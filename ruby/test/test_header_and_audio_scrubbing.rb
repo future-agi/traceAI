@@ -11,12 +11,14 @@ class EndToEndTest
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       tracer = OpenTelemetry.tracer_provider.tracer('app')
-      before = tracer.start_span('header-span-started-before-request', with_parent: OpenTelemetry::Context.empty)
+      # Application AI spans (gen_ai.span.kind) are the ones sent to Future AGI.
+      ai = {'gen_ai.span.kind' => 'CHAIN'}
+      before = tracer.start_span('header-span-started-before-request', attributes: ai, with_parent: OpenTelemetry::Context.empty)
       failure = nil
-      tracer.in_span('application-records-header-error') do |application|
+      tracer.in_span('application-records-header-error', attributes: ai) do |application|
         begin
           tracer.in_span('covered-header-library-call', attributes: {'gen_ai.span.kind' => 'LLM'}) do
-            tracer.in_span('header-native-intermediate') do
+            tracer.in_span('header-native-intermediate', attributes: ai) do
               if #{(transport == 'net_http').inspect}
                 request = Net::HTTP::Post.new('/v1/chat/completions')
                 request['content-type'] = 'application/json'; request.body = '{"model":"m","messages":[]}'
@@ -47,7 +49,7 @@ class EndToEndTest
         end
       end
       before.finish
-      tracer.in_span('unrelated-header-error') do |span|
+      tracer.in_span('unrelated-header-error', attributes: ai) do |span|
         span.set_attribute('ordinary', failure.message)
         span.record_exception(failure)
       end
@@ -128,9 +130,8 @@ class EndToEndTest
   end
 
   def test_structural_short_and_indexed_audio_is_scrubbed_in_actual_otlp
-    attributes = audio_attributes
-    code = <<~RUBY
-      require 'opentelemetry/sdk'
+    attributes = {'gen_ai.span.kind' => 'CHAIN'}.merge(audio_attributes)
+    code = app_sdk + <<~RUBY
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       OpenTelemetry.tracer_provider.tracer('app').in_span('structural-audio', attributes: #{attributes.inspect}) { |span| span.add_event('audio', attributes: #{attributes.inspect}) }

@@ -11,12 +11,14 @@ class EndToEndTest
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       tracer = OpenTelemetry.tracer_provider.tracer('app')
-      before = tracer.start_span('proxy-before-request', with_parent: OpenTelemetry::Context.empty)
+      # Application AI spans (gen_ai.span.kind) are the ones sent to Future AGI.
+      ai = {'gen_ai.span.kind' => 'CHAIN'}
+      before = tracer.start_span('proxy-before-request', attributes: ai, with_parent: OpenTelemetry::Context.empty)
       failure = nil
-      tracer.in_span('proxy-application') do |application|
+      tracer.in_span('proxy-application', attributes: ai) do |application|
         begin
           tracer.in_span('proxy-covered', attributes: {'gen_ai.span.kind' => 'LLM'}) do
-            tracer.in_span('proxy-intermediate') do
+            tracer.in_span('proxy-intermediate', attributes: ai) do
               if #{(transport == 'net_http_https').inspect}
                 client = Net::HTTP::Proxy('127.0.0.1', #{@provider.port}, 'test-connect-user', 'test-connect-password').new('127.0.0.1', 1)
                 client.use_ssl = true
@@ -45,7 +47,7 @@ class EndToEndTest
         end
       end
       before.finish
-      tracer.in_span('proxy-unrelated') do |span|
+      tracer.in_span('proxy-unrelated', attributes: ai) do |span|
         span.set_attribute('ordinary', failure.message)
         span.status = OpenTelemetry::Trace::Status.error(failure.message)
         span.record_exception(failure)
@@ -107,8 +109,9 @@ class EndToEndTest
   end
 
   def assert_media_export(attributes, payloads, media_keys, visible)
-    code = <<~RUBY
-      require 'opentelemetry/sdk'
+    # Application AI spans (gen_ai.span.kind) are the ones sent to Future AGI.
+    attributes = {'gen_ai.span.kind' => 'CHAIN'}.merge(attributes)
+    code = app_sdk + <<~RUBY
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       attributes = #{attributes.inspect}

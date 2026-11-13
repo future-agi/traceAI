@@ -140,7 +140,7 @@ class EndToEndTest
       OpenTelemetry.tracer_provider = host
       TraceAI::Auto.init(config_file: #{file.path.inspect}, api_key: #{ignored.first.inspect})
       values = #{values.inspect}.join(' ')
-      host.tracer('app').in_span('ignored-fi-pair') do |span|
+      host.tracer('app').in_span('ignored-fi-pair', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do |span|
         span.set_attribute('ordinary', values)
         span.add_event('echo', attributes: {'ordinary' => values})
       end
@@ -347,7 +347,7 @@ class EndToEndTest
       processor = OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)
       host.add_span_processor(processor)
       TraceAI::Auto.init(provider: host, processor: processor, exporter: memory, fi_export: true)
-      host.tracer('app').in_span('both-destinations') {}
+      host.tracer('app').in_span('both-destinations', attributes: {'gen_ai.span.kind' => 'CHAIN'}) {}
       abort 'flush failed' unless TraceAI::Auto.flush
       abort 'host duplicated' unless memory.finished_spans.size == 1
       puts 'BOTH_ACTIVE'

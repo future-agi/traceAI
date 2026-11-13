@@ -256,6 +256,7 @@ class EndToEndTest
       TraceAI::Auto.init
       ['ordinary output', '{unfinished JSON'].each do |output|
         host.tracer('app').in_span('fallback-media', attributes: {
+          'gen_ai.span.kind' => 'CHAIN',
           'gen_ai.usage.parts.0.mime_type' => 'audio/pcm', 'gen_ai.usage.parts.0.content.chunk' => #{MediaAdmissionTest::PAYLOAD.inspect},
           'gen_ai.usage.parts.1.mime_type' => 'image/raw', 'gen_ai.usage.parts.1.content.chunk' => [1, 2, 3, 4], 'output.value' => output
         }) {}
@@ -314,20 +315,22 @@ class EndToEndTest
   end
 
   def test_owned_and_host_providers_zero_code_and_init_preserve_application_and_omit_media
-    %w[owned host].product(%w[zero init]).each do |ownership, boot|
+    # Without an application provider, a zero-code start waits for one (or for
+    # the first AI request), so application spans need 'host' or an explicit init.
+    [%w[owned init], %w[host zero], %w[host init]].each do |ownership, boot|
       baseline = nil
       [false, true].each do |enabled|
         code = <<~RUBY
           require 'opentelemetry/sdk'; require 'json'
+          ENV['FI_API_KEY'] = 'fixture-api-12345678'; ENV['FI_SECRET_KEY'] = 'fixture-secret-12345678'
           host = OpenTelemetry::SDK::Trace::TracerProvider.new if #{ownership.inspect} == 'host' || !#{enabled}
           OpenTelemetry.tracer_provider = host if host
-          ENV['FI_API_KEY'] = 'fixture-api-12345678'; ENV['FI_SECRET_KEY'] = 'fixture-secret-12345678'
           require 'net/http'
           if #{enabled} && #{boot.inspect} == 'init'
             require 'traceai/auto/agent'
             TraceAI::Auto.init
           end
-          host ||= OpenTelemetry.tracer_provider
+          host ||= TraceAI::Auto.provider
           abort 'provider replaced' if #{enabled} && !TraceAI::Auto.provider.equal?(host)
           memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
           host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
@@ -340,14 +343,15 @@ class EndToEndTest
             limits.instance_variable_set(:@attribute_length_limit, length)
             limits.instance_variable_set(:@event_attribute_length_limit, length)
             host.span_limits = limits
-            span = host.tracer('app').start_span('host-media', attributes: values.dup,
+            # The AI marker comes first so that count limits never drop it.
+            span = host.tracer('app').start_span('host-media', attributes: {'gen_ai.span.kind' => 'CHAIN'}.merge(values),
               links: [OpenTelemetry::Trace::Link.new(ctx, values.to_a.reverse.to_h)])
             abort 'setter return changed' unless span.add_attributes('plain' => 'text with spaces').equal?(span)
             span.add_event('media', attributes: values.to_a.reverse.to_h)
             span.finish
             [#{MediaAdmissionTest::PAYLOAD.inspect}, [1, 2, 3, 4]].each do |payload|
               key = 'input.messages.199.parts.0.content.chunk'
-              late = {key => [], 'input.mime_type' => 'application/json'}
+              late = {'gen_ai.span.kind' => 'CHAIN', key => [], 'input.mime_type' => 'application/json'}
               200.times { |i| late["filler." + i.to_s] = 'ordinary words' }
               late['input.messages.199.parts.0.mime_type'] = 'audio/pcm'
               span = host.tracer('app').start_span('host-late-media', attributes: late)

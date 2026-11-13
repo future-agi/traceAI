@@ -185,14 +185,16 @@ class EndToEndTest
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       tracer = OpenTelemetry.tracer_provider.tracer('app')
-      before = tracer.start_span('started-before-request', with_parent: OpenTelemetry::Context.empty)
-      queued = tracer.start_span('finished-before-request', attributes: {'ordinary' => #{key.inspect}}, with_parent: OpenTelemetry::Context.empty)
+      # Application AI spans (gen_ai.span.kind) are the ones sent to Future AGI.
+      ai = {'gen_ai.span.kind' => 'CHAIN'}
+      before = tracer.start_span('started-before-request', attributes: ai, with_parent: OpenTelemetry::Context.empty)
+      queued = tracer.start_span('finished-before-request', attributes: ai.merge('ordinary' => #{key.inspect}), with_parent: OpenTelemetry::Context.empty)
       queued.finish
       error = nil
-      tracer.in_span('application-records-error') do |application|
+      tracer.in_span('application-records-error', attributes: ai) do |application|
         begin
           tracer.in_span('covered-library-call', attributes: {'gen_ai.span.kind' => 'LLM'}) do
-            tracer.in_span('native-intermediate') do
+            tracer.in_span('native-intermediate', attributes: ai) do
               if #{(transport == 'net_http').inspect}
                 client = Anthropic::Client.new(api_key: #{key.inspect}, base_url: '#{@provider.url}', max_retries: 0)
                 client.messages.create(model: 'claude-test', max_tokens: 16, messages: [{role: 'user', content: 'hi'}])
@@ -216,7 +218,7 @@ class EndToEndTest
       end
       before.finish
       # No parent or shared trace with the request; discovery must be process-wide.
-      tracer.in_span('unrelated-later-span') do |span|
+      tracer.in_span('unrelated-later-span', attributes: ai) do |span|
         span.set_attribute('ordinary', error.message)
         span.record_exception(error)
       end
@@ -256,7 +258,10 @@ class EndToEndTest
         assert_empty spans
         next
       end
-      assert_equal identities.length, spans.length # S4 emits no duplicate wire span.
+      # S4 emits no duplicate wire span. The vendor's own span carries no
+      # gen_ai.span.kind, so it stays with the application's exporters.
+      assert_equal identities.reject { |name, _| name == 'anthropic.messages.create' }.length, spans.length
+      refute spans.any? { |span| span.name == 'anthropic.messages.create' }
       assert spans.none? { |span| attrs(span.attributes)['traceai.capture.layer'] == 'wire' }
       %w[application-records-error covered-library-call native-intermediate started-before-request finished-before-request unrelated-later-span].each do |name|
         identity = identities.fetch(name)
@@ -274,7 +279,7 @@ class EndToEndTest
       if transport == 'net_http'
         # The native Anthropic error is a Ruby Hash-inspect string beginning '{',
         # not JSON. Drop content, but retain independently sanitized identity.
-        assert_empty attrs(application.attributes)
+        assert_equal({'gen_ai.span.kind' => 'CHAIN'}, attrs(application.attributes))
         assert_empty application.events
       else
         assert_includes attrs(application.attributes)['ordinary'], '<redacted>'
@@ -293,15 +298,14 @@ class EndToEndTest
 
   def test_fi_and_environment_echoes_are_seeded_once_and_public_api_registers_extra_secrets
     values = %w[KEY TOKEN SECRET PASSWORD PASSWD CREDENTIAL AUTH].to_h { |name| ["TEST_PROVIDER_#{name}", "test-env-#{name}-12345678"] }
-    code = <<~RUBY
-      require 'opentelemetry/sdk'
+    code = app_sdk + <<~RUBY
       # Seeded values survive removal from the environment after initialization.
       echoes = #{values.keys.inspect}.map { |name| ENV.delete(name) }
       echoes += [ENV.fetch('FI_API_KEY'), ENV.fetch('FI_SECRET_KEY')]
       extra = 'test-explicit-public-credential-12345678'
       TraceAI::Auto.register_secret(extra)
       echoes << extra
-      OpenTelemetry.tracer_provider.tracer('app').in_span('env-fi-echoes') do |span|
+      OpenTelemetry.tracer_provider.tracer('app').in_span('env-fi-echoes', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do |span|
         span.set_attribute('ordinary', echoes.join(' '))
         span.set_attribute('array', echoes)
         span.record_exception(RuntimeError.new(echoes.join(' ')))
@@ -325,7 +329,7 @@ class EndToEndTest
       body = "test-#{transport}-body-credential-12345678"
       @provider.stop
       @provider = MockHTTP.new { |_request| [401, {'Content-Type' => 'application/json'}, JSON.generate(error: {message: "echo #{query} #{body}"})] }
-      code = <<~RUBY
+      code = app_sdk + <<~RUBY
         require 'net/http'; require 'httpx'
         payload = {model: 'm', messages: [], nested: [{client_secret: #{body.inspect}}]}
         path = '/v1/chat/completions?api_key=#{query}'
@@ -338,7 +342,7 @@ class EndToEndTest
           response = HTTPX.post('#{@provider.url}' + path, json: payload)
           output = response.to_s
         end
-        OpenTelemetry.tracer_provider.tracer('app').in_span('unrelated-body-query-echo') { |span| span.set_attribute('ordinary', output) }
+        OpenTelemetry.tracer_provider.tracer('app').in_span('unrelated-body-query-echo', attributes: {'gen_ai.span.kind' => 'CHAIN'}) { |span| span.set_attribute('ordinary', output) }
         print output
       RUBY
       stdout, stderr, status = app(code)

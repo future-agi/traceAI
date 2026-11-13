@@ -63,7 +63,7 @@ class EndToEndTest
   def test_httpx_header_first_stream_preserves_suppression_dedup_and_caller_context
     @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'text/event-stream'}, STREAM] }
     [false, true].each do |header_first|
-      code = <<~RUBY
+      code = app_sdk + <<~RUBY
         require 'httpx'
         def invoke
           response = HTTPX.plugin(:stream).post('#{@provider.url}/v1/chat/completions', json: {model: 'm', messages: []}, stream: true)
@@ -97,7 +97,7 @@ class EndToEndTest
         parent = spans.find { |s| s.name == 'framework-' + kind }; refute_nil parent
         child = wire.find { |s| s.parent_span_id == parent.span_id }; refute_nil child
         a = attrs(child.attributes)
-        assert_equal '<redacted>', a['session.id'] # S6 session-name rule
+        assert_equal 's-' + kind, a['session.id']
         assert_equal 'u-' + kind, a['user.id']
         assert_equal({'tenant' => kind}, JSON.parse(a['metadata']))
         assert_equal 'one two', a['output.value']
@@ -107,10 +107,10 @@ class EndToEndTest
 
   def test_httpx_header_first_stream_retains_request_parent_when_iteration_scope_changes
     @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'text/event-stream'}, STREAM] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       require 'httpx'
       response = nil
-      OpenTelemetry.tracer_provider.tracer('app').in_span('original') do
+      OpenTelemetry.tracer_provider.tracer('app').in_span('original', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do
         TraceAI::Auto.using_session('original-session') do
           response = HTTPX.plugin(:stream).post('#{@provider.url}/v1/chat/completions', json: {model: 'm', messages: []}, stream: true)
           abort 'bad header' unless response.status == 200
@@ -123,7 +123,7 @@ class EndToEndTest
     spans = export_spans.map(&:first)
     wire = spans.find { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }; refute_nil wire
     assert_equal spans.find { |s| s.name == 'original' }.span_id, wire.parent_span_id
-    assert_equal '<redacted>', attrs(wire.attributes)['session.id'] # S6 session-name rule
+    assert_equal 'original-session', attrs(wire.attributes)['session.id'] # The request's own context.
   end
 
   def test_httpx_header_first_consumer_exceptions_finalize_without_transport_error
@@ -163,7 +163,7 @@ class EndToEndTest
       {'FI_HIDE_INPUT_MESSAGES' => 'true', 'FI_HIDE_OUTPUT_MESSAGES' => 'true'},
       {'FI_HIDE_INPUT_TEXT' => 'true', 'FI_HIDE_OUTPUT_TEXT' => 'true'}
     ].each do |flags|
-      code = <<~RUBY
+      code = app_sdk + <<~RUBY
         require 'anthropic'
         memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
         OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
@@ -181,8 +181,10 @@ class EndToEndTest
       stdout, stderr, status = app(code, flags)
       assert status.success?, stderr; assert_equal "APPLICATION_RAN\n", stdout
       spans = export_spans.map(&:first)
-      assert_operator spans.length, :>=, 2
-      native = spans.find { |s| attrs(s.attributes)['traceai.capture.layer'] != 'wire' }; refute_nil native
+      # The vendor span has no gen_ai.span.kind: only the masked wire span is
+      # sent to Future AGI, and the application's exporter keeps its content.
+      assert_equal 1, spans.length
+      assert_equal 'wire', attrs(spans.first.attributes)['traceai.capture.layer']
       %w[PRIVATE_INPUT_MARKER PRIVATE_OUTPUT_MARKER PRIVATE_SYSTEM_MARKER].each do |marker|
         refute_includes spans.map(&:to_h).to_s, marker
       end

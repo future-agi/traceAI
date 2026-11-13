@@ -158,11 +158,11 @@ class EndToEndTest
     url = 'https://example.invalid/object?' + values.map { |name, value| name + '=' + value }.join('&') + '&signature=control'
     @provider.stop
     @provider = MockHTTP.new { |_| [200, {'Content-Type' => 'application/json'}, JSON.generate(choices: [{message: {content: url}}])] }
-    code = <<~RUBY
-      require 'opentelemetry/sdk'; require 'net/http'
+    code = app_sdk + <<~RUBY
+      require 'net/http'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
-      OpenTelemetry.tracer_provider.tracer('app').in_span('s6-response-urls') do |span|
+      OpenTelemetry.tracer_provider.tracer('app').in_span('s6-response-urls', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do |span|
         response = Net::HTTP.post(URI('#{@provider.url}/v1/chat/completions'), '{"model":"m","messages":[]}', {'content-type' => 'application/json'})
         span.set_attribute('output.value', response.body)
         span.add_event('response', attributes: {'output.value' => response.body})

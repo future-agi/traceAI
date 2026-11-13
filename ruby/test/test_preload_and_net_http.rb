@@ -244,7 +244,7 @@ class EndToEndTest
       @provider.stop
       @provider = MockHTTP.new { |_r| [200, {'Content-Type' => streamed ? 'text/event-stream' : 'application/json'}, streamed ? STREAM : CHAT] }
       invocation = streamed ? "c.chat.completions.stream(model: 'gpt-4o-mini', messages: []).each { |e| print e.chunk.choices.first&.delta&.content if e.type == :chunk }" : "print c.chat.completions.create(model: 'gpt-4o-mini', messages: []).choices.first.message.content"
-      code = official_client_code + <<~RUBY
+      code = app_sdk + official_client_code + <<~RUBY
         def call_sdk(c)
           #{invocation}
         end
@@ -276,7 +276,7 @@ class EndToEndTest
         parent = spans.find { |span| span.name == 'framework-' + kind }; refute_nil parent
         child = wire.find { |span| span.parent_span_id == parent.span_id }; refute_nil child
         a = attrs(child.attributes)
-        assert_equal '<redacted>', a['session.id'] # S6 session-name rule
+        assert_equal 's-' + kind, a['session.id']
         assert_equal 'u-' + kind, a['user.id']
         assert_equal({'tenant' => kind}, JSON.parse(a['metadata']))
         assert_equal(streamed ? 'one two' : 'Hello from Ruby', a['output.value'])
@@ -286,7 +286,7 @@ class EndToEndTest
 
   def test_official_openai_stream_keeps_original_context_after_callers_scope_exits
     @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'text/event-stream'}, STREAM] }
-    code = official_client_code + <<~RUBY
+    code = app_sdk + official_client_code + <<~RUBY
       t = OpenTelemetry.tracer_provider.tracer('app')
       stream = nil
       t.in_span('original-parent', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do
@@ -304,7 +304,7 @@ class EndToEndTest
     parent = spans.find { |s| s.name == 'original-parent' }
     wire = spans.find { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }; refute_nil wire
     assert_equal parent.span_id, wire.parent_span_id
-    assert_equal '<redacted>', attrs(wire.attributes)['session.id'] # Parent and user/metadata still prove context propagation.
+    assert_equal 'original-session', attrs(wire.attributes)['session.id'] # The request's own context, not the iteration's.
   end
 
   def test_net_http_and_httpx_consumer_exceptions_preserve_identity_and_are_incomplete_not_error

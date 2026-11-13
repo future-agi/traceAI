@@ -135,6 +135,22 @@ class SafetyTest < Minitest::Test
   ensure
     file&.unlink
   end
+  # The session id set through the agent's API is correlation data, exported as
+  # set, as in the Node SDK. Registered secrets inside it are still scrubbed,
+  # and every other session-named key keeps the credential rule.
+  def test_session_id_is_exported_as_set_and_other_session_keys_stay_redacted
+    attributes = {'session.id' => 'checkout-session-42', 'session_id' => 'other-session-value', 'session.token' => 'token-value-12345678',
+                  'user.id' => 'user-7', 'metadata' => '{"session":{"id":"nested-session"}}'}
+    scrubbed = P.scrub(attributes, [])
+    assert_equal 'checkout-session-42', scrubbed['session.id']
+    assert_equal '<redacted>', scrubbed['session_id']
+    assert_equal '<redacted>', scrubbed['session.token']
+    assert_equal 'user-7', scrubbed['user.id']
+    refute_includes scrubbed['metadata'], 'nested-session'
+    secret = 'registered-session-secret-value'
+    assert_equal '<redacted>', P.scrub({'session.id' => secret}, [secret])['session.id']
+    assert_equal 'id <redacted>', P.scrub({'session.id' => 'id ' + secret}, [secret])['session.id']
+  end
   def test_project_name_fallback
     c = TraceAI::Auto::Config.new({}, env: {'OTEL_SERVICE_NAME' => 'otel-service'}, cwd: ROOT); assert_equal 'otel-service', c['project_name']
     c = TraceAI::Auto::Config.new({}, env: {}, cwd: ROOT); assert_equal 'ruby', c['project_name']; assert_equal 'observe', c['project_type']

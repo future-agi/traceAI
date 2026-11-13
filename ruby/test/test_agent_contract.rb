@@ -119,7 +119,9 @@ class EndToEndTest
 
   def test_init_is_once_with_concurrent_callers_and_immutable_export_settings
     code = <<~RUBY
+      first = TraceAI::Auto.init
       original = [TraceAI::Auto.provider, TraceAI::Auto.processor, TraceAI::Auto.exporter, TraceAI::Auto.config]
+      abort 'not started' unless original.all? && first.equal?(original.first)
       results = 12.times.map { Thread.new { TraceAI::Auto.init(project_name: 'CHANGED', sample_rate: 0, api_key: 'CHANGED') } }.map(&:value)
       abort 'init result changed' unless results.all? { |value| value.equal?(original.first) }
       abort 'init rewired state' unless original == [TraceAI::Auto.provider, TraceAI::Auto.processor, TraceAI::Auto.exporter, TraceAI::Auto.config]
@@ -135,9 +137,10 @@ class EndToEndTest
   def test_auto_instrument_is_additive_and_never_disables_or_rewires
     code = <<~RUBY
       require 'httpx'
-      provider = TraceAI::Auto.provider; processor = TraceAI::Auto.processor
       abort 'wire enabled too soon' if TraceAI::Auto.wire_enabled?
       TraceAI::Auto.auto_instrument(instrumentations: ['wire'])
+      provider = TraceAI::Auto.provider; processor = TraceAI::Auto.processor
+      abort 'not started' unless provider && processor
       TraceAI::Auto.auto_instrument(instrumentations: [])
       TraceAI::Auto.init(wire_capture: false)
       abort 'provider rewired' unless TraceAI::Auto.provider.equal?(provider) && TraceAI::Auto.processor.equal?(processor)
@@ -153,7 +156,9 @@ class EndToEndTest
     @provider.stop
     body = JSON.generate(id: 'msg-1', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: 'answer'}], stop_reason: 'end_turn', usage: {input_tokens: 3, output_tokens: 2})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, body] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       require 'anthropic'
       client = Anthropic::Client.new(api_key: 'mock-key', base_url: '#{@provider.url}', max_retries: 0)
       tracer = OpenTelemetry.tracer_provider.tracer('app')
@@ -170,17 +175,23 @@ class EndToEndTest
         tracer.in_span('framework-' + kind, attributes: {'gen_ai.span.kind' => kind}) { invoke(client) }
       end
       OpenTelemetry::Common::Utilities.untraced { invoke(client) }
+      native = memory.finished_spans.select { |s| s.name == 'anthropic.messages.create' }
       puts 'APPLICATION_RAN'
+      puts native.map { |s| s.span_id.unpack1('H*') }.join(',')
     RUBY
     stdout, stderr, status = app(code)
-    assert status.success?, stderr; assert_equal "APPLICATION_RAN\n", stdout
+    assert status.success?, stderr
+    output, native_ids = stdout.split("\n")
+    assert_equal 'APPLICATION_RAN', output
     assert_equal 8, @provider.requests.length
+    native_ids = native_ids.split(',')
+    assert_equal 7, native_ids.length
     spans = export_spans.map(&:first)
     wire = spans.select { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }
     assert_equal 3, wire.length
-    native = spans.select { |s| s.name == 'anthropic.messages.create' }
-    assert_equal 7, native.length
-    wire.each { |s| assert native.any? { |n| n.span_id == s.parent_span_id } }
+    wire.each { |s| assert_includes native_ids, s.parent_span_id.unpack1('H*') }
+    # Vendor spans carry no gen_ai.span.kind and are not sent to Future AGI.
+    refute spans.any? { |s| s.name == 'anthropic.messages.create' }
   end
 
   def test_httpx_unconsumed_stream_is_untouched_and_response_identity_survives

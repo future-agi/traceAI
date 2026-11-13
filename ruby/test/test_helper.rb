@@ -69,6 +69,13 @@ module ChildHelper
                'GEM_HOME' => CHILD_GEM_HOME, 'GEM_PATH' => CHILD_GEM_PATH,
                'FI_CONFIG_FILE' => File.join(ROOT, '.bundle/nonexistent.toml')}).merge(overrides)
   end
+  # Child code for an application that configures its own OpenTelemetry SDK
+  # provider. The agent never makes a provider of its own global, so child code
+  # that records application spans sets one up first, as a real application does.
+  def app_sdk
+    "require 'opentelemetry/sdk'\n" \
+      "OpenTelemetry.tracer_provider = OpenTelemetry::SDK::Trace::TracerProvider.new unless OpenTelemetry.tracer_provider.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)\n"
+  end
   # The bundle executable of the running Bundler (set by `bundle exec`).
   def bundle_command
     ENV['BUNDLE_BIN_PATH'] || Gem.bin_path('bundler', 'bundle')

@@ -20,7 +20,7 @@ class EndToEndTest
     callback_server = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, CHAT] }
     file = Tempfile.new('sdk-callback', File.join(ROOT, '.bundle/tmp'))
     file.write('upload bytes'); file.close
-    code = official_client_code + <<~RUBY
+    code = app_sdk + official_client_code + <<~RUBY
       file = File.open(#{file.path.inspect}, 'rb')
       file.define_singleton_method(:read) do |*args|
         unless @called
@@ -28,7 +28,7 @@ class EndToEndTest
           TraceAI::Auto.using_session('callback-session') do
             TraceAI::Auto.using_user('callback-user') do
               TraceAI::Auto.using_metadata(tenant: 'callback') do
-                OpenTelemetry.tracer_provider.tracer('app').in_span('callback-parent') do
+                OpenTelemetry.tracer_provider.tracer('app').in_span('callback-parent', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do
                   scope = #{mode == 'suppressed' ? 'OpenTelemetry::Common::Utilities.method(:untraced)' : '->(&block) { block.call }'}
                   scope.call do
                     context = OpenTelemetry::Context.current
@@ -67,7 +67,7 @@ class EndToEndTest
       assert_equal 1, wire.length
       a = attrs(wire.first.attributes)
       assert_equal callback_server.port, a['server.port']
-      assert_equal '<redacted>', a['session.id'] # S6 session-name rule
+      assert_equal 'callback-session', a['session.id']
       assert_equal 'callback-user', a['user.id']
       assert_equal({'tenant' => 'callback'}, JSON.parse(a['metadata']))
       assert_equal spans.find { |s| s.name == 'callback-parent' }.span_id, wire.first.parent_span_id
@@ -83,7 +83,7 @@ class EndToEndTest
     @provider.stop
     payload = JSON.generate(id: 'native-private', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: "echo #{key}"}], stop_reason: 'end_turn', usage: {input_tokens: 2, output_tokens: 1})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, payload] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       require 'anthropic'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
@@ -99,23 +99,24 @@ class EndToEndTest
     stdout, stderr, status = app(code)
     assert status.success?, stderr; assert_equal "APPLICATION_RAN\n", stdout
     spans = export_spans.map(&:first)
-    assert spans.any? { |s| s.name == 'anthropic.messages.create' }
-    assert spans.any? { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }
+    # The vendor span has no gen_ai.span.kind and stays with the application.
+    refute spans.any? { |s| s.name == 'anthropic.messages.create' }
+    assert_equal 1, spans.length
+    assert_equal 'wire', attrs(spans.first.attributes)['traceai.capture.layer']
     refute_includes spans.map(&:to_h).to_s, key
-    native = spans.find { |s| s.name == 'anthropic.messages.create' }
-    assert_includes attrs(native.attributes)['gen_ai.output.messages'], '<redacted>'
+    assert_equal 'echo <redacted>', attrs(spans.first.attributes)['output.value']
   end
 
   def test_export_scrubs_names_events_links_without_mutating_other_exporters
     secret = 'fixture-api-12345678'
     signed = 'SIGNED_PRIVATE_VALUE'
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       name = 'echo #{secret} https://cdn.test/x?signature=#{signed}'
       linked = OpenTelemetry::Trace::SpanContext.new
       link = OpenTelemetry::Trace::Link.new(linked, {'nested' => '{"api_key":"link-private-value"}', 'ordinary' => name, 'output.value' => 'PRIVATE_LINK_OUTPUT'})
-      span = TraceAI::Auto.tracer.start_span(name, links: [link], attributes: {'ordinary' => name})
+      span = TraceAI::Auto.tracer.start_span(name, links: [link], attributes: {'gen_ai.span.kind' => 'CHAIN', 'ordinary' => name})
       span.add_event(name, attributes: {'ordinary' => name, 'output.value' => 'PRIVATE_EVENT_OUTPUT'})
       span.finish
       TraceAI::Auto.flush

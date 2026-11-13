@@ -42,18 +42,18 @@ class EndToEndTest < Minitest::Test
   # A container started with LANG=C reads files and the environment as US-ASCII.
   # The agent must still load, read its UTF-8 config and export non-ASCII text.
   def test_posix_locale_loads_agent_and_exports_utf8_wire_span
-    text = "Olá \u{1f600}"
+    text = "Ol\u{e1} \u{1f600}"
     reply = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini', choices: [{index: 0, message: {role: 'assistant', content: text}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5})
     @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, reply] }
     config = File.join(ROOT, '.bundle/tmp', "posix-locale-#{Process.pid}.toml")
-    File.binwrite(config, "project_name = \"café \u{1f600}\"\n".b)
+    File.binwrite(config, "project_name = \"caf\u{e9} \u{1f600}\"\n".b)
     # The child code stays ASCII: a non-ASCII literal in -e is invalid under LANG=C.
     code = plain_code + <<~RUBY
       name = TraceAI::Auto.config['project_name']
       abort 'config value is ' + name.encoding.name unless name.encoding == Encoding::UTF_8 && name.valid_encoding?
     RUBY
     locale = {'LANG' => 'C', 'LC_ALL' => 'C', 'LC_CTYPE' => nil, 'LANGUAGE' => nil}
-    stdout, stderr, status = app(code, locale.merge('FI_PROJECT_NAME' => nil, 'FI_CONFIG_FILE' => config, 'FI_PROJECT_VERSION_NAME' => "vé"))
+    stdout, stderr, status = app(code, locale.merge('FI_PROJECT_NAME' => nil, 'FI_CONFIG_FILE' => config, 'FI_PROJECT_VERSION_NAME' => "v\u{e9}"))
     assert status.success?, stderr.b
     assert_equal reply.b, stdout.b
     spans = export_spans
@@ -62,8 +62,8 @@ class EndToEndTest < Minitest::Test
     a = attrs(span.attributes)
     assert_equal 'wire', a['traceai.capture.layer']
     assert_equal text, a['output.value']
-    assert_equal "café \u{1f600}", resource['project_name']
-    assert_equal "vé", resource['project_version_name']
+    assert_equal "caf\u{e9} \u{1f600}", resource['project_name']
+    assert_equal "v\u{e9}", resource['project_version_name']
   ensure
     File.unlink(config) if config && File.exist?(config)
   end
@@ -117,14 +117,21 @@ class EndToEndTest < Minitest::Test
     @provider.stop
     body = JSON.generate(id: 'msg-1', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: 'anthropic local'}], stop_reason: 'end_turn', usage: {input_tokens: 3, output_tokens: 2})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, body] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       require 'anthropic'
       c = Anthropic::Client.new(api_key: 'mock-anthropic-api', base_url: '#{@provider.url}', max_retries: 0)
       r = c.messages.create(model: 'claude-test', max_tokens: 16, messages: [{role: 'user', content: 'hi'}])
       puts r.content.first.text
+      native = memory.finished_spans.find { |s| s.name == 'anthropic.messages.create' }
+      abort 'native span missing from the application exporter' unless native
+      puts native.span_id.unpack1('H*')
     RUBY
     stdout, stderr, status = app(code)
-    assert status.success?, stderr; assert_equal "anthropic local\n", stdout
+    assert status.success?, stderr
+    output, native_id = stdout.split("\n")
+    assert_equal 'anthropic local', output
     spans = export_spans.map(&:first)
     wire = spans.select { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }
     assert_equal 1, wire.length
@@ -132,7 +139,10 @@ class EndToEndTest < Minitest::Test
     assert_equal 'anthropic local', attrs(wire.first.attributes)['output.value']
     # Anthropic 2.3 has a vendor-native span without traceAI's dedup marker;
     # preserve it and parent the wire child rather than modifying vendor tracing.
-    native = spans.find { |s| s.span_id == wire.first.parent_span_id }; refute_nil native
+    assert_equal native_id, wire.first.parent_span_id.unpack1('H*')
+    # The vendor span carries no gen_ai.span.kind, so it stays with the
+    # application's own exporters and is not sent to Future AGI.
+    assert_equal [wire.first.span_id], spans.map(&:span_id)
   end
   def test_ruby_llm_default_adapter
     code = <<~RUBY
@@ -223,12 +233,112 @@ class EndToEndTest < Minitest::Test
     assert status.success?, stderr; assert_equal CHAT, stdout; assert elapsed < 6
     assert_includes stderr, 'collector export failed'
   end
-  def test_one_line_configuration_does_not_reconfigure_initialized_preload
-    code = "original = TraceAI::Auto.provider; result = TraceAI::Auto.init(project_name: 'argument-project', sample_rate: 1.0); abort 'provider changed' unless result.equal?(original)\n" + plain_code
-    _, stderr, status = app(code, {'FI_PROJECT_NAME' => 'environment-project', 'FI_SAMPLE_RATE' => '0'})
+  # With the OpenTelemetry SDK in the bundle, a RUBYOPT preload starts nothing
+  # until the application configures a provider, calls init or makes an AI
+  # request. An explicit init after the preload therefore applies its settings.
+  def test_explicit_init_after_preload_applies_its_settings
+    code = <<~RUBY
+      abort 'agent started before any trigger' if TraceAI::Auto.provider
+      result = TraceAI::Auto.init(project_name: 'argument-project', sample_rate: 1.0)
+      abort 'init returned another provider' unless result.equal?(TraceAI::Auto.provider)
+      abort 'agent provider made global' if OpenTelemetry.tracer_provider.equal?(result)
+      abort 'second init rewired the agent' unless TraceAI::Auto.init(project_name: 'second-project').equal?(result)
+    RUBY
+    _, stderr, status = app(code + plain_code, {'FI_PROJECT_NAME' => 'environment-project', 'FI_SAMPLE_RATE' => '0'})
     assert status.success?, stderr
-    assert_includes stderr, 'already initialized'
-    assert_empty export_spans
+    assert_equal 1, stderr.scan('already initialized').length
+    spans = export_spans
+    assert_equal 1, spans.length
+    span, resource = spans.first
+    assert_equal 'chat gpt-4o-mini', span.name
+    assert_equal 'argument-project', resource['project_name']
+  end
+
+  # The application configures its own SDK after Bundler.setup, as a Rails
+  # initializer does. The agent attaches to that provider: the wire span reaches
+  # both the application's exporter and Future AGI, under the application span.
+  def test_application_provider_configured_after_bundler_setup_gets_wire_spans
+    code = <<~RUBY
+      require 'bundler/setup'
+      require 'opentelemetry/sdk'
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      OpenTelemetry::SDK.configure { |c| c.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)) }
+      abort 'agent did not attach to the application provider' unless TraceAI::Auto.provider.equal?(OpenTelemetry.tracer_provider)
+      OpenTelemetry.tracer_provider.tracer('app').in_span('app-request', attributes: {'gen_ai.span.kind' => 'AGENT'}) do
+        #{plain_code}
+      end
+      parent = memory.finished_spans.find { |s| s.name == 'app-request' }
+      wire = memory.finished_spans.select { |s| s.attributes['traceai.capture.layer'] == 'wire' }
+      abort 'wire span missing from the application exporter' unless parent && wire.length == 1
+      abort 'wire span not under the application span' unless wire.first.parent_span_id == parent.span_id
+      puts
+      puts parent.span_id.unpack1('H*')
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    body, parent_id = stdout.split("\n", 2)
+    assert_equal CHAT, body
+    spans = export_spans.map(&:first)
+    wire = spans.find { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }; refute_nil wire
+    assert_equal parent_id.strip, wire.parent_span_id.unpack1('H*')
+    assert_includes spans.map(&:name), 'app-request'
+  end
+
+  # An explicit init(provider:) after the RUBYOPT preload still attaches to the
+  # supplied provider instead of being refused, and makes no provider global.
+  def test_explicit_init_with_provider_after_preload_attaches_to_it
+    code = <<~RUBY
+      require 'opentelemetry/sdk'
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      host = OpenTelemetry::SDK::Trace::TracerProvider.new
+      host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
+      abort 'supplied provider not used' unless TraceAI::Auto.init(provider: host, fi_export: true).equal?(host)
+      abort 'a provider was made global' if OpenTelemetry.tracer_provider.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
+      host.tracer('app').in_span('app-parent', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do
+        #{plain_code}
+      end
+      abort 'wire span missing from the supplied provider' unless memory.finished_spans.count { |s| s.attributes['traceai.capture.layer'] == 'wire' } == 1
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    refute_includes stderr, 'already initialized'
+    spans = export_spans.map(&:first)
+    wire = spans.find { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }; refute_nil wire
+    assert_equal spans.find { |s| s.name == 'app-parent' }.span_id, wire.parent_span_id
+  end
+
+  # Future AGI receives only AI spans. An application span without
+  # gen_ai.span.kind, such as a database query, stays with the application.
+  def test_application_span_with_db_statement_never_reaches_future_agi
+    code = app_sdk + <<~RUBY
+      t = OpenTelemetry.tracer_provider.tracer('app')
+      t.in_span('db-query', attributes: {'db.statement' => 'SELECT private_column FROM accounts'}) {}
+      t.in_span('framework', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do
+        t.in_span('db-inside-ai-trace', attributes: {'db.statement' => 'SELECT private_column FROM sessions'}) {}
+        #{plain_code}
+      end
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    spans = export_spans.map(&:first)
+    assert_equal %w[chat\ gpt-4o-mini framework], spans.map(&:name)
+    refute_includes spans.map(&:to_h).to_s, 'private_column'
+  end
+
+  # A server span goes to Future AGI only when its trace contained an AI span.
+  def test_server_span_reaches_future_agi_only_with_an_ai_span_in_its_trace
+    code = app_sdk + <<~RUBY
+      t = OpenTelemetry.tracer_provider.tracer('app')
+      t.in_span('GET /health', kind: :server) {}
+      t.in_span('POST /chat', kind: :server) do
+        #{plain_code}
+      end
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    spans = export_spans.map(&:first)
+    assert_equal ['chat gpt-4o-mini', 'POST /chat'], spans.map(&:name)
+    assert_equal spans.last.span_id, spans.first.parent_span_id
   end
   def test_doctor_masks_and_exports_diagnostic
     code = "require 'json'; puts JSON.generate(TraceAI::Auto.report(test_export: true))"
@@ -252,8 +362,7 @@ class EndToEndTest < Minitest::Test
     end
   end
   def test_parent_dedup_suppression_and_context
-    prefix = <<~RUBY
-      require 'opentelemetry/sdk'
+    prefix = app_sdk + <<~RUBY
       t = OpenTelemetry.tracer_provider.tracer('application')
       def invoke; #{plain_code}; end
       t.in_span('framework', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do
@@ -261,6 +370,7 @@ class EndToEndTest < Minitest::Test
       end
       t.in_span('dedicated', attributes: {'gen_ai.span.kind' => 'LLM'}) { invoke }
       OpenTelemetry::Common::Utilities.untraced { invoke }
+      t.in_span('application-only') {}
     RUBY
     _, stderr, status = app(prefix)
     assert status.success?, stderr
@@ -268,7 +378,10 @@ class EndToEndTest < Minitest::Test
     wire = spans.select { |s| attrs(s.attributes)['traceai.capture.layer'] == 'wire' }
     assert_equal 1, wire.length
     parent = spans.find { |s| s.name == 'framework' }; assert_equal parent.span_id, wire.first.parent_span_id
-    assert_equal '<redacted>', attrs(wire.first.attributes)['session.id'] # S6 session-name rule
+    # The session id set through the agent's API is exported as set.
+    assert_equal 's123', attrs(wire.first.attributes)['session.id']
+    # Only AI spans reach Future AGI: the wire span and the two tagged spans.
+    assert_equal %w[chat\ gpt-4o-mini dedicated framework], spans.map(&:name).sort
   end
   def test_coexists_with_existing_provider
     # Preload manual agent API only; app sets its provider before one-line init.

@@ -291,7 +291,7 @@ class EndToEndTest
         TraceAI::Auto.init(hide_outputs: true)
       end
       ['safe text', '{partial model JSON'].each do |text|
-        host.tracer('app').in_span('safe-name resource-secret-12345678', attributes: {'output.value' => text, 'gen_ai.usage.input_tokens' => 7}) {}
+        host.tracer('app').in_span('safe-name resource-secret-12345678', attributes: {'gen_ai.span.kind' => 'CHAIN', 'output.value' => text, 'gen_ai.usage.input_tokens' => 7}) {}
       end
       abort 'flush failed' if ENV['TEST_AGENT'] == 'true' && !TraceAI::Auto.flush
       puts JSON.generate(memory.finished_spans.map { |span| [span.name, span.attributes, span.resource.instance_variable_get(:@attributes)] })
@@ -341,6 +341,7 @@ class EndToEndTest
       response = Net::HTTP.start('127.0.0.1', #{@provider.port}) { |client| client.request(request) }
       ['ordinary output', '{partial JSON'].each_with_index do |text, index|
         host.tracer('app').in_span('credential-key-' + index.to_s, attributes: {
+          'gen_ai.span.kind' => 'CHAIN',
           'gen_ai.usage.wireObserved783421' => 7,
           'gen_ai.usage.fixture-api-12345678' => 8,
           'gen_ai.usage.input_tokens' => 9,
@@ -394,7 +395,7 @@ class EndToEndTest
                    'gen_ai.audio.transcript.text' => 'PRIVATE_NESTED_TRANSCRIPT',
                    'gen_ai.audio.transcript.0' => 'PRIVATE_INDEXED_TRANSCRIPT',
                    'gen_ai.audio.transcript.parts.0.text' => ['PRIVATE_ARRAY_TRANSCRIPT']}
-        host.tracer('app').in_span('transcript-family', attributes: content.merge('gen_ai.operation.name' => #{operation.inspect})) do |span|
+        host.tracer('app').in_span('transcript-family', attributes: {'gen_ai.span.kind' => 'CHAIN'}.merge(content).merge('gen_ai.operation.name' => #{operation.inspect})) do |span|
           span.add_event('transcript-event', attributes: content)
         end
         abort 'flush failed' if ENV['TEST_HIDE_FLAG'] && !TraceAI::Auto.flush

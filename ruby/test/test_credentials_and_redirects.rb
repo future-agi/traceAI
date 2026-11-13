@@ -13,6 +13,7 @@ class EndToEndTest
     code = <<~RUBY
       require 'net/http'
       if defined?(TraceAI::Auto)
+        #{app_sdk}
         memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
         OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
       end
@@ -62,7 +63,7 @@ class EndToEndTest
     @provider.stop
     payload = JSON.generate(id: 'native-private', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: "echo #{key}"}], stop_reason: 'end_turn', usage: {input_tokens: 2, output_tokens: 1})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, payload] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       require 'anthropic'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
@@ -73,6 +74,8 @@ class EndToEndTest
       abort 'native missing' unless native
       original = JSON.generate(native.attributes)
       abort 'native capture missing' unless original.include?(#{key.inspect})
+      # An AI span from the application echoes the request-only key later.
+      OpenTelemetry.tracer_provider.tracer('app').in_span('agent-step', attributes: {'gen_ai.span.kind' => 'AGENT', 'output.value' => response.content.first.text}) {}
       TraceAI::Auto.flush
       abort 'other exporter mutated' unless JSON.generate(native.attributes) == original
       puts 'APPLICATION_RAN'
@@ -83,10 +86,13 @@ class EndToEndTest
       assert status.success?, "#{flags}: #{stderr}"; assert_equal "APPLICATION_RAN\n", stdout
       assert_equal "Bearer #{key}", @provider.requests.pop(true)[:headers]['authorization']
       spans = export_spans.map(&:first)
+      # The vendor span has no gen_ai.span.kind, so only the wire span (when
+      # enabled) and the application's AI span reach Future AGI.
       assert_equal(flags.empty? ? 2 : 1, spans.length, flags.inspect)
-      native = spans.find { |span| span.name == 'anthropic.messages.create' }; refute_nil native
+      refute spans.any? { |span| span.name == 'anthropic.messages.create' }, flags.inspect
       refute_includes spans.map(&:to_h).to_s, key, flags.inspect
-      assert_includes attrs(native.attributes)['gen_ai.output.messages'], '<redacted>'
+      step = spans.find { |span| span.name == 'agent-step' }; refute_nil step
+      assert_equal 'echo <redacted>', attrs(step.attributes)['output.value']
     end
   end
 
@@ -95,11 +101,11 @@ class EndToEndTest
     @provider.stop
     payload = JSON.generate(choices: [{message: {role: 'assistant', content: "echo #{key}"}}])
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, payload] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       require 'httpx'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
-      OpenTelemetry.tracer_provider.tracer('app').in_span('library-call') do |span|
+      OpenTelemetry.tracer_provider.tracer('app').in_span('library-call', attributes: {'gen_ai.span.kind' => 'CHAIN'}) do |span|
         response = HTTPX.plugin(:stream).post('#{@provider.url}/v1/chat/completions', json: {model: 'm', messages: []}, headers: {'x-api-key' => #{key.inspect}}, stream: true)
         abort 'bad status' unless response.status == 200
         output = +''; response.each { |chunk| output << chunk }
@@ -125,7 +131,7 @@ class EndToEndTest
     @provider.stop
     payload = JSON.generate(id: 'native-params', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: 'answer'}], stop_reason: 'end_turn', usage: {input_tokens: 2, output_tokens: 1})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json', 'request-id' => 'safe-request-id'}, payload] }
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       require 'anthropic'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
       OpenTelemetry.tracer_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
@@ -143,11 +149,13 @@ class EndToEndTest
     stdout, stderr, status = app(code, {'FI_HIDE_LLM_INVOCATION_PARAMETERS' => 'true'})
     assert status.success?, stderr; assert_equal "APPLICATION_RAN\n", stdout
     spans = export_spans.map(&:first)
-    native = spans.find { |span| span.name == 'anthropic.messages.create' }; refute_nil native
-    attributes = attrs(native.attributes)
+    # The vendor span has no gen_ai.span.kind and is not sent to Future AGI;
+    # the wire span that is sent still hides the invocation parameters.
+    refute spans.any? { |span| span.name == 'anthropic.messages.create' }
+    wire = spans.find { |span| attrs(span.attributes)['traceai.capture.layer'] == 'wire' }; refute_nil wire
+    attributes = attrs(wire.attributes)
     assert_equal 'claude-test', attributes['gen_ai.request.model']
-    assert_equal 'safe-request-id', attributes['anthropic.request.id']
-    %w[gen_ai.request.max_tokens gen_ai.request.reasoning.level anthropic.request.service_tier anthropic.thinking.type anthropic.thinking.budget_tokens].each do |key|
+    %w[gen_ai.request.max_tokens gen_ai.request.parameters gen_ai.request.reasoning.level anthropic.request.service_tier anthropic.thinking.type anthropic.thinking.budget_tokens].each do |key|
       refute attributes.key?(key), key
     end
   end
@@ -255,7 +263,7 @@ class EndToEndTest
         [200, {'Content-Type' => 'application/json'}, JSON.generate(model: model, choices: [{message: {role: 'assistant', content: model + '-answer'}}])]
       end
     end
-    code = <<~RUBY
+    code = app_sdk + <<~RUBY
       require 'httpx'; require 'net/http'
       session = HTTPX.plugin(:follow_redirects)
       module NestedRedirectCallback
