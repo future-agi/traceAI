@@ -90,11 +90,11 @@ Up to `traceai-openai` 0.1.10, the provider field says `openai`, including for Q
 | `dashscope.aliyuncs.com` (Beijing) | `openai` | `dashscope` |
 | `dashscope-intl.aliyuncs.com` (Singapore) | `openai` | `dashscope` |
 | `dashscope-us.aliyuncs.com` (Virginia) | `openai` | `dashscope` |
-| `cn-hongkong.dashscope.aliyuncs.com` (Hong Kong shared) | `openai` | `openai` |
+| `cn-hongkong.dashscope.aliyuncs.com` (Hong Kong shared) | `openai` | `dashscope` |
 | `*.maas.aliyuncs.com` (including Hong Kong workspace hosts) | `openai` | `dashscope` |
 | Custom proxies and loopback hosts | `openai` | `openai` |
 
-The Hong Kong shared host is not in the current provider map, so it retains `openai`; its workspace-dedicated host is mapped to `dashscope`. This affects the tracing label, not which endpoint receives the request.
+The Hong Kong shared host and its workspace-dedicated hosts map to `dashscope` in source. The shared-host correction requires a release newer than 0.1.12; versions through 0.1.12 label it `openai`. This affects the tracing label, not which endpoint receives the request.
 
 - Streamed output accumulates in `output.value`. Up to 0.1.10, streamed and failed calls have no `gen_ai.request.model` attribute; later versions record the requested model there. The requested model remains in `gen_ai.request.parameters` unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 - When the provider supplies usage, the span records `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens`. Missing usage is omitted, never set to zero. Without `include_usage`, the OpenAI-compatible stream does not return usage by default; [Alibaba documents](https://www.alibabacloud.com/help/en/model-studio/stream) requesting it in the last chunk.
@@ -181,7 +181,7 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 | 1.69.0 | Repository source (SDK floor) |
 | 3.24.0 | Published `traceAI-openai==0.1.10` + `fi-instrumentation-otel==1.1.0` |
 
-The fixtures cover chat, streaming with and without final usage, response-versus-request model IDs, provider errors, privacy controls, project-name precedence, strict URL validation, and CLI subprocesses. Synthetic response IDs and usage counts are fixture data, not provider output. Provider assertions require the exact label for each shared and workspace host, including the Hong Kong shared-host exception, across chat, streaming, and errors. Proxy and look-alike hosts must keep `openai`. Expected provider/model attributes are selected by the imported source or pinned published package, not by accepting either value.
+The fixtures cover chat, streaming with and without final usage, response-versus-request model IDs, provider errors, privacy controls, project-name precedence, strict URL validation, and CLI subprocesses. Synthetic response IDs and usage counts are fixture data, not provider output. Provider assertions require the exact label for each shared and workspace host, including the Hong Kong shared host, across chat, streaming, and errors. Proxy and look-alike hosts must keep `openai`. Expected provider/model attributes are selected by the imported source or pinned published package, not by accepting either value.
 
 ## Official API references
 

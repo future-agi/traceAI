@@ -32,6 +32,7 @@ _HOSTS = {
     "dashscope.aliyuncs.com": "dashscope",
     "dashscope-intl.aliyuncs.com": "dashscope",
     "dashscope-us.aliyuncs.com": "dashscope",
+    "cn-hongkong.dashscope.aliyuncs.com": "dashscope",
     "api.perplexity.ai": "perplexity",
     "api.parallel.ai": "parallel",
     "api.orcarouter.ai": "orcarouter",

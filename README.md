@@ -320,6 +320,8 @@ Python and TypeScript provide framework instrumentors; Java provides client wrap
 
 All 80 families are listed below, grouped by what they integrate. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations. Package availability is not a claim of complete upstream feature compatibility; check each package's source and documentation for its scope.
 
+**OpenAI-compatible provider recipes:** [Qwen / Alibaba Cloud Model Studio (Python)](python/examples/qwen/) uses the maintained [OpenAI instrumentor](python/frameworks/openai/), not a separate Qwen package.
+
 [Model providers](#model-providers) · [Agent frameworks](#agent-frameworks) · [RAG & vector databases](#rag-vector-databases) · [Tools & search](#tools-search) · [Voice & realtime](#voice-realtime) · [Gateways & proxies](#gateways-proxies) · [Coding agents](#coding-agents) · [Java frameworks](#java-frameworks) · [Other](#other)
 
 <a id="model-providers"></a>
