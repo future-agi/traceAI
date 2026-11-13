@@ -370,6 +370,20 @@ class EndToEndTest < Minitest::Test
       end
     end
   end
+  # Rack server spans are installed only after the application's own
+  # OpenTelemetry configuration and once Rack is loaded. Until then the report
+  # says pending, never failed. (The Rack instrumentation gem is not in this
+  # bundle, so the child registers a stand-in specification for it.)
+  def test_rack_instrumentation_is_pending_until_rack_and_the_application_provider_exist
+    code = <<~RUBY
+      require 'json'
+      Gem.loaded_specs['opentelemetry-instrumentation-rack'] = Gem::Specification.new { |s| s.name = 'opentelemetry-instrumentation-rack'; s.version = '0.0.0' }
+      puts JSON.generate(TraceAI::Auto.report[:integrations]['rack'])
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    assert_equal({'status' => 'pending'}, JSON.parse(stdout))
+  end
   def test_missing_credentials_no_patch_one_warning
     stdout, stderr, status = app(plain_code + "\nputs Net::HTTP.ancestors.any? { |m| m.name == 'TraceAI::Auto::NetHTTP' }", {'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil})
     assert status.success?, stderr; assert_equal CHAT + "false\n", stdout
