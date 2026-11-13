@@ -21,6 +21,13 @@ internal static class PrivacyCatalog
     private static readonly (Regex Rule,string[] Guards)[] Exclusions=Credentials["exclusions"]!.AsArray().Select(n=>(Rx(n!["regex"]!.GetValue<string>()),
         n["unless_contains_patterns"] is {} guards?Strings(guards).Select(id=>Credentials["patterns"]!.AsArray().First(p=>p!["id"]!.GetValue<string>()==id)!["contains"]!.GetValue<string>()).ToArray():Array.Empty<string>())).ToArray();
     private static readonly Regex[] ContextExclusions=Credentials["contextual_exclusions"]!.AsArray().Select(n=>Rx(n!["path_regex"]!.GetValue<string>())).ToArray();
+    // Credential-shaped values are redacted wherever they appear in exported text,
+    // independent of names. They never exempt anything.
+    private static readonly Regex[] ValueShapes=Credentials["value_shapes"]!.AsArray().Select(n=>n!["flags"]!.GetValue<string>() switch {
+        ""=>Rx(n["regex"]!.GetValue<string>()),
+        "i"=>new Regex(n["regex"]!.GetValue<string>(),RegexOptions.CultureInvariant|RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(250)),
+        _=>throw new InvalidDataException("Unsupported value shape flags")
+    }).ToArray();
     private static readonly HashSet<string> Signed=Strings(Catalog["signed_url"]!["parameters"]!).Select(Normalize).ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<char> Alphabet=Media["base64_alphabet"]!.GetValue<string>().ToHashSet();
     private static readonly HashSet<string> Unrecognized=Strings(Media["unrecognized_base64_fields"]!).ToHashSet(StringComparer.Ordinal);
@@ -225,6 +232,7 @@ internal static class PrivacyCatalog
         }
         foreach(string secret in (secrets??[]).Where(s=>s.Length>=8&&s!=Redacted).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length).ThenBy(s=>s,StringComparer.Ordinal))
             value=string.Join(Redacted,value.Split(Redacted,StringSplitOptions.None).Select(part=>part.Replace(secret,Redacted,StringComparison.Ordinal)));
+        foreach(var shape in ValueShapes) value=shape.Replace(value,Redacted);
         return value;
     }
     internal sealed class Budget
