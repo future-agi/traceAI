@@ -62,7 +62,7 @@ response = client.chat.completions.create(
 
 - Python >= 3.9
 - openai >= 1.0.0
-- fi-instrumentation >= 0.1.0
+- fi-instrumentation-otel >= 0.1.0
 - opentelemetry-api >= 1.0.0
 - opentelemetry-sdk >= 1.0.0
 
