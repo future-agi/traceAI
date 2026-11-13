@@ -139,9 +139,10 @@ public class StartupHookTests
         return new(process.ExitCode,await stdout,await stderr);
     }
     private static string Configuration=>AppContext.BaseDirectory.Contains("/Release/")?"Release":"Debug";
-    /// <summary>The startup hook a user would publish for an application on this framework.</summary>
+    /// <summary>The startup hook a user would publish for an application on this framework:
+    /// one net8.0 payload serves .NET 8 and .NET 10 applications.</summary>
     internal static string HookPath(string framework)=>
-        Path.Combine(WireFixtureTests.Repo,"csharp","src","TraceAI.AutoInstrumentation","bin",Configuration,framework,"TraceAI.AutoInstrumentation.dll");
+        Path.Combine(WireFixtureTests.Repo,"csharp","src","TraceAI.AutoInstrumentation","bin",Configuration,"net8.0","TraceAI.AutoInstrumentation.dll");
     internal static Process StartApp(string url,string mode,Dictionary<string,string?> environment,string framework="net10.0",bool stock=false)
     {
         var csharp=Path.Combine(WireFixtureTests.Repo,"csharp");

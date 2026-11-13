@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The SDK project targets net10 only and follows the solution's OpenTelemetry test
        matrix. Build its unchanged sources for net8 here, against the hook's own pinned
-       OpenTelemetry; the net8.0 and net10.0 hook payloads both load this copy. -->
+       OpenTelemetry; the hook payload, for .NET 8 and .NET 10 applications, loads this copy. -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>FIInstrumentation</AssemblyName>

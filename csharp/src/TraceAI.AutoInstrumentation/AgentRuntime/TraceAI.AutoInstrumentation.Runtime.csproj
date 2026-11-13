@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>TraceAI.AutoInstrumentation.Runtime</AssemblyName>
     <RootNamespace>TraceAI.AutoInstrumentation</RootNamespace>
     <PackageId>TraceAI.AutoInstrumentation.Runtime</PackageId>
@@ -17,7 +17,7 @@
     <EmbeddedResource Include="../Wire/wire-protocols.json" LogicalName="TraceAI.AutoInstrumentation.Wire.wire-protocols.json" />
     <EmbeddedResource Include="../Wire/privacy.json" LogicalName="TraceAI.AutoInstrumentation.Wire.privacy.json" />
     <None Include="../Wire/privacy-fixtures.json" Pack="true" PackagePath="privacy/" />
-    <!-- Both payloads use the private net8.0 build of the SDK sources. Referencing the
+    <!-- The payload uses the private net8.0 build of the SDK sources. Referencing the
          SDK project would tie the hook's pinned OpenTelemetry to the solution's
          OpenTelemetryVersion test matrix and fail restore with a package downgrade. -->
     <ProjectReference Include="../Net8Sdk/TraceAI.AutoInstrumentation.Net8Sdk.csproj" />
