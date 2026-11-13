@@ -9,8 +9,15 @@ try:
     from fi_instrumentation.auto._bootstrap import start
 
     start()
-except Exception:  # never stop the application from starting
-    pass
+except Exception as error:  # never stop the application from starting
+    # fi-instrument may come from another environment (pipx, another venv) than the Python it
+    # runs. Say so once for the whole process tree: children inherit the marker. The .pth start
+    # uses the same marker, so the two never both print.
+    if (os.environ.get("FI_AUTO_INSTRUMENT", "").strip().lower() in ("1", "true", "yes", "on")
+            and not os.environ.get("FI_AUTO_INSTRUMENT_WARNED")):
+        os.environ["FI_AUTO_INSTRUMENT_WARNED"] = "1"
+        sys.stderr.write(f"traceAI: tracing is off: {sys.executable} cannot import fi_instrumentation "
+                         f"({type(error).__name__}). Install fi-instrumentation-otel in this environment.\n")
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.machinery.PathFinder.find_spec(

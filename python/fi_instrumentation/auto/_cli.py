@@ -21,6 +21,9 @@ from fi_instrumentation.auto import _manager
 from fi_instrumentation.auto._config import CONFIG_TEMPLATE, DEFAULT_CONFIG_FILE, AutoConfig, ConfigError, resolve
 
 SITECUSTOMIZE_DIR = Path(__file__).resolve().parent / "_sitecustomize"
+# Windows has no exec: os.execve starts a new process and ends this one, so the shell would
+# return at once and lose the program's exit code.
+_WINDOWS = os.name == "nt"
 COMMANDS = ("run", "doctor", "bootstrap", "init-config", "validate")
 NOT_TRACED_HINT = ("Libraries marked missing_instrumentor are not traced yet: this version traces a library only "
                    "through its traceAI package. Run `fi-instrument bootstrap --install`, then restart the app.")
@@ -38,6 +41,8 @@ def _run(argv: Sequence[str]) -> int:
     env["FI_AUTO_INSTRUMENT"] = "true"
     program = shutil.which(argv[0]) or argv[0]
     try:
+        if _WINDOWS:
+            return subprocess.call([program, *argv[1:]], env=env)
         os.execve(program, list(argv), env)
     except OSError as error:
         print(f"fi-instrument: cannot run {argv[0]}: {error}", file=sys.stderr)
@@ -116,6 +121,20 @@ def _doctor(args: argparse.Namespace) -> int:
 _OPT_IN_CATEGORIES = ("vector_db", "web")
 
 
+def _contrib_pin() -> str:
+    """``==<version>`` of the installed opentelemetry-instrumentation, as opentelemetry-bootstrap pins.
+
+    The web server packages are released together with it; an unpinned install could move
+    opentelemetry-instrumentation, the semantic conventions or the API/SDK the app relies on.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return "==" + version("opentelemetry-instrumentation")
+    except PackageNotFoundError:
+        return ""
+
+
 def _missing_packages(settings: AutoConfig, include_all: bool) -> List[str]:
     packages = []
     for status in _manager.plan(settings):
@@ -123,8 +142,11 @@ def _missing_packages(settings: AutoConfig, include_all: bool) -> List[str]:
             continue
         if status.category in _OPT_IN_CATEGORIES and not include_all:
             continue
-        if status.package not in packages:
-            packages.append(status.package)
+        package = status.package
+        if status.category == "web" and package.startswith("opentelemetry-instrumentation-"):
+            package += _contrib_pin()
+        if package not in packages:
+            packages.append(package)
     return packages
 
 
