@@ -445,15 +445,23 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     internal AutoProcessor(AutoConfig config,Func<bool>? enabled=null)
     {
         _config=config; _enabled=enabled??(()=>true); KnownSecrets.Seed(config);
+        bool inputs=config.Bool("HIDE_INPUTS"),outputs=config.Bool("HIDE_OUTPUTS"),
+            inputMessages=config.Bool("HIDE_INPUT_MESSAGES"),outputMessages=config.Bool("HIDE_OUTPUT_MESSAGES"),
+            inputText=config.Bool("HIDE_INPUT_TEXT"),outputText=config.Bool("HIDE_OUTPUT_TEXT");
         _mask=config.Options.TraceConfig??new TraceConfig {
-            HideInputs=config.Bool("HIDE_INPUTS"), HideOutputs=config.Bool("HIDE_OUTPUTS"),
-            HideInputMessages=config.Bool("HIDE_INPUT_MESSAGES"), HideOutputMessages=config.Bool("HIDE_OUTPUT_MESSAGES"),
-            HideInputText=config.Bool("HIDE_INPUT_TEXT"), HideOutputText=config.Bool("HIDE_OUTPUT_TEXT"),
+            HideInputs=inputs, HideOutputs=outputs,
+            HideInputMessages=inputMessages, HideOutputMessages=outputMessages,
+            HideInputText=inputText, HideOutputText=outputText,
             HideInputImages=config.Bool("HIDE_INPUT_IMAGES"), HideEmbeddingVectors=config.Bool("HIDE_EMBEDDING_VECTORS"),
             HideLlmInvocationParameters=config.Bool("HIDE_LLM_INVOCATION_PARAMETERS"),
+            // As in TraceConfig: an explicit FI_HIDE_ERROR_DETAILS wins; otherwise any content
+            // hide flag also hides error text, because provider errors can echo the prompt.
+            HideErrorDetails=config.OptionalBool("HIDE_ERROR_DETAILS")??(inputs||outputs||inputMessages||outputMessages||inputText||outputText),
             Base64ImageMaxLength=int.TryParse(config.Get("BASE64_IMAGE_MAX_LENGTH"),out var max)?Math.Max(0,max):32000
         };
     }
+    /// <summary>Error messages, stack traces and status descriptions are omitted; error types stay.</summary>
+    internal bool HideErrorDetails=>_mask.HideErrorDetails;
     public override void OnStart(Activity activity)
     {
         try
@@ -496,7 +504,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
         object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:key),operation);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
-        return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit);
+        return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails);
     }
     internal Resource WithRouting(Resource resource)=>ResourceBuilder.CreateEmpty()
         .AddAttributes(new Dictionary<string,object> {
@@ -547,7 +555,11 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
             ((key=="gen_ai.request.parameters"||key.StartsWith("gen_ai.tool.definitions",StringComparison.Ordinal))&&(inputText||_mask.HideInputMessages))) return TraceConfig.RedactedValue;
         // TraceConfig's decision depends only on the key. Never serialize a value
         // just to make that decision (NaN, cycles and custom serializers are valid inputs).
-        if(_mask.Mask(key,"")==TraceConfig.RedactedValue) return TraceConfig.RedactedValue;
+        // Null means omit: error messages and stack traces under HideErrorDetails.
+        var decision=_mask.Mask(key,"");
+        if(decision==null) return null;
+        if(decision==TraceConfig.RedactedValue) return TraceConfig.RedactedValue;
+        if(_mask.HideErrorDetails && key=="otel.status_description") return null;
         if(_mask.HideInputImages && (key.Contains("image",StringComparison.OrdinalIgnoreCase)||key.Contains("file_uri",StringComparison.OrdinalIgnoreCase)||key.Contains("fileUri",StringComparison.Ordinal)||key.Contains("file_url",StringComparison.OrdinalIgnoreCase)||key.Contains("file.uri",StringComparison.OrdinalIgnoreCase)||key.Contains("file.url",StringComparison.OrdinalIgnoreCase))) return TraceConfig.RedactedValue;
         value=WirePrivacy.Scrub(value,path:key);
         if(value is string str)

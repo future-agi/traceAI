@@ -694,11 +694,11 @@ internal static class WireCore
             for(int k=0;k<m.Calls.Count;k++) { var c=m.Calls[k]; var ck=$"{key}.tool_calls.{k}.tool_call"; Put(attrs,ck+".id",c.Id); Put(attrs,ck+".function.name",c.Name); Put(attrs,ck+".function.arguments",c.Arguments); }
         }
     }
-    internal static SpanResult? Build(WireMatch m,RequestData req,ResponseData resp)
+    internal static SpanResult? Build(WireMatch m,RequestData req,ResponseData resp,bool hideErrorDetails=false)
     {
-        try { return BuildInternal(m,req,resp); } catch { return null; }
+        try { return BuildInternal(m,req,resp,hideErrorDetails); } catch { return null; }
     }
-    private static SpanResult? BuildInternal(WireMatch m,RequestData req,ResponseData resp)
+    private static SpanResult? BuildInternal(WireMatch m,RequestData req,ResponseData resp,bool hideErrorDetails)
     {
         var p=Check(m,req); if(p==null) return null;
         var body=Decode(resp,S(m.Endpoint["format"])!); bool ok=resp.Error==null&&(resp.Status??0)<400;
@@ -738,8 +738,12 @@ internal static class WireCore
         if(!ok)
         {
             a["error.type"]=resp.Error?.GetType().Name??resp.Status?.ToString()??"unknown";
-            var d=body.Json is JsonArray ? G(body.Json,"0") : body.Json;
-            description=(resp.Error==null?null:WirePrivacy.ErrorMessage(resp.Error))??S(G(d,"error","message"))??S(G(d,"error"))??S(G(d,"message"))??S(G(d,"detail"))??S(G(d,"err_msg"))??S(G(d,"detail","message"))??(body.Text is {} t?t[..Math.Min(t.Length,500)]:null)??$"HTTP {resp.Status}";
+            // Provider error text can echo the prompt; with hidden error details only the type stays.
+            if(!hideErrorDetails)
+            {
+                var d=body.Json is JsonArray ? G(body.Json,"0") : body.Json;
+                description=(resp.Error==null?null:WirePrivacy.ErrorMessage(resp.Error))??S(G(d,"error","message"))??S(G(d,"error"))??S(G(d,"message"))??S(G(d,"detail"))??S(G(d,"err_msg"))??S(G(d,"detail","message"))??(body.Text is {} t?t[..Math.Min(t.Length,500)]:null)??$"HTTP {resp.Status}";
+            }
         }
         KnownSecrets.Register(WirePrivacy.RequestSecrets(req));
         string[]? secrets;

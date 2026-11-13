@@ -104,6 +104,8 @@ internal sealed class AutoConfig
     private void Set(string key,string? value) { if(value!=null) Values["FI_"+key]=value; }
     internal string Get(string key) => Values.GetValueOrDefault("FI_"+key)??"";
     internal bool Bool(string key) => Get(key).ToLowerInvariant() is "true" or "1" or "yes";
+    /// <summary>Null when neither the environment nor the file sets the key.</summary>
+    internal bool? OptionalBool(string key) => string.IsNullOrWhiteSpace(Get(key)) ? null : Bool(key);
     internal bool Disabled => Values.GetValueOrDefault("OTEL_SDK_DISABLED")?.ToLowerInvariant() == "true";
     internal bool HasCredentials => !string.IsNullOrWhiteSpace(Get("API_KEY")) && !string.IsNullOrWhiteSpace(Get("SECRET_KEY"));
     internal int MaxBody => int.TryParse(Get("WIRE_MAX_BODY_BYTES"),out var n) && n >= 0 ? n : 4194304;

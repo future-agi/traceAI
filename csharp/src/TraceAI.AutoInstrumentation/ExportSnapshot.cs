@@ -100,7 +100,8 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         return scope;
     }
     internal static ExportSnapshot Create(IEnumerable<Activity> batch,Resource resource,
-        Func<string,object,string?,object?> safe,Func<string,string> redact,Func<string,string,string>? eventKey=null,int? attributeLimit=null)
+        Func<string,object,string?,object?> safe,Func<string,string> redact,Func<string,string,string>? eventKey=null,int? attributeLimit=null,
+        bool hideErrorDetails=false)
     {
         var spans=new List<Activity>();
         var shared=new Budget(65536,8*1024*1024);
@@ -118,8 +119,9 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 Set(copy,"_traceState",original.TraceStateString==null?null:budget.Text(original.TraceStateString,redact));
                 copy.DisplayName=budget.Text(original.DisplayName,redact);
                 Set(copy,"<OperationName>k__BackingField",budget.Text(original.OperationName,redact));
+                // Hidden error details keep the status code but never its description.
                 copy.SetStatus(original.Status==ActivityStatusCode.Unset?ActivityStatusCode.Ok:original.Status,
-                    original.StatusDescription==null?null:budget.Text(original.StatusDescription,redact));
+                    hideErrorDetails||original.StatusDescription==null?null:budget.Text(original.StatusDescription,redact));
                 foreach(var tag in Tags(original.TagObjects,budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
                 foreach(var item in original.Events)
                 {

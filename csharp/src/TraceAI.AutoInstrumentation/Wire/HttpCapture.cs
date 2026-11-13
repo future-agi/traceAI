@@ -301,7 +301,7 @@ internal sealed class Capture
             var ended=error!=null?observed:_lastByte??_headers??observed;
             if(ended<_start) ended=_start;
             if(!_enabled()) return;
-            var result=WireCore.Build(_match,_request,Response); if(result==null) return;
+            var result=WireCore.Build(_match,_request,Response,_privacy?.HideErrorDetails==true); if(result==null) return;
             var tags=new ActivityTagsCollection(result.Attributes.Select(p=>new KeyValuePair<string,object?>(p.Key,p.Value)));
             foreach(var (key,value) in _context) tags[key]=value;
             var hints=PrivacyCatalog.IndexHints(tags);
