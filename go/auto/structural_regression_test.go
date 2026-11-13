@@ -12,9 +12,6 @@ import (
 	"testing"
 	"time"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -440,38 +437,8 @@ func TestTransportBoundaryTimestamps(t *testing.T) {
 	}
 }
 
-func TestRealAnthropicDedupThroughNativeSpan(t *testing.T) {
-	ownedRegressionSetup(t)
-	p := sdktrace.NewTracerProvider()
-	defer p.Shutdown(context.Background())
-	otel.SetTracerProvider(p)
-	rec := tracetest.NewSpanRecorder()
-	if _, err := InitForTest(context.Background(), WithSpanProcessor(rec)); err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"test","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
-	}))
-	defer server.Close()
-	ctx, model := p.Tracer("traceai-middleware").Start(context.Background(), "model", trace.WithAttributes(attribute.String("gen_ai.span.kind", "LLM")))
-	client := anthropic.NewClient(anthropicoption.WithAPIKey("ANTHROPIC_PROVIDER_PRIVATE"), anthropicoption.WithBaseURL(server.URL), anthropicoption.WithMaxRetries(0))
-	message, err := client.Messages.New(ctx, anthropic.MessageNewParams{Model: "test", MaxTokens: 16, Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("hi"))}})
-	if err != nil || message.ID != "msg_1" {
-		t.Fatalf("SDK return value changed: %v", err)
-	}
-	model.SetAttributes(attribute.String("output.value", "ANTHROPIC_PROVIDER_PRIVATE"))
-	model.End()
-	for _, span := range rec.Ended() {
-		if spanAttr(span, "traceai.capture.layer").AsString() == "wire" {
-			t.Fatal("real Anthropic native span broke middleware deduplication")
-		}
-		if strings.Contains(spanAttr(span, "output.value").AsString(), "ANTHROPIC_PROVIDER_PRIVATE") {
-			t.Fatal("real SDK credential escaped ancestor privacy")
-		}
-	}
-}
+// The real Anthropic SDK deduplication check lives in the sdkcompat test
+// module, so this module does not require the SDK.
 
 type upgradedBody struct {
 	strings.Reader

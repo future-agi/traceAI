@@ -11,11 +11,7 @@ import (
 	"testing"
 	"time"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/future-agi/traceAI/go/auto"
-	"github.com/openai/openai-go/v3"
-	openaioption "github.com/openai/openai-go/v3/option"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -171,40 +167,8 @@ func TestDedupAndSuppression(t *testing.T) {
 		})
 	}
 }
-func TestRealSDKDefaults(t *testing.T) {
-	for _, sdk := range []string{"openai", "anthropic"} {
-		t.Run(sdk, func(t *testing.T) {
-			rec, _ := setup(t)
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = io.Copy(io.Discard, r.Body)
-				w.Header().Set("Content-Type", "application/json")
-				if sdk == "openai" {
-					_, _ = io.WriteString(w, responseJSON)
-				} else {
-					_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
-				}
-			}))
-			defer s.Close()
-			if sdk == "openai" {
-				c := openai.NewClient(openaioption.WithAPIKey("sdk-test"), openaioption.WithBaseURL(s.URL+"/v1/"), openaioption.WithMaxRetries(0))
-				_, err := c.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{Model: "test-model", Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("Hi")}})
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				c := anthropic.NewClient(anthropicoption.WithAPIKey("sdk-test"), anthropicoption.WithBaseURL(s.URL), anthropicoption.WithMaxRetries(0))
-				_, err := c.Messages.New(context.Background(), anthropic.MessageNewParams{Model: "test-model", MaxTokens: 16, Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("Hi"))}})
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			ss := wires(rec)
-			if len(ss) != 1 || value(ss[0], "output.value") != "Hello" {
-				t.Fatalf("SDK default transport not covered: %d", len(ss))
-			}
-		})
-	}
-}
+// Real OpenAI and Anthropic SDK clients are checked in the sdkcompat test
+// module, so consumers of this module never inherit those SDK requirements.
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
