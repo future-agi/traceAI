@@ -305,10 +305,17 @@ internal static class ExportCallback
 
 internal static class InstrumentationSuppression
 {
-    private static readonly PropertyInfo? Legacy=typeof(SuppressTracing).GetProperty("IsSuppressed",BindingFlags.Static|BindingFlags.NonPublic);
+    // Runs on every activity start and outgoing request: resolve the SDK's non-public getter once.
+    private static readonly Func<bool>? Legacy=ResolveLegacy();
+    private static Func<bool>? ResolveLegacy()
+    {
+        try { return typeof(SuppressTracing).GetProperty("IsSuppressed",BindingFlags.Static|BindingFlags.NonPublic)?.GetGetMethod(true)?.CreateDelegate<Func<bool>>(); }
+        catch { return null; }
+    }
+    internal static bool LegacyResolved=>Legacy!=null;
     internal static bool Active
     {
-        get { try { return Sdk.SuppressInstrumentation || Legacy?.GetValue(null) is true || HostContext.Suppressed; } catch { return Sdk.SuppressInstrumentation; } }
+        get { try { return Sdk.SuppressInstrumentation || Legacy?.Invoke()==true || HostContext.Suppressed; } catch { return Sdk.SuppressInstrumentation; } }
     }
 }
 
@@ -522,7 +529,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
                 model=ancestor.GetCustomProperty("traceai.model.covered") is true || ancestor.GetTagItem("gen_ai.span.kind") is "LLM" or "EMBEDDING" or "RERANKER" or "GUARDRAIL";
             if(model) activity.SetCustomProperty("traceai.model.covered",true);
             // Wire spans carry the request's context from their own creation.
-            if(activity.GetTagItem("traceai.capture.layer") is not "wire" && HostContext.Attributes().ToArray() is { Length:>0 } context)
+            if(activity.GetTagItem("traceai.capture.layer") is not "wire" && HostContext.Attributes() is { Length:>0 } context)
                 activity.SetCustomProperty(ContextProperty,context);
         }
         catch { }

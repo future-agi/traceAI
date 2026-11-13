@@ -93,7 +93,7 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
         ReadRequest(request.Content,req,_config.MaxBody);
         foreach(var header in request.Headers) req.Headers[header.Key]=string.Join(",",header.Value);
         var capture=new Capture(match,req,_config.MaxBody,parent?.Context??default,started,
-            HostContext.Attributes().ToArray(),()=>Volatile.Read(ref _disposed)==0,clock,_attributeLimit,_privacy);
+            HostContext.Attributes(),()=>Volatile.Read(ref _disposed)==0,clock,_attributeLimit,_privacy);
         if(_pending.TryAdd(request,capture))
         {
             current?.SetCustomProperty("traceai.wire.capture",true);
