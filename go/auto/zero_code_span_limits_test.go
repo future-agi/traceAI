@@ -20,8 +20,8 @@ import (
 // reach OTLP, on span attributes, events and links; application bytes are
 // unchanged.
 func TestRC2ZeroCodeLimitsE2E(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "rc2limits")
-	build := hostCommand("go", "build", "-o", bin, "./testdata/rc2limits")
+	bin := filepath.Join(t.TempDir(), "spanlimits")
+	build := hostCommand("go", "build", "-o", bin, "./testdata/spanlimits")
 	build.Env = cleanEnv()
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build zero-code app %v %s", err, out)
