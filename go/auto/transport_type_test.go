@@ -45,8 +45,9 @@ func TestDefaultTransportTypeWhileCapturing(t *testing.T) {
 // With FI_WIRE_CAPTURE=false, http.DefaultTransport keeps its concrete type.
 func TestWireCaptureOffKeepsDefaultTransportType(t *testing.T) {
 	t.Setenv("FI_WIRE_CAPTURE", "false")
+	before := http.DefaultTransport
 	setup(t)
-	if _, ok := http.DefaultTransport.(*http.Transport); !ok {
+	if http.DefaultTransport != before {
 		t.Fatal("FI_WIRE_CAPTURE=false still replaced http.DefaultTransport")
 	}
 }
