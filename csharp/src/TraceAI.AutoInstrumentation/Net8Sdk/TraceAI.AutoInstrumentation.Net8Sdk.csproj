@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The legacy SDK project targets net10 only. Build its unchanged sources for
+       net8 here rather than retargeting files outside the auto-agent package. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>FIInstrumentation</AssemblyName>
+    <RootNamespace>FIInstrumentation</RootNamespace>
+    <PackageId>TraceAI.AutoInstrumentation.Net8Sdk</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Shared traceAI SDK sources compiled for the .NET 8 auto-instrumentation agent</Description>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../FIInstrumentation/**/*.cs" Exclude="../../FIInstrumentation/obj/**/*.cs;../../FIInstrumentation/bin/**/*.cs" Link="Sdk/%(RecursiveDir)%(Filename)%(Extension)" />
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.3" />
+  </ItemGroup>
+</Project>

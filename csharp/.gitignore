@@ -9,3 +9,8 @@ obj/
 *.snupkg
 .vs/
 TestResults/
+.dotnet/
+.downloads/
+artifacts/
+.nuget/
+.dotnet-home/
