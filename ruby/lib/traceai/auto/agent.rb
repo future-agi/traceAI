@@ -35,6 +35,9 @@ module TraceAI
         unless @config.credentials? || sdk_host_provider
           at_exit { warn_once('missing FI_API_KEY/FI_SECRET_KEY and application destination; instrumentation disabled') unless @initialized || sdk_host_provider }
         end
+        # Never wait silently: a Gemfile in the working directory (or
+        # BUNDLE_GEMFILE) without the application's Bundler.setup traces nothing.
+        at_exit { warn_once("found a Gemfile but the application never ran Bundler.setup; nothing was traced (start with 'bundle exec' or require 'bundler/setup')") if @pending && @config.credentials? && waiting_for_bundle? }
         @pending = true
         observe_targets
         load_hook.enable unless load_hook.enabled?
@@ -136,13 +139,13 @@ module TraceAI
         return true unless ENV['BUNDLE_GEMFILE'].to_s.empty?
         # Bundler also discovers Gemfile/gems.rb without BUNDLE_GEMFILE. Respect
         # that startup order rather than activating newer default gems first.
+        # Only the working directory counts: a Gemfile in a parent, such as a
+        # monorepo root, must not stop scripts run below it from being traced.
+        # The targeted Bundler.setup hook still sees a later setup either way.
         directory = Dir.pwd
-        loop do
-          return true if File.file?(File.join(directory, 'Gemfile')) || File.file?(File.join(directory, 'gems.rb'))
-          parent = File.dirname(directory)
-          return false if parent == directory
-          directory = parent
-        end
+        File.file?(File.join(directory, 'Gemfile')) || File.file?(File.join(directory, 'gems.rb'))
+      rescue SystemCallError
+        false
       end
       def bundle_ready?
         @bundle_ready || $LOADED_FEATURES.any? { |path| path.end_with?('/bundler/setup.rb') }
