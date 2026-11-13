@@ -23,7 +23,11 @@ public final class TraceAIAgent {
         new AgentBuilder.Default().disableClassFormatChanges()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .ignore(nameStartsWith("ai.traceai.auto.").and(not(hasSuperType(namedOneOf("okio.Source", "okhttp3.ResponseBody"))))
-                .or(nameStartsWith("net.bytebuddy.")))
+                // Built at runtime: Shade would rewrite the literal to the agent's own relocated package.
+                .or(nameStartsWith(String.join(".", "net", "bytebuddy", "")))
+                // Never match the OpenTelemetry Java agent's own classes, by name or by its class loaders.
+                .or(nameStartsWith(OtelJavaAgent.PREFIX)))
+            .or(any(), loader -> loader != null && loader.getClass().getName().startsWith(OtelJavaAgent.PREFIX))
             .with(new AgentBuilder.Listener.Adapter() {
                 @Override public void onTransformation(TypeDescription type, ClassLoader loader, JavaModule module, boolean loaded, DynamicType dynamicType) {
                     TraceAIAuto.integrationInstrumented(type.getName().startsWith("okhttp3") ? "okhttp" : "java.net.http");

@@ -87,6 +87,11 @@ public final class TraceAIAuto {
             KnownSecrets.PROCESS.seed(config, System.getenv());
             reportLibraries();
             if (config.flag("OTEL_SDK_DISABLED")) { STATUS.put("wire", "disabled"); return; }
+            if (OtelJavaAgent.present()) {
+                STATUS.put("wire", "disabled (OpenTelemetry Java agent detected)");
+                warn("The OpenTelemetry Java agent is also running; the Future AGI agent stays off and the application runs unchanged");
+                return;
+            }
             if (!config.credentials()) {
                 // Nothing was installed, so a later init() that supplies keys can still start.
                 initialized = false;
