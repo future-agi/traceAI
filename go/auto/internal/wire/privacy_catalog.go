@@ -59,6 +59,8 @@ type privacyCatalog struct {
 			Types    []string `json:"type_names"`
 			Metadata []string `json:"metadata_fields"`
 		}
+		Image imageRule
+		Video imageRule
 	}
 	Limits struct {
 		Depth int `json:"max_depth"`
@@ -83,6 +85,14 @@ type decimalCountRule struct {
 type metricContainer struct {
 	Keys      []string
 	ValueType string `json:"value_type"`
+}
+
+// imageRule is a catalog image or video declaration. Video has no payload
+// fields of its own; it uses the generic MIME payload fields.
+type imageRule struct {
+	Types    []string `json:"type_names"`
+	Modality []string `json:"modality_names"`
+	Payload  []string `json:"payload_fields"`
 }
 
 type nameExclusion struct {
@@ -400,10 +410,14 @@ func magicMedia(value string) bool {
 	return false
 }
 
-type mediaHint struct{ media, audio bool }
+// mediaHint is the context a MIME/type/modality hint gives its parent object.
+// image is extra image evidence: it can only widen omission, never admit text.
+type mediaHint struct{ media, audio, image bool }
 type privacyHints map[string]mediaHint
 
-func combineHint(a, b mediaHint) mediaHint { return mediaHint{a.media || b.media, a.audio || b.audio} }
+func combineHint(a, b mediaHint) mediaHint {
+	return mediaHint{a.media || b.media, a.audio || b.audio, a.image || b.image}
+}
 func hint(name string, value any) mediaHint {
 	if values, ok := value.([]any); ok {
 		var result mediaHint
@@ -433,12 +447,46 @@ func hint(name string, value any) mediaHint {
 		for _, prefix := range privacyRules.Media.MIME.Prefixes {
 			media = media || strings.HasPrefix(mime, prefix)
 		}
-		return mediaHint{media, strings.HasPrefix(mime, "audio/")}
+		return mediaHint{media, strings.HasPrefix(mime, "audio/"), strings.HasPrefix(mime, "image/")}
 	}
-	if leaf == "type" && contains(privacyRules.Media.Audio.Types, privacyRules.normalize(text)) {
-		return mediaHint{audio: true}
+	switch leaf {
+	case "type":
+		// Image and video types establish generic media context; audio types
+		// establish audio context only.
+		kind := privacyRules.normalize(mime)
+		image := contains(privacyRules.Media.Image.Types, kind)
+		video := contains(privacyRules.Media.Video.Types, kind)
+		return mediaHint{image || video, contains(privacyRules.Media.Audio.Types, privacyRules.normalize(text)), image}
+	case "modality":
+		image := contains(privacyRules.Media.Image.Modality, mime)
+		return mediaHint{image || contains(privacyRules.Media.Video.Modality, mime), false, image}
 	}
 	return mediaHint{}
+}
+
+// declaredImagePayload reports a path under an image declaration (image type,
+// modality or MIME) whose component is a catalog image payload field. Audio
+// metadata components end the declaration unless they are image payload
+// fields themselves (url), and a fresh image hint below starts it again.
+// Callers omit only encoded values, so ordinary HTTP image URLs stay text.
+func declaredImagePayload(path string, hints privacyHints) bool {
+	image, payload := hints[""].image, false
+	var prefix []string
+	for _, part := range pathParts(path) {
+		prefix = append(prefix, part)
+		if !numericPart(part) {
+			name := privacyRules.normalize(part)
+			field := contains(privacyRules.Media.Image.Payload, name)
+			if contains(privacyRules.Media.Audio.Metadata, name) && !field {
+				image, payload = false, false
+			}
+			if image && field {
+				payload = true
+			}
+		}
+		image = image || hints[strings.Join(prefix, ".")].image
+	}
+	return payload
 }
 
 // MediaHintParent reports whether a flattened attribute is a catalog MIME/type
@@ -592,6 +640,9 @@ func mediaString(value, path string, inherited mediaHint, hints privacyHints, fr
 			return omitted(value), true
 		}
 		return privacyRules.Media.Other, true
+	}
+	if encoded && declaredImagePayload(path, hints) {
+		return omitted(value), true
 	}
 	if encoded && contains(privacyRules.Media.Fields, privacyLeaf(path)) && len(value) > privacyRules.Media.Threshold {
 		return omitted(value), true
