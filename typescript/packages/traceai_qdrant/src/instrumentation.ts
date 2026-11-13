@@ -9,6 +9,7 @@ import {
   SpanKind,
   SpanStatusCode,
   Attributes,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
@@ -34,10 +35,21 @@ const VectorDBConventions = {
 
 const MODULE_NAME = "@qdrant/js-client-rest";
 
-let _isPatched = false;
+// Ownership is per client prototype, not process-wide: applications can load
+// multiple client copies, or register instrumentation more than once.
+const patchOwners = new WeakMap<object, QdrantInstrumentation>();
+let patchedPrototypeCount = 0;
 
-export function isPatched() {
-  return _isPatched;
+/** Whether this package currently owns any patched client prototypes. */
+export function isPatched(): boolean {
+  return patchedPrototypeCount > 0;
+}
+
+interface MethodPatch {
+  name: string;
+  descriptor?: PropertyDescriptor;
+  wrapped: Function;
+  active: boolean;
 }
 
 /**
@@ -60,7 +72,8 @@ export interface QdrantInstrumentationConfig extends InstrumentationConfig {
 export class QdrantInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private _qdrantConfig: QdrantInstrumentationConfig;
+  private readonly knownPrototypes = new Set<any>();
+  private readonly patches = new Map<any, MethodPatch[]>();
 
   constructor({
     instrumentationConfig,
@@ -69,13 +82,35 @@ export class QdrantInstrumentation extends InstrumentationBase {
     instrumentationConfig?: QdrantInstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super("@traceai/qdrant", VERSION, Object.assign({}, instrumentationConfig));
+    // The base constructor calls enable(); defer it until our state and privacy
+    // configuration exist, including when a client was already loaded.
+    super("@traceai/qdrant", VERSION, { ...instrumentationConfig, enabled: false });
     this._traceConfig = traceConfig;
-    this._qdrantConfig = instrumentationConfig || {};
+    this.setConfig(instrumentationConfig || {});
+    this.refreshTracer();
+    if (this.getConfig().enabled) this.enable();
   }
 
   public override enable(): void {
+    if (this.isEnabled()) return;
+    this.refreshTracer();
     super.enable();
+    // OTel retains only the last module export; keep all copies and manually
+    // registered clients participating in disable/enable cycles.
+    for (const prototype of this.knownPrototypes) this.patchPrototype(prototype);
+  }
+
+  public override disable(): void {
+    super.disable();
+    for (const prototype of this.patches.keys()) this.unpatchPrototype(prototype);
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
     this.fiTracer = new FITracer({
       tracer: this.tracer,
       traceConfig: this._traceConfig,
@@ -84,7 +119,7 @@ export class QdrantInstrumentation extends InstrumentationBase {
 
   protected init() {
     return new InstrumentationNodeModuleDefinition(
-      "@qdrant/js-client-rest",
+      MODULE_NAME,
       ["^1.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this)
@@ -94,187 +129,96 @@ export class QdrantInstrumentation extends InstrumentationBase {
   /**
    * Manually instruments the Qdrant module
    */
-  manuallyInstrument(module: any) {
+  manuallyInstrument(module: any): void {
     this.patch(module);
   }
 
-  private patch(moduleExports: any, moduleVersion?: string) {
-    if (_isPatched) {
-      return moduleExports;
+  private patch(moduleExports: any, _moduleVersion?: string) {
+    const prototype = moduleExports?.QdrantClient?.prototype;
+    if (prototype) {
+      this.knownPrototypes.add(prototype);
+      if (this.isEnabled()) this.patchPrototype(prototype);
     }
-
-    const instrumentation = this;
-
-    // Ensure fiTracer is properly initialized
-    if (!instrumentation.fiTracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig,
-      });
-    }
-
-    // Qdrant has a QdrantClient class with methods for operations
-    if (moduleExports.QdrantClient) {
-      const ClientPrototype = moduleExports.QdrantClient.prototype;
-
-      // Patch search (query)
-      if (ClientPrototype.search) {
-        const originalSearch = ClientPrototype.search;
-        ClientPrototype.search = function (
-          this: any,
-          collectionName: string,
-          params: any
-        ) {
-          return instrumentation.wrapSearch(
-            originalSearch,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch query (newer API)
-      if (ClientPrototype.query) {
-        const originalQuery = ClientPrototype.query;
-        ClientPrototype.query = function (
-          this: any,
-          collectionName: string,
-          params: any
-        ) {
-          return instrumentation.wrapQuery(
-            originalQuery,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch queryPoints
-      if (ClientPrototype.queryPoints) {
-        const originalQueryPoints = ClientPrototype.queryPoints;
-        ClientPrototype.queryPoints = function (
-          this: any,
-          collectionName: string,
-          params: any
-        ) {
-          return instrumentation.wrapQueryPoints(
-            originalQueryPoints,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch upsert
-      if (ClientPrototype.upsert) {
-        const originalUpsert = ClientPrototype.upsert;
-        ClientPrototype.upsert = function (
-          this: any,
-          collectionName: string,
-          params: any
-        ) {
-          return instrumentation.wrapUpsert(
-            originalUpsert,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch delete
-      if (ClientPrototype.delete) {
-        const originalDelete = ClientPrototype.delete;
-        ClientPrototype.delete = function (
-          this: any,
-          collectionName: string,
-          params: any
-        ) {
-          return instrumentation.wrapDelete(
-            originalDelete,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch retrieve
-      if (ClientPrototype.retrieve) {
-        const originalRetrieve = ClientPrototype.retrieve;
-        ClientPrototype.retrieve = function (
-          this: any,
-          collectionName: string,
-          params: any
-        ) {
-          return instrumentation.wrapRetrieve(
-            originalRetrieve,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch scroll
-      if (ClientPrototype.scroll) {
-        const originalScroll = ClientPrototype.scroll;
-        ClientPrototype.scroll = function (
-          this: any,
-          collectionName: string,
-          params?: any
-        ) {
-          return instrumentation.wrapScroll(
-            originalScroll,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch count
-      if (ClientPrototype.count) {
-        const originalCount = ClientPrototype.count;
-        ClientPrototype.count = function (
-          this: any,
-          collectionName: string,
-          params?: any
-        ) {
-          return instrumentation.wrapCount(
-            originalCount,
-            this,
-            collectionName,
-            params
-          );
-        };
-      }
-
-      // Patch getCollection
-      if (ClientPrototype.getCollection) {
-        const originalGetCollection = ClientPrototype.getCollection;
-        ClientPrototype.getCollection = function (
-          this: any,
-          collectionName: string
-        ) {
-          return instrumentation.wrapGetCollection(
-            originalGetCollection,
-            this,
-            collectionName
-          );
-        };
-      }
-    }
-
-    _isPatched = true;
     return moduleExports;
   }
 
-  private unpatch(moduleExports: any, moduleVersion?: string) {
-    _isPatched = false;
+  private patchPrototype(prototype: any): void {
+    if (patchOwners.has(prototype)) return;
+
+    const instrumentation = this;
+    const wrappers = {
+      search: this.wrapSearch,
+      query: this.wrapQuery,
+      queryPoints: this.wrapQueryPoints,
+      queryBatch: this.wrapQueryBatch,
+      queryGroups: this.wrapQueryGroups,
+      upsert: this.wrapUpsert,
+      delete: this.wrapDelete,
+      retrieve: this.wrapRetrieve,
+      scroll: this.wrapScroll,
+      count: this.wrapCount,
+      getCollection: this.wrapGetCollection,
+    };
+    const patches: MethodPatch[] = [];
+    for (const [name, wrapOperation] of Object.entries(wrappers)) {
+      const original = prototype[name];
+      if (typeof original !== "function") continue;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+      // Do not mutate accessors or methods that cannot be replaced.
+      if (descriptor && (!("value" in descriptor) || !descriptor.writable)) continue;
+      const patch: MethodPatch = {
+        name,
+        descriptor,
+        active: true,
+        wrapped: function (this: any, ...args: any[]) {
+          if (!patch.active || !instrumentation.isEnabled()) {
+            return original.apply(this, args);
+          }
+          // Keep the exact receiver and argument list, including future SDK
+          // options; the operation helpers only inspect collection and params.
+          return wrapOperation.call(
+            instrumentation,
+            () => original.apply(this, args),
+            this,
+            args[0],
+            args[1]
+          );
+        },
+      };
+      Object.defineProperty(prototype, name, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        ...descriptor,
+        value: patch.wrapped,
+      });
+      patches.push(patch);
+    }
+    if (patches.length) {
+      this.patches.set(prototype, patches);
+      patchOwners.set(prototype, this);
+      patchedPrototypeCount++;
+    }
+  }
+
+  private unpatch(moduleExports: any, _moduleVersion?: string) {
+    this.unpatchPrototype(moduleExports?.QdrantClient?.prototype);
+  }
+
+  private unpatchPrototype(prototype: any): void {
+    const patches = this.patches.get(prototype);
+    if (!patches) return;
+    for (const patch of patches) {
+      // A later wrapper may still call ours. Leave that wrapper alone and make
+      // its captured copy inert, even after we enable again.
+      patch.active = false;
+      if (prototype[patch.name] !== patch.wrapped) continue;
+      if (patch.descriptor) Object.defineProperty(prototype, patch.name, patch.descriptor);
+      else delete prototype[patch.name];
+    }
+    this.patches.delete(prototype);
+    patchOwners.delete(prototype);
+    patchedPrototypeCount--;
   }
 
   private getCommonAttributes(
@@ -354,19 +298,25 @@ export class QdrantInstrumentation extends InstrumentationBase {
     original: Function,
     instance: any,
     collectionName: string,
-    params: any
+    params: any,
+    operation = "query"
   ): Promise<any> {
-    const attributes = this.getCommonAttributes("query", collectionName);
+    const attributes = this.getCommonAttributes(operation, collectionName);
 
-    const limit = params?.limit || 10;
-    attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] = limit;
-
+    if (operation === "query_batch") {
+      attributes["db.vector.query.batch_size"] = params?.searches?.length ?? 0;
+    } else if (operation === "query_groups") {
+      // The limit counts groups, not points. Do not report it as top_k.
+      attributes["db.vector.query.group_limit"] = params?.limit ?? 10;
+      attributes["db.vector.query.group_size"] = params?.group_size ?? 3;
+    } else {
+      attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] = params?.limit ?? 10;
+    }
     if (params?.filter) {
-      attributes[VectorDBConventions.DB_VECTOR_QUERY_FILTER] =
-        JSON.stringify(params.filter);
+      attributes[VectorDBConventions.DB_VECTOR_QUERY_FILTER] = JSON.stringify(params.filter);
     }
 
-    const span = this.fiTracer.startSpan("qdrant query", {
+    const span = this.fiTracer.startSpan(`qdrant ${operation}`, {
       kind: SpanKind.CLIENT,
       attributes,
     });
@@ -376,19 +326,17 @@ export class QdrantInstrumentation extends InstrumentationBase {
         trace.setSpan(context.active(), span),
         () => original.call(instance, collectionName, params)
       );
-
-      if (result?.points) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.points.length
-        );
+      let count: number | undefined;
+      if (operation === "query_batch" && Array.isArray(result)) {
+        count = result.reduce((sum, response) => sum + (response?.points?.length ?? 0), 0);
+      } else if (operation === "query_groups" && Array.isArray(result?.groups)) {
+        count = result.groups.reduce((sum: number, group: any) => sum + (group?.hits?.length ?? 0), 0);
+      } else if (Array.isArray(result?.points)) {
+        count = result.points.length;
       } else if (Array.isArray(result)) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.length
-        );
+        count = result.length;
       }
-
+      if (count !== undefined) span.setAttribute(VectorDBConventions.DB_VECTOR_RESULTS_COUNT, count);
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (error: any) {
@@ -400,49 +348,16 @@ export class QdrantInstrumentation extends InstrumentationBase {
     }
   }
 
-  private async wrapQueryPoints(
-    original: Function,
-    instance: any,
-    collectionName: string,
-    params: any
-  ): Promise<any> {
-    const attributes = this.getCommonAttributes("query_points", collectionName);
+  private wrapQueryPoints(original: Function, instance: any, collectionName: string, params: any) {
+    return this.wrapQuery(original, instance, collectionName, params, "query_points");
+  }
 
-    const limit = params?.limit || 10;
-    attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] = limit;
+  private wrapQueryBatch(original: Function, instance: any, collectionName: string, params: any) {
+    return this.wrapQuery(original, instance, collectionName, params, "query_batch");
+  }
 
-    if (params?.filter) {
-      attributes[VectorDBConventions.DB_VECTOR_QUERY_FILTER] =
-        JSON.stringify(params.filter);
-    }
-
-    const span = this.fiTracer.startSpan("qdrant query_points", {
-      kind: SpanKind.CLIENT,
-      attributes,
-    });
-
-    try {
-      const result = await context.with(
-        trace.setSpan(context.active(), span),
-        () => original.call(instance, collectionName, params)
-      );
-
-      if (result?.points) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.points.length
-        );
-      }
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-      throw error;
-    } finally {
-      span.end();
-    }
+  private wrapQueryGroups(original: Function, instance: any, collectionName: string, params: any) {
+    return this.wrapQuery(original, instance, collectionName, params, "query_groups");
   }
 
   private async wrapUpsert(
