@@ -8,7 +8,13 @@ module TraceAI
       IDENTITY = %w[gen_ai.span.kind gen_ai.response.id project_name project_type project_version_name project_version_id].freeze
       OUTCOME = %w[error.type http.response.status_code gen_ai.response.finish_reasons].freeze
       MODEL = %w[gen_ai.provider.name gen_ai.request.model gen_ai.response.model gen_ai.operation.name].freeze
-      PROVENANCE = %w[traceai.capture.layer traceai.wire.endpoint server.address server.port http.request.method gen_ai.request.stream gen_ai.response.time_to_first_chunk gen_ai.response.time_to_first_text traceai.audio.output_bytes gen_ai.audio.mime_type].freeze
+      # Protected TIMING family (spec A7, privacy catalog version 3): only these
+      # exact keys, when present, reserved before content. Retention does not
+      # change their units or bypass privacy scrubbing.
+      TIMING = %w[gen_ai.response.latency gen_ai.response.time_to_first_chunk gen_ai.response.time_to_first_text
+                  gen_ai.response.time_to_first_token gen_ai.server.time_to_first_token
+                  gen_ai.server.time_per_output_token gen_ai.server.request.duration].freeze
+      PROVENANCE = %w[traceai.capture.layer traceai.wire.endpoint server.address server.port http.request.method gen_ai.request.stream traceai.audio.output_bytes gen_ai.audio.mime_type].freeze
       DEGRADATION = %w[traceai.wire.truncated traceai.wire.incomplete traceai.wire.body_unavailable traceai.wire.undecoded_encoding].freeze
       Result = Struct.new(:attributes, :dropped)
       ZERO_MUTEX = Mutex.new
@@ -22,7 +28,10 @@ module TraceAI
         return 2 if OUTCOME.include?(key)
         return 3 if MODEL.include?(key)
         return 4 if key.start_with?('gen_ai.usage.')
-        return 5 if PROVENANCE.include?(key)
+        # Families are retained in this order when even they exceed a limit:
+        # degradation, identity, outcome, model, usage, TIMING, provenance.
+        return 5 if TIMING.include?(key)
+        return 6 if PROVENANCE.include?(key)
       end
 
       # [priority, numeric order, group identity]. A whole message (including all

@@ -83,7 +83,9 @@ module TraceAI
           Auto.register_secret(value.sub(/\A\S+\s+/, '')) if leaf(key).end_with?('authorization')
         end
       end
-      def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil)
+      # `policy` is set only by scrub_provider_response, for the parsed provider
+      # response it was given. Nested JSON strings never inherit it.
+      def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil, policy: nil)
         secrets = secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] } if depth.zero?
         budget.spend
         raise Limit if depth > CATALOG['limits']['max_depth']
@@ -93,11 +95,26 @@ module TraceAI
         klass = Codec.type(value)
         if klass == Hash
           hints = index_hints(value, path, hints, budget)
+          # A provider-root logprob token skips only the key-name rule. Its
+          # value still meets registered secrets and credential shapes, and a
+          # masked token also masks its bytes, which spell the same text.
+          token = policy&.token_parents&.key?(value) ? value['token'] : nil
+          clean_token = scrub(token, secrets, nil, depth + 1, budget) if token
+          masked_bytes = token && clean_token != token
+          masked_text = policy&.masked_text&.[](value)
+          masked_choice = policy&.masked_choices&.key?(value)
           value.each_with_object({}) do |(k, v), out|
             name = Codec.type(k) == Symbol ? k.name : safe_string(k)
             cleaned = clean_string(name, secrets, budget)
             child_path = path.empty? ? name : path + '.' + name
-            out[cleaned] = scrub(v, secrets, child_path, depth + 1, budget, media, audio, hints, lossy: lossy, on_media: on_media)
+            out[cleaned] =
+              if (masked_choice && name == 'logprobs') || masked_text&.key?(name) || (masked_bytes && name == 'bytes')
+                REDACTED
+              elsif token && Codec.type(k) == String && k == 'token'
+                clean_token
+              else
+                scrub(v, secrets, child_path, depth + 1, budget, media, audio, hints, lossy: lossy, on_media: on_media, policy: policy)
+              end
           end
         elsif klass == Array
           raise Limit if value.length > Budget::MAX_NODES
@@ -107,7 +124,7 @@ module TraceAI
             on_media&.call
             return MEDIA['other_replacement']
           end
-          value.each_with_index.map { |v, i| scrub(v, secrets, path + '.' + i.to_s, depth + 1, budget, media, audio, hints, lossy: lossy, on_media: on_media) }
+          value.each_with_index.map { |v, i| scrub(v, secrets, path + '.' + i.to_s, depth + 1, budget, media, audio, hints, lossy: lossy, on_media: on_media, policy: policy) }
         elsif klass == String
           budget.spend(value.bytesize)
           replacement = media_replacement(value, path, media, audio, hints, framed)
@@ -137,6 +154,136 @@ module TraceAI
         else
           clean_string(Codec.type_name(value), secrets, budget)
         end
+      end
+      ResponsePolicy = Struct.new(:token_parents, :masked_choices, :masked_text)
+      def response_roots(value)
+        return [value] unless Codec.type(value) == Array
+        raise Limit if value.length > Budget::MAX_NODES
+        value
+      end
+      # The exact objects that hold a catalog logprob token, reached from this
+      # root through real arrays. Identity, not equality: an equal object
+      # elsewhere (tool output, user content) gets no exemption.
+      def response_token_parents(value, rule, budget)
+        parents = {}.compare_by_identity
+        return parents unless rule
+        visit = lambda do |node, path, depth|
+          budget.spend
+          raise Limit if depth > CATALOG['limits']['max_depth']
+          segment = path.first
+          rest = path.drop(1)
+          if segment == '*'
+            next unless Codec.type(node) == Array
+            raise Limit if node.length > Budget::MAX_NODES
+            node.each { |item| visit.call(item, rest, depth + 1) }
+          elsif Codec.type(node) != Hash
+            next
+          elsif rest.empty?
+            parents[node] = true if segment == 'token' && Codec.type(node['token']) == String
+          else
+            visit.call(node[segment], rest, depth + 1)
+          end
+        end
+        response_roots(value).each { |root| rule['paths'].each { |path| visit.call(root, path, 0) unless path.empty? } }
+        parents
+      end
+      # Privacy catalog version 3 `logprob_tokens`: the explicit entry point for
+      # a parsed provider response (or a buffered array of its stream chunks)
+      # that a caller received from its own provider parser. Logprob tokens at
+      # the catalog's exact paths are checked against registered secrets and
+      # credential shapes, not key-name rules. When value masking changes a
+      # choice's message or delta text, that choice's whole logprobs block is
+      # masked; buffered chunks are joined by choice index first, so a secret
+      # split across deltas masks every delta and block of that choice. Other
+      # input, unknown formats and nested JSON strings use the strict generic
+      # rules. Raises Limit when the shared budget is exhausted.
+      def scrub_provider_response(value, secrets = [], format = 'openai.chat')
+        rule = LOGPROB_FORMATS[format]
+        return scrub(value, secrets) unless rule
+        secrets = secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] }
+        budget = Budget.new
+        policy = ResponsePolicy.new(response_token_parents(value, rule, budget), {}.compare_by_identity, {}.compare_by_identity)
+        streaming = Codec.type(value) == Array
+        changed = lambda do |text|
+          text.include?(REDACTED) || text.include?('__REDACTED__') || scrub(text, secrets, nil, 0, budget) != text
+        end
+        slots = {}
+        response_roots(value).each do |root|
+          next unless Codec.type(root) == Hash
+          choices = root['choices']
+          next unless Codec.type(choices) == Array
+          raise Limit if choices.length > Budget::MAX_NODES
+          choices.each_with_index do |choice, position|
+            budget.spend
+            next unless Codec.type(choice) == Hash
+            index = choice['index']
+            # A streamed choice without an index cannot be joined to its other
+            # deltas, so its logprobs cannot be proven safe.
+            if streaming && !(Codec.type(index) == Integer && index >= 0)
+              policy.masked_choices[choice] = true
+              next
+            end
+            slot = (slots[streaming ? index : position] ||= {choices: [], text: {}, masked: false})
+            fields = []
+            rule['text_paths'].each do |text_path|
+              parent = choice
+              text_path[0...-1].each { |part| parent = Codec.type(parent) == Hash ? parent[part] : nil }
+              next unless Codec.type(parent) == Hash
+              name = text_path.last
+              field = parent[name]
+              next if field.nil?
+              fields << [parent, name]
+              unless Codec.type(field) == String
+                slot[:masked] = true
+                next
+              end
+              slot[:masked] = true if changed.call(field)
+              next unless streaming
+              joined = (slot[:text][text_path] || '') + field
+              raise Limit if joined.length > CATALOG['limits']['max_text_chars']
+              slot[:text][text_path] = joined
+            end
+            slot[:choices] << [choice, fields]
+          end
+        end
+        slots.each_value do |slot|
+          # A secret or shape can cross delta boundaries: check the joined text.
+          slot[:masked] = true if slot[:text].each_value.any? { |joined| changed.call(joined) }
+          next unless slot[:masked]
+          slot[:choices].each do |choice, fields|
+            policy.masked_choices[choice] = true
+            next unless streaming
+            fields.each { |parent, name| (policy.masked_text[parent] ||= {})[name] = true }
+          end
+        end
+        scrub(value, secrets, nil, 0, budget, policy: policy)
+      end
+      # Credentials named in a parsed provider response, for the caller to
+      # register. Catalog logprob tokens are model text here, not credentials.
+      def discover_provider_response_secrets(value, format = 'openai.chat')
+        budget = Budget.new
+        parents = response_token_parents(value, LOGPROB_FORMATS[format], budget)
+        found = []
+        collect = lambda do |node, key, depth|
+          budget.spend
+          raise Limit if depth > 64
+          klass = Codec.type(node)
+          if klass == Hash
+            node.each do |name, item|
+              next unless Codec.type(name) == String || Codec.type(name) == Symbol
+              name = name.name if Codec.type(name) == Symbol
+              next if name == 'token' && Codec.type(item) == String && parents.key?(node)
+              collect.call(item, key ? key + '.' + name : name, depth + 1)
+            end
+          elsif klass == Array
+            node.each { |item| collect.call(item, key, depth + 1) }
+          elsif klass == String && key && credential?(key)
+            found << node
+            found << node.sub(/\A\S+\s+/, '') if leaf(key).end_with?('authorization')
+          end
+        end
+        collect.call(value, nil, 0)
+        found.select { |secret| secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] }
       end
       # Upstream scrubbing must not lose a wire span on malformed provider data,
       # nor hand unsafe wire content to other processors. Clear the affected

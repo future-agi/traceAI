@@ -22,6 +22,36 @@ module TraceAI
       CONTEXT_EXCLUSIONS = CATALOG['credentials']['contextual_exclusions'].map do |item|
         Regexp.new('\\A(?:' + item['path_regex'].delete_prefix('^').delete_suffix('$') + ')\\z')
       end.freeze
+      # Catalog regexes are written for Python and JavaScript, where `$` without
+      # a multiline flag is the end of the input. In Ruby it is the end of a
+      # line, which would stop a private-key match at its first line break.
+      def self.end_anchored(source)
+        out = +''; in_class = false; escaped = false
+        source.each_char do |char|
+          if escaped
+            escaped = false
+          elsif char == '\\'
+            escaped = true
+          elsif in_class
+            in_class = false if char == ']'
+          elsif char == '['
+            in_class = true
+          elsif char == '$'
+            out << '\\z'
+            next
+          end
+          out << char
+        end
+        out
+      end
+      # Version 3: credential value shapes apply to text independently of any
+      # name, after registered secrets. They only ever add redaction.
+      VALUE_SHAPES = CATALOG['credentials'].fetch('value_shapes', []).map do |item|
+        Regexp.new(end_anchored(item['regex']), item['flags'].to_s.include?('i') ? Regexp::IGNORECASE : 0)
+      end.freeze
+      # Version 3: the closed list of provider-response logprob token paths.
+      # Only an explicit, parsed provider response root may use them.
+      LOGPROB_FORMATS = CATALOG.fetch('logprob_tokens', {}).fetch('formats', []).to_h { |rule| [rule['format'], rule] }.freeze
       MEDIA = CATALOG.fetch('media')
       MIME = MEDIA.fetch('mime_siblings')
       AUDIO = MEDIA.fetch('audio')
@@ -51,7 +81,10 @@ module TraceAI
         EXCLUSIONS.any? { |regex, guards| regex.match?(folded) && guards.none? { |marker| folded.include?(marker) } }
       end
       # The sole credential-name predicate, including ancestry and catalog-pinned
-      # metric/logprob exclusions. Exemptions never hide an independent marker.
+      # metric exclusions. Contextual exclusions apply only if the catalog lists
+      # any; version 3 lists none, and logprob tokens get their exemption only
+      # through Privacy.scrub_provider_response. Exemptions never hide an
+      # independent marker.
       def credential?(name)
         parts = path_parts(name || '').reject { |part| numeric_part?(part) }.map { |part| normalize(part) }
         excluded = false
@@ -310,6 +343,7 @@ module TraceAI
           next unless Codec.type(secret) == String && secret.length >= 8 && secret != REDACTED
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end
+        VALUE_SHAPES.each { |shape| text = text.gsub(shape, REDACTED) }
         text
       end
     end
