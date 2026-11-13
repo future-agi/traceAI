@@ -8,8 +8,12 @@ import threading
 import uuid
 import warnings
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
+
+if TYPE_CHECKING:
+    from fi_instrumentation.attachments import AttachmentConfig
+    from fi_instrumentation.instrumentation.config import TraceConfig
 
 import requests
 from fi_instrumentation.fi_types import (
@@ -113,6 +117,8 @@ def register(
     timeout: Optional[float] = None,
     sampler: Optional[Sampler] = None,
     span_limits: Optional[SpanLimits] = None,
+    attachment_config: Optional["AttachmentConfig"] = None,
+    trace_config: Optional["TraceConfig"] = None,
 ) -> _TracerProvider:
     """Configure and return a Future AGI `TracerProvider`.
 
@@ -247,6 +253,21 @@ def register(
     # Replaces the default the provider added on construction. This processor is not marked as a
     # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
+
+    # Attachment control-plane configuration is independent of OTLP. OFF returns
+    # the null object: no transport, thread, timer, fork hook or bootstrap request.
+    from fi_instrumentation.attachments import AttachmentConfig, AttachmentSpanProcessor, create_attachment_manager
+    from fi_instrumentation.instrumentation.config import TraceConfig
+
+    tracer_provider.trace_config = trace_config or TraceConfig()
+    attachment_config = attachment_config or AttachmentConfig()
+    tracer_provider.attachment_manager = create_attachment_manager(
+        config=attachment_config, trace_config=tracer_provider.trace_config,
+        project_name=project_name, project_type=project_type.value,
+        headers=_with_fi_auth_headers(headers) if attachment_config.enabled else None,
+    )
+    if tracer_provider.attachment_manager.status().state != "disabled":
+        tracer_provider.add_span_processor(AttachmentSpanProcessor(tracer_provider.attachment_manager))
 
     if set_global_tracer_provider:
         trace_api.set_tracer_provider(tracer_provider)
