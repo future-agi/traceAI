@@ -279,6 +279,9 @@ def test_fi_instrument_runs_an_unmodified_app(tmp_path):
         plain, _ = _run([sys.executable, str(script), server.url], _child_env(stand_ins, server), tmp_path)
         traced, _ = _run(AGENT + [str(script), server.url], _child_env(stand_ins, server), tmp_path)
         spans = decode_spans(server.collected)
+        bodies = list(server.collected)
+    # The keys travel only in the export's headers, never in what it carries.
+    assert not [body for body in bodies if b"fi-api-PLACEHOLDER" in body or b"fi-secret-PLACEHOLDER" in body]
     assert json.loads(plain) == {"replies": ["pong", "pong"], "wire_loaded": False}
     assert traced == plain
     llm = [s for s in spans if s["attributes"].get("gen_ai.span.kind") == "LLM"]

@@ -1,8 +1,14 @@
-"""A local stand-in for an OpenAI-compatible API and the Future AGI collector, for zero-code tests."""
+"""A local stand-in for an OpenAI-compatible API and the Future AGI collector, for zero-code tests.
+
+With TRACEAI_TEST_EXPORT_DIR set, every export body the collector received is also written to that
+directory when the server stops, so a later step can search the raw bytes.
+"""
 
 import gzip
 import json
+import os
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List
 
@@ -77,6 +83,17 @@ class MockServer:
     def __exit__(self, *exc: Any) -> None:
         self.server.shutdown()
         self.server.server_close()
+        self._keep_exports()
+
+    def _keep_exports(self) -> None:
+        directory = os.environ.get("TRACEAI_TEST_EXPORT_DIR")
+        if not directory:
+            return
+        os.makedirs(directory, exist_ok=True)
+        for body in self.collected:
+            if body:
+                with open(os.path.join(directory, f"{uuid.uuid4().hex}.otlp"), "wb") as handle:
+                    handle.write(body)
 
 
 def decode_spans(payloads: List[bytes]) -> List[Dict[str, Any]]:
