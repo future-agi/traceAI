@@ -85,7 +85,7 @@ func makeReport(c Config, wire bool, reason string) AgentReport {
 		name, target, option string
 		protocols            []string
 	}{
-		{"openai", "github.com/openai/openai-go/v3", "option.WithMiddleware(traceaiopenai.Middleware())", []string{"openai.chat", "openai.responses", "openai.completions", "openai.embeddings", "openai.audio_transcription", "openai.audio_speech", "openai.images", "openai.moderations"}},
+		{"openai", "github.com/openai/openai-go/v3", "option.WithMiddleware(traceaiopenai.Middleware())", []string{"openai.chat_completions", "openai.responses", "openai.completions", "openai.embeddings", "openai.audio_transcriptions", "openai.audio_speech", "openai.images_generations", "openai.moderations"}},
 		{"anthropic", "github.com/anthropics/anthropic-sdk-go", "option.WithMiddleware(traceaianthropic.Middleware())", []string{"anthropic.messages"}},
 		{"genai", "google.golang.org/genai", "genai.ClientConfig{HTTPClient: traceaigenai.NewHTTPClient()}", []string{"gemini.generate_content", "gemini.embed_content"}},
 		{"eino", "github.com/cloudwego/eino", "callbacks.AppendGlobalHandlers(traceaieino.NewHandler())", []string{"underlying model HTTP protocols only (not framework steps)"}},
