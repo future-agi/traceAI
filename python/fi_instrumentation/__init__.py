@@ -34,10 +34,9 @@ from .otel import (
     register,
 )
 
+# fi_instrumentation.init and fi_instrumentation.auto_instrument are not listed: they load on first
+# use (see __getattr__ below), and a star import must not load the zero-code agent.
 __all__ = [
-    # Zero-code setup
-    "init",
-    "auto_instrument",
     # Context and attributes
     "get_attributes_from_context",
     "using_attributes",
