@@ -1,11 +1,14 @@
 import type { Attributes } from "@opentelemetry/api";
+import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import { privacyFilter } from "../export-privacy";
 import { getRegisteredSecrets } from "../secrets";
+import { FITracer } from "../trace/trace-config/FITracer";
 
 // Some integrations also record the session id under their own attribute name,
-// with the same value as session.id. Each of those keys reaches the collector as
-// set, like session.id, unless its value is a credential the exporter already
-// knows. Other session-named attributes keep the credential name rule.
+// with the same value as session.id. On spans made by an FI tracer, each of
+// those keys reaches the collector as set, like session.id, unless its value is
+// a credential the exporter already knows. Other session-named attributes keep
+// the credential name rule, and so does a span from any other tracer.
 
 // [integration key, a token- or cookie-named attribute next to it]
 const KEYS: Array<[string, string]> = [
@@ -20,8 +23,17 @@ const KEYS: Array<[string, string]> = [
 
 const idFor = (key: string, suffix: string) => `${key.replace(/[^A-Za-z0-9]+/g, "-")}-${suffix}`;
 
-function snapshot(attributes: Attributes): any {
-  return { _spanContext: { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 },
+// A detached copy of a fresh span made by an FI tracer, as an integration's
+// FITracer span reaches the exporter. It carries that span's context.
+const fiProvider = new BasicTracerProvider();
+function snapshot(attributes: Attributes, fiTracer = true): any {
+  let spanContext: object = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 };
+  if (fiTracer) {
+    const span = new FITracer({ tracer: fiProvider.getTracer("integration") }).startSpan("integration");
+    span.end();
+    spanContext = span.spanContext();
+  }
+  return { _spanContext: spanContext,
     name: "integration", kind: 1, startTime: [1, 0], endTime: [2, 0], _duration: [1, 0], attributes,
     status: { code: 1 }, resource: { attributes: {} }, instrumentationScope: { name: "integration" }, events: [], links: [] };
 }
@@ -72,4 +84,12 @@ test("a session id under an attribute name that is not listed keeps the credenti
   const id = "other-integration-session-0001";
   const clean = privacyFilter().span(snapshot({ "other_integration.session.id": id }));
   expect(clean.attributes["other_integration.session.id"]).toBe("<redacted>");
+});
+
+test.each(KEYS)("%s on a span from another tracer keeps the credential name rule", key => {
+  const id = idFor(key, "forwarded-0001");
+  const clean = privacyFilter().span(snapshot({ "session.id": id, [key]: id }, false));
+  expect(clean.attributes["session.id"]).toBe("<redacted>");
+  expect(clean.attributes[key]).toBe("<redacted>");
+  expect(JSON.stringify(clean.attributes)).not.toContain(id);
 });
