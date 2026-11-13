@@ -274,6 +274,8 @@ class EndToEndTest
             super
           end
         end
+        # The agent loads its wire parser when it starts; start it first.
+        TraceAI::Auto.init
         TraceAI::Auto::Wire.singleton_class.prepend(SlowParser)
         before = Time.now.to_r * 1_000_000_000
         if #{transport.inspect} == 'net_http'
