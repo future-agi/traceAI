@@ -143,6 +143,10 @@ for element in parent.findall("m:modules/m:module", ns):
     excluded.append({"manifest": str(path.relative_to(ROOT)), "reason": reason})
 for path in sorted(ROOT.glob("go/*/go.mod")):
     name = re.search(r"^module\s+(\S+)", path.read_text(), re.M)[1]
+    if path.parent.name == "auto":
+        # The one-import agent traces at the HTTP layer; it is not a framework family.
+        excluded.append({"manifest": str(path.relative_to(ROOT)), "reason": "zero-code HTTP-layer agent; not a framework integration"})
+        continue
     add("Go", path.parent.name, path, name)
 for path in sorted(ROOT.glob("csharp/src/*/*.csproj")):
     excluded.append({"manifest": str(path.relative_to(ROOT)), "reason": "manual-span SDK; no framework auto-instrumentors"})
