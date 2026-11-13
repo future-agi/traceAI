@@ -317,8 +317,13 @@ module TraceAI
         end
         @active = true
         @enabled_transports = []
-        if @config.truthy?('wire_capture') && @config.enabled?('wire')
-          @enabled_transports = %w[net_http httpx].reject { |name| @config.list('disabled_instrumentations').include?(name) }
+        denied = @config.list('disabled_instrumentations')
+        if @config.truthy?('wire_capture') && !denied.include?('wire')
+          # 'wire' (or no allowlist) enables both transports; 'net_http' or
+          # 'httpx' in the allowlist enables the wire layer for that transport.
+          allowed = @config.list('instrumentations')
+          wanted = allowed.empty? || allowed.include?('wire') ? %w[net_http httpx] : allowed & %w[net_http httpx]
+          @enabled_transports = wanted - denied
         end
         observe_targets
         install_transports
