@@ -57,12 +57,16 @@ func (p *processorRegistration) OnStart(ctx context.Context, span sdktrace.ReadW
 func (p *processorRegistration) OnEnd(span sdktrace.ReadOnlySpan) {
 	if p.active.Load() {
 		_ = guarded(func() error {
-			p.endPrivacy(span)
+			session := p.endPrivacy(span)
 			if p.processor == nil {
 				return nil // Host exporters receive the original application view.
 			}
 			if p.aiOnly.Load() && !aiSpan(span) {
 				return nil
+			}
+			if session != nil {
+				// The export sanitizer runs after the span's record is gone.
+				span = sessionSpan{ReadOnlySpan: span, session: *session}
 			}
 			if p.queued {
 				// The exporter snapshots the process registry after queueing, so a

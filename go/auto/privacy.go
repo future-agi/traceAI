@@ -31,6 +31,10 @@ type spanRecord struct {
 	span    sdktrace.ReadOnlySpan
 	parent  spanIdentity
 	covered bool
+	// session is the session.id value the agent wrote on its own wire span
+	// from ContextWithSessionID, if any. Only that value keeps its value at
+	// export.
+	session *string
 }
 
 // Live dedup ancestry is process-local and removed at OnEnd. Credentials are
@@ -98,11 +102,40 @@ func (p *processorRegistration) covered(ctx context.Context) bool {
 	defer store.mu.Unlock()
 	return store.covered(identity(trace.SpanFromContext(ctx).SpanContext()))
 }
-func (p *processorRegistration) endPrivacy(span sdktrace.ReadOnlySpan) {
+
+// wroteSession keeps the session.id value the agent wrote on one of its wire
+// spans in that span's record, until the span ends.
+func (p *processorRegistration) wroteSession(span trace.SpanContext, value string) {
 	store := p.privacy
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	delete(store.spans, identity(span.SpanContext()))
+	if r := store.spans[identity(span)]; r != nil {
+		r.session = &value
+	}
+}
+
+// endPrivacy removes the span's record and returns the session.id value the
+// agent wrote on it, if any.
+func (p *processorRegistration) endPrivacy(span sdktrace.ReadOnlySpan) *string {
+	store := p.privacy
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := identity(span.SpanContext())
+	var session *string
+	if r := store.spans[key]; r != nil {
+		session = r.session
+	}
+	delete(store.spans, key)
+	return session
+}
+
+// sessionSpan is one of the agent's wire spans on its way to the export
+// sanitizer, carrying the session.id value the agent wrote on it. The record
+// itself ends with the span, but the agent's exporter sanitizes queued spans
+// later. Only the agent creates it.
+type sessionSpan struct {
+	sdktrace.ReadOnlySpan
+	session string
 }
 
 // Never mutate an SDK snapshot: other application exporters see their original
@@ -150,11 +183,11 @@ type spanSanitizer struct {
 	// context may have been dropped or truncated by a span limit, or discarded
 	// by a fallback. A zero MediaRisk (nil scopes) puts every path at risk.
 	risk *wire.MediaRisk
-	// session, set for the attributes of the agent's own wire spans, marks a
-	// top-level session.id as the value ContextWithSessionID set: its value is
-	// scrubbed, but its name is not a credential marker. Any other session.id
-	// on a wire span was already redacted at capture.
-	session bool
+	// session, set only for the attributes of one of the agent's own wire
+	// spans, is the session.id value the agent wrote on it from
+	// ContextWithSessionID (see sessionID). Every other session.id, including
+	// one another span processor set or replaced, is redacted by name.
+	session *string
 }
 
 func (s *spanSanitizer) spend(n, bytes, depth int) {
@@ -169,6 +202,25 @@ func (s *spanSanitizer) text(key, value string) string {
 	value = wire.PrivacyAttributeStringWithMasker(key, value, s.secrets.replace)
 	return sanitize(value, s.config.TraceConfig).(string)
 }
+
+// sessionID scrubs a top-level session.id on one of the agent's wire spans.
+// Its name is not a credential marker only while it is still the exact value
+// the agent wrote (*s.session), or that value cut by the provider's
+// value-length limit. Known secrets and credential shapes in it are redacted,
+// and a cut value takes the same fail-closed text path as any other cut
+// attribute. Any other value reports false, and the name rule applies.
+func (s *spanSanitizer) sessionID(value string) (string, bool) {
+	switch {
+	case value == *s.session:
+		return s.text("", value), true
+	case s.risk != nil && s.risk.Truncated != nil && s.risk.Truncated(value) && strings.HasPrefix(*s.session, value):
+		s.spend(1, len(value), 0)
+		value = wire.PrivacyValueFailClosed(value, "", nil, s.secrets.replace, *s.risk).(string)
+		return sanitize(value, s.config.TraceConfig).(string), true
+	}
+	return "", false
+}
+
 func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int, _ int) []attribute.KeyValue {
 	s.spend(len(attrs), 0, depth)
 	// One object preserves all sibling hints, including string-array/indexed MIME
@@ -186,10 +238,11 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 		if !keep {
 			continue
 		}
-		if s.session && depth == 0 && key == "session.id" && kv.Value.Type() == attribute.STRING {
-			// Known secrets and credential shapes in the value, not the name.
-			session = map[string]string{key: s.text("", kv.Value.AsString())}
-			continue
+		if s.session != nil && depth == 0 && key == "session.id" && kv.Value.Type() == attribute.STRING {
+			if value, ok := s.sessionID(kv.Value.AsString()); ok {
+				session = map[string]string{key: value}
+				continue
+			}
 		}
 		original[key] = kv.Value
 		values[key] = s.native(kv.Value, depth+1)
@@ -627,7 +680,9 @@ func exportSpanLimited(span sdktrace.ReadOnlySpan, c Config, res *resource.Resou
 	scope.Name, scope.Version, scope.SchemaURL = s.text("", scope.Name), s.text("", scope.Version), s.text("", scope.SchemaURL)
 	scope.Attributes = attribute.NewSet(s.attrs(scope.Attributes.ToSlice(), false, 0, 0)...)
 	s.risk = mediaRisk(span.Attributes(), span.DroppedAttributes(), valueLimit)
-	s.session = span.InstrumentationScope().Name == wireScope
+	if own, ok := span.(sessionSpan); ok {
+		s.session = &own.session
+	}
 	attrs := s.attrs(span.Attributes(), false, 0, 0)
 	return privateSpan{ReadOnlySpan: span, name: s.text("", span.Name()), attrs: attrs, events: events, links: links, status: status, res: r, scope: scope, ctx: s.spanContext(span.SpanContext()), parent: s.spanContext(span.Parent())}
 }

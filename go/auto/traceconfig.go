@@ -181,7 +181,10 @@ func ContextWithAttributes(ctx context.Context, kvs ...attribute.KeyValue) conte
 // wire spans under ctx. It is exported as its value: unlike a session-like
 // name from headers, bodies or other attributes, it is not redacted for its
 // name. Known secrets and credential-shaped values inside it are still
-// redacted. It replaces a session.id set with ContextWithAttributes.
+// redacted, and a value cut by the provider's value-length limit is scrubbed
+// like any other cut value. It replaces a session.id set with
+// ContextWithAttributes. A session.id that another span processor sets or
+// replaces on the wire span is redacted.
 func ContextWithSessionID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, sessionKey, id)
 }

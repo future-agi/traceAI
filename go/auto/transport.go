@@ -571,6 +571,15 @@ func (t *wireTransport) finish(ctx context.Context, start, end time.Time, m *wir
 	values = budgetAttributes(values, t.state.attributeLimit)
 	spanContext := context.WithoutCancel(ctx)
 	_, span := t.state.tracer().Start(spanContext, captureString(result.Name, cfg), trace.WithTimestamp(start), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(values...))
+	if _, ok := ctx.Value(sessionKey).(string); ok {
+		// Record the exact session.id this span starts with: it keeps its value
+		// at export only while the span still carries it.
+		for _, kv := range values {
+			if kv.Key == "session.id" && kv.Value.Type() == attribute.STRING {
+				t.state.registration.wroteSession(span.SpanContext(), kv.Value.AsString())
+			}
+		}
+	}
 	if result.OK {
 		span.SetStatus(codes.Ok, "")
 	} else {
@@ -586,7 +595,9 @@ func (t *wireTransport) finish(ctx context.Context, start, end time.Time, m *wir
 // withSessionID writes the session id set with ContextWithSessionID as
 // session.id, in place of any session.id from other context attributes. Its
 // name is not treated as a credential marker: the value gets structural and
-// credential-shape scrubbing here and known-secret scrubbing at export.
+// credential-shape scrubbing here and known-secret scrubbing at export. The
+// span's privacy record keeps the value, so a session.id that another span
+// processor sets or replaces is still redacted by name at export.
 func withSessionID(values []attribute.KeyValue, id string, cfg Config, operation string) []attribute.KeyValue {
 	out := make([]attribute.KeyValue, 0, len(values)+1)
 	for _, kv := range values {
