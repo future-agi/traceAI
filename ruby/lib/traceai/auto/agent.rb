@@ -18,6 +18,18 @@ module TraceAI
       rescue StandardError
         nil
       end
+      # Preload and init each read the configuration; print each of its
+      # warnings (such as an incomplete key pair) once per process.
+      def announce_warnings(config)
+        @announced ||= {}
+        config.warnings.each do |message|
+          next if @announced[message]
+          @announced[message] = true
+          warn 'traceai-auto: ' + message
+        end
+      rescue StandardError
+        nil
+      end
       def debug(error)
         warn "traceai-auto: internal #{error.class.name}" if @config&.truthy?('auto_debug')
       rescue StandardError
@@ -27,7 +39,8 @@ module TraceAI
       # URI, net-http, etc. may all be pinned by the application's bundle.
       def preload
         return init if @initialized
-        @config ||= Config.new
+        @config ||= Config.new(announce: false)
+        announce_warnings(@config)
         return self if @config.truthy?('sdk_disabled')
         # A neutral destination may be installed by the application after this
         # RUBYOPT shim. Keep dependency-free lazy hooks until it exists; do not
@@ -243,7 +256,8 @@ module TraceAI
       def initialize_once(arguments)
         # Destinations are opaque application objects, not serializable config.
         destinations = arguments.select { |key, _| %i[provider exporter processor].include?(key) }
-        @config = Config.new(arguments.reject { |key, _| destinations.key?(key) })
+        @config = Config.new(arguments.reject { |key, _| destinations.key?(key) }, announce: false)
+        announce_warnings(@config)
         SECRET_REGISTRY.seed(@config)
         return self if @config.truthy?('sdk_disabled')
         candidate = destinations[:provider] || sdk_host_provider

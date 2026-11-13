@@ -22,7 +22,9 @@ module TraceAI
       rescue EncodingError
         value.b.force_encoding(Encoding::UTF_8).scrub
       end
-      def initialize(arguments = {}, env: ENV, cwd: Dir.pwd)
+      # announce: false leaves printing the warnings to the caller (the agent
+      # prints each one once per process, however often it reads its config).
+      def initialize(arguments = {}, env: ENV, cwd: Dir.pwd, announce: true)
         file = arguments[:config_file] || arguments['config_file'] || env['FI_CONFIG_FILE'] || File.join(cwd, 'futureagi.toml')
         file_values = read_file(file)
         environment = env.each_with_object({}) do |(k, v), out|
@@ -50,7 +52,7 @@ module TraceAI
         end
         @values['api_key'], @values['secret_key'] = selected if selected
         @warnings.freeze
-        @warnings.each { |message| warn 'traceai-auto: ' + message }
+        @warnings.each { |message| warn 'traceai-auto: ' + message } if announce
         @values['auto_debug'] = @values.delete('debug') if @values.key?('debug')
         @values['project_name'] ||= Config.utf8(env['OTEL_SERVICE_NAME'] || File.basename(cwd))
         @values['project_name'] = 'DEFAULT_PROJECT_NAME' if @values['project_name'].to_s.empty?
