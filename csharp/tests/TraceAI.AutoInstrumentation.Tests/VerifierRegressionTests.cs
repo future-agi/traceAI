@@ -41,7 +41,9 @@ public class VerifierRegressionTests
     public async Task LateApplicationProcessorsCannotBypassWireExportPrivacy(bool builtIn,bool addEvent)
     {
         await using var server=new MockServer("{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"safe\"}}]}"u8.ToArray(),"application/json");
-        var exporter=new MemoryExporter(); var options=Options(builtIn?null:exporter); options.BaseUrl=server.Url; options.TraceConfig=new TraceConfig { HideInputs=true };
+        var exporter=new MemoryExporter(); var options=Options(builtIn?null:exporter); options.BaseUrl=server.Url;
+        // Error details stay on so the status description shows that echoes are still scrubbed.
+        options.TraceConfig=new TraceConfig { HideInputs=true,HideErrorDetails=false };
         using var agent=new Agent(new AutoConfig(options));
         using var host=Sdk.CreateTracerProviderBuilder().AddSource(TraceAIAuto.Source.Name).AddProcessor(new LateProcessor(activity=> {
             activity.SetTag("input.value","LATE_PRIVATE_INPUT");
@@ -158,9 +160,10 @@ public class VerifierRegressionTests
         var requestData=new RequestData { Url=url,Body=explicitEmpty?[]:null };
         Assert.Null(WireCore.Build(WireCore.Match("POST",url)!,requestData,new ResponseData { Status=200 })); Assert.False(requestData.BodyUnavailable);
         using var request=new HttpRequestMessage(HttpMethod.Post,url) { Content=explicitEmpty?new ByteArrayContent([]):null };
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        var id=Guid.NewGuid();
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=id }));
         using var response=new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content=new StringContent("{}",Encoding.UTF8,"application/json") };
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Stop",new { Request=request,Response=response }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Response",new { Response=response,LoggingRequestId=id }));
         response.Content.CopyTo(Stream.Null,null,CancellationToken.None); Assert.True(agent.Flush(1000)); Assert.Empty(exporter.Spans);
     }
 }
