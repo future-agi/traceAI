@@ -1,0 +1,1 @@
+import os; os.environ.get("FI_AUTO_INSTRUMENT", "").strip().lower() in ("1", "true", "yes", "on") and __import__("fi_instrumentation.auto._bootstrap", fromlist=["start"]).start()

@@ -12,6 +12,12 @@ packages = [
 exclude = [
     "frameworks",
 ]
+
+# FI_AUTO_INSTRUMENT=true starts the agent at interpreter start: the wheel puts this file in
+# site-packages. It does nothing unless that variable is set.
+include = [
+    { path = "fi_instrumentation_auto.pth", format = ["sdist", "wheel"] },
+]
 license = "Apache-2.0"
 keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm"]
 classifiers = [
@@ -52,6 +58,12 @@ opentelemetry-exporter-otlp-proto-grpc = {version = "^1.29.0", optional = true}
 [tool.poetry.extras]
 grpc = ["opentelemetry-exporter-otlp-proto-grpc"]
 evaluation = ["futureagi", "ai-evaluation"]
+
+[tool.poetry.scripts]
+fi-instrument = "fi_instrumentation.auto._cli:main"
+
+[tool.poetry.plugins."opentelemetry_instrumentor"]
+futureagi = "fi_instrumentation.auto._otel_entry:FutureAGIInstrumentor"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
