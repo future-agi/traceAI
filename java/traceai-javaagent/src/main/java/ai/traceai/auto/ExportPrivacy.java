@@ -6,8 +6,12 @@ import java.util.*;
 /** The sole authoritative privacy boundary, used immediately before OTLP serialization. */
 final class ExportPrivacy {
     static WirePrivacy privacy(AutoConfig config) { return new WirePrivacy(KnownSecrets.PROCESS.snapshot(), config.flag("FI_HIDE_INPUT_IMAGES")); }
-    @SuppressWarnings({"rawtypes", "unchecked"})
     static Attributes attributes(Attributes source, WirePrivacy privacy, AutoConfig config, boolean event, String operation) {
+        return attributes(source, privacy, config, event, operation, false);
+    }
+    /** contextSession: these are the agent's own span attributes, whose top-level session.id is the context API's session id. */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    static Attributes attributes(Attributes source, WirePrivacy privacy, AutoConfig config, boolean event, String operation, boolean contextSession) {
         AttributesBuilder result = Attributes.builder();
         WireCore.Match match = new WireCore.Match(Map.of("operation", operation), "", "", 0, Map.of(), Map.of());
         Map<String, Object> siblings = new LinkedHashMap<>();
@@ -15,7 +19,8 @@ final class ExportPrivacy {
         WirePrivacy.Scope scope = privacy.scope(siblings, "", WirePrivacy.Scope.EMPTY);
         source.forEach((key, value) -> {
             if (TraceAIAuto.hidden(key.getKey(), match, config)) return;
-            Object clean = privacy.clean(key.getKey(), value, scope, true);
+            Object clean = contextSession && WirePrivacy.SESSION_ID.equals(key.getKey()) && value instanceof String session
+                ? privacy.sessionValue(session) : privacy.clean(key.getKey(), value, scope, true);
             // Only inspect materialized sanitizer output, never an application's List implementation.
             if (event && TraceAIAuto.hidesContent(config) && (clean instanceof String || clean instanceof List<?> list && list.stream().anyMatch(String.class::isInstance))) return;
             String name = privacy.text(key.getKey());

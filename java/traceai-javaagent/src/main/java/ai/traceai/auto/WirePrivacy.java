@@ -25,6 +25,18 @@ final class WirePrivacy {
         hideImages = config != null && config.flag("FI_HIDE_INPUT_IMAGES");
     }
     WirePrivacy(KnownSecrets.Snapshot secrets, boolean hideImages) { this.secrets = secrets; this.hideImages = hideImages; }
+    /** The session id set through ContextAttributes.usingSession, as written on the agent's own spans. */
+    static final String SESSION_ID = "session.id";
+    /**
+     * The context API's session id is an identifier, like gen_ai.conversation.id, which carries the
+     * same value: its name is not a credential marker. Known secrets, credential shapes, URL
+     * credentials and media inside the value are still removed.
+     */
+    synchronized String sessionValue(String value) {
+        nodes = 0; characters = 0;
+        try { return string(value, "", 0, Scope.EMPTY, false, false, true); }
+        catch (Throwable ignored) { failed = true; return "<redacted>"; }
+    }
     String text(String value) { return value == null ? null : (String)clean(value); }
     Object clean(Object value) { return clean("", value); }
     Object clean(String key, Object value) { return clean(key, value, Scope.EMPTY, true); }

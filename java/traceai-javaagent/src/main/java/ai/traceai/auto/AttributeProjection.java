@@ -42,7 +42,12 @@ final class AttributeProjection {
         WirePrivacy privacy = ExportPrivacy.privacy(config); Map<String, Object> clean = new TreeMap<>();
         try {
             WirePrivacy.Scope scope = privacy.scope(source, "", WirePrivacy.Scope.EMPTY);
-            for (var e : source.entrySet()) if (!TraceAIAuto.hidden(e.getKey(), match, config)) clean.put(privacy.text(e.getKey()), privacy.clean(e.getKey(), e.getValue(), scope, true));
+            for (var e : source.entrySet()) if (!TraceAIAuto.hidden(e.getKey(), match, config)) {
+                // Wire attributes: session.id comes only from the context API's session id (see WirePrivacy.sessionValue).
+                Object value = WirePrivacy.SESSION_ID.equals(e.getKey()) && e.getValue() instanceof String session
+                    ? privacy.sessionValue(session) : privacy.clean(e.getKey(), e.getValue(), scope, true);
+                clean.put(privacy.text(e.getKey()), value);
+            }
             if (!privacy.failed) return clean;
         } catch (Throwable ignored) { }
         // Sanitizer work limits must not let a very large history erase already-known usage

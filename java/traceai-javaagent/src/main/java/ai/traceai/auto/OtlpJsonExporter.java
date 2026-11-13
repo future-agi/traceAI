@@ -58,7 +58,9 @@ final class OtlpJsonExporter implements SpanExporter {
         if (!span.getParentSpanId().equals("0000000000000000")) data.put("parentSpanId", span.getParentSpanId());
         data.put("name", privacy.text(span.getName())); data.put("kind", span.getKind().ordinal() + 1);
         data.put("startTimeUnixNano", String.valueOf(span.getStartEpochNanos())); data.put("endTimeUnixNano", String.valueOf(span.getEndEpochNanos()));
-        Attributes attrs = ExportPrivacy.attributes(span.getAttributes(), privacy, config, false, operation);
+        // On the agent's own spans, session.id is the session id set through the context API.
+        boolean own = TraceAIAuto.SCOPE.equals(span.getInstrumentationScopeInfo().getName());
+        Attributes attrs = ExportPrivacy.attributes(span.getAttributes(), privacy, config, false, operation, own);
         data.put("attributes", attributes(attrs)); data.put("droppedAttributesCount", Math.max(0, span.getTotalAttributeCount() - attrs.size()));
         data.put("status", Map.of("code", span.getStatus().getStatusCode().ordinal(), "message", TraceAIAuto.hidesContent(config) ? "" : privacy.text(span.getStatus().getDescription())));
         List<Object> events = new ArrayList<>(), links = new ArrayList<>();

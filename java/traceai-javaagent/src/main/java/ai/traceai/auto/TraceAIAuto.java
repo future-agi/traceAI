@@ -19,6 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Zero-code agent and optional one-line initialization. All entry points fail open. */
 public final class TraceAIAuto {
     public static final ContextKey<Boolean> SUPPRESS = ContextKey.named("traceai.auto.suppress");
+    /** Instrumentation scope of every span this agent creates. */
+    static final String SCOPE = "traceai-java-auto";
     static final ThreadLocal<Boolean> IN_FLIGHT = ThreadLocal.withInitial(() -> false);
     private static final AtomicBoolean WARNED = new AtomicBoolean();
     private static volatile boolean active, initialized;
@@ -92,7 +94,7 @@ public final class TraceAIAuto {
             OpenTelemetrySdk sdk = OpenTelemetrySdk.builder().setTracerProvider(provider).build();
             try { GlobalOpenTelemetry.set(sdk); } catch (IllegalStateException ignored) { }
             // Only this agent's own spans are exported. Application providers, processors and spans are left alone.
-            RUNTIME.set(new RuntimeState(config, provider, sdk.getTracer("traceai-java-auto", "1.0.0"), exporter, processor, resource));
+            RUNTIME.set(new RuntimeState(config, provider, sdk.getTracer(SCOPE, "1.0.0"), exporter, processor, resource));
             if (instrumentation == null) instrumentation = ByteBuddyAgent.install();
             STATUS.put("java.net.http", transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");
             STATUS.put("okhttp", !transportEnabled("okhttp") ? "disabled" : present("okhttp3.OkHttpClient") ? "pending (enabled when loaded)" : "not_installed");
