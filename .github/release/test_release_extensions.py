@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -61,6 +62,30 @@ class ExtensionTests(unittest.TestCase):
         plan = release_plan.plan(auto, release_plan.load_config(), offline=True)
         self.assertEqual(plan['go'], [])
         self.assertEqual([p['name'] for p in plan['skipped']], ['github.com/future-agi/traceAI/go/auto'])
+
+    def test_java_agent_is_built_but_held_from_central_until_its_first_release_is_approved(self):
+        root = release_plan.REPO_ROOT
+        java = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'java']
+        self.assertEqual([p['name'] for p in java], ['com.futureagi:traceai-java-parent'])
+        self.assertIn('traceai-javaagent', java[0]['artifacts'], 'the reactor still builds and tests the agent')
+        plan = release_plan.plan(java, release_plan.load_config(), offline=True)
+        # The rest of the reactor is still released, and the Central check waits only for what was deployed.
+        self.assertEqual([p['name'] for p in plan['java']], ['com.futureagi:traceai-java-parent'])
+        planned = plan['java'][0]
+        self.assertNotIn('traceai-javaagent', planned['artifacts'])
+        self.assertIn('traceai-java-core', planned['artifacts'])
+        self.assertEqual(planned['held_artifacts'], ['traceai-javaagent'])
+        held = [p for p in plan['skipped'] if p['name'] == 'com.futureagi:traceai-javaagent']
+        self.assertEqual(len(held), 1)
+        self.assertIn('first release', held[0]['reason'])
+        # The deploy leaves the module out: its release profile turns Central publishing off.
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        pom = ET.parse(root / 'java/traceai-javaagent/pom.xml').getroot()
+        profiles = [p for p in pom.findall('m:profiles/m:profile', ns) if p.findtext('m:id', namespaces=ns) == 'release']
+        self.assertEqual(len(profiles), 1)
+        plugins = [p for p in profiles[0].findall('m:build/m:plugins/m:plugin', ns)
+                   if p.findtext('m:artifactId', namespaces=ns) == 'central-publishing-maven-plugin']
+        self.assertEqual([p.findtext('m:configuration/m:skipPublishing', namespaces=ns) for p in plugins], ['true'])
 
     def test_go_proxy_case_escaping(self):
         with patch.object(release_plan, '_get_json', return_value={'Version': 'v0.1.0'}) as get:
