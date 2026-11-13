@@ -101,7 +101,10 @@ class AgentE2ETest {
         String endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + path;
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("traceai.test.java.home", System.getProperty("java.home")), "bin", "java").toString());
+        String otelAgent = "-javaagent:" + Path.of("target", "otel-javaagent", "opentelemetry-javaagent.jar").toAbsolutePath();
+        if ("first".equals(options.get("TRACEAI_TEST_OTEL_AGENT"))) command.add(otelAgent);
         if (!client.equals("init") && !scenario.equals("coexist_existing") && !options.containsKey("TRACEAI_TEST_NO_AGENT")) command.add("-javaagent:" + agent);
+        if ("second".equals(options.get("TRACEAI_TEST_OTEL_AGENT"))) command.add(otelAgent);
         if (client.equals("jdkonly")) {
             Path app = Files.createTempFile(Path.of("target"), "plain-app-", ".jar");
             java.util.jar.Manifest manifest = new java.util.jar.Manifest(); manifest.getMainAttributes().putValue("Manifest-Version", "1.0"); manifest.getMainAttributes().putValue("Main-Class", JdkOnlyApp.class.getName());
@@ -194,6 +197,15 @@ class AgentE2ETest {
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void initWithKeysStartsAfterAKeylessJavaagentStart(String client) throws Exception {
         String log = run(client, "late_keys", Map.of(), false);
         assertSpan(); assertEquals(1, log.lines().filter(l -> l.contains("FI_API_KEY and FI_SECRET_KEY are required")).count(), log);
+    }
+    @ParameterizedTest @ValueSource(strings = {"first", "second"})
+    void openTelemetryJavaAgentBesideThisOneKeepsItOffWithOneWarning(String order) throws Exception {
+        assertTrue(Files.isRegularFile(Path.of("target", "otel-javaagent", "opentelemetry-javaagent.jar")), "the build copies the OpenTelemetry Java agent");
+        String log = run("jdk", "basic", Map.of("TRACEAI_TEST_OTEL_AGENT", order, "OTEL_TRACES_EXPORTER", "none", "OTEL_METRICS_EXPORTER", "none", "OTEL_LOGS_EXPORTER", "none"), true);
+        // The application runs unchanged (run() compares its request and response), and this agent exports nothing.
+        assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty());
+        var warnings = log.lines().filter(l -> l.contains("[traceai-auto]")).toList();
+        assertEquals(1, warnings.size(), log); assertTrue(warnings.get(0).contains("OpenTelemetry Java agent"), log);
     }
     @Test void deadCollectorDoesNotAffectApplication() throws Exception { String log = run("jdk", "basic", Map.of("FI_BASE_URL", "http://127.0.0.1:1"), true); assertTrue(spans.isEmpty()); assertEquals(1, log.lines().filter(l -> l.contains("[traceai-auto]")).count(), log); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void individualTransportCanBeDisabled(String client) throws Exception { run(client, "basic", Map.of("FI_DISABLED_INSTRUMENTATIONS", client.equals("jdk") ? "java.net.http" : "okhttp"), true); assertTrue(spans.isEmpty()); }
