@@ -529,33 +529,14 @@ module TraceAI
       rescue StandardError => e
         @flushing = false; debug(e); false
       end
+      # Flush and shut down at exit only. Ruby's default SIGTERM handling raises
+      # SignalException in the main thread, which runs at_exit hooks, and an
+      # application's own TERM handler normally ends in exit, which does too, so
+      # the agent never replaces the application's signal handlers.
       def install_exit_hooks
         return if @exit_hooks
         @exit_hooks = true
         at_exit { shutdown(timeout: 5) }
-        @previous_term = Signal.trap('TERM') do
-          unless @handling_term
-            @handling_term = true
-            begin
-              flush(timeout: 5)
-            ensure
-              previous = @previous_term
-              if previous.respond_to?(:call)
-                @handling_term = false
-                previous.call(Signal.list['TERM'])
-              elsif previous == 'IGNORE' || previous == 'SIG_IGN'
-                @handling_term = false
-              elsif previous == 'EXIT'
-                exit
-              else
-                Signal.trap('TERM', 'DEFAULT')
-                Process.kill('TERM', Process.pid)
-              end
-            end
-          end
-        end
-      rescue ArgumentError, ThreadError => e
-        debug(e)
       end
       def installed?(name)
         !Gem::Specification.find_all_by_name(name).empty?
