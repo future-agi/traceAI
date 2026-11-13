@@ -39,18 +39,27 @@ module TraceAI
           %w[api_key secret_key].filter_map { |key| Config.utf8(source[key]).dup.freeze if source[key].instance_of?(String) }
         end.freeze
         @values.delete('api_key'); @values.delete('secret_key')
-        selected = nil
+        selected = nil; selected_source = nil
         [['explicit arguments', explicit], ['environment', environment], ['config file', file_values]].each do |label, source|
           api = source['api_key']; secret = source['secret_key']
           has_api = api.instance_of?(String) && !api.empty?
           has_secret = secret.instance_of?(String) && !secret.empty?
           if has_api && has_secret
+            selected_source ||= label
             selected ||= [api, secret]
           elsif has_api || has_secret
             @warnings << "#{label} credential pair ignored: missing #{has_api ? 'FI_SECRET_KEY' : 'FI_API_KEY'}"
           end
         end
         @values['api_key'], @values['secret_key'] = selected if selected
+        # futureagi.toml is meant to be committed. Its base_url must not send key
+        # pairs from elsewhere (the environment or init) to another host, so it
+        # counts only when the key pair comes from the same file.
+        from_file = file_values.key?('base_url') && !environment.key?('base_url') && !explicit.key?('base_url')
+        if from_file && selected && selected_source != 'config file'
+          @values['base_url'] = DEFAULTS['base_url']
+          @warnings << 'config file base_url ignored: the key pair does not come from the same file'
+        end
         @warnings.freeze
         @warnings.each { |message| warn 'traceai-auto: ' + message } if announce
         @values['auto_debug'] = @values.delete('debug') if @values.key?('debug')
@@ -133,7 +142,7 @@ module TraceAI
         return {} unless File.file?(path) && File.size(path) <= 65_536
         # TOML is UTF-8. Never decode it in the locale encoding (US-ASCII under
         # LANG=C); a line that is not valid UTF-8 is skipped like a malformed one.
-        text = File.binread(path).force_encoding(Encoding::UTF_8).delete_prefix("﻿")
+        text = File.binread(path).force_encoding(Encoding::UTF_8).delete_prefix([0xFEFF].pack('U'))
         text.each_line.each_with_object({}) do |line, out|
           next unless line.valid_encoding?
           # Remove comments outside quoted strings, respecting JSON/TOML escapes.
