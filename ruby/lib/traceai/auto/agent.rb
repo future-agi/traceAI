@@ -322,7 +322,6 @@ module TraceAI
         end
         observe_targets
         install_transports
-        install_server_instrumentation if @sdk
         install_exit_hooks
         warn Codec.generate(report) if @config.truthy?('auto_debug')
         @provider
@@ -431,6 +430,7 @@ module TraceAI
         result = Wire.build(request, response, limit: @config['wire_max_body_bytes'])
         return unless result
         adopt_host_provider if @own_provider && @provider.equal?(@own_provider)
+        install_server_instrumentation if @sdk && !%w[instrumented failed].include?(@rack_status)
         context_attrs = parent.value(@attributes_key) || {}
         attributes = Privacy.mask(Privacy.scrub_attributes(context_attrs.merge(result.attributes)), @config)
         description = Privacy.hide_errors?(@config) ? '__REDACTED__' : result.description.to_s
@@ -567,9 +567,19 @@ module TraceAI
           @httpx_installed = !!target('HTTPX::Session') if transport_enabled?('httpx')
         end
       end
+      # Rack server spans are installed lazily (on an AI request, a report or
+      # auto_instrument), only once Rack is loaded and only on an application
+      # or supplied provider, after the application's own OpenTelemetry
+      # configuration: never on the agent's private provider, and never ahead
+      # of the application's own Rack options. Until then the status is pending.
       def install_server_instrumentation(force: false)
-        return if @rack_status == 'instrumented'
-        return unless (force || @config.enabled?('rack')) && Gem.loaded_specs.key?('rack') && Gem.loaded_specs.key?('opentelemetry-instrumentation-rack')
+        return if %w[instrumented failed].include?(@rack_status) || @initializing
+        return unless (force || @config.enabled?('rack')) && Gem.loaded_specs.key?('opentelemetry-instrumentation-rack')
+        rack_loaded = Object.const_defined?(:Rack, false) && !Object.autoload?(:Rack)
+        unless rack_loaded && @sdk && @provider && !@provider.equal?(@own_provider)
+          @rack_status = 'pending'
+          return
+        end
         require 'opentelemetry/instrumentation/rack'
         @rack_status = OpenTelemetry::Instrumentation::Rack::Instrumentation.instance.install ? 'instrumented' : 'failed'
       rescue LoadError, SyntaxError, StandardError => e
@@ -577,6 +587,7 @@ module TraceAI
       end
       def report(test_export: false)
         init if @pending && !waiting_for_bundle?
+        install_server_instrumentation if active?
         integrations = {}
         {'wire' => nil, 'net_http' => 'net-http', 'httpx' => 'httpx', 'openai' => 'openai', 'ruby-openai' => 'ruby-openai',
          'anthropic' => 'anthropic', 'anthropic-sdk-ruby' => 'anthropic-sdk-ruby', 'ruby_llm' => 'ruby_llm', 'roast' => 'roast', 'rack' => 'rack'}.each do |name, gem|
@@ -585,9 +596,9 @@ module TraceAI
           state = if !active? || !allowed || (%w[wire net_http httpx].include?(name) && !wire_enabled?)
                     'disabled'
                   elsif name == 'wire' || name == 'net_http' then 'instrumented'
+                  elsif name == 'rack' && @rack_status then @rack_status
                   elsif !installed?(gem) then 'not_installed'
                   elsif name == 'httpx' then @httpx_installed ? 'instrumented' : 'pending'
-                  elsif name == 'rack' && @rack_status then @rack_status
                   else 'missing_instrumentor'
                   end
           integrations[name] = {status: state}
