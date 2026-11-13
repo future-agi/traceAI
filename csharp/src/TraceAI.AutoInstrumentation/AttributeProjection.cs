@@ -17,8 +17,8 @@ internal static class AttributeProjection
         // its resolved options (including DI configuration), not just today's env.
         if(exporter is OtlpTraceExporter)
         {
-            var options=typeof(OtlpTraceExporter).GetField("sdkLimitOptions",BindingFlags.Instance|BindingFlags.NonPublic)?.GetValue(exporter);
-            if(options?.GetType().GetProperty("SpanAttributeCountLimit")?.GetValue(options) is int configured && configured>=0) return configured;
+            var options=RuntimeLayout.OtlpLimits?.GetValue(exporter);
+            if(options!=null && RuntimeLayout.OtlpSpanAttributeLimit?.GetValue(options) is int configured && configured>=0) return configured;
         }
         int? Read(string name)=>int.TryParse(Environment.GetEnvironmentVariable(name),out var value)&&value>=0?value:null;
         return Read("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT")??Read("OTEL_ATTRIBUTE_COUNT_LIMIT")??128;

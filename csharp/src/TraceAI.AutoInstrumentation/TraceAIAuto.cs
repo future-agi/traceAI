@@ -161,6 +161,7 @@ internal sealed class Agent : IDisposable
     internal Agent(AutoConfig config)
     {
         _config=config; _installed=InstalledAssemblies();
+        RuntimeLayout.Check();
         if(config.Enabled("openai")) AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry",true);
         if(config.Enabled("semantic_kernel")) AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics",true);
         if(config.Enabled("azure_inference")||config.Enabled("azure_openai")) AppContext.SetSwitch("Azure.Experimental.EnableActivitySource",true);
@@ -329,8 +330,6 @@ internal sealed class BorrowedExporter(BaseExporter<Activity> inner,AutoProcesso
 {
     private sealed class Association { internal BaseProvider? Provider; }
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BaseExporter<Activity>,Association> Associations=new();
-    private static readonly PropertyInfo ProviderProperty=typeof(BaseExporter<Activity>).GetProperty(nameof(ParentProvider))!;
-    private static readonly PropertyInfo? OtlpResource=typeof(OtlpTraceExporter).GetProperty("Resource",BindingFlags.Instance|BindingFlags.NonPublic);
     public override ExportResult Export(in Batch<Activity> batch)
     {
         bool previous=ExportCallback.Active; ExportCallback.Active=true;
@@ -349,7 +348,7 @@ internal sealed class BorrowedExporter(BaseExporter<Activity> inner,AutoProcesso
                 // without taking ownership, and never replace a caller's existing provider.
                 if(ParentProvider!=null && (inner.ParentProvider==null || ReferenceEquals(inner.ParentProvider,association.Provider)))
                 {
-                    ProviderProperty.SetValue(inner,ParentProvider);
+                    (RuntimeLayout.ExporterProvider??throw new MissingMemberException(nameof(BaseExporter<Activity>),nameof(ParentProvider))).SetValue(inner,ParentProvider);
                     association.Provider=ParentProvider;
                 }
                 if(inner is OtlpTraceExporter)
@@ -357,7 +356,7 @@ internal sealed class BorrowedExporter(BaseExporter<Activity> inner,AutoProcesso
                     // The caller may share this exporter with another provider. Change only
                     // a detached exporter shell, never its cached resource or association.
                     var shell=(BaseExporter<Activity>)ExportSnapshot.Clone(inner);
-                    OtlpResource!.SetValue(shell,snapshot.Resource);
+                    (RuntimeLayout.OtlpResource??throw new MissingMemberException(nameof(OtlpTraceExporter),"Resource")).SetValue(shell,snapshot.Resource);
                     return shell.Export(in safe);
                 }
                 return inner.Export(in safe);
@@ -384,7 +383,7 @@ internal sealed class TrackingOtlpExporter(OtlpExporterOptions options,AutoProce
             if(_compatibility!=null) result=_compatibility.Export(snapshot.Resource,snapshot.Spans)?ExportResult.Success:ExportResult.Failure;
             else
             {
-                typeof(OtlpTraceExporter).GetProperty("Resource",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(this,snapshot.Resource);
+                (RuntimeLayout.OtlpResource??throw new MissingMemberException(nameof(OtlpTraceExporter),"Resource")).SetValue(this,snapshot.Resource);
                 result=base.Export(in safe);
             }
             LastResult=result==ExportResult.Success?"accepted":"failed";

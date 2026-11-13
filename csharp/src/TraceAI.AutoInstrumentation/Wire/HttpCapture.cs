@@ -74,9 +74,7 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
         // framework content has one owned stream; tap only that stream, never
         // call application content/stream factories or read an unread body.
         var content=response.Content;
-        var type=content.GetType();
-        var field=type.Assembly==typeof(HttpClient).Assembly && type.FullName=="System.Net.Http.HttpConnectionResponseContent"?
-            type.GetField("_stream",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic):null;
+        var field=content.GetType()==RuntimeLayout.ResponseContent?RuntimeLayout.ResponseStream:null;
         if(field?.GetValue(content) is Stream stream) field.SetValue(content,new ReadTapStream(stream,capture));
         // Unknown custom content is deliberately untouched, not silently replaced.
     }
@@ -171,16 +169,15 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
         // Only exact buffered BCL types reach this helper. Never call ReadAs*,
         // serialize content or materialize a Content-Length header: even the BCL
         // getter mutates multipart parts after the enclosing length was computed.
-        const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+        // A missing field (RuntimeLayout) throws here and fails this request's discovery closed.
         if(content is ByteArrayContent)
         {
-            var type=typeof(ByteArrayContent);
-            var bytes=(byte[])type.GetField("_content",flags)!.GetValue(content)!;
-            int offset=(int)type.GetField("_offset",flags)!.GetValue(content)!;
-            int count=(int)type.GetField("_count",flags)!.GetValue(content)!;
+            var bytes=(byte[])RuntimeLayout.ByteArrayBuffer!.GetValue(content)!;
+            int offset=(int)RuntimeLayout.ByteArrayOffset!.GetValue(content)!;
+            int count=(int)RuntimeLayout.ByteArrayCount!.GetValue(content)!;
             return bytes.AsMemory(offset,count);
         }
-        return (ReadOnlyMemory<byte>)typeof(ReadOnlyMemoryContent).GetField("_content",flags)!.GetValue(content)!;
+        return (ReadOnlyMemory<byte>)RuntimeLayout.MemoryBuffer!.GetValue(content)!;
     }
     private static long? KnownLength(HttpContent content)
     {

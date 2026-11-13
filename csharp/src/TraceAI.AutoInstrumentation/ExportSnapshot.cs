@@ -19,10 +19,13 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
     internal Activity[] Spans { get; }=spans;
     internal Resource Resource { get; }=resource;
     private const BindingFlags Fields=BindingFlags.Instance|BindingFlags.NonPublic;
-    private static readonly MethodInfo Memberwise=typeof(object).GetMethod("MemberwiseClone",Fields)!;
-    internal static object Clone(object value)=>Memberwise.Invoke(value,null)!;
-    private static void Set(object value,string field,object? replacement) =>
-        (value.GetType().GetField(field,Fields)??throw new MissingFieldException(value.GetType().Name,field)).SetValue(value,replacement);
+    internal static object Clone(object value)=>(RuntimeLayout.CloneMethod??throw new MissingMethodException(nameof(Object),"MemberwiseClone")).Invoke(value,null)!;
+    // Members are resolved once (RuntimeLayout); a missing one fails this span closed.
+    private static void Set(object value,string field,object? replacement)
+    {
+        var type=value is Activity?typeof(Activity):value.GetType();
+        (RuntimeLayout.Field(type,field)??throw new MissingFieldException(type.Name,field)).SetValue(value,replacement);
+    }
     private static Activity Shell(Activity original)
     {
         // Materialize lazy identity before detaching the parent reference.
@@ -35,7 +38,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         // application's. Every span that reaches this point was sampled for Future AGI.
         copy.ActivityTraceFlags|=ActivityTraceFlags.Recorded;
         // This reference is not exported, and must not retain an application's activity graph.
-        typeof(Activity).GetField("_previousActiveActivity",Fields)?.SetValue(copy,null);
+        RuntimeLayout.Field(typeof(Activity),"_previousActiveActivity")?.SetValue(copy,null);
         return copy;
     }
     private sealed class Budget(int nodes=WirePrivacy.MaxAttributeNodes,int characters=8*1024*1024,Budget? shared=null)
@@ -154,7 +157,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 {
                     // AddLink is absent on DS8. Populate its stable BCL list
                     // directly instead; no application listener or iterator runs.
-                    var field=typeof(Activity).GetField("_links",Fields)!;
+                    var field=RuntimeLayout.Field(typeof(Activity),"_links")??throw new MissingFieldException(nameof(Activity),"_links");
                     var list=Activator.CreateInstance(field.FieldType,nonPublic:true)!;
                     var add=field.FieldType.GetMethod("Add",Fields|BindingFlags.Public)!;
                     foreach(var link in links) add.Invoke(list,new object[] { link });
@@ -174,8 +177,8 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 copy=Shell(original);
                 var source=(ActivitySource)Clone(original.Source);
                 Set(source,"<Name>k__BackingField","traceai.redacted"); Set(source,"<Version>k__BackingField",null);
-                typeof(ActivitySource).GetField("<Tags>k__BackingField",Fields)?.SetValue(source,null);
-                typeof(ActivitySource).GetField("<TelemetrySchemaUrl>k__BackingField",Fields)?.SetValue(source,null);
+                RuntimeLayout.Field(typeof(ActivitySource),"<Tags>k__BackingField")?.SetValue(source,null);
+                RuntimeLayout.Field(typeof(ActivitySource),"<TelemetrySchemaUrl>k__BackingField")?.SetValue(source,null);
                 Set(copy,"<Source>k__BackingField",source); Set(copy,"_traceState",null);
                 string Text(string text) { try { return redact(text); } catch { return "traceai.redacted"; } }
                 copy.DisplayName=Text(original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(original.OperationName)); copy.SetStatus(original.Status);

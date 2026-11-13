@@ -8,10 +8,9 @@ namespace TraceAI.AutoInstrumentation.Wire;
 internal static class WirePrivacy
 {
     internal const string Redacted="<redacted>";
-    private static readonly System.Reflection.FieldInfo? ExceptionMessage=typeof(Exception).GetField("_message",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
     // Message is virtual. Read only the BCL's stored text, never an application's
     // override (including overrides nested inside AggregateException.Message).
-    internal static string ErrorMessage(Exception error)=>ExceptionMessage?.GetValue(error) as string??error.GetType().Name;
+    internal static string ErrorMessage(Exception error)=>RuntimeLayout.ExceptionMessage?.GetValue(error) as string??error.GetType().Name;
     internal static bool CredentialParameter(string key)=>PrivacyCatalog.QueryName(key);
     internal static bool CredentialKey(string key)=>PrivacyCatalog.CredentialName(key);
     internal static string[] HeaderSecrets(IEnumerable<KeyValuePair<string,string>> headers) => headers
