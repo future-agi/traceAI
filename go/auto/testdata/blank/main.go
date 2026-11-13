@@ -27,5 +27,6 @@ func main() {
 	}
 	// Only needed because this intentionally has no tracing calls at all.
 	// Real short-lived programs should call auto.Shutdown instead of sleeping.
-	time.Sleep(800 * time.Millisecond)
+	// The 200 ms batch export gets a wide margin on slow, race-enabled runners.
+	time.Sleep(3 * time.Second)
 }
