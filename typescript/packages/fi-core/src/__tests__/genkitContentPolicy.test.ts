@@ -1,0 +1,66 @@
+import { indexPrivacyHints, mediaReplacement } from "../privacy-runtime";
+import { carryGenkitAliases, isGenkitMappedAlias, rememberGenkitAliases } from "../genkit-content-policy";
+import { privacyFilter } from "../export-privacy";
+
+const canonicalCounts = ["llm.token_count.prompt_details.audio", "llm.token_count.completion_details.audio", "gen_ai.usage.cache_read_tokens.audio"];
+const counts = [...canonicalCounts, ...canonicalCounts.map(key => `genkit.usage.${key}`)];
+
+describe("exact typed audio usage metadata", () => {
+  it("preserves the existing scalar contract on exact aggregate audio usage aliases", () => {
+    for (const key of ["genkit.usage.gen_ai.usage.input_tokens.audio", "genkit.usage.gen_ai.usage.output_tokens.audio"]) {
+      expect(mediaReplacement("SYNTHETIC CONTENT !", key)).toBeUndefined();
+      expect(mediaReplacement(42, key)).toBeUndefined();
+      expect(mediaReplacement(42, key + ".0.content")).toBe("<omitted: media>");
+    }
+  });
+  test.each(counts)("keeps valid %s counts but not invalid payloads or hinted media", key => {
+    for (const value of [0, 1, 730000001]) expect(mediaReplacement(value, key)).toBeUndefined();
+    for (const [value, expected] of [
+      ["SYNTHETIC CONTENT !", "<omitted: media>"], ["730000001", "<omitted: 9 base64 chars>"],
+      [-1, "<omitted: media>"], [0.5, "<omitted: media>"], [true, "<omitted: media>"], [[1, 2], "<omitted: media>"],
+    ] as const) {
+      expect(mediaReplacement(value, key)).toBe(expected);
+    }
+    const parent = key.slice(0, key.lastIndexOf("."));
+    const hints = indexPrivacyHints([[parent + ".mime_type", "audio/wav"]]);
+    expect(mediaReplacement(42, key, hints)).toBe("<omitted: media>");
+    expect(mediaReplacement(42, key + ".0.content")).toBe("<omitted: media>");
+    expect(mediaReplacement(42, key, undefined, true, false, true)).toBe("<omitted: media>");
+    // Numeric metadata remains subject to exact secret replacement.
+    expect(privacyFilter({}, ["730000001"]).attributes({ [key]: 730000001 })[key]).toBe("<redacted>");
+  });
+});
+
+describe("value-bound native aliases", () => {
+  it("does not trust an unregistered map, mutated value or weaker mapper policy", () => {
+    const attributes = { "output.value": "masked response" };
+    expect(isGenkitMappedAlias(attributes, "output.value", attributes["output.value"], { hideOutputText: true })).toBe(false);
+    rememberGenkitAliases(attributes, { hideOutputText: true }, ["output.value"]);
+    expect(isGenkitMappedAlias(attributes, "output.value", attributes["output.value"], { hideOutputText: true })).toBe(true);
+    expect(isGenkitMappedAlias(attributes, "output.value", "changed response", { hideOutputText: true })).toBe(false);
+    expect(isGenkitMappedAlias(attributes, "output.value", attributes["output.value"], { hideOutputs: true })).toBe(false);
+    const copy = { "output.value": "credential-scrubbed response" };
+    carryGenkitAliases(attributes, copy);
+    expect(isGenkitMappedAlias(copy, "output.value", copy["output.value"], { hideOutputText: true })).toBe(true);
+  });
+});
+
+
+test("the final Genkit boundary excludes native context from off-policy resource capsules", () => {
+  const capsule = "traceai.attribute_projection.metadata";
+  const marker = "SYNTHETIC CAPSULE CONTENT !";
+  const attributes = { [capsule]: JSON.stringify({ "genkit:metadata:context": marker,
+    [capsule]: JSON.stringify({ "genkit:metadata:context": marker, "gen_ai.request.model": "public-model" }),
+  }), "genkit:metadata:context": marker };
+  const ctx = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 };
+  const span: any = { _spanContext: ctx, spanContext: () => ctx, attributes: {}, name: "probe", kind: 0,
+    startTime: [1, 0], endTime: [2, 0], duration: [1, 0], ended: true, status: { code: 0 },
+    resource: { attributes }, instrumentationScope: { name: "genkit-tracer" }, events: [], links: [] };
+  const before = JSON.stringify(attributes);
+  const clean = privacyFilter().span(span);
+  expect(JSON.stringify(clean.resource.attributes)).not.toContain(marker);
+  const outer = JSON.parse(String(clean.resource.attributes[capsule]));
+  expect(outer["genkit:metadata:context"]).toBeUndefined();
+  expect(JSON.parse(outer[capsule])).toEqual({ "gen_ai.request.model": "public-model" });
+  expect(JSON.stringify(attributes)).toBe(before);
+});

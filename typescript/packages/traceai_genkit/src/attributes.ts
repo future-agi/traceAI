@@ -111,7 +111,7 @@ export const TYPE_TO_KIND: Readonly<Record<string, FISpanKind>> = {
 };
 
 /**
- * Input-side content keys: hidden by `hideInputs` (FI_HIDE_INPUTS), and on model spans also by
+ * Input-side content keys: hidden by `hideInputs` (FI_HIDE_INPUTS), and on model/generate spans also by
  * `hideInputMessages` (the model request is the message list). `genkit:init` is a beta agent's
  * initial state; `genkit:metadata:resumed` is the data a resumed tool call was given.
  */
@@ -122,7 +122,7 @@ export const GENKIT_INPUT_KEYS: readonly string[] = [
 ];
 
 /**
- * Output-side content keys: hidden by `hideOutputs` (FI_HIDE_OUTPUTS), and on model spans also by
+ * Output-side content keys: hidden by `hideOutputs` (FI_HIDE_OUTPUTS), and on model/generate spans also by
  * `hideOutputMessages`. `genkit:metadata:interrupt` is the payload a tool interrupt returned.
  */
 export const GENKIT_OUTPUT_KEYS: readonly string[] = [GenkitAttributes.OUTPUT, GenkitAttributes.METADATA_INTERRUPT];

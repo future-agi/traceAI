@@ -39,8 +39,6 @@ describe("@traceai/genkit package.json", () => {
       directory: "typescript/packages/traceai_genkit",
     });
     expect(manifest.bugs).toEqual(sibling.bugs);
-    expect(manifest.homepage).toBe(
-      "https://docs.futureagi.com/docs/tracing",
-    );
+    expect(manifest.homepage).toBe("https://docs.futureagi.com/docs/tracing");
   });
 });

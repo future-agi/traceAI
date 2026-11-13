@@ -11,6 +11,7 @@ import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, PROJECTION_METADATA } from "./attribute-projection";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
+import { hideSemanticContent, isGenkitMappedAlias, carryGenkitAliases } from "./genkit-content-policy";
 import type { PrivacyHints } from "./privacy-runtime";
 import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialName, mediaReplacement, scrubAttribute, scrubValue, providerResponseBinding, scrubProviderResponse, discoverProviderResponseSecrets, rememberProviderResponse, rememberSessionIdentity, isSessionIdentity, s1MediaPrefixReplacement, MAX_DISCOVERY_BODY_BYTES } from "./privacy-runtime";
 
@@ -485,7 +486,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   const hideOutput = tc.hideOutputs || tc.hideOutputMessages || tc.hideOutputText;
   let spanBudget: { remaining: number; nodes: number; unknown: boolean } | undefined;
   let spanScanBudget: InspectionBudget | undefined;
-  const attributes = (attrs: unknown, requestSecrets?: readonly string[], operation?: unknown, capsuleDepth = 0, admission = false, incomplete = false, valueLimit = Infinity, unattestedCopy = false, spanType?: unknown, responseContext?: object, outputResponseContext?: object, withholdContent = false, authoredHints?: PrivacyHints): Attributes => {
+  const attributes = (attrs: unknown, requestSecrets?: readonly string[], operation?: unknown, capsuleDepth = 0, admission = false, incomplete = false, valueLimit = Infinity, unattestedCopy = false, spanType?: unknown, responseContext?: object, outputResponseContext?: object, withholdContent = false, authoredHints?: PrivacyHints, genkit = false): Attributes => {
     if (capsuleDepth > 16) throw new Error("Privacy capsule budget");
     const secrets = requestSecrets ?? snapshot();
     const budget = spanBudget ?? { remaining: 8 * 1024 * 1024, nodes: 20000 };
@@ -611,6 +612,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     for (const [key, original] of entries(attrs)) {
       // Preserve optional usage/detail absence before value() can stringify it.
       if (original === undefined) continue;
+      // Mandatory Genkit context exclusion also applies to borrowed resources
+      // when every optional content flag is off, including legacy capsules.
+      if (genkit && key === "genkit:metadata:context") continue;
       // Do this before parsing capsules, parser-bound responses, PII, hide
       // transforms or MIME inference: a fragment can hide the rest of a secret.
       if (!admission && (unknownHints || !NON_CONTENT_KEYS.has(key) && (withholdContent || scanBudget.exhausted || !exportedMarker(attrs, key, original) && truncatedValue(original, valueLimit, scanBudget, 0, true)))) {
@@ -627,9 +631,18 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (!packed || typeof packed !== "object" || Array.isArray(packed)) throw new Error("Privacy capsule shape");
         // A capsule is an attribute map, not an unrestricted JSON blob. Apply
         // every original key's hide family, including error/prompt/image rules.
-        clean[key] = JSON.stringify(attributes(packed, secrets, operation, capsuleDepth + 1, admission, incomplete, valueLimit, unattestedCopy, spanType, responseContext, outputResponseContext, withholdContent, authoredHints));
+        clean[key] = JSON.stringify(attributes(packed, secrets, operation, capsuleDepth + 1, admission, incomplete, valueLimit, unattestedCopy, spanType, responseContext, outputResponseContext, withholdContent, authoredHints, genkit));
         continue;
       }
+      const mappedAlias = genkit && !!attrs && typeof attrs === "object" && isGenkitMappedAlias(attrs, key, original, tc);
+      if (genkit && !mappedAlias && key !== "gen_ai.input.messages" && key !== "gen_ai.output.messages" &&
+          hideSemanticContent(key.startsWith("genkit.usage.") ? key.slice("genkit.usage.".length) : key, { ...tc, hideLLMInvocationParameters: invocation })) {
+        if (!key.endsWith("mime_type")) clean[key] = REDACTED_VALUE;
+        continue;
+      }
+      // Genkit's shared side policy replaces the older broad alias rules only;
+      // credentials, media, PII, inspection budgets and loss handling still run.
+      if (!genkit) {
       // Native aliases can duplicate FI I/O under a different spelling. Treat
       // each opaque alias as a whole for granular flags, including image hiding.
       const inputAlias = /^(?:input\.|raw\.input$|gen_ai\.input\.|gen_ai\.prompt$|gen_ai\.system_instructions(?:\.|$)|gen_ai\.tool\.(?:call\.arguments|definitions|description)$|gen_ai\.request\.stop_sequences$)/.test(key)
@@ -673,6 +686,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       if (hideInput && /embedding.*text/.test(key)) continue;
       if (!messages && tc.hideInputImages && (/^(?:input\.|raw\.input$|gen_ai\.input\.)/.test(key) || /(?:image|file).*(?:url|uri)|(?:url|uri).*(?:image|file)/i.test(key))) { clean[key] = "[REDACTED]"; continue; }
       if (key === "gen_ai.audio.transcript" && (operation === "text_to_speech" ? hideInput : hideOutput)) { clean[key] = "[REDACTED]"; continue; }
+      }
       const name = string(key);
       requireInspection(scanBudget);
       const binding = providerResponseBinding(responseContext, key, item);
@@ -715,6 +729,12 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       }
     }
     const masked = maskAttributes({ config: tc, attributes: clean });
+    if (genkit && attrs && typeof attrs === "object") {
+      for (const [key, original] of entries(attrs)) {
+        if (isGenkitMappedAlias(attrs, key, original, tc) && clean[key] !== undefined) masked[key] = clean[key];
+      }
+      carryGenkitAliases(attrs, masked);
+    }
     if (!admission) carryAttributeEvidence(attrs, masked);
     return masked;
   };
@@ -1030,7 +1050,8 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         // conservative media classification only to that projected attribute map;
         // Q8b's lineage-wide blanket remains gated solely by actual host loss.
         const projectedContext = projectedAttributeDrops(span) > 0;
-        const cleanAttributes = (value: unknown, responseContext?: object) => attributes(value, secrets, operation, 0, false, unknownCopy || projectedContext && value === attrs, valueLimit, unattestedCopy, spanType, responseContext, responseContext ? ctx : undefined, unknownCopy);
+        const genkit = data(scope, "name") === "genkit-tracer" || typeof data(attrs, "genkit:type") === "string";
+        const cleanAttributes = (value: unknown, responseContext?: object) => attributes(value, secrets, operation, 0, false, unknownCopy || projectedContext && value === attrs, valueLimit, unattestedCopy, spanType, responseContext, responseContext ? ctx : undefined, unknownCopy, undefined, genkit);
         const boundaryText = (value: unknown, stripStack = false): string => unknownCopy ? HOST_TRUNCATED : text(stripStack && typeof value === "string" ? stripStackTrace(value) : value, secrets);
         const result = { ...base, spanContext: () => ctx, ...(parent ? { parentSpanContext: unknownCopy ? identityOnly(parent) : spanContext(parent, secrets) } : {}),
           name: boundaryText(data(span, "name") ?? ""), attributes: cleanAttributes(attrs, lossContext(rawContext)),

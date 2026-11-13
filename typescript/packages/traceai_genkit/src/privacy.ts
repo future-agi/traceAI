@@ -5,8 +5,9 @@
  * inputs and outputs (prompts, model responses, tool arguments and results, flow input/output) are
  * exported by default, and the standard flags hide them: `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
  * `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`,
- * `FI_HIDE_EMBEDDING_VECTORS`, or the same options on `traceConfig`. Precedence and parsing are fi-core's: option > env var >
- * default, and only the string "true" (any case) hides.
+ * `FI_HIDE_INPUT_IMAGES`, `FI_HIDE_EMBEDDING_VECTORS`, or the same options on `traceConfig`. Error details follow
+ * fi-core's tri-state `hideErrorDetails` / `FI_HIDE_ERROR_DETAILS` policy, derived from
+ * input/output/message/text hiding when unset. Options override environment variables.
  *
  * Never exported, in either mode: Genkit's request context, stack traces, and local file paths
  * (rewritten to `[cwd]`, `~` or `[path]`). Error text additionally loses emails and this
@@ -17,6 +18,7 @@ import {
   DEFAULT_HIDE_EMBEDDING_VECTORS,
   DEFAULT_HIDE_INPUTS,
   DEFAULT_HIDE_INPUT_MESSAGES,
+  DEFAULT_HIDE_INPUT_IMAGES,
   DEFAULT_HIDE_INPUT_TEXT,
   DEFAULT_HIDE_OUTPUTS,
   DEFAULT_HIDE_OUTPUT_MESSAGES,
@@ -24,10 +26,14 @@ import {
   FI_HIDE_EMBEDDING_VECTORS,
   FI_HIDE_INPUTS,
   FI_HIDE_INPUT_MESSAGES,
+  FI_HIDE_INPUT_IMAGES,
   FI_HIDE_INPUT_TEXT,
   FI_HIDE_OUTPUTS,
   FI_HIDE_OUTPUT_MESSAGES,
   FI_HIDE_OUTPUT_TEXT,
+  ERROR_DETAIL_ATTRIBUTE_KEYS,
+  generateTraceConfig,
+  HIDE_ERROR_DETAILS_IMPLIED_BY,
   REDACTED_VALUE,
   type TraceConfigOptions,
 } from "@traceai/fi-core";
@@ -41,6 +47,10 @@ export interface ContentPolicy {
   hideInputText: boolean;
   hideOutputText: boolean;
   hideEmbeddingVectors: boolean;
+  /** Optional for compatibility with policies created before image masking. */
+  hideInputImages?: boolean;
+  /** Optional for compatibility with existing policies; unset derives from content flags. */
+  hideErrorDetails?: boolean;
   hideLLMInvocationParameters?: boolean;
 }
 
@@ -53,6 +63,7 @@ export const SHOW_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideInputText: DEFAULT_HIDE_INPUT_TEXT,
   hideOutputText: DEFAULT_HIDE_OUTPUT_TEXT,
   hideEmbeddingVectors: DEFAULT_HIDE_EMBEDDING_VECTORS,
+  hideInputImages: DEFAULT_HIDE_INPUT_IMAGES,
   hideLLMInvocationParameters: false,
 });
 
@@ -65,13 +76,14 @@ export const HIDE_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideInputText: true,
   hideOutputText: true,
   hideEmbeddingVectors: true,
+  hideInputImages: true,
   hideLLMInvocationParameters: true,
 });
 
 /**
  * One fi-core boolean flag: option > env var > default, with fi-core's env rule
- * (`value.toLowerCase() === "true"`). Read here because fi-core's `generateTraceConfig` is not
- * exported and reads the env vars only when a config object is passed.
+ * (`value.toLowerCase() === "true"`). Resolve these separately to preserve the legacy
+ * `captureContent: false` fallback below options and environment variables.
  */
 function flag(option: boolean | undefined, envKey: string, fallback: boolean): boolean {
   if (option !== undefined) return option;
@@ -89,36 +101,67 @@ export function resolveContentPolicy(
   fallback: Partial<ContentPolicy> = {},
 ): ContentPolicy {
   const d = { ...SHOW_ALL, ...fallback };
-  return {
+  const content = {
     hideInputs: flag(traceConfig?.hideInputs, FI_HIDE_INPUTS, d.hideInputs),
     hideOutputs: flag(traceConfig?.hideOutputs, FI_HIDE_OUTPUTS, d.hideOutputs),
     hideInputMessages: flag(traceConfig?.hideInputMessages, FI_HIDE_INPUT_MESSAGES, d.hideInputMessages),
     hideOutputMessages: flag(traceConfig?.hideOutputMessages, FI_HIDE_OUTPUT_MESSAGES, d.hideOutputMessages),
     hideInputText: flag(traceConfig?.hideInputText, FI_HIDE_INPUT_TEXT, d.hideInputText),
+    hideInputImages: flag(traceConfig?.hideInputImages, FI_HIDE_INPUT_IMAGES, d.hideInputImages ?? DEFAULT_HIDE_INPUT_IMAGES),
     hideOutputText: flag(traceConfig?.hideOutputText, FI_HIDE_OUTPUT_TEXT, d.hideOutputText),
     hideEmbeddingVectors: flag(traceConfig?.hideEmbeddingVectors, FI_HIDE_EMBEDDING_VECTORS, d.hideEmbeddingVectors),
     hideLLMInvocationParameters: flag(traceConfig?.hideLLMInvocationParameters, "FI_HIDE_LLM_INVOCATION_PARAMETERS", d.hideLLMInvocationParameters ?? false),
   };
+  // Use fi-core's tri-state parser: option > valid env > derivation from resolved content flags.
+  const { hideErrorDetails } = generateTraceConfig({ ...content, hideErrorDetails: traceConfig?.hideErrorDetails });
+  return { ...content, hideErrorDetails };
 }
 
 /** True when free text written at run time (error messages) must not be exported. */
 export function hidesFreeText(policy: ContentPolicy): boolean {
-  return policy.hideInputs || policy.hideOutputs;
+  return policy.hideErrorDetails ?? HIDE_ERROR_DETAILS_IMPLIED_BY.some((key) => policy[key]);
+}
+
+const ERROR_DETAIL_SUFFIXES = [...ERROR_DETAIL_ATTRIBUTE_KEYS].map((key) => `.${key}`).concat(".error_message");
+
+/** The same exact and namespaced error-detail keys as fi-core's span/event masking. */
+export function isErrorDetailAttribute(key: string): boolean {
+  return ERROR_DETAIL_ATTRIBUTE_KEYS.has(key) || ERROR_DETAIL_SUFFIXES.some((suffix) => key.endsWith(suffix));
 }
 
 const MAX_REDACT_DEPTH = 64;
 
-function redactTextFields(value: unknown, depth: number): unknown {
+function isImageMedia(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const { contentType, url } = value as { contentType?: unknown; url?: unknown };
+  // Media.contentType is optional. Do not fetch URLs or guess from extensions:
+  // unknown media must fail closed; explicitly typed audio/video can stay visible.
+  if (typeof url === "string" && /^data:image\//i.test(url)) return true;
+  return typeof contentType !== "string" || !contentType || /^image\//i.test(contentType);
+}
+
+function redactMessageFields(value: unknown, images: boolean, depth: number): unknown {
   if (depth > MAX_REDACT_DEPTH) return REDACTED_VALUE;
-  if (Array.isArray(value)) return value.map((item) => redactTextFields(item, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => redactMessageFields(item, images, depth + 1));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      out[key] = (key === "text" || key === "reasoning") && typeof item === "string" ? REDACTED_VALUE : redactTextFields(item, depth + 1);
+      const hide = images ? key === "media" && isImageMedia(item)
+        : (key === "text" || key === "reasoning") && typeof item === "string";
+      out[key] = hide ? REDACTED_VALUE : redactMessageFields(item, images, depth + 1);
     }
     return out;
   }
   return value;
+}
+
+function redactMessageJson(value: unknown, images: boolean): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    return JSON.stringify(redactMessageFields(JSON.parse(value), images, 0));
+  } catch {
+    return REDACTED_VALUE;
+  }
 }
 
 /**
@@ -128,12 +171,12 @@ function redactTextFields(value: unknown, depth: number): unknown {
  * reasoning as `{ reasoning }` (@genkit-ai/ai model-types.ts). Not JSON: `__REDACTED__`.
  */
 export function redactMessageText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    return JSON.stringify(redactTextFields(JSON.parse(value), 0));
-  } catch {
-    return REDACTED_VALUE;
-  }
+  return redactMessageJson(value, false);
+}
+
+/** Hide image media in native request copies, retaining text and explicitly non-image media. */
+export function redactMessageImages(value: unknown): string | undefined {
+  return redactMessageJson(value, true);
 }
 
 /**
