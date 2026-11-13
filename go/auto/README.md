@@ -194,7 +194,8 @@ EOF or close their bodies: that is when the wire span completes.
   context attributes to child wire spans. The session id set with
   `ContextWithSessionID` is exported as its value, with known secrets and
   credential-shaped values inside it still redacted; a `session.id` passed to
-  `ContextWithAttributes` is redacted like any credential-named key. Other
+  `ContextWithAttributes`, or set or replaced on the wire span by another span
+  processor, is redacted like any credential-named key. Other
   modules' context keys are private, so their session/user helpers do not
   automatically bridge to this package. OTel parent span context still works
   across modules.
@@ -353,9 +354,11 @@ Replacement is longest-first on immutable export snapshots. The shipping
 `internal/wire/privacy.json` and `privacy-fixtures.json` are byte-identical copies
 of `spec/auto-instrumentation/`; one catalog-loaded name predicate and one media
 predicate serve every recognition site. Credential markers include session/cookie
-fields (including `session.id` from headers, bodies and other attributes; only
-the session id the agent writes from `ContextWithSessionID` keeps its value,
-with known secrets and credential shapes in it still redacted), while token usage/limits, token timing and
+fields (including `session.id` from headers, bodies, other attributes and other
+span processors; only the session id the agent writes from `ContextWithSessionID`
+keeps its value, and only while the wire span still carries that value, with
+known secrets and credential shapes in it still redacted and a value cut by a
+value-length limit scrubbed like any other cut value), while token usage/limits, token timing and
 throughput names (`time_to_first_token`, `tokens_per_second`, ...) and key
 identifiers retain the catalog's explicit, component-local exemptions. A `token`
 field inside logprobs is redacted like any other token field. Catalog value
@@ -399,8 +402,9 @@ content/metadata is dropped while span identity, timing and status code survive.
 ### Privacy differences from other traceAI SDKs
 
 The agent embeds a byte-identical copy of the shared privacy catalog (version 3)
-and runs its shared fixtures. Three catalog rules are not ported yet; in each,
-Go removes more than the other SDKs, never less:
+and runs its shared fixtures. Four rules differ. The first three are catalog
+rules that are not ported yet, and in each Go removes more than the other SDKs.
+In the fourth, by design, Go removes less:
 
 - **Logprob tokens:** the provider-response policy for logprob tokens is not
   ported. Every `token` field inside logprobs is redacted by name, so logprob
@@ -409,6 +413,11 @@ Go removes more than the other SDKs, never less:
   rather than by the catalog's ownership rules across JSON and URL syntax.
 - **Zero-valued usage details:** zero-valued detail counters stay protected
   instead of yielding attribute capacity to content.
+- **Session id from `auto.ContextWithSessionID`:** by design, the session id
+  set with `auto.ContextWithSessionID` is exported as its value, although the
+  catalog treats session names as credentials. Known secrets and credential
+  shapes inside it are still redacted. A `session.id` from any other source is
+  redacted by name.
 
 ## Coverage and dedicated middleware
 
