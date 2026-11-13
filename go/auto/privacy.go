@@ -539,15 +539,7 @@ func providerValueLengthLimit(provider *sdktrace.TracerProvider) int {
 		warn()
 		return 0
 	}
-	limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
-	if limits.IsValid() && limits.Kind() == reflect.Struct {
-		length := limits.FieldByName("AttributeValueLengthLimit")
-		if length.IsValid() && length.Kind() == reflect.Int {
-			return int(length.Int())
-		}
-	}
-	spanLimitsUnreadable()
-	return 0
+	return spanLimit(reflect.ValueOf(provider).Elem(), "AttributeValueLengthLimit")
 }
 
 // truncatedValue reports a string that may have been cut by a value-length

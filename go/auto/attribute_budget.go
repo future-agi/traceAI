@@ -25,24 +25,35 @@ func spanLimitsUnreadable() {
 	spanLimitsOnce.Do(func() { log.Print(spanLimitsWarning) })
 }
 
-// The pinned Go SDK has no public limit getter. Read only its immutable numeric
-// configuration once, before registering the agent. No unsafe, setters, probes,
-// synthetic spans, sampler calls, or changes to host configuration. The ABI is
-// regression-tested; an unsupported layout fails closed to a zero-slot budget.
+// spanLimit reads one integer field of the span limits held by provider, the
+// tracer provider struct of the pinned Go SDK. That SDK has no public limit
+// getter. Read only its immutable numeric configuration once, before
+// registering the agent. No unsafe, setters, probes, synthetic spans, sampler
+// calls, or changes to host configuration. The ABI is regression-tested; a
+// layout without the field prints the warning that names the SDK, once, and
+// fails closed to zero.
+func spanLimit(provider reflect.Value, field string) int {
+	if provider.Kind() == reflect.Struct {
+		limits := provider.FieldByName("spanLimits")
+		if limits.IsValid() && limits.Kind() == reflect.Struct {
+			value := limits.FieldByName(field)
+			if value.IsValid() && value.Kind() == reflect.Int {
+				return int(value.Int())
+			}
+		}
+	}
+	spanLimitsUnreadable()
+	return 0
+}
+
+// providerAttributeLimit is the provider's attribute count limit; an
+// unsupported layout fails closed to a zero-slot budget.
 func providerAttributeLimit(provider *sdktrace.TracerProvider) int {
 	if provider == nil {
 		warn()
 		return 0
 	}
-	limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
-	if limits.IsValid() && limits.Kind() == reflect.Struct {
-		count := limits.FieldByName("AttributeCountLimit")
-		if count.IsValid() && count.Kind() == reflect.Int {
-			return int(count.Int())
-		}
-	}
-	spanLimitsUnreadable()
-	return 0
+	return spanLimit(reflect.ValueOf(provider).Elem(), "AttributeCountLimit")
 }
 
 // protectedAttributePriority is the spec's closed A7 protected set: exact
