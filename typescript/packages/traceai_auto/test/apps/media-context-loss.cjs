@@ -46,6 +46,8 @@ if (process.env.OWNER === 'host' || manual) {
     spanProcessors: process.env.SDK === 'legacy' ? [] : processors });
   if (process.env.SDK === 'legacy') for (const processor of processors) host.addSpanProcessor(processor);
   trace.setGlobalTracerProvider(host);
+  // The host's spans reach Future AGI only with the forwarding switch.
+  if (!manual) process.env.FI_FORWARD_APP_SPANS = 'true';
 }
 const early = trace.getTracer('preexisting-application');
 
@@ -53,6 +55,9 @@ async function main() {
   const auto = manual ? undefined : require('@traceai/auto');
   if (process.env.ENTRY === 'init') assert(auto.init({ exporter: core.createSpanExporter({ endpoint: process.env.FI_BASE_URL, verbose: false }) }));
   if (auto) assert(auto.report().active);
+  // The agent never registers its provider globally. This application chooses to
+  // use it for its own and Genkit's spans, which then go to Future AGI.
+  if (auto && !host) assert(trace.setGlobalTracerProvider(globalThis[Symbol.for('traceai.auto.agent.v1')].provider));
   if (!host) {
     const proxy = trace.getTracerProvider(), provider = proxy.getDelegate?.() || proxy;
     const processors = provider._activeSpanProcessor?._spanProcessors;

@@ -7,7 +7,9 @@ const mode = process.env.MODE, app = [], fi = [];
 const exporter = { export(spans, done) { fi.push(...spans); done({ code: 0 }); }, async shutdown() {} };
 const provider = new BasicTracerProvider({ resource: resourceFromAttributes({ custom: 'configured-private-token' }), spanProcessors: [new SimpleSpanProcessor({ export(spans, done) { app.push(...spans); done({ code: 0 }); }, async shutdown() {} })] });
 trace.setGlobalTracerProvider(provider); context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-const options = { apiKey: 'configured-private-token', secretKey: 'configured-private-secret', exporter, instrumentations: ['wire'] };
+// These cases check AI and application spans on the application's provider,
+// which needs the forwarding switch.
+const options = { apiKey: 'configured-private-token', secretKey: 'configured-private-secret', exporter, instrumentations: ['wire'], forwardApplicationSpans: true };
 const auto = require('@traceai/auto');
 (async () => {
   if (mode === 'request-credentials') {

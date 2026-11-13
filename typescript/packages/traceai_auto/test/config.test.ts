@@ -91,6 +91,26 @@ test.each(["api_key", "secret_key"])("S7 ignored %s from every config/profile so
     expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
   } finally { cwd.mockRestore(); warn.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
 });
+test("half a pair with no complete pair leaves the single warning to init()", () => {
+  const dir = mkdtempSync(join(__dirname, ".half-pair-")), cwd = jest.spyOn(process, "cwd").mockReturnValue(dir);
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const config = resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_API_KEY: "env-private-half", XDG_CONFIG_HOME: join(dir, "user") });
+    expect(config.apiKey).toBeUndefined(); expect(config.secretKey).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  } finally { cwd.mockRestore(); warn.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+test("the forwarding switch is off by default and comes from code, the environment or the file", () => {
+  const dir = mkdtempSync(join(__dirname, ".forward-")), path = join(dir, "futureagi.toml");
+  try {
+    writeFileSync(path, "forward_app_spans = true\n");
+    expect(resolveConfig({ configFile: join(dir, "missing.toml") }, {})).toMatchObject({ forwardApplicationSpans: false });
+    expect(resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_FORWARD_APP_SPANS: "true" })).toMatchObject({ forwardApplicationSpans: true });
+    expect(resolveConfig({ configFile: path }, {})).toMatchObject({ forwardApplicationSpans: true });
+    const code = { configFile: path, forwardApplicationSpans: false };
+    expect(resolveConfig(code, { FI_FORWARD_APP_SPANS: "true" })).toMatchObject({ forwardApplicationSpans: false });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 test("registry covers every instrumentation package and records exported class and targets", () => {
   const packages = resolve(__dirname, "../..");
   // Coding-agent tracers (@traceai/agent-core and the hook plugins built on it) are set up

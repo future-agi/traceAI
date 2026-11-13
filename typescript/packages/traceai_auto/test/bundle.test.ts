@@ -79,7 +79,7 @@ test("missing module.register falls back to CJS/fetch without a bad Node option"
   const result = await run(["-r", join(dir, "old-node.cjs"), "-r", agent, "app.cjs"]);
   expect(result.stdout.trim()).toBe("hello"); expect(spans).toHaveLength(1); expect(result.stderr).not.toContain("bad option");
 });
-test("standalone bundle retains app-owned OTel SDK, context and exporter without global errors", async () => {
+test("standalone bundle retains app-owned OTel SDK, context and exporter without global errors, and sends AI spans only to Future AGI", async () => {
   for (const name of ["@opentelemetry/api", "@opentelemetry/sdk-trace-base", "@opentelemetry/context-async-hooks", "@opentelemetry/resources"]) link(name);
   writeFileSync(join(dir, "sdk.cjs"), `const { trace, context, diag } = require('@opentelemetry/api');
  const { BasicTracerProvider, SimpleSpanProcessor, InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
@@ -89,7 +89,8 @@ test("standalone bundle retains app-owned OTel SDK, context and exporter without
  trace.setGlobalTracerProvider(provider); const manager = new AsyncLocalStorageContextManager().enable(); context.setGlobalContextManager(manager);
  process.on('exit', () => console.log(JSON.stringify({same:trace.getTracerProvider().getDelegate()===provider, contextSame:context._getContextManager()===manager, appSpans:exporter.getFinishedSpans().length, errors})));`);
   const result = await run(["-r", join(dir, "sdk.cjs"), "-r", agent, "app.mjs"]);
-  expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({ same: true, contextSame: true, appSpans: 1, errors: [] });
+  // The application's exporter receives none of the agent's AI spans.
+  expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({ same: true, contextSame: true, appSpans: 0, errors: [] });
   expect(result.stderr).toBe(""); expect(spans).toHaveLength(1);
 });
 test.each(["cjs", "mjs"])("standalone agent traces the real default OpenAI transport with only openai installed (%s)", async ext => {
@@ -115,13 +116,22 @@ test("without module.register the embedded integration still patches the real CJ
 });
 test("embedded OpenAI integration also coexists with the application's global OTel SDK", async () => {
   const result = await run(["-r", join(dir, "sdk.cjs"), "-r", agent, sdkApp("cjs")], { FI_INSTRUMENTATIONS: "openai,wire" });
-  expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({ same: true, contextSame: true, appSpans: 1, errors: [] });
+  expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({ same: true, contextSame: true, appSpans: 0, errors: [] });
   expect(withoutRegisterDeprecation(result.stderr)).toBe(""); expect(spans).toHaveLength(1);
 });
-test("unsupported Node and Node's internal loader thread never load the dependency graph", () => {
+test("unsupported Node prints one warning and never loads the dependency graph; Node's internal loader thread loads nothing", () => {
   const code = readFileSync(agent, "utf8");
   for (const version of ["8.0.0", "12.0.0", "16.20.0"]) {
-    const require = jest.fn(); runInNewContext(code, { process: { versions: { node: version } }, require, console }); expect(require).not.toHaveBeenCalled();
+    const require = jest.fn(), warn = jest.fn();
+    runInNewContext(code, { process: { versions: { node: version } }, require, console: { warn } }); expect(require).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1); expect(warn.mock.calls[0][0]).toContain(`Node.js ${version} is not supported`);
+  }
+  // The package's own register entry behaves the same way.
+  const register = readFileSync(join(root, "dist/src/register.js"), "utf8");
+  for (const version of ["12.0.0", "16.20.0"]) {
+    const require = jest.fn(), warn = jest.fn();
+    runInNewContext(register, { process: { versions: { node: version } }, require, console: { warn }, exports: {}, module: { exports: {} } });
+    expect(require).not.toHaveBeenCalled(); expect(warn).toHaveBeenCalledTimes(1);
   }
   const require = jest.fn(() => ({ isInternalThread: true }));
   runInNewContext(code, { process: { versions: { node: "26.0.0" } }, require, console }); expect(require).toHaveBeenCalledTimes(1);

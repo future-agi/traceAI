@@ -6,6 +6,9 @@ const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-asyn
 const mode = process.env.MODE, agent = process.env.AGENT === 'true', app = [], fi = [], collected = [];
 const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor({ export(spans, done) { app.push(...spans); done({ code: 0 }); }, async shutdown() {} })] });
 trace.setGlobalTracerProvider(provider); context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+// These cases check AI and application spans on the application's provider,
+// which needs the forwarding switch.
+process.env.FI_FORWARD_APP_SPANS = 'true';
 const core = require('@traceai/fi-core'), secret = mode.endsWith('long-query') ? 'query-private-' + 'Q'.repeat(8203) : 'runtime-provider-private-token-' + mode;
 let instrumentor;
 if (mode === 'openai-preinstalled') {

@@ -49,7 +49,12 @@ async function child(extra: Record<string, string> = {}, flag = "-r", extension 
   for (const key of Object.keys(env)) if (/^(TRACEAI_|FI_|OTEL_|F4_)/.test(key) || key === "NODE_OPTIONS") delete env[key];
   Object.assign(env, { HOME: dir, XDG_CONFIG_HOME: dir, FI_PROFILE: "f4-isolated", FI_CONFIG_FILE: join(dir, "futureagi.toml"), FI_WIRE_CAPTURE: "false", FI_INSTRUMENTATIONS: "wire", TRACEAI_PROPAGATE_OUTGOING_ADAPTERS: "true", F4_AUTO: require.resolve("@traceai/auto", { paths: [root] }), F4_URL: url, F4_CA: join(dir, "loopback.crt") }, extra);
   const args = ["-r", resolve(apps, "f4-outgoing-host.cjs")];
-  if (extra.F4_MANUAL !== "1") args.push(flag, require.resolve("@traceai/auto/register", { paths: [root] }));
+  if (extra.F4_MANUAL !== "1") {
+    // An application provider is not a destination: the preloaded agent starts only with
+    // an FI pair. No AI call is made here, so nothing is ever sent to this closed port.
+    Object.assign(env, { FI_API_KEY: "f4-placeholder-api", FI_SECRET_KEY: "f4-placeholder-secret", FI_BASE_URL: "http://127.0.0.1:9" }, extra);
+    args.push(flag, require.resolve("@traceai/auto/register", { paths: [root] }));
+  }
   args.push(resolve(apps, `f4-outgoing.${extension}`));
   return new Promise((resolveResult, reject) => {
     const proc = spawn(process.execPath, args, { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"] });

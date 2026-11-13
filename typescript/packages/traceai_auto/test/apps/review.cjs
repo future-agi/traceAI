@@ -9,10 +9,19 @@ const options = { apiKey, secretKey, instrumentations: ['wire'], ...(positiveIma
 const exported = [], appSpans = [];
 const exporter = { export(spans, done) { exported.push(...spans); done({code:0}); }, async shutdown() {} };
 function installProvider() {
+  // These cases check AI spans on the application's provider, which needs the forwarding switch.
+  process.env.FI_FORWARD_APP_SPANS = 'true';
   const provider = new BasicTracerProvider({spanProcessors:[new SimpleSpanProcessor({export(spans,done) {appSpans.push(...spans);done({code:0});},async shutdown(){}})]});
   trace.setGlobalTracerProvider(provider); context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()); return provider;
 }
 (async () => {
+  if (mode === 'promise-hooks') {
+    const before = process.emit;
+    const auto = require('@traceai/auto'); auto.init({...options,exporter});
+    const installed = process.emit !== before;
+    await auto.shutdown();
+    console.log(JSON.stringify({installed,restored:process.emit === before})); return;
+  }
   if (mode === 'wire-context-privacy') {
     installProvider(); const {setSession} = require('@traceai/fi-core');
     globalThis.fetch = async () => new Response('{"choices":[{"message":{"role":"assistant","content":"answer"}}]}', {headers:{'content-type':'application/json'}});
@@ -40,13 +49,21 @@ function installProvider() {
     release(); await closing;
     console.log(JSON.stringify({exported:exported.length,appSpans:appSpans.length,processorsDuringDrain,processorsAfter:provider._activeSpanProcessor._spanProcessors.length,output:exported[0]?.attributes['output.value']})); return;
   }
-  if (mode === 'sigterm-order') {
+  if (mode === 'sigterm-order' || mode === 'sigterm-idle' || mode === 'sigterm-failed') {
     const keepalive = setInterval(() => {},1000);
+    let signalled = false;
     process.once('SIGTERM', () => console.log('application-once'));
-    exporter.forceFlush = async () => { console.log('flush-start'); await new Promise(resolve => setImmediate(resolve)); console.log('flush-finished'); };
+    if (mode === 'sigterm-failed') exporter.export = (_spans, done) => done({code:1});
+    exporter.forceFlush = async () => { if (!signalled) return; console.log('flush-start'); await new Promise(resolve => setImmediate(resolve)); console.log('flush-finished'); };
+    globalThis.fetch = async () => new Response('{"choices":[{"message":{"role":"assistant","content":"answer"}}]}',{headers:{'content-type':'application/json'}});
     const auto = require('@traceai/auto'); auto.init({...options,exporter});
+    const call = async () => { await (await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',body:'{"messages":[]}'})).text(); await new Promise(resolve => setImmediate(resolve)); };
+    // The collector fails on the first flush.
+    if (mode === 'sigterm-failed') { await call(); await auto.forceFlush(); }
+    // A span waits on the FI route, except in the idle case.
+    if (mode !== 'sigterm-idle') await call();
     process.on('SIGTERM', () => { console.log('application-handler');clearInterval(keepalive);process.exit(0); });
-    process.kill(process.pid,'SIGTERM'); return;
+    signalled = true; process.kill(process.pid,'SIGTERM'); return;
   }
   if (mode === 'owned-privacy') {
     const provider = installProvider(), auto = require('@traceai/auto');

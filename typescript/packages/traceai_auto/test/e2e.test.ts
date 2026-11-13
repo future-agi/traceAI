@@ -119,12 +119,15 @@ test("missing credentials fails open with exactly one warning", async () => {
   expect(output.stderr).toContain("auto-instrumentation is disabled");
 });
 test.each(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"])("deduplicates active FI-wrapped %s library spans", async kind => {
+  // The application's own model span stays with its own provider.
   await child("context.cjs", ["--import", "@traceai/auto/register"], { KIND: kind });
-  expect(wireSpans()).toHaveLength(0); expect(allSpans()).toHaveLength(1); expect(requests).toBe(1);
+  expect(wireSpans()).toHaveLength(0); expect(allSpans()).toHaveLength(0); expect(requests).toBe(1);
 });
 test("CHAIN spans parent wire calls, including context attributes and explicit timing", async () => {
-  await child("context.cjs");
-  const parent = allSpans().find(s => s.name === "framework parent"), wire = wireSpans()[0];
+  const output = await child("context.cjs");
+  const parent = JSON.parse(output.stdout.trim()), wire = wireSpans()[0];
+  // Only the AI span reaches Future AGI; it parents under the application's active span.
+  expect(allSpans()).toHaveLength(1);
   expect(wire.parentSpanId).toBe(parent.spanId); expect(wire.traceId).toBe(parent.traceId);
   // Session and user ids from the context are exported as set, without losing ancestry or timing.
   expect(attrs(wire)).toMatchObject({ "session.id": "session-test", "user.id": "user-test" });
@@ -152,14 +155,16 @@ test("head sampling zero and OTEL_SDK_DISABLED disable export without changing a
   await child("plain.cjs", undefined, { FI_SAMPLE_RATE: "0" }); expect(allSpans()).toHaveLength(0); expect(requests).toBe(1);
   await child("plain.cjs", undefined, { OTEL_SDK_DISABLED: "true" }); expect(allSpans()).toHaveLength(0); expect(requests).toBe(2);
 });
-test("coexists with an existing global SDK, keeps its exporter and signal handlers", async () => {
+test("keeps an application provider registered first untouched and sends AI spans on its own provider", async () => {
   const output = await child("plain.cjs", ["-r", resolve(apps, "existing-provider.cjs"), "--import", "@traceai/auto/register"]);
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
-  // The app's own handlers stay; the agent only adds a SIGTERM listener that flushes and defers to them.
-  expect(info).toEqual({ existing: true, collected: 1, sigint: 1, sigterm: 2 });
-  expect(wireSpans()).toHaveLength(1);
+  // The app's provider and handlers stay; its exporter receives none of the agent's
+  // spans. The agent only adds a SIGTERM listener that defers to the app's handlers.
+  expect(info).toEqual({ existing: true, collected: 0, sigint: 1, sigterm: 2 });
+  expect(wireSpans()).toHaveLength(1); expect(allSpans()).toHaveLength(1);
   const resources = collected.flatMap(e => e.resourceSpans).map(r => attrs({ attributes: r.resource.attributes }));
-  expect(resources[0]).toMatchObject({ project_name: "auto-test", project_type: "observe", "service.name": "existing-app" });
+  expect(resources[0]).toMatchObject({ project_name: "auto-test", project_type: "observe" });
+  expect(resources[0]["service.name"]).not.toBe("existing-app");
 });
 test("SIGTERM flushes and keeps the default exit for an app without its own handler", async () => {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -238,8 +243,8 @@ test("real OTel 1.30.1 provider exports parent/child through production OTLP wit
   expect(childSpan.parentSpanId).toBe(parent.spanId); expect(childSpan.traceId).toBe(parent.traceId);
   expect(collected[0].resourceSpans[0].scopeSpans[0].scope).toMatchObject({ name: "legacy-app", version: "1.2.3" });
 });
-test.each(["--import", "-r"])("pure ESM incoming HTTP extracts remote parent with only wire,http enabled (%s)", async flag => {
-  const output = await child("incoming.mjs", [flag, "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
+test.each(["--import", "-r"])("pure ESM incoming HTTP joins the remote parent through the application's propagator with only wire,http enabled (%s)", async flag => {
+  const output = await child("incoming.mjs", ["-r", resolve(apps, "app-otel.cjs"), flag, "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
   expect(JSON.parse(output.stdout)).toMatchObject({ name: "http", status: "instrumented" });
   const incoming = allSpans().filter(span => span.kind === 2), wire = wireSpans()[0];
   expect(incoming).toHaveLength(1); expect(allSpans()).toHaveLength(2);
@@ -313,9 +318,94 @@ test("an application-installed propagator remains unchanged", async () => {
   const output = await child("review.cjs", [], { MODE: "propagator-preserved" });
   expect(JSON.parse(output.stdout)).toEqual({ preserved: true });
 });
-test("standalone incoming HTTP extracts the remote W3C parent and preserves the trace for AI children", async () => {
-  await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
+test("incoming HTTP joins the remote W3C parent through the application's propagator and keeps the trace for AI children", async () => {
+  // The agent registers no propagator; the application's own one extracts the parent.
+  await child("incoming.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
   const serverSpan = allSpans().find(s => s.kind === 2), wire = wireSpans()[0];
   expect(serverSpan.traceId).toBe("11111111111111111111111111111111"); expect(serverSpan.parentSpanId).toBe("2222222222222222");
   expect(wire.traceId).toBe(serverSpan.traceId); expect(wire.parentSpanId).toBe(serverSpan.spanId);
+  expect(allSpans()).toHaveLength(2);
+});
+test("an application NodeSDK started after the preload registers its globals and keeps its spans; Future AGI receives only the AI span", async () => {
+  const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "app-after" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(info.registered).toEqual({ trace: true, context: true, propagation: true, metrics: true });
+  expect(info.appSpans).toEqual([{ name: "app-work", kind: 0, layer: null }]);
+  expect(allSpans()).toHaveLength(1); expect(wireSpans()).toHaveLength(1);
+  // The AI span still parents under the application's active span.
+  expect(wireSpans()[0].traceId).toBe(info.work.traceId); expect(wireSpans()[0].parentSpanId).toBe(info.work.spanId);
+});
+test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
+  const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(info.registered).toEqual({ trace: true, context: true, propagation: true, metrics: true });
+  // Two AI calls: one inside the custom span, one inside the incoming request.
+  expect(allSpans()).toHaveLength(2); expect(wireSpans()).toHaveLength(2);
+  expect(allSpans().map(span => span.name)).not.toContain("app-work");
+  // The application's exporter keeps its own SERVER, CLIENT and custom spans, and no AI span.
+  const kinds = info.appSpans.map((span: any) => span.kind).sort();
+  expect(kinds).toEqual([0, 1, 2]);
+  expect(info.appSpans.some((span: any) => span.layer === "wire")).toBe(false);
+});
+test("the forwarding switch sends application spans again, and FI_HIDE_* hides other AI tracers' content keys", async () => {
+  const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"],
+    { MODE: "forward", FI_FORWARD_APP_SPANS: "true", FI_HIDE_INPUTS: "true", FI_HIDE_OUTPUTS: "true" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  const work = allSpans().find(span => span.name === "app-work");
+  expect(work).toBeDefined(); expect(wireSpans()).toHaveLength(1);
+  expect(attrs(work)).toMatchObject({
+    "ai.prompt.messages": "[REDACTED]", "ai.response.text": "[REDACTED]", "ai.toolCall.args": "[REDACTED]", "ai.toolCall.result": "[REDACTED]",
+    "gen_ai.prompt.0.content": "[REDACTED]", "gen_ai.completion.0.content": "[REDACTED]", "llm.prompts": "[REDACTED]",
+    "traceloop.entity.input": "[REDACTED]", "traceloop.entity.output": "[REDACTED]", "ai.response.model": "gpt-fixture", "app.order": "order-1",
+  });
+  const data = JSON.stringify(allSpans());
+  for (const value of ["PRIVATE-FOREIGN-PROMPT", "PRIVATE-FOREIGN-ANSWER", "PRIVATE-FOREIGN-TOOL"]) expect(data).not.toContain(value);
+  // The application's own span is unchanged.
+  expect(info.appContent).toBe(true);
+});
+test("FI keys alone install nothing, and an explicit start registers no OpenTelemetry globals", async () => {
+  const noops = { trace: "NoopTracerProvider", context: "NoopContextManager", propagation: "NoopTextMapPropagator" };
+  const keysOnly = await child("own-provider.cjs", [], { MODE: "keys-only" });
+  expect(JSON.parse(keysOnly.stdout.trim())).toEqual({ active: false, fetchUnchanged: true, emitUnchanged: true, sigterm: 0, globals: noops });
+  expect(allSpans()).toHaveLength(0); expect(requests).toBe(1);
+  const started = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "globals" });
+  expect(JSON.parse(started.stdout.trim())).toEqual({ active: true, globals: noops });
+  expect(wireSpans()).toHaveLength(1);
+});
+test("explicitly enabled http sends a SERVER span only for a trace with AI work", async () => {
+  await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", HEALTH: "true" });
+  const servers = allSpans().filter(s => s.kind === 2), wire = wireSpans()[0];
+  // The /health request made no AI call, so its SERVER span is not sent.
+  expect(servers).toHaveLength(1); expect(allSpans()).toHaveLength(2);
+  expect(wire.parentSpanId).toBe(servers[0].spanId);
+});
+test("http is off unless the allowlist names it", async () => {
+  // Every other eligible integration is enabled; incoming requests create no SERVER span.
+  await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: undefined });
+  expect(allSpans().filter(s => s.kind === 2)).toHaveLength(0); expect(wireSpans()).toHaveLength(1);
+});
+test("a partial FI key pair gives one warning in total and installs nothing", async () => {
+  const output = await child("plain.cjs", undefined, { FI_SECRET_KEY: "" });
+  const warnings = output.stderr.split("\n").filter(line => line.includes("[traceai:auto]"));
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("Ignoring incomplete credentials"); expect(warnings[0]).toContain("nothing is sent to Future AGI");
+  expect(output.stderr).not.toContain("mock-fi-api-key");
+  expect(requests).toBe(1); expect(allSpans()).toHaveLength(0);
+});
+test("no FI keys with an application provider first gives one warning and leaves that provider alone", async () => {
+  const output = await child("plain.cjs", ["-r", resolve(apps, "existing-provider.cjs"), "--import", "@traceai/auto/register"], { FI_API_KEY: "", FI_SECRET_KEY: "" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  // Nothing is installed: no AI spans on the app's provider and no SIGTERM listener.
+  expect(info).toEqual({ existing: true, collected: 0, sigint: 1, sigterm: 1 });
+  expect(output.stderr.split("\n").filter(Boolean)).toHaveLength(1);
+  expect(output.stderr).toContain("auto-instrumentation is disabled");
+  expect(allSpans()).toHaveLength(0);
+});
+test.each(["sigterm-idle", "sigterm-failed"])("SIGTERM reaches the application at once when the FI route has nothing to send (%s)", async mode => {
+  const output = await child("review.cjs", [], { MODE: mode });
+  expect(output.stdout.trim().split("\n")).toEqual(["application-once", "application-handler"]);
+});
+test("shutdown removes the promise hook and gives back process.emit", async () => {
+  const output = await child("review.cjs", [], { MODE: "promise-hooks" });
+  expect(JSON.parse(output.stdout)).toEqual({ installed: true, restored: true });
 });

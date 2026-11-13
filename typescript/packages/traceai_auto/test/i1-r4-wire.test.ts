@@ -153,7 +153,8 @@ let mastraLoads = 0;
       if (request === '@traceai/mastra' || request === '@traceai/mastra/auto') mastraLoads++;
       return ['@traceai/vercel', '@traceai/mastra', '@traceai/genkit'].some(name => request === name || request === name + '/auto') ? fixturePath : Reflect.apply(originalResolve, this, [request, ...args]);
     };
-    const returned = auto.init({ provider: selected, exporter: sink(fi), apiKey: '', secretKey: '', configFile: '/does-not-exist/i1-r4-wire-config', instrumentations: ['vercel', 'mastra', 'genkit'] });
+    // AI spans on a supplied provider, beside an FI route, need the forwarding switch.
+    const returned = auto.init({ provider: selected, exporter: sink(fi), apiKey: '', secretKey: '', configFile: '/does-not-exist/i1-r4-wire-config', instrumentations: ['vercel', 'mastra', 'genkit'], forwardApplicationSpans: true });
     const agent = globalThis[Symbol.for('traceai.auto.agent.v1')];
     assert.equal(returned, selected); assert.equal(agent.provider, selected); assert.equal(auto.report().active, true);
     assert.equal(trace.getTracerProvider().getDelegate(), unrelated);
@@ -167,10 +168,10 @@ let mastraLoads = 0;
     assert.equal(globalThis.__traceai_enable_calls || 0, calls); assert.equal(received.length, calls);
     for (const [i, options] of received.entries()) {
       assert.notEqual(options.tracerProvider, selected);
-      assert.equal(Object.getPrototypeOf(options.tracerProvider), selected);
+      assert(selected.isPrototypeOf(options.tracerProvider));
       assert.equal(options.spanProcessor, agent.processor);
       const tracer = options.tracerProvider.getTracer('i1-r4-selected');
-      assert.equal(Object.getPrototypeOf(tracer), selected.getTracer('i1-r4-selected'));
+      assert(selected.getTracer('i1-r4-selected').isPrototypeOf(tracer));
       tracer.startSpan('optional-selected-' + i).end();
     }
     if (originalEnable) {
