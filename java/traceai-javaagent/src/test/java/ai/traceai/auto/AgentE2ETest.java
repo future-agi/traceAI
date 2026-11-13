@@ -191,6 +191,10 @@ class AgentE2ETest {
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void asynchronousFrameworkContextSurvivesExecutorHandoff(String client) throws Exception {
         assertFrameworkParent(run(client, "framework_async", Map.of(), true));
     }
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void initWithKeysStartsAfterAKeylessJavaagentStart(String client) throws Exception {
+        String log = run(client, "late_keys", Map.of(), false);
+        assertSpan(); assertEquals(1, log.lines().filter(l -> l.contains("FI_API_KEY and FI_SECRET_KEY are required")).count(), log);
+    }
     @Test void deadCollectorDoesNotAffectApplication() throws Exception { String log = run("jdk", "basic", Map.of("FI_BASE_URL", "http://127.0.0.1:1"), true); assertTrue(spans.isEmpty()); assertEquals(1, log.lines().filter(l -> l.contains("[traceai-auto]")).count(), log); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void individualTransportCanBeDisabled(String client) throws Exception { run(client, "basic", Map.of("FI_DISABLED_INSTRUMENTATIONS", client.equals("jdk") ? "java.net.http" : "okhttp"), true); assertTrue(spans.isEmpty()); }
     @Test void disabledWireDoesNotAffectApplication() throws Exception { run("okhttp", "basic", Map.of("FI_DISABLED_INSTRUMENTATIONS", "wire"), true); assertTrue(spans.isEmpty()); }
