@@ -90,6 +90,9 @@ func makeReport(c Config, wire bool, reason string) AgentReport {
 		{"genai", "google.golang.org/genai", "genai.ClientConfig{HTTPClient: traceaigenai.NewHTTPClient()}", []string{"gemini.generate_content", "gemini.embed_content"}},
 		{"eino", "github.com/cloudwego/eino", "callbacks.AppendGlobalHandlers(traceaieino.NewHandler())", []string{"underlying model HTTP protocols only (not framework steps)"}},
 		{"a2a", "github.com/a2aproject/a2a-go", "a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor())", []string{"underlying model HTTP protocols only (not A2A RPCs)"}},
+		{"bedrock", "github.com/aws/aws-sdk-go-v2/service/bedrockruntime", "traceaibedrock.NewClient(bedrockruntimeClient)", []string{"bedrock.converse", "bedrock.invoke_model"}},
+		{"langchaingo", "github.com/tmc/langchaingo", "openai.WithCallback(traceailangchaingo.NewHandler())", []string{"underlying model HTTP protocols only (not chain, tool or retriever steps)"}},
+		{"lambda", "github.com/aws/aws-lambda-go", "lambda.StartHandler(traceailambda.WrapHandler(handler, provider))", []string{"underlying model HTTP protocols only (not Lambda invocations)"}},
 	}
 	for _, e := range entries {
 		s := "manual"
