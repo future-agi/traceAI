@@ -283,6 +283,14 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
         if p["ecosystem"] == "java" and (p["group"] != "com.futureagi" or "SNAPSHOT" in p["version"]):
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
+        if p["ecosystem"] == "java":
+            # A held module is built and tested with the reactor but not deployed (its release profile
+            # sets skipPublishing), so the Central checks must not wait for it.
+            hold = config.get("hold_artifacts", {})
+            names = {a: f"{p['group']}:{a}" for a in p.get("artifacts", [])}
+            held = [a for a, name in names.items() if name in hold]
+            p = {**p, "artifacts": [a for a in names if a not in held], "held_artifacts": held}
+            out["skipped"].extend({"name": names[a], "reason": hold[names[a]]} for a in held)
         if not offline:
             have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have

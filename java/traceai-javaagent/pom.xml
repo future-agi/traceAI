@@ -298,4 +298,25 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Held from Maven Central until the owner approves the agent's first release. The Java
+             release still builds, tests and signs this module, but leaves it out of the Central
+             bundle; hold_artifacts in .github/release/config.json keeps it out of the release's
+             Central check. To publish it, remove this profile and that entry. -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <configuration>
+                            <skipPublishing>true</skipPublishing>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
