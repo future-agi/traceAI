@@ -40,6 +40,9 @@
         <!-- Core -->
         <module>traceai-java-core</module>
 
+        <!-- Zero-code agent -->
+        <module>traceai-javaagent</module>
+
         <!-- LLM Providers -->
         <module>traceai-java-openai</module>
         <module>traceai-java-azure-openai</module>
