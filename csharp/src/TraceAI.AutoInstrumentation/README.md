@@ -48,7 +48,6 @@ separated by the OS path separator (`:` on Unix; `;` on Windows).
 For a local NuGet installation, package the dependencies and agent:
 
 ```sh
-dotnet pack csharp/src/FIInstrumentation -c Release -o csharp/artifacts/packages
 dotnet pack csharp/src/TraceAI.AutoInstrumentation/Net8Sdk/TraceAI.AutoInstrumentation.Net8Sdk.csproj \
   -c Release -o csharp/artifacts/packages
 dotnet pack csharp/src/TraceAI.AutoInstrumentation/AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj \
@@ -58,8 +57,9 @@ dotnet pack csharp/src/TraceAI.AutoInstrumentation -c Release -o csharp/artifact
 
 Add that directory as a package source and reference `TraceAI.AutoInstrumentation`
 version `0.1.0`. These packages have not been published by this change. The .NET 8
-support package compiles the unchanged shared FI SDK sources for .NET 8; the legacy
-SDK project remains net10-only. The .NET 10 target keeps its existing SDK reference.
+support package compiles the unchanged shared FI SDK sources for .NET 8 against the
+hook's own pinned OpenTelemetry; both the `net8.0` and `net10.0` payloads load that
+copy, so the SDK project's OpenTelemetry version matrix never changes the hook.
 For version-conflict isolation prefer the separate published hook directory rather
 than mixing agent dependencies into an application's own output.
 
@@ -166,7 +166,10 @@ Credentials are used only for collector authentication. Provider authorization
 headers are never exported; known provider keys are redacted if echoed in a wire
 response/error. Credential-named JSON keys at any depth, signed-URL query values,
 and credential echoes (including configured FI keys) are replaced by `<redacted>`.
-Inline base64 media is replaced by `<omitted: N base64 chars>` before TraceConfig
+Credential-shaped values are also replaced in every exported string, whatever the
+field is called: bare provider keys (`sk-…`), AWS access key IDs, JWTs, `Bearer` and
+`Basic` authorization values and private-key PEM blocks (the catalog's
+`credentials.value_shapes`). Inline base64 media is replaced by `<omitted: N base64 chars>` before TraceConfig
 masking, including percent-escaped and mixed escaped/plain data-URL payloads
 (without decoding media bytes). Other RFC 2397 data URIs, including percent-encoded
 or literal audio, become `<omitted: data URI>`. Explicit audio payload fields and
@@ -241,8 +244,12 @@ Attribute projection follows the shared A7 contract, independent of insertion or
 Wire candidates are projected before Activity creation; forwarded Activities are
 sanitized and mapped on a detached snapshot before the SDK's bounded serializer
 (Activity itself has no bounded tag container on DiagnosticSource 8–10). Reserve
-identity, outcome, provider/model/operation, all known usage, provenance and
-degradation fields, including one dropped-content marker when necessary. Atomic
+identity, outcome, provider/model/operation, all known usage, timing, provenance and
+degradation fields, including one dropped-content marker when necessary. Timing is
+the exact keys `gen_ai.response.latency`, `gen_ai.response.time_to_first_chunk`,
+`gen_ai.response.time_to_first_text`, `gen_ai.response.time_to_first_token`,
+`gen_ai.server.time_to_first_token`, `gen_ai.server.time_per_output_token` and
+`gen_ai.server.request.duration`, when present. Atomic
 output message/tool groups and output value/MIME pairs precede input messages,
 newest numeric index first. Retained input is a contiguous newest suffix; a missing
 newer group prevents retaining older ones or an aggregate input that restores them.
@@ -255,7 +262,7 @@ SDK serializer eviction, not pre-projection loss. Native exporter resolved limit
 options are respected; otherwise `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` overrides
 `OTEL_ATTRIBUTE_COUNT_LIMIT` (default 128). If protected fields themselves overflow,
 no content is admitted: degradation, identity, outcome, provider/model/operation,
-usage and provenance families retain their lexical prefix. A zero limit produces a
+usage, timing and provenance families retain their lexical prefix. A zero limit produces a
 bounded one-time diagnostic rather than increasing the host's limit. Host Activities,
 resources and other exporters' views are unchanged.
 
@@ -486,10 +493,14 @@ policy; the host's exporters are unaffected.
 ## Tests
 
 ```sh
+export DOTNET_HOST_PATH="$(dirname "$(readlink -f "$(command -v dotnet)")")/dotnet"
 dotnet build csharp/FIInstrumentation.sln -c Release
 dotnet test csharp/FIInstrumentation.sln -c Release
 ```
 
+The child-process tests need the .NET 8 runtime (including ASP.NET Core) installed
+next to the .NET 10 SDK in the same `dotnet` root; `DOTNET_HOST_PATH` names that
+root's `dotnet` executable (without it, the tests look for `csharp/.dotnet/dotnet`).
 Tests use no live provider or Future AGI credentials. The net10 test runner builds
 both framework payloads and launches actual .NET 8 and .NET 10 child processes.
 Stock console probes have **no package or telemetry references**; richer probes
@@ -567,13 +578,24 @@ production has no reset or reconfiguration API.
 ## Shared privacy catalog (S6)
 
 `Wire/privacy.json` and `Wire/privacy-fixtures.json` ship byte-identical to
-`spec/auto-instrumentation/`; `sync.py` checks both. The runtime embeds the catalog,
-so startup-hook deployment does not depend on a source checkout or an external
-privacy file. `PrivacyCatalog.CredentialName` is the one normalized, path-aware
-credential predicate, shared by transport headers/query/body harvesting and every
-export surface. Query names additionally use the catalog's signed-URL parameters.
-Credential ancestry persists through containers and indices; metric exclusions and
-logprob-token context apply only to their component, not independent credentials.
+`spec/auto-instrumentation/` (catalog version 3); `sync.py` checks both. The runtime
+embeds the catalog, so startup-hook deployment does not depend on a source checkout
+or an external privacy file. `PrivacyCatalog.CredentialName` is the one normalized,
+path-aware credential predicate, shared by transport headers/query/body harvesting
+and every export surface. Query names additionally use the catalog's signed-URL
+parameters. Credential ancestry persists through containers and indices; metric and
+token-timing exclusions (`time_to_first_token`, `tokens_per_second`, ...) apply only
+to their component, not independent credentials. Credential value shapes apply to
+every exported string after registered secrets.
+
+Catalog version 3 has no contextual logprob exemption: at generic sites a logprob
+`token` is a credential name like any other. `ProviderResponse.Scrub` is the explicit
+parsed provider-response root from the catalog's `logprob_tokens` list (OpenAI chat
+completions and their buffered chunk arrays). There, tokens are checked against
+registered secrets and value shapes instead, a masked token also loses its `bytes`,
+and a choice whose message or joined streamed text changes under value masking loses
+its whole logprobs block. Wire spans export parsed messages, not provider response
+bodies, so the hook does not call it today.
 
 `PrivacyCatalog.MediaString` is the one media predicate. It recognizes bounded
 decoded magic prefixes under any key, exact whole-value data URIs, all catalog
