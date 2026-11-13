@@ -40,5 +40,8 @@ for (const vitest of ['vitest', 'vitest-floor']) test(`real ${vitest} eval metad
     assert.match(json, /model-1/);
     assert.doesNotMatch(json, /private prompt|private answer|private input|synthetic-secret/);
     assert.match(json, /gen_ai.usage.input_tokens/);
+    // The trace root is named after Vitest's full test name; the harness name stays as an attribute.
+    assert.match(json, /"name":"reporter fixture\s*>\s*captures actual harness metadata"/);
+    assert.match(json, /vitest\.evals\.original_name.{0,40}fixture-harness/);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
