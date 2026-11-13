@@ -115,8 +115,12 @@ func TestInitPlainHTTPAndParent(t *testing.T) {
 			t.Errorf("%s = %v want %v", k, got, want)
 		}
 	}
-	if len(auto.Report().Integrations) != 6 {
-		t.Fatal("incomplete report")
+	var names []string
+	for _, integration := range auto.Report().Integrations {
+		names = append(names, integration.Name)
+	}
+	if got := strings.Join(names, ","); got != "wire,openai,anthropic,genai,eino,a2a,bedrock,langchaingo,lambda" {
+		t.Fatalf("report does not list every traceAI Go module: %s", got)
 	}
 }
 func TestStreamingUnchanged(t *testing.T) {
