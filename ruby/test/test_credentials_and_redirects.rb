@@ -1,8 +1,8 @@
 # frozen_string_literal: true
-require_relative 'test_round4_contract'
+require_relative 'test_agent_contract'
 
 class EndToEndTest
-  def test_r4_verifier_partial_tool_json_fails_closed_without_changing_bytes_or_eof
+  def test_partial_tool_json_fails_closed_without_changing_bytes_or_eof
     credential = 'TOOL_CREDENTIAL_12345678'
     arguments = '{"api_key":"' + credential + '"'
     event = "data: #{JSON.generate(id: 'partial', model: 'm', choices: [{index: 0, delta: {tool_calls: [{index: 0, id: 'call-1', function: {name: 'tool', arguments: arguments}}]}}])}\n\n"
@@ -57,7 +57,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_verifier_native_credentials_are_discovered_with_wire_disabled
+  def test_native_credentials_are_discovered_with_wire_disabled
     key = 'REQUEST_ONLY_API_KEY_12345678'
     @provider.stop
     payload = JSON.generate(id: 'native-private', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: "echo #{key}"}], stop_reason: 'end_turn', usage: {input_tokens: 2, output_tokens: 1})
@@ -90,7 +90,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_verifier_httpx_credentials_survive_header_first_fiber_with_wire_disabled
+  def test_httpx_credentials_survive_header_first_fiber_with_wire_disabled
     key = 'HTTPX_REQUEST_ONLY_CREDENTIAL_12345678'
     @provider.stop
     payload = JSON.generate(choices: [{message: {role: 'assistant', content: "echo #{key}"}}])
@@ -121,7 +121,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_verifier_native_invocation_aliases_follow_hiding_without_mutation
+  def test_native_invocation_aliases_follow_hiding_without_mutation
     @provider.stop
     payload = JSON.generate(id: 'native-params', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: 'answer'}], stop_reason: 'end_turn', usage: {input_tokens: 2, output_tokens: 1})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json', 'request-id' => 'safe-request-id'}, payload] }
@@ -152,7 +152,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_verifier_httpx_follow_redirects_captures_final_route_once_with_native_parity
+  def test_httpx_follow_redirects_captures_final_route_once_with_native_parity
     @provider.stop
     @provider = MockHTTP.new do |request|
       path = request[:line].split[1]
@@ -212,7 +212,7 @@ class EndToEndTest
       end
     end
   end
-  def test_r4_verifier_httpx_redirected_credentials_survive_stripped_auth_headers
+  def test_httpx_redirected_credentials_survive_stripped_auth_headers
     key = 'REDIRECT_REQUEST_ONLY_KEY_12345678'
     payload = JSON.generate(choices: [{message: {role: 'assistant', content: "echo #{key}"}}])
     final = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, payload] }
@@ -244,7 +244,7 @@ class EndToEndTest
     final&.stop
   end
 
-  def test_r4_verifier_httpx_redirect_batch_pairing_ancestry_and_nested_guard
+  def test_httpx_redirect_batch_pairing_ancestry_and_nested_guard
     @provider.stop
     @provider = MockHTTP.new do |request|
       path = request[:line].split[1]
@@ -308,8 +308,8 @@ class EndToEndTest
   end
 end
 
-class Round4BoundaryTest
-  def test_r4_verifier_embedded_json_errors_fail_closed_per_snapshot_not_batch
+class ExportBoundaryTest
+  def test_embedded_json_errors_fail_closed_per_snapshot_not_batch
     credential = 'TOOL_CREDENTIAL_12345678'
     complete = JSON.generate(api_key: credential)
     original = record; original.attributes = {'output.value' => complete}
@@ -333,7 +333,7 @@ class Round4BoundaryTest
     end
   end
 
-  def test_r4_verifier_invocation_families_cover_new_nested_aliases_on_every_surface
+  def test_invocation_families_cover_new_nested_aliases_on_every_surface
     attributes = {'gen_ai.request.model' => 'model', 'gen_ai.request.stream' => true, 'anthropic.request.id' => 'request-id',
                   'gen_ai.request.reasoning.level' => 'PRIVATE_SETTING', 'gen_ai.request.future.nested' => 'PRIVATE_SETTING',
                   'anthropic.request.future' => 'PRIVATE_SETTING', 'anthropic.thinking' => '{"type":"PRIVATE_SETTING"}',

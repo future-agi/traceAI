@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-require_relative 'test_round2'
+require_relative 'test_preload_and_net_http'
 
 class EndToEndTest
   def test_standalone_transport_require_leaves_application_gem_selection_untouched

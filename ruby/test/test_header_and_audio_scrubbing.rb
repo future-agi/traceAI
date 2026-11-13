@@ -1,8 +1,8 @@
 # frozen_string_literal: true
-require_relative 'test_round5'
+require_relative 'test_secret_registry'
 
 class EndToEndTest
-  def r5_verifier_header_echo_code(transport, header, credential, proxy: false)
+  def header_echo_code(transport, header, credential, proxy: false)
     <<~RUBY
       require 'opentelemetry/sdk'; require 'net/http'; require 'httpx'
       unless OpenTelemetry.tracer_provider.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
@@ -21,7 +21,7 @@ class EndToEndTest
                 request = Net::HTTP::Post.new('/v1/chat/completions')
                 request['content-type'] = 'application/json'; request.body = '{"model":"m","messages":[]}'
                 if #{proxy.inspect}
-                  client = Net::HTTP::Proxy('127.0.0.1', #{@provider.port}, 'r5-proxy-user', 'r5-proxy-password').new('127.0.0.1', 1)
+                  client = Net::HTTP::Proxy('127.0.0.1', #{@provider.port}, 'test-proxy-user', 'test-proxy-password').new('127.0.0.1', 1)
                 else
                   client = Net::HTTP.new('127.0.0.1', #{@provider.port}, nil)
                   request[#{header.inspect}] = #{credential.inspect}
@@ -61,12 +61,12 @@ class EndToEndTest
     RUBY
   end
 
-  def assert_r5_verifier_header_echo(transport, header, credential, proxy: false)
+  def assert_header_echo(transport, header, credential, proxy: false)
     @provider.stop
     @provider = MockHTTP.new do |request|
       [401, {'Content-Type' => 'application/json'}, JSON.generate(error: {message: 'provider echoes ' + request[:headers].fetch(header)})]
     end
-    code = r5_verifier_header_echo_code(transport, header, credential, proxy: proxy)
+    code = header_echo_code(transport, header, credential, proxy: proxy)
     baseline = nil
     [nil, {}, {'FI_WIRE_CAPTURE' => 'false'}].each do |flags|
       stdout, stderr, status = app(code, flags || {'RUBYOPT' => nil})
@@ -96,18 +96,18 @@ class EndToEndTest
     end
   end
 
-  def test_r5_verifier_aws_session_token_headers_are_observed_by_both_covered_transports
+  def test_aws_session_token_headers_are_observed_by_both_covered_transports
     %w[net_http httpx].each do |transport|
-      assert_r5_verifier_header_echo(transport, 'x-amz-security-token', "r5-#{transport}-aws-session-credential-12345678")
+      assert_header_echo(transport, 'x-amz-security-token', "test-#{transport}-aws-session-credential-12345678")
     end
   end
 
-  def test_r5_verifier_native_net_http_proxy_authorization_is_observed_when_covered
-    credential = 'Basic ' + ['r5-proxy-user:r5-proxy-password'].pack('m0')
-    assert_r5_verifier_header_echo('net_http', 'proxy-authorization', credential, proxy: true)
+  def test_native_net_http_proxy_authorization_is_observed_when_covered
+    credential = 'Basic ' + ['test-proxy-user:test-proxy-password'].pack('m0')
+    assert_header_echo('net_http', 'proxy-authorization', credential, proxy: true)
   end
 
-  def r5_verifier_audio_attributes
+  def audio_attributes
     samples = [1, 300].map do |frames|
       pcm = "\0\0" * frames
       wav = 'RIFF' + [36 + pcm.bytesize].pack('V') + 'WAVEfmt ' + [16].pack('V') + [1, 1, 8000, 16_000, 2, 16].pack('vvVVvv') + 'data' + [pcm.bytesize].pack('V') + pcm
@@ -127,8 +127,8 @@ class EndToEndTest
     }
   end
 
-  def test_r5_verifier_structural_short_and_indexed_audio_is_scrubbed_in_actual_otlp
-    attributes = r5_verifier_audio_attributes
+  def test_structural_short_and_indexed_audio_is_scrubbed_in_actual_otlp
+    attributes = audio_attributes
     code = <<~RUBY
       require 'opentelemetry/sdk'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
@@ -158,8 +158,8 @@ class EndToEndTest
   end
 end
 
-class Round4BoundaryTest
-  def test_r5_verifier_structural_audio_scrubbing_covers_nested_arrays_and_all_attribute_surfaces
+class ExportBoundaryTest
+  def test_structural_audio_scrubbing_covers_nested_arrays_and_all_attribute_surfaces
     audio = ['RIFF' + "\0" * 40].pack('m0')
     attributes = {
       'input.audio.0' => audio,

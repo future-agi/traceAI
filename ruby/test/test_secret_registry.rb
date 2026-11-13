@@ -1,12 +1,12 @@
 # frozen_string_literal: true
-require_relative 'test_round4_contract'
+require_relative 'test_agent_contract'
 require_relative '../lib/traceai/auto/transports'
 
-class Round5SecretsTest < Minitest::Test
+class SecretRegistryTest < Minitest::Test
   A = TraceAI::Auto
   P = A::Privacy
 
-  def test_r5_registry_seeds_fi_options_and_all_credential_like_environment_names
+  def test_registry_seeds_fi_options_and_all_credential_like_environment_names
     registry = A::SecretRegistry.new
     env = %w[KEY TOKEN SECRET PASSWORD PASSWD CREDENTIAL AUTH].to_h { |name| ["CUSTOM_#{name}_VALUE", "seed-#{name}-12345678"] }
     env['ORDINARY'] = 'not-a-credential-12345678'
@@ -20,7 +20,7 @@ class Round5SecretsTest < Minitest::Test
     refute_includes registry.inspect, '12345678'
   end
 
-  def test_r5_registry_is_bounded_lru_and_caches_longest_first_immutable_snapshots
+  def test_registry_is_bounded_lru_and_caches_longest_first_immutable_snapshots
     registry = A::SecretRegistry.new
     values = 1024.times.map { |i| format('bounded-%04d-value', i) }
     values.each { |value| assert registry.register(value) }
@@ -38,7 +38,7 @@ class Round5SecretsTest < Minitest::Test
     assert_includes first, values[1] # In-flight snapshots cannot be mutated.
   end
 
-  def test_r5_registry_registration_and_snapshots_are_thread_safe
+  def test_registry_registration_and_snapshots_are_thread_safe
     registry = A::SecretRegistry.new
     threads = 8.times.map do |thread|
       Thread.new do
@@ -55,7 +55,7 @@ class Round5SecretsTest < Minitest::Test
     assert_equal 800, registry.snapshot.uniq.length
   end
 
-  def test_r5_public_registration_copies_strings_and_ignores_nonstring_or_short_values
+  def test_public_registration_copies_strings_and_ignores_nonstring_or_short_values
     value = +'public-literal-credential-12345678'
     assert A.register_secret(value)
     value.replace('changed')
@@ -68,7 +68,7 @@ class Round5SecretsTest < Minitest::Test
     refute A.register_secret(hostile)
   end
 
-  def test_r5_suppressed_transport_hooks_observe_headers_and_urls_without_inspecting_bodies
+  def test_suppressed_transport_hooks_observe_headers_and_urls_without_inspecting_bodies
     %i[net_http httpx].each do |transport|
       secret = "suppressed-#{transport}-header-12345678"
       query = "suppressed-#{transport}-query-12345678"
@@ -95,7 +95,7 @@ class Round5SecretsTest < Minitest::Test
     end
   end
 
-  def test_r5_parsed_body_discovery_is_bounded_and_never_stringifies_unknown_values
+  def test_parsed_body_discovery_is_bounded_and_never_stringifies_unknown_values
     secret = 'parsed-nested-body-credential-12345678'
     hostile = Object.new
     def hostile.to_s = raise('user stringifier called')
@@ -107,9 +107,9 @@ class Round5SecretsTest < Minitest::Test
     P.observe_body_credentials(Array.new(100_001, {'ordinary' => 'text'}))
   end
 
-  def test_r5_discovery_covers_every_accepted_body_not_just_the_smaller_export_budget
-    deep_secret = 'r5-deep-parsed-body-credential-12345678'
-    wide_secret = 'r5-wide-parsed-body-credential-12345678'
+  def test_discovery_covers_every_accepted_body_not_just_the_smaller_export_budget
+    deep_secret = 'test-deep-parsed-body-credential-12345678'
+    wide_secret = 'test-wide-parsed-body-credential-12345678'
     deep = {'api_key' => deep_secret}
     40.times { deep = {'nested' => deep} }
     wide = Array.new(20_000, nil) + [{'client_secret' => wide_secret}]
@@ -119,8 +119,8 @@ class Round5SecretsTest < Minitest::Test
   end
 end
 
-class Round4BoundaryTest
-  def test_r5_registry_scrubs_every_export_surface_even_for_a_span_created_before_discovery
+class ExportBoundaryTest
+  def test_registry_scrubs_every_export_surface_even_for_a_span_created_before_discovery
     original = record
     secret = 'late-discovered-export-credential-12345678'
     prefix = 'late-discovered-export-credential'
@@ -157,7 +157,7 @@ class Round4BoundaryTest
     assert_equal original.end_timestamp, copy.end_timestamp
   end
 
-  def test_r5_registry_access_failure_fails_closed_without_dropping_spans_or_mutating_originals
+  def test_registry_access_failure_fails_closed_without_dropping_spans_or_mutating_originals
     original = record
     original.attributes = {'input.value' => 'PRIVATE_INPUT', 'ordinary' => 'PRIVATE_ECHO'}
     original.status = OpenTelemetry::Trace::Status.error('PRIVATE_STATUS')
@@ -176,7 +176,7 @@ class Round4BoundaryTest
 end
 
 class EndToEndTest
-  def r5_covered_error_code(transport, key)
+  def covered_error_code(transport, key)
     <<~RUBY
       require 'opentelemetry/sdk'; require 'anthropic'; require 'httpx'
       unless OpenTelemetry.tracer_provider.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
@@ -233,8 +233,8 @@ class EndToEndTest
     RUBY
   end
 
-  def assert_r5_covered_error(transport)
-    key = "r5-#{transport}-outgoing-only-credential-12345678"
+  def assert_covered_error(transport)
+    key = "test-#{transport}-outgoing-only-credential-12345678"
     @provider.stop
     @provider = MockHTTP.new do |request|
       credential = request[:headers]['x-api-key'] || request[:headers]['authorization'].sub(/\ABearer /, '')
@@ -242,7 +242,7 @@ class EndToEndTest
     end
     baseline = nil
     [false, true].each do |injected|
-      stdout, stderr, status = app(r5_covered_error_code(transport, key), injected ? {} : {'RUBYOPT' => nil})
+      stdout, stderr, status = app(covered_error_code(transport, key), injected ? {} : {'RUBYOPT' => nil})
       assert status.success?, stderr
       assert_includes stdout, key
       message, ids = stdout.split("\nSPAN_IDS ", 2)
@@ -283,22 +283,22 @@ class EndToEndTest
     end
   end
 
-  def test_r5_net_http_covered_provider_401_is_scrubbed_across_the_process
-    assert_r5_covered_error('net_http')
+  def test_net_http_covered_provider_401_is_scrubbed_across_the_process
+    assert_covered_error('net_http')
   end
 
-  def test_r5_httpx_covered_provider_401_is_scrubbed_across_the_process
-    assert_r5_covered_error('httpx')
+  def test_httpx_covered_provider_401_is_scrubbed_across_the_process
+    assert_covered_error('httpx')
   end
 
-  def test_r5_fi_and_environment_echoes_are_seeded_once_and_public_api_registers_extra_secrets
-    values = %w[KEY TOKEN SECRET PASSWORD PASSWD CREDENTIAL AUTH].to_h { |name| ["R5_PROVIDER_#{name}", "r5-env-#{name}-12345678"] }
+  def test_fi_and_environment_echoes_are_seeded_once_and_public_api_registers_extra_secrets
+    values = %w[KEY TOKEN SECRET PASSWORD PASSWD CREDENTIAL AUTH].to_h { |name| ["TEST_PROVIDER_#{name}", "test-env-#{name}-12345678"] }
     code = <<~RUBY
       require 'opentelemetry/sdk'
       # Seeded values survive removal from the environment after initialization.
       echoes = #{values.keys.inspect}.map { |name| ENV.delete(name) }
       echoes += [ENV.fetch('FI_API_KEY'), ENV.fetch('FI_SECRET_KEY')]
-      extra = 'r5-explicit-public-credential-12345678'
+      extra = 'test-explicit-public-credential-12345678'
       TraceAI::Auto.register_secret(extra)
       echoes << extra
       OpenTelemetry.tracer_provider.tracer('app').in_span('env-fi-echoes') do |span|
@@ -313,16 +313,16 @@ class EndToEndTest
     assert_equal "APPLICATION_RAN\n", stdout
     spans = export_spans.map(&:first)
     assert_equal 1, spans.length
-    (values.values + %w[fixture-api-12345678 fixture-secret-12345678 r5-explicit-public-credential-12345678]).each do |secret|
+    (values.values + %w[fixture-api-12345678 fixture-secret-12345678 test-explicit-public-credential-12345678]).each do |secret|
       refute_includes spans.map(&:to_h).to_s, secret
     end
     assert attrs(spans.first.attributes)['array'].all? { |value| value == '<redacted>' }
   end
 
-  def test_r5_outgoing_query_and_parsed_body_credentials_scrub_unrelated_later_spans
+  def test_outgoing_query_and_parsed_body_credentials_scrub_unrelated_later_spans
     %w[net_http httpx].each do |transport|
-      query = "r5-#{transport}-query-credential-12345678"
-      body = "r5-#{transport}-body-credential-12345678"
+      query = "test-#{transport}-query-credential-12345678"
+      body = "test-#{transport}-body-credential-12345678"
       @provider.stop
       @provider = MockHTTP.new { |_request| [401, {'Content-Type' => 'application/json'}, JSON.generate(error: {message: "echo #{query} #{body}"})] }
       code = <<~RUBY

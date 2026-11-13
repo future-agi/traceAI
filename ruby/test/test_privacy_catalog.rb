@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-require_relative 'test_round5_followup'
+require_relative 'test_proxy_and_mime_scrubbing'
 require 'tempfile'
 
 class PrivacyCatalogTest < Minitest::Test
@@ -138,20 +138,20 @@ class EndToEndTest
   def test_s6_credential_marked_headers_on_both_covered_transports
     %w[net_http httpx].each do |transport|
       %w[x-access-token private-token x-vault-token].each do |header|
-        assert_r5_verifier_header_echo(transport, header, "s6-#{transport}-#{header}-12345678")
+        assert_header_echo(transport, header, "s6-#{transport}-#{header}-12345678")
       end
     end
   end
 
   def test_s6_mime_content_and_response_query_credentials_in_detached_otlp
-    audio = r5_verifier_audio_attributes.fetch('input.audio.0')
+    audio = audio_attributes.fetch('input.audio.0')
     attributes = {
       'gen_ai.input.messages' => JSON.generate([{type: 'blob', mime_type: 'audio/wav', content: audio}]),
       'input.attachment.0.content' => audio,
       'input.attachment.0.mime_type' => 'audio/wav',
       'ordinary' => 'visible'
     }
-    assert_r5_followup_media_export(attributes, [audio], %w[gen_ai.input.messages input.attachment.0.content],
+    assert_media_export(attributes, [audio], %w[gen_ai.input.messages input.attachment.0.content],
                                   {'input.attachment.0.mime_type' => 'audio/wav', 'ordinary' => 'visible'})
     names = %w[client_secret password refresh_token api-key]
     values = names.to_h { |name| [name, "s6-returned-#{name}-12345678"] }

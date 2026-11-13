@@ -5,7 +5,7 @@ require_relative '../lib/traceai/auto/privacy'
 require_relative '../lib/traceai/auto/export'
 require_relative '../lib/traceai/auto/wire'
 
-class Round6FollowupTest < Minitest::Test
+class SanitizerFallbackTest < Minitest::Test
   A = TraceAI::Auto
   ANTHROPIC_EVENTS = [
     {type: 'message_start', message: {id: 'msg-ndjson', model: 'm', usage: {input_tokens: 5, cache_read_input_tokens: 3}}},
@@ -82,7 +82,7 @@ class Round6FollowupTest < Minitest::Test
     assert_equal '{partial model JSON', original.attributes['output.value']
   end
 
-  def test_r6_sanitizer_fallback_scrubs_known_credentials_in_protected_keys
+  def test_sanitizer_fallback_scrubs_known_credentials_in_protected_keys
     secrets = %w[wireObserved wireObserved783421 fixture-api-12345678]
     values = {'output.value' => '{partial JSON', 'gen_ai.usage.input_tokens' => 7,
               'traceai.capture.dropped_content_count' => 3,
@@ -109,7 +109,7 @@ class Round6FollowupTest < Minitest::Test
     assert_equal original, Marshal.dump(values)
   end
 
-  def test_r6_sanitizer_fallback_drops_unverifiable_protected_keys_without_registry
+  def test_sanitizer_fallback_drops_unverifiable_protected_keys_without_registry
     values = {'output.value' => '{partial JSON', 'gen_ai.usage.input_tokens' => 7,
               'gen_ai.usage.output_tokens.reasoning' => 2, 'traceai.capture.dropped_content_count' => 3,
               'traceai.wire.incomplete' => true, 'gen_ai.usage.wireObserved783421' => 8,
@@ -147,9 +147,9 @@ class Round6FollowupTest < Minitest::Test
 end
 
 class EndToEndTest
-  def test_r6_anthropic_ndjson_and_sse_capture_match_without_changing_application_bytes
+  def test_anthropic_ndjson_and_sse_capture_match_without_changing_application_bytes
     %w[application/x-ndjson text/event-stream].each do |content_type|
-      chunks = Round6FollowupTest::ANTHROPIC_EVENTS.map do |event|
+      chunks = SanitizerFallbackTest::ANTHROPIC_EVENTS.map do |event|
         content_type == 'text/event-stream' ? "data: #{JSON.generate(event)}\n\n" : JSON.generate(event) + "\n"
       end
       @provider.stop
@@ -194,7 +194,7 @@ class EndToEndTest
     end
   end
 
-  def test_r6_real_gzip_arrivals_use_discovered_native_inflater_before_decode
+  def test_real_gzip_arrivals_use_discovered_native_inflater_before_decode
     payload = "data: #{JSON.generate(choices: [{delta: {content: 'native gzip output'}}])}\n\n"
     io = StringIO.new; gzip = Zlib::GzipWriter.new(io); gzip.write(payload); gzip.close
     chunks = [io.string.byteslice(0, 10), io.string.byteslice(10..)]
@@ -274,11 +274,11 @@ class EndToEndTest
     end
   end
 
-  def test_r6_sanitizer_failure_preserves_safe_resource_and_name_in_actual_otlp
+  def test_sanitizer_failure_preserves_safe_resource_and_name_in_actual_otlp
     code = <<~RUBY
       require 'opentelemetry/sdk'; require 'json'
       resource = OpenTelemetry::SDK::Resources::Resource.create(
-        'service.name' => 'checkout-verifier', 'service.namespace' => 'commerce',
+        'service.name' => 'checkout-api', 'service.namespace' => 'commerce',
         'custom.identity' => 'keep-custom', 'ordinary' => 'echo resource-secret-12345678',
         'parts.0.mime_type' => 'audio/pcm', 'parts.0.content.chunk' => 'AQIDBA==',
         'output.value' => 'PRIVATE_RESOURCE_CONTENT')
@@ -310,7 +310,7 @@ class EndToEndTest
       assert_equal 2, spans.size
       spans.each do |span, resource|
         assert_equal 'safe-name <redacted>', span.name
-        assert_equal 'checkout-verifier', resource['service.name']
+        assert_equal 'checkout-api', resource['service.name']
         assert_equal 'commerce', resource['service.namespace']
         assert_equal 'keep-custom', resource['custom.identity']
         assert_equal 'ruby-e2e', resource['project_name']
@@ -325,7 +325,7 @@ class EndToEndTest
     end
   end
 
-  def test_r6_known_credential_in_protected_keys_is_scrubbed_in_fallback_otlp_without_host_mutation
+  def test_known_credential_in_protected_keys_is_scrubbed_in_fallback_otlp_without_host_mutation
     code = <<~RUBY
       require 'opentelemetry/sdk'; require 'net/http'; require 'json'
       host = OpenTelemetry::SDK::Trace::TracerProvider.new
@@ -377,7 +377,7 @@ class EndToEndTest
     end
   end
 
-  def test_r6_transcript_descendants_are_hidden_in_actual_otlp_without_mutating_host
+  def test_transcript_descendants_are_hidden_in_actual_otlp_without_mutating_host
     %w[speech_to_text text_to_speech].each do |operation|
       flags = operation == 'text_to_speech' ? %w[hide_inputs hide_input_text] : %w[hide_outputs hide_output_text]
       code = <<~RUBY

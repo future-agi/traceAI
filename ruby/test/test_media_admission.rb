@@ -4,7 +4,7 @@ require_relative '../lib/traceai/auto/agent'
 require_relative '../lib/traceai/auto/export'
 require_relative '../lib/traceai/auto/media_admission'
 
-class ReleaseCandidateMediaTest < Minitest::Test
+class MediaAdmissionTest < Minitest::Test
   A = TraceAI::Auto
   P = A::Privacy
   PAYLOAD = 'AQIDBA=='
@@ -52,7 +52,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     refute attributes.values.include?([1, 2, 3, 4])
   end
 
-  def test_rc2_default_and_32_128_140_limits_precede_media_context_eviction
+  def test_default_and_32_128_140_limits_precede_media_context_eviction
     [nil, 32, 128, 140].product([nil, 8, 16, 24, 32]).each do |count, length|
       host = provider(count, length)
       values = self.class.values
@@ -75,7 +75,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     end
   end
 
-  def test_rc2_short_truncated_mime_and_type_hints_are_not_safe
+  def test_short_truncated_mime_and_type_hints_are_not_safe
     [['mimeType', 'application/octet-stream'], ['mime_type', 'audio/pcm'], ['media_type', 'image/raw'], ['type', 'input_audio']].each do |name, value|
       [8, 16, 24].each do |length|
         host = provider(140, length)
@@ -98,7 +98,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     assert P.safe_mime?('mime_type', 'text/plain')
   end
 
-  def test_rc2_sequential_setters_and_late_evicted_hints_fail_closed
+  def test_sequential_setters_and_late_evicted_hints_fail_closed
     host = provider(32, 8)
     span = host.tracer('app').start_span('setters')
     assert_same span, span.set_attribute('blob.id.content.chunk', PAYLOAD)
@@ -116,7 +116,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     copy.links.each { |link| assert_no_media(link.attributes) }
   end
 
-  def test_rc2_projection_scrubs_complete_candidates_before_any_selection
+  def test_projection_scrubs_complete_candidates_before_any_selection
     ['transcript', 'id'].each do |boundary|
       root = 'gen_ai.usage.' + boundary + '.parts.199'
       values = {root + '.content.chunk' => PAYLOAD, root + '.mime_type' => 'audio/pcm', 'output.value' => '{unfinished JSON'}
@@ -127,7 +127,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     end
   end
 
-  def test_rc2_fallback_preserves_sibling_hints_for_protected_media
+  def test_fallback_preserves_sibling_hints_for_protected_media
     values = {'gen_ai.usage.parts.0.mime_type' => 'audio/pcm', 'gen_ai.usage.parts.0.content.chunk' => PAYLOAD,
               'gen_ai.usage.parts.1.mime_type' => 'image/raw', 'gen_ai.usage.parts.1.content.chunk' => [1, 2, 3, 4],
               'gen_ai.usage.input_tokens' => 7, 'output.value' => '{unfinished JSON'}
@@ -140,7 +140,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     end
   end
 
-  def test_rc2_export_without_sidecars_fails_closed_after_loss_or_truncation
+  def test_export_without_sidecars_fails_closed_after_loss_or_truncation
     span = provider.tracer('app').start_span('forwarded'); span.finish
     record = span.to_span_data
     record.remove_instance_variable(:@traceai_media)
@@ -154,7 +154,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     end
   end
 
-  def test_rc2_event_and_link_loss_alone_trigger_export_fallback
+  def test_event_and_link_loss_alone_trigger_export_fallback
     host = provider(32)
     values = 40.times.to_h { |i| ["ordinary.#{i}", 'safe sentence'] }.merge('blob.data' => PAYLOAD)
     span = host.tracer('app').start_span('event-link-only')
@@ -170,7 +170,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     assert_no_media(copy.links.first.attributes)
   end
 
-  def test_rc2_truncated_mime_arrays_and_unknown_sibling_base64_fail_closed
+  def test_truncated_mime_arrays_and_unknown_sibling_base64_fail_closed
     values = {'blob.mime_type.0' => 'text/plain', 'blob.mime_type.1' => 'application/octet-str...',
               'blob.opaque' => PAYLOAD, 'missing.opaque' => PAYLOAD, 'unknown' => 'iVBOR...'}
     result = P.scrub(values, [], lossy: true)
@@ -179,7 +179,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     assert_equal '<omitted: media>', result['unknown']
   end
 
-  def test_rc2_empty_payload_admission_remembers_media_context_without_omitting_empty_values
+  def test_empty_payload_admission_remembers_media_context_without_omitting_empty_values
     [[], nil].each do |empty|
       values = {'input.mime_type' => 'application/json', 'input.parts.199.mime_type' => 'audio/pcm',
                 'input.parts.199.content.chunk' => empty}
@@ -195,7 +195,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     end
   end
 
-  def test_rc2_outer_mime_cannot_exempt_late_payloads_or_detached_lossy_records
+  def test_outer_mime_cannot_exempt_late_payloads_or_detached_lossy_records
     [nil, 32, 128, 140].product([nil, 8, 16, 24], ['', '.transcript', '.id'], [PAYLOAD, [1, 2, 3, 4]]).each do |count, length, boundary, payload|
       root = 'input.messages.199.parts.0' + boundary
       key = root + '.content.arbitrary[0]'
@@ -221,7 +221,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     end
   end
 
-  def test_rc2_lossy_outer_mime_does_not_protect_untyped_descendant_base64
+  def test_lossy_outer_mime_does_not_protect_untyped_descendant_base64
     values = {'input.mime_type' => 'application/json', 'input.parts.199.opaque' => PAYLOAD,
               'input.parts[198].opaque' => PAYLOAD, 'input.opaque' => 'ordinary words'}
     assert_equal values, P.scrub(values)
@@ -234,7 +234,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
     assert_equal '<omitted: media>', result['input.content.arbitrary']
   end
 
-  def test_rc2_complete_metadata_boundaries_and_text_mime_are_preserved
+  def test_complete_metadata_boundaries_and_text_mime_are_preserved
     values = {'audio.transcript.content' => PAYLOAD, 'audio.id.value' => 'public id',
               'blob.mime_type' => 'text/plain', 'blob.content' => 'ordinary words'}
     span = provider.tracer('app').start_span('intact', attributes: values.dup); span.finish
@@ -246,7 +246,7 @@ class ReleaseCandidateMediaTest < Minitest::Test
 end
 
 class EndToEndTest
-  def test_rc2_prior_fallback_finding_is_closed_on_actual_fi_export
+  def test_prior_fallback_finding_is_closed_on_actual_fi_export
     code = <<~RUBY
       require 'opentelemetry/sdk'; require 'traceai/auto/agent'
       host = OpenTelemetry::SDK::Trace::TracerProvider.new
@@ -256,11 +256,11 @@ class EndToEndTest
       TraceAI::Auto.init
       ['ordinary output', '{unfinished JSON'].each do |output|
         host.tracer('app').in_span('fallback-media', attributes: {
-          'gen_ai.usage.parts.0.mime_type' => 'audio/pcm', 'gen_ai.usage.parts.0.content.chunk' => #{ReleaseCandidateMediaTest::PAYLOAD.inspect},
+          'gen_ai.usage.parts.0.mime_type' => 'audio/pcm', 'gen_ai.usage.parts.0.content.chunk' => #{MediaAdmissionTest::PAYLOAD.inspect},
           'gen_ai.usage.parts.1.mime_type' => 'image/raw', 'gen_ai.usage.parts.1.content.chunk' => [1, 2, 3, 4], 'output.value' => output
         }) {}
       end
-      abort 'host changed' unless memory.finished_spans.all? { |span| span.attributes['gen_ai.usage.parts.0.content.chunk'] == #{ReleaseCandidateMediaTest::PAYLOAD.inspect} && span.attributes['gen_ai.usage.parts.1.content.chunk'] == [1, 2, 3, 4] }
+      abort 'host changed' unless memory.finished_spans.all? { |span| span.attributes['gen_ai.usage.parts.0.content.chunk'] == #{MediaAdmissionTest::PAYLOAD.inspect} && span.attributes['gen_ai.usage.parts.1.content.chunk'] == [1, 2, 3, 4] }
       abort 'flush failed' unless TraceAI::Auto.flush
       puts 'HOST_UNCHANGED'
     RUBY
@@ -273,11 +273,11 @@ class EndToEndTest
       values = attrs(span.attributes)
       assert_equal '<omitted: media>', values['gen_ai.usage.parts.0.content.chunk']
       assert_equal '<omitted: media>', values['gen_ai.usage.parts.1.content.chunk']
-      refute_includes span.to_h.to_s, ReleaseCandidateMediaTest::PAYLOAD
+      refute_includes span.to_h.to_s, MediaAdmissionTest::PAYLOAD
     end
   end
 
-  def test_rc2_wire_projection_scrubs_media_in_long_messages_before_sdk_limits
+  def test_wire_projection_scrubs_media_in_long_messages_before_sdk_limits
     %w[owned host].each do |ownership|
       code = <<~RUBY
         require 'opentelemetry/sdk'; require 'net/http'; require 'json'; require 'traceai/auto/agent'
@@ -287,7 +287,7 @@ class EndToEndTest
         TraceAI::Auto.init
         host = TraceAI::Auto.provider
         messages = 200.times.map { |i| {role: 'user', content: 'message number ' + i.to_s} }
-        messages.last[:content] = [{type: 'input_audio', input_audio: {data: #{ReleaseCandidateMediaTest::PAYLOAD.inspect}, format: 'pcm16'}}]
+        messages.last[:content] = [{type: 'input_audio', input_audio: {data: #{MediaAdmissionTest::PAYLOAD.inspect}, format: 'pcm16'}}]
         request_body = JSON.generate(model: 'm', messages: messages)
         [[nil, nil], [32, 8], [128, 16], [140, 24]].each do |count, length|
           limits = OpenTelemetry::SDK::Trace::SpanLimits.new(**(count ? {attribute_count_limit: count} : {}))
@@ -307,13 +307,13 @@ class EndToEndTest
       spans = export_spans.map(&:first)
       assert_equal 4, spans.size
       spans.each do |span|
-        refute_includes span.to_h.to_s, ReleaseCandidateMediaTest::PAYLOAD
+        refute_includes span.to_h.to_s, MediaAdmissionTest::PAYLOAD
         assert_operator span.dropped_attributes_count, :>, 0
       end
     end
   end
 
-  def test_rc2_owned_and_host_providers_zero_code_and_init_preserve_application_and_omit_media
+  def test_owned_and_host_providers_zero_code_and_init_preserve_application_and_omit_media
     %w[owned host].product(%w[zero init]).each do |ownership, boot|
       baseline = nil
       [false, true].each do |enabled|
@@ -331,7 +331,7 @@ class EndToEndTest
           abort 'provider replaced' if #{enabled} && !TraceAI::Auto.provider.equal?(host)
           memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
           host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
-          values = #{ReleaseCandidateMediaTest.values.inspect}
+          values = #{MediaAdmissionTest.values.inspect}
           ctx = OpenTelemetry::Trace::SpanContext.new(trace_id: "\\1" * 16, span_id: "\\2" * 8)
           [nil, 32, 128, 140].product([nil, 8, 16, 24]).each do |count, length|
             limits = OpenTelemetry::SDK::Trace::SpanLimits.new(**(count ? {
@@ -340,17 +340,17 @@ class EndToEndTest
             limits.instance_variable_set(:@attribute_length_limit, length)
             limits.instance_variable_set(:@event_attribute_length_limit, length)
             host.span_limits = limits
-            span = host.tracer('app').start_span('rc2-media', attributes: values.dup,
+            span = host.tracer('app').start_span('host-media', attributes: values.dup,
               links: [OpenTelemetry::Trace::Link.new(ctx, values.to_a.reverse.to_h)])
             abort 'setter return changed' unless span.add_attributes('plain' => 'text with spaces').equal?(span)
             span.add_event('media', attributes: values.to_a.reverse.to_h)
             span.finish
-            [#{ReleaseCandidateMediaTest::PAYLOAD.inspect}, [1, 2, 3, 4]].each do |payload|
+            [#{MediaAdmissionTest::PAYLOAD.inspect}, [1, 2, 3, 4]].each do |payload|
               key = 'input.messages.199.parts.0.content.chunk'
               late = {key => [], 'input.mime_type' => 'application/json'}
               200.times { |i| late["filler." + i.to_s] = 'ordinary words' }
               late['input.messages.199.parts.0.mime_type'] = 'audio/pcm'
-              span = host.tracer('app').start_span('rc2-late-media', attributes: late)
+              span = host.tracer('app').start_span('host-late-media', attributes: late)
               abort 'setter return changed' unless span.set_attribute(key, payload).equal?(span)
               retained = span.to_span_data.attributes.dup
               abort 'nested MIME survived' if retained.key?('input.messages.199.parts.0.mime_type')
@@ -373,13 +373,13 @@ class EndToEndTest
         spans = export_spans.map(&:first)
         if enabled
           assert_equal 48, spans.size
-          assert_equal 32, spans.count { |span| span.name == 'rc2-late-media' }
-          spans.select { |span| span.name == 'rc2-late-media' }.each do |span|
+          assert_equal 32, spans.count { |span| span.name == 'host-late-media' }
+          spans.select { |span| span.name == 'host-late-media' }.each do |span|
             assert_operator span.dropped_attributes_count, :>, 0
           end
           spans.each do |span|
             [attrs(span.attributes), *span.events.map { |event| attrs(event.attributes) }, *span.links.map { |link| attrs(link.attributes) }].each do |attributes|
-              refute_includes attributes.to_s, ReleaseCandidateMediaTest::PAYLOAD
+              refute_includes attributes.to_s, MediaAdmissionTest::PAYLOAD
               refute_includes attributes.to_s, 'iVBOR'
               refute attributes.values.include?([1, 2, 3, 4])
             end

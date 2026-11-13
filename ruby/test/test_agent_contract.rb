@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-require_relative 'test_round4'
+require_relative 'test_uploads_and_tool_calls'
 require_relative '../lib/traceai/auto/export'
 require_relative '../lib/traceai/auto/agent'
 
@@ -8,7 +8,7 @@ class EndToEndTest
     ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }
   end
 
-  def test_r4_https_export_uses_loaded_tls_with_certificate_and_hostname_verification
+  def test_https_export_uses_loaded_tls_with_certificate_and_hostname_verification
     require 'openssl'
     key = OpenSSL::PKey::RSA.new(2048)
     certificate = OpenSSL::X509::Certificate.new
@@ -21,7 +21,7 @@ class EndToEndTest
     certificate.add_extension(factory.create_extension('basicConstraints', 'CA:TRUE', true))
     certificate.add_extension(factory.create_extension('subjectAltName', 'DNS:localhost,IP:127.0.0.1'))
     certificate.sign(key, OpenSSL::Digest.new('SHA256'))
-    file = Tempfile.new('r4-ca', File.join(ROOT, '.bundle/tmp'))
+    file = Tempfile.new('test-ca', File.join(ROOT, '.bundle/tmp'))
     file.write(certificate.to_pem); file.close
     context = OpenSSL::SSL::SSLContext.new
     context.cert = certificate; context.key = key
@@ -53,7 +53,7 @@ class EndToEndTest
     tcp&.close; server&.kill; server&.join; file&.unlink
   end
 
-  def test_r4_health_and_ai_requests_never_activate_gems_or_preselect_json
+  def test_health_and_ai_requests_never_activate_gems_or_preselect_json
     code = <<~RUBY
       require 'net/http'
       before = Gem.loaded_specs.transform_values(&:version)
@@ -76,7 +76,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_httpx_only_standalone_export_never_loads_net_http_or_selects_gems
+  def test_httpx_only_standalone_export_never_loads_net_http_or_selects_gems
     code = <<~RUBY
       require 'httpx'
       before = Gem.loaded_specs.transform_values(&:version)
@@ -94,8 +94,8 @@ class EndToEndTest
     end
   end
 
-  def test_r4_require_observation_never_triggers_zeitwerk_namespace_autoloads
-    Dir.mktmpdir('r4-zeitwerk', File.join(ROOT, '.bundle/tmp')) do |directory|
+  def test_require_observation_never_triggers_zeitwerk_namespace_autoloads
+    Dir.mktmpdir('zeitwerk-app', File.join(ROOT, '.bundle/tmp')) do |directory|
       File.write(File.join(directory, 'httpx.rb'), "module HTTPX; BOOT_HOST = ENV.fetch('BOOT_HOST', 'unconfigured'); end")
       File.write(File.join(directory, 'open_ai.rb'), "module OpenAI; BOOT_HOST = ENV.fetch('BOOT_HOST', 'unconfigured'); end")
       code = <<~RUBY
@@ -117,7 +117,7 @@ class EndToEndTest
     assert_empty export_spans
   end
 
-  def test_r4_init_is_once_with_concurrent_callers_and_immutable_export_settings
+  def test_init_is_once_with_concurrent_callers_and_immutable_export_settings
     code = <<~RUBY
       original = [TraceAI::Auto.provider, TraceAI::Auto.processor, TraceAI::Auto.exporter, TraceAI::Auto.config]
       results = 12.times.map { Thread.new { TraceAI::Auto.init(project_name: 'CHANGED', sample_rate: 0, api_key: 'CHANGED') } }.map(&:value)
@@ -132,7 +132,7 @@ class EndToEndTest
     assert_equal 'ruby-e2e', spans.first.last['project_name']
   end
 
-  def test_r4_auto_instrument_is_additive_and_never_disables_or_rewires
+  def test_auto_instrument_is_additive_and_never_disables_or_rewires
     code = <<~RUBY
       require 'httpx'
       provider = TraceAI::Auto.provider; processor = TraceAI::Auto.processor
@@ -149,7 +149,7 @@ class EndToEndTest
     assert_chat_span(export_spans)
   end
 
-  def test_r4_real_anthropic_native_span_cannot_defeat_covered_ancestry
+  def test_real_anthropic_native_span_cannot_defeat_covered_ancestry
     @provider.stop
     body = JSON.generate(id: 'msg-1', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: 'answer'}], stop_reason: 'end_turn', usage: {input_tokens: 3, output_tokens: 2})
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, body] }
@@ -183,7 +183,7 @@ class EndToEndTest
     wire.each { |s| assert native.any? { |n| n.span_id == s.parent_span_id } }
   end
 
-  def test_r4_httpx_unconsumed_stream_is_untouched_and_response_identity_survives
+  def test_httpx_unconsumed_stream_is_untouched_and_response_identity_survives
     code = <<~RUBY
       require 'httpx'
       response = HTTPX.plugin(:stream).post('#{@provider.url}/v1/chat/completions', json: {model: 'm', messages: []}, stream: true)
@@ -201,7 +201,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_native_response_identity_helpers_and_cached_bodies_match_baseline
+  def test_native_response_identity_helpers_and_cached_bodies_match_baseline
     code = <<~RUBY
       require 'net/http'; require 'httpx'
       module ObserveNativeIdentity
@@ -238,7 +238,7 @@ class EndToEndTest
     end
   end
 
-  def test_r4_transport_timestamps_exclude_consumer_and_parser_time
+  def test_transport_timestamps_exclude_consumer_and_parser_time
     %w[net_http httpx].each do |transport|
       code = <<~RUBY
         require 'net/http'; require 'httpx'
@@ -282,7 +282,7 @@ class EndToEndTest
   end
 end
 
-class Round4BoundaryTest < Minitest::Test
+class ExportBoundaryTest < Minitest::Test
   P = TraceAI::Auto::Privacy
   C = TraceAI::Auto::Codec
   A = TraceAI::Auto
@@ -295,7 +295,7 @@ class Round4BoundaryTest < Minitest::Test
   def snapshot(value, flags = {})
     P.snapshot(value, A::ExportResource.new({}), A::Config.new(flags, env: {}), ['SECRET_VALUE_12345678'])
   end
-  def test_r4_all_export_surfaces_are_sanitized_without_mutation_or_unknown_getters
+  def test_all_export_surfaces_are_sanitized_without_mutation_or_unknown_getters
     secret = 'SECRET_VALUE_12345678'
     marker = "#{secret} https://host/path?signature=PRIVATE_SIGNATURE data:image/png;base64,QUJD"
     value = record
@@ -329,7 +329,7 @@ class Round4BoundaryTest < Minitest::Test
     assert_equal value.span_id, copy.span_id
   end
 
-  def test_r4_sanitizer_cycles_and_branching_fail_closed_per_span_not_batch
+  def test_sanitizer_cycles_and_branching_fail_closed_per_span_not_batch
     cycle = []; cycle << cycle
     [cycle, Array.new(20_000, 'content')].each do |bad|
       original = record; original.attributes = {'input.value' => 'PRIVATE', 'cycle' => bad}
@@ -346,7 +346,7 @@ class Round4BoundaryTest < Minitest::Test
     end
   end
 
-  def test_r4_hide_flags_cover_flattened_parameters_and_attribute_families
+  def test_hide_flags_cover_flattened_parameters_and_attribute_families
     original = record
     original.attributes = {'gen_ai.request.model' => 'model', 'gen_ai.request.stream' => true, 'gen_ai.request.temperature' => 0.731,
                            'gen_ai.request.top_p' => 0.819, 'gen_ai.request.max_tokens' => 1237, 'gen_ai.request.parameters.extra' => 'PARAM',
@@ -360,12 +360,12 @@ class Round4BoundaryTest < Minitest::Test
     assert_equal true, copy.attributes['gen_ai.request.stream']
   end
 
-  def test_r4_packaged_preload_cannot_activate_dependencies_before_the_shim_runs
+  def test_packaged_preload_cannot_activate_dependencies_before_the_shim_runs
     spec = Gem::Specification.load(File.join(ROOT, 'traceai-auto.gemspec'))
     assert_empty spec.runtime_dependencies
   end
 
-  def test_r4_configuration_is_an_immutable_snapshot_not_an_alias_of_application_options
+  def test_configuration_is_an_immutable_snapshot_not_an_alias_of_application_options
     name = +'original'; integration = +'wire'; list = [integration]
     config = A::Config.new({project_name: name, instrumentations: list}, env: {})
     name.replace('changed'); integration.replace('changed'); list.clear
@@ -376,7 +376,7 @@ class Round4BoundaryTest < Minitest::Test
     assert_raises(FrozenError) { config['instrumentations'].clear }
   end
 
-  def test_r4_internal_codec_matches_json_without_activating_or_calling_hooks
+  def test_internal_codec_matches_json_without_activating_or_calling_hooks
     samples = [nil, true, false, 0, -12, 0.123, 1e30, "café世界\n\"\\", {'array' => [1, nil, false, 'é'], 'emoji' => "\u{1f680}"}]
     samples.each do |sample|
       if sample.nil?

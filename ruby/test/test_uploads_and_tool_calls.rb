@@ -1,20 +1,20 @@
 # frozen_string_literal: true
-require_relative 'test_round3'
+require_relative 'test_httpx_streams'
 
 class EndToEndTest
-  def test_round4_sdk_upload_callback_preserves_nested_suppression_and_context
-    assert_round4_sdk_upload_callback('suppressed')
+  def test_sdk_upload_callback_preserves_nested_suppression_and_context
+    assert_sdk_upload_callback('suppressed')
   end
 
-  def test_round4_sdk_upload_callback_preserves_nested_capture_guard
-    assert_round4_sdk_upload_callback('nested')
+  def test_sdk_upload_callback_preserves_nested_capture_guard
+    assert_sdk_upload_callback('nested')
   end
 
-  def test_round4_sdk_upload_callback_preserves_callback_parent_and_metadata
-    assert_round4_sdk_upload_callback('metadata')
+  def test_sdk_upload_callback_preserves_callback_parent_and_metadata
+    assert_sdk_upload_callback('metadata')
   end
 
-  def assert_round4_sdk_upload_callback(mode)
+  def assert_sdk_upload_callback(mode)
     @provider.stop
     @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, '{"text":"answer"}'] }
     callback_server = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, CHAT] }
@@ -78,7 +78,7 @@ class EndToEndTest
     callback_server&.stop; file&.unlink
   end
 
-  def test_round4_native_anthropic_echoed_request_key_is_scrubbed_only_for_fi
+  def test_native_anthropic_echoed_request_key_is_scrubbed_only_for_fi
     key = 'REQUEST_ONLY_API_KEY_12345678'
     @provider.stop
     payload = JSON.generate(id: 'native-private', type: 'message', role: 'assistant', model: 'claude-test', content: [{type: 'text', text: "echo #{key}"}], stop_reason: 'end_turn', usage: {input_tokens: 2, output_tokens: 1})
@@ -106,7 +106,7 @@ class EndToEndTest
     assert_includes attrs(native.attributes)['gen_ai.output.messages'], '<redacted>'
   end
 
-  def test_round4_export_scrubs_names_events_links_without_mutating_other_exporters
+  def test_export_scrubs_names_events_links_without_mutating_other_exporters
     secret = 'fixture-api-12345678'
     signed = 'SIGNED_PRIVATE_VALUE'
     code = <<~RUBY
@@ -138,15 +138,15 @@ class EndToEndTest
     assert_equal 8, span.links.first.span_id.bytesize
   end
 
-  def test_round4_utf8_resident_multipart_is_byte_identical_and_captured
-    assert_round4_utf8_multipart('resident')
+  def test_utf8_resident_multipart_is_byte_identical_and_captured
+    assert_utf8_multipart('resident')
   end
 
-  def test_round4_utf8_file_multipart_is_byte_identical_and_captured
-    assert_round4_utf8_multipart('file')
+  def test_utf8_file_multipart_is_byte_identical_and_captured
+    assert_utf8_multipart('file')
   end
 
-  def assert_round4_utf8_multipart(kind)
+  def assert_utf8_multipart(kind)
     body = "--utf8\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--utf8\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ncafé世界\r\n--utf8\r\nContent-Disposition: form-data; name=\"file\"; filename=\"é.wav\"\r\nContent-Type: audio/wav\r\n\r\nAUDIO\x00BYTES\r\n--utf8--\r\n"
     file = Tempfile.new('utf8-multipart', File.join(ROOT, '.bundle/tmp'))
     file.binmode; file.write('PREFIX' + body); file.close
@@ -183,7 +183,7 @@ class EndToEndTest
     file&.unlink
   end
 
-  def test_round4_httpx_header_first_close_finalizes_exactly_once_without_draining
+  def test_httpx_header_first_close_finalizes_exactly_once_without_draining
     @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'text/event-stream'}, STREAM] }
     %w[close body.close].each do |close|
       [false, true].each do |injected|
@@ -215,7 +215,7 @@ class EndToEndTest
 end
 
 class SafetyTest
-  def test_round4_incremental_utf8_multipart_headers_survive_every_byte_boundary
+  def test_incremental_utf8_multipart_headers_survive_every_byte_boundary
     require_relative '../lib/traceai/auto/upload'
     body = "--b\r\nContent-Disposition: form-data; name=\"modèle\"\r\n\r\ncafé世界\r\n--b\r\nContent-Disposition: form-data; name=\"fichieré\"; filename=\"é世界.wav\"\r\nContent-Type: audio/wav\r\n\r\nBINARY\r\n--b--\r\n"
     resident = W.multipart(body, 'multipart/form-data; boundary=b')
@@ -234,7 +234,7 @@ class SafetyTest
     end
   end
 
-  def test_round4_interrupted_responses_retain_function_calls_and_argument_fragments
+  def test_interrupted_responses_retain_function_calls_and_argument_fragments
     req = request('/v1/responses', 'api.openai.com', {model: 'm', input: 'hi', stream: true})
     events = [
       {type: 'response.created', response: {id: 'resp-partial', model: 'm'}},
@@ -261,7 +261,7 @@ class SafetyTest
     assert_equal '{"city":"London"}', a['gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.arguments']
   end
 
-  def test_round4_ollama_tool_only_json_and_ndjson_preserve_structured_arguments
+  def test_ollama_tool_only_json_and_ndjson_preserve_structured_arguments
     req = request('/api/chat', 'ollama.com', {model: 'llama3', messages: []})
     call = {function: {name: 'weather', arguments: {city: 'London'}}}
     final = {model: 'llama3', message: {role: 'assistant', content: '', tool_calls: [call]}, done: true, done_reason: 'stop', prompt_eval_count: 2, eval_count: 3}
@@ -278,7 +278,7 @@ class SafetyTest
     end
   end
 
-  def test_round4_streamed_function_name_fragments_accumulate_per_choice_and_call
+  def test_streamed_function_name_fragments_accumulate_per_choice_and_call
     req = request('/v1/chat/completions', 'api.openai.com', {model: 'm', messages: [], stream: true})
     events = [
       {choices: [{index: 0, delta: {tool_calls: [{index: 0, id: 'call-1', function: {name: 'get_', arguments: '{"city":'}}, {index: 1, id: 'call-2', function: {name: 'get_', arguments: ''}}]}}]},

@@ -1,8 +1,8 @@
 # frozen_string_literal: true
-require_relative 'test_round6_privacy'
+require_relative 'test_privacy_catalog'
 require_relative '../lib/traceai/auto/projection'
 
-class Round6FindingsTest < Minitest::Test
+class ProjectionAndDestinationsTest < Minitest::Test
   A = TraceAI::Auto
   P = A::AttributeProjection
 
@@ -93,7 +93,7 @@ class Round6FindingsTest < Minitest::Test
   end
 
   def test_a7_dropped_count_and_numeric_usage_survive_sanitizer_budget_exhaustion
-    record = Round4BoundaryTest.new('unused').record
+    record = ExportBoundaryTest.new('unused').record
     record.attributes = {'gen_ai.response.id' => 'x' * (A::Privacy::CATALOG['limits']['max_text_chars'] + 1),
                          'output.value' => 'PRIVATE', P::COUNT => 17, 'gen_ai.usage.input_tokens' => 9}
     record.total_recorded_attributes = 40
@@ -108,7 +108,7 @@ class Round6FindingsTest < Minitest::Test
   end
 
   def test_a7_snapshot_preserves_all_recorded_counts_even_when_privacy_fails_closed
-    record = Round4BoundaryTest.new('unused').record
+    record = ExportBoundaryTest.new('unused').record
     record.total_recorded_attributes = 19
     record.total_recorded_events = 7
     record.total_recorded_links = 5

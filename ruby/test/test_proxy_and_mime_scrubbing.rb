@@ -1,8 +1,8 @@
 # frozen_string_literal: true
-require_relative 'test_round5_findings'
+require_relative 'test_header_and_audio_scrubbing'
 
 class EndToEndTest
-  def r5_followup_proxy_code(transport, credential, explicit_start: false)
+  def proxy_code(transport, credential, explicit_start: false)
     <<~RUBY
       require 'opentelemetry/sdk'; require 'net/http'; require 'httpx'
       unless OpenTelemetry.tracer_provider.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
@@ -18,7 +18,7 @@ class EndToEndTest
           tracer.in_span('proxy-covered', attributes: {'gen_ai.span.kind' => 'LLM'}) do
             tracer.in_span('proxy-intermediate') do
               if #{(transport == 'net_http_https').inspect}
-                client = Net::HTTP::Proxy('127.0.0.1', #{@provider.port}, 'r5-connect-user', 'r5-connect-password').new('127.0.0.1', 1)
+                client = Net::HTTP::Proxy('127.0.0.1', #{@provider.port}, 'test-connect-user', 'test-connect-password').new('127.0.0.1', 1)
                 client.use_ssl = true
                 client.start if #{explicit_start.inspect}
                 request = Net::HTTP::Post.new('/v1/chat/completions')
@@ -26,7 +26,7 @@ class EndToEndTest
                 client.request(request)
                 abort 'CONNECT rejection lost'
               else
-                session = HTTPX.plugin(:proxy).with(proxy: {uri: '#{@provider.url}', username: 'r5-connect-user', password: 'r5-connect-password'})
+                session = HTTPX.plugin(:proxy).with(proxy: {uri: '#{@provider.url}', username: 'test-connect-user', password: 'test-connect-password'})
                 response = session.post('#{transport == 'httpx_https_proxy' ? 'https' : 'http'}://127.0.0.1:1/v1/chat/completions', json: {model: 'm', messages: []})
                 abort 'proxy status changed' unless response.status == 401
                 raise RuntimeError, response.to_s
@@ -61,14 +61,14 @@ class EndToEndTest
     RUBY
   end
 
-  def assert_r5_followup_native_proxy(transport, explicit_start: false)
-    credential = 'Basic ' + ['r5-connect-user:r5-connect-password'].pack('m0')
+  def assert_native_proxy(transport, explicit_start: false)
+    credential = 'Basic ' + ['test-connect-user:test-connect-password'].pack('m0')
     @provider.raw do |io, request|
       echo = request[:headers].fetch('proxy-authorization')
       body = 'proxy echoes ' + echo
       io.write "HTTP/1.1 401 #{body}\r\nContent-Type: text/plain\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}"
     end
-    code = r5_followup_proxy_code(transport, credential, explicit_start: explicit_start)
+    code = proxy_code(transport, credential, explicit_start: explicit_start)
     baseline = nil
     [nil, {}, {'FI_WIRE_CAPTURE' => 'false'}].each do |flags|
       stdout, stderr, status = app(code, flags || {'RUBYOPT' => nil})
@@ -98,15 +98,15 @@ class EndToEndTest
     end
   end
 
-  def test_r5_followup_net_http_https_connect_authentication_is_observed_when_covered
-    [false, true].each { |explicit_start| assert_r5_followup_native_proxy('net_http_https', explicit_start: explicit_start) }
+  def test_net_http_https_connect_authentication_is_observed_when_covered
+    [false, true].each { |explicit_start| assert_native_proxy('net_http_https', explicit_start: explicit_start) }
   end
 
-  def test_r5_followup_httpx_serializer_proxy_authentication_is_observed_when_covered
-    %w[httpx_proxy httpx_https_proxy].each { |transport| assert_r5_followup_native_proxy(transport) }
+  def test_httpx_serializer_proxy_authentication_is_observed_when_covered
+    %w[httpx_proxy httpx_https_proxy].each { |transport| assert_native_proxy(transport) }
   end
 
-  def assert_r5_followup_media_export(attributes, payloads, media_keys, visible)
+  def assert_media_export(attributes, payloads, media_keys, visible)
     code = <<~RUBY
       require 'opentelemetry/sdk'
       memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
@@ -132,8 +132,8 @@ class EndToEndTest
     end
   end
 
-  def test_r5_followup_flattened_and_indexed_mime_siblings_scrub_short_audio_in_otlp
-    audio = r5_verifier_audio_attributes.fetch('input.audio.0')
+  def test_flattened_and_indexed_mime_siblings_scrub_short_audio_in_otlp
+    audio = audio_attributes.fetch('input.audio.0')
     attributes = {
       'input.source.data' => audio, 'input.source.media_type' => 'audio/wav',
       'input.attachment.0.data' => audio, 'input.attachment.0.mimeType' => 'audio/wav',
@@ -145,21 +145,21 @@ class EndToEndTest
     }
     media_keys = %w[input.source.data input.attachment.0.data input.attachment.2.bytes.0 input.value input.audio.0]
     visible = attributes.reject { |key, _| media_keys.include?(key) }
-    assert_r5_followup_media_export(attributes, [audio], media_keys, visible)
+    assert_media_export(attributes, [audio], media_keys, visible)
   end
 
-  def test_r5_followup_nonbase64_audio_data_uri_is_scrubbed_in_otlp
-    audio = r5_verifier_audio_attributes.fetch('input.audio.0').unpack1('m0')
+  def test_nonbase64_audio_data_uri_is_scrubbed_in_otlp
+    audio = audio_attributes.fetch('input.audio.0').unpack1('m0')
     payload = audio.bytes.map { |byte| format('%%%02X', byte) }.join
     uri = 'data:audio/wav,' + payload
     literal = "data:audio/basic,synthetic'audio"
     attributes = {'input.value' => 'sound: ' + uri, 'output.value' => JSON.generate(audio: uri), 'input.literal' => literal, 'ordinary' => 'visible'}
-    assert_r5_followup_media_export(attributes, [uri, payload, "synthetic'audio"], %w[input.value output.value input.literal], {'ordinary' => 'visible'})
+    assert_media_export(attributes, [uri, payload, "synthetic'audio"], %w[input.value output.value input.literal], {'ordinary' => 'visible'})
   end
 end
 
-class Round5SecretsTest
-  def test_r5_followup_connect_observer_preserves_native_writes_and_ignores_nonhandshake_data
+class SecretRegistryTest
+  def test_connect_observer_preserves_native_writes_and_ignores_nonhandshake_data
     base = Class.new do
       attr_reader :parts
       def initialize(result) = (@result = result)
@@ -190,7 +190,7 @@ class Round5SecretsTest
     Thread.current[:traceai_net_connect] = previous
   end
 
-  def test_r5_followup_connect_scope_restores_fiber_local_marker_after_native_errors
+  def test_connect_scope_restores_fiber_local_marker_after_native_errors
     base = Class.new do
       def initialize(error) = (@error = error)
       def connect = raise(@error)
@@ -215,7 +215,7 @@ class Round5SecretsTest
     Thread.current[:traceai_net_connect] = previous
   end
 
-  def test_r5_followup_httpx_final_header_observation_is_single_pass_and_fail_open
+  def test_httpx_final_header_observation_is_single_pass_and_fail_open
     base = Class.new do
       attr_reader :serialized
       def initialize(result) = (@result = result)
@@ -252,8 +252,8 @@ class Round5SecretsTest
   end
 end
 
-class Round4BoundaryTest
-  def test_r5_followup_flattened_mime_index_is_bounded_and_fails_closed
+class ExportBoundaryTest
+  def test_flattened_mime_index_is_bounded_and_fails_closed
     original = record
     original.attributes = {('attachment.' * 17_000) + 'mimeType' => 'audio/wav', 'input.value' => 'PRIVATE_AUDIO'}
     copy = snapshot(original)
@@ -265,7 +265,7 @@ class Round4BoundaryTest
     assert_equal 'PRIVATE_AUDIO', original.attributes['input.value']
   end
 
-  def test_r5_followup_mime_siblings_remain_scoped_and_cover_every_attribute_surface
+  def test_mime_siblings_remain_scoped_and_cover_every_attribute_surface
     audio = ['RIFF' + "\0" * 40].pack('m0')
     attributes = {
       'input.source.data' => audio, 'input.source.media_type' => 'audio/wav',
@@ -293,7 +293,7 @@ class Round4BoundaryTest
     assert_equal audio, original.attributes['input.source.data']
   end
 
-  def test_r5_followup_nonbase64_data_uris_cover_every_exported_string_surface
+  def test_nonbase64_data_uris_cover_every_exported_string_surface
     payload = '%52%49%46%46%00%00%00%00%57%41%56%45'
     uri = 'data:audio/wav,' + payload
     marker = 'sound ' + uri

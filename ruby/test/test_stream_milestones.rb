@@ -5,7 +5,7 @@ require_relative 'test_e2e'
 require_relative '../lib/traceai/auto/agent'
 require_relative '../lib/traceai/auto/transports'
 
-class Round6TransportMilestonesTest < Minitest::Test
+class StreamMilestonesTest < Minitest::Test
   A = TraceAI::Auto
   def capture(limit: 4 * 1024 * 1024)
     config = A::Config.new({wire_max_body_bytes: limit}, env: {})

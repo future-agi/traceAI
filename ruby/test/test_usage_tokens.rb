@@ -2,7 +2,7 @@
 require_relative 'test_helper'
 require_relative 'test_wire'
 
-class Round6TokenAlgebraTest < Minitest::Test
+class UsageTokensTest < Minitest::Test
   def test_a8_list_content_cannot_short_circuit_later_usage_snapshots
     fixture = {
       'request' => {'method' => 'POST', 'url' => 'https://api.mistral.ai/v1/chat/completions',
