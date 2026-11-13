@@ -153,6 +153,44 @@ class EndToEndTest
     gemfile&.unlink
   end
 
+  # Startup hooks watch class definitions and Bundler.setup only, and turn off
+  # once they have nothing left to find. No method-call hook is ever installed.
+  ENABLED_TRACE_HOOKS = 'ObjectSpace.each_object(TracePoint).count(&:enabled?)'
+  def with_empty_bundle(name)
+    gemfile = Tempfile.new([name, '.Gemfile'], File.join(ROOT, '.bundle/tmp'))
+    gemfile.write("source 'https://rubygems.org'\n"); gemfile.close
+    yield ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }.merge('BUNDLE_GEMFILE' => gemfile.path)
+  ensure
+    File.unlink(gemfile.path + '.lock') if gemfile && File.exist?(gemfile.path + '.lock')
+    gemfile&.unlink
+  end
+
+  def test_no_trace_hook_stays_enabled_after_setup
+    with_empty_bundle('hooks-with-keys') do |overrides|
+      code = "require 'bundler/setup'\n" + plain_code + "\nputs\nputs 'ENABLED=' + #{ENABLED_TRACE_HOOKS}.to_s\n"
+      stdout, stderr, status = app(code, overrides)
+      assert status.success?, stderr
+      assert_equal CHAT + "\nENABLED=0\n", stdout
+      assert_chat_span(export_spans)
+    end
+  end
+
+  def test_no_trace_hook_stays_enabled_after_bundler_setup_without_fi_keys
+    with_empty_bundle('hooks-without-keys') do |overrides|
+      code = <<~RUBY
+        require 'bundler/setup'
+        puts 'ENABLED=' + #{ENABLED_TRACE_HOOKS}.to_s
+        require 'net/http'
+        puts Net::HTTP.ancestors.any? { |m| m.name.to_s.start_with?('TraceAI') }
+      RUBY
+      stdout, stderr, status = app(code, overrides.merge('FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil))
+      assert status.success?, stderr
+      assert_equal "ENABLED=0\nfalse\n", stdout
+      assert_equal 1, stderr.scan('traceai-auto:').length, stderr
+      assert_empty export_spans
+    end
+  end
+
   def test_default_gemfile_and_manual_bundler_setup_do_not_preactivate_agent_dependencies
     Dir.mktmpdir('default-json-bundle', File.join(ROOT, '.bundle/tmp')) do |directory|
       File.write(File.join(directory, 'Gemfile'), "source 'https://rubygems.org'\ngem 'json', '2.6.3'\n")
