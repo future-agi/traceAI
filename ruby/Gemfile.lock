@@ -26,7 +26,13 @@ GEM
       net-http (~> 0.5)
     faraday-retry (2.4.0)
       faraday (~> 2.0)
+    google-protobuf (4.36.2-aarch64-linux-gnu)
+      bigdecimal
+      rake (~> 13.3)
     google-protobuf (4.36.2-arm64-darwin)
+      bigdecimal
+      rake (~> 13.3)
+    google-protobuf (4.36.2-x86_64-linux-gnu)
       bigdecimal
       rake (~> 13.3)
     googleapis-common-protos-types (1.24.0)
@@ -90,7 +96,9 @@ GEM
     zeitwerk (2.8.3)
 
 PLATFORMS
+  aarch64-linux
   arm64-darwin-23
+  x86_64-linux
 
 DEPENDENCIES
   anthropic
