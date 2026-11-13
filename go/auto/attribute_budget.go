@@ -50,7 +50,7 @@ func providerAttributeLimit(provider *sdktrace.TracerProvider) int {
 // degradation keys, plus numeric gen_ai.usage.* counters. It is deliberately not prefix-based: an
 // application attribute such as project_metadata.media.data, a string under
 // gen_ai.usage.* or server.media.* is ordinary metadata, so it keeps the joint
-// capture-time media scrub and the projection's MIME-companion pin (R6A B2).
+// capture-time media scrub and the projection's MIME-companion pin.
 func protectedAttributePriority(kv attribute.KeyValue) int {
 	key := string(kv.Key)
 	switch key {

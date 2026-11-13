@@ -678,7 +678,7 @@ func captureContext(extra, wireValues []attribute.KeyValue, cfg Config, operatio
 			break // Nothing to keep, or the scalar retry would repeat tier two.
 		}
 		// Fail-closed: hints in native maps, JSON strings or generic slices were
-		// dropped with the content, so no sample may rely on them (R6A B2).
+		// dropped with the content, so no sample may rely on them.
 		if checked, ok := scrubContext(append(append([]attribute.KeyValue(nil), subset...), hints...), siblings, cfg, operation, true); ok {
 			out = make([]attribute.KeyValue, 0, len(subset)+1)
 			for _, kv := range checked {
