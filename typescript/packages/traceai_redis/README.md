@@ -115,6 +115,8 @@ Redis's native OpenTelemetry observability exports metrics; it does not replace 
 
 Query text, hash values, JSON content, result documents and vectors are not captured. The legacy `captureQueryVectors` and `captureResultVectors` options remain accepted but have no effect. There is no `captureDocuments` option.
 
+Set `instrumentationConfig: { vectorOnly: true }` to trace only vector operations: `FT.SEARCH` and `FT.AGGREGATE` with a `KNN` clause, and `FT.CREATE` with a `VECTOR` field. Hash, JSON and `DEL` commands and text searches then run without a span. `@traceai/auto` turns this on when it enables Redis.
+
 Keys and index names are exported as metadata; keep personal data out of these names or remove these attributes in your collector. `hideInputs` and `hideOutputs` do not remove Redis key or index metadata. Use `traceConfig: { hideErrorDetails: true }` to omit exception messages and stack traces, which can contain server-supplied content. Errors still propagate unchanged to your application and mark the span as an error.
 
 ## Troubleshooting
