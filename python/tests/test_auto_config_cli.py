@@ -161,32 +161,64 @@ def test_credentials_are_one_pair_per_source(tmp_path, caplog):
     assert settings.sources["api_key"] == "argument"
 
 
-def test_a_config_file_base_url_needs_the_keys_from_the_same_file(tmp_path, caplog):
-    # A futureagi.toml in a checkout must not send keys from the environment to a collector it names.
+def test_a_found_config_file_base_url_with_keys_from_elsewhere_turns_export_off(tmp_path, monkeypatch, caplog):
+    import requests
+
+    posted = []
+    monkeypatch.setattr(requests.Session, "post", lambda self, url, **kwargs: posted.append(url))
+    # A futureagi.toml that arrives with a checkout must not send keys from the environment, or the
+    # traces, to a collector it names; nor may they go to the default collector instead.
+    monkeypatch.chdir(tmp_path)
     config = tmp_path / "futureagi.toml"
     config.write_text('base_url = "http://127.0.0.1:1"\nproject_name = "checkout"\n')
     environ = {"FI_API_KEY": "fi-api-PLACEHOLDER", "FI_SECRET_KEY": "fi-secret-PLACEHOLDER"}
     with caplog.at_level(logging.WARNING, logger="fi_instrumentation.auto"):
-        settings = resolve(environ=environ, config_file=str(config))
-    assert settings.base_url is None
+        settings = resolve(environ=environ)
     assert settings.project_name == "checkout"
-    assert caplog.text.count("ignoring base_url") == 1
-    assert str(config) in caplog.text
+    assert settings.base_url is None
+    assert settings.has_credentials is False
+    warnings = [r.getMessage() for r in caplog.records]
+    assert len(warnings) == 1, warnings
+    # It says that export is off, why, and the two ways to fix it.
+    assert "export to Future AGI is off" in warnings[0]
+    assert "futureagi.toml" in warnings[0]
+    assert "same file" in warnings[0] and "FI_BASE_URL" in warnings[0]
     assert "PLACEHOLDER" not in caplog.text
+    # The collector check does not send the keys anywhere either.
+    ok, detail = _cli.check_collector(settings)
+    assert ok is False
+    assert "FI_BASE_URL" in detail
+    assert posted == []
+    # Without keys there is nothing to send: the missing keys are the one thing reported, later.
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="fi_instrumentation.auto"):
-        assert resolve(environ={}, config_file=str(config)).base_url is None
-    assert caplog.text.count("ignoring base_url") == 1
+        assert resolve(environ={}).base_url is None
+    assert not caplog.records
     # Keys and base_url from the same file belong together.
     config.write_text('base_url = "http://127.0.0.1:1"\napi_key = "file-api-PLACEHOLDER"\n'
                       'secret_key = "file-secret-PLACEHOLDER"\n')
-    settings = resolve(environ={}, config_file=str(config))
+    settings = resolve(environ={})
     assert (settings.base_url, settings.api_key) == ("http://127.0.0.1:1", "file-api-PLACEHOLDER")
+    assert settings.has_credentials is True
     # A base URL from the environment or an argument is always used.
-    assert resolve(environ={**environ, "FI_BASE_URL": "http://127.0.0.1:2"},
-                   config_file=str(config)).base_url == "http://127.0.0.1:2"
-    assert resolve({"base_url": "http://127.0.0.1:3"}, environ=environ,
-                   config_file=str(config)).base_url == "http://127.0.0.1:3"
+    assert resolve(environ={**environ, "FI_BASE_URL": "http://127.0.0.1:2"}).base_url == "http://127.0.0.1:2"
+    assert resolve({"base_url": "http://127.0.0.1:3"}, environ=environ).base_url == "http://127.0.0.1:3"
+
+
+def test_a_config_file_named_explicitly_is_trusted_with_its_base_url(tmp_path, monkeypatch, caplog):
+    # Naming the file is a choice of the person who starts the app, not something a checkout brings.
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "collector.toml"
+    config.write_text('base_url = "http://127.0.0.1:1"\nproject_name = "checkout"\n')
+    environ = {"FI_API_KEY": "fi-api-PLACEHOLDER", "FI_SECRET_KEY": "fi-secret-PLACEHOLDER"}
+    with caplog.at_level(logging.WARNING, logger="fi_instrumentation.auto"):
+        by_variable = resolve(environ={**environ, "FI_CONFIG_FILE": str(config)})
+        by_argument = resolve(environ=environ, config_file=str(config))
+    for settings in (by_variable, by_argument):
+        assert settings.base_url == "http://127.0.0.1:1"
+        assert settings.sources["base_url"] == f"file {config}"
+        assert settings.has_credentials is True
+    assert not caplog.records
 
 
 def test_privacy_settings_come_from_the_config_file(tmp_path, monkeypatch):
@@ -290,6 +322,8 @@ def test_doctor_never_shows_any_part_of_the_secret_key(tmp_path, monkeypatch):
 
 def test_fi_instrument_waits_for_the_program_on_windows(monkeypatch):
     # Windows has no exec: os.execve starts a new process and ends this one, losing the exit code.
+    # Ctrl+C in the console reaches the program too, so fi-instrument ignores it while it waits:
+    # the program finishes its own shutdown and the agent's exit flush, and its exit code is returned.
     calls = []
 
     def execve(program, argv, env):
@@ -297,14 +331,26 @@ def test_fi_instrument_waits_for_the_program_on_windows(monkeypatch):
         raise OSError("exec is not used here")
 
     def call(argv, env=None):
-        calls.append((list(argv[1:]), env.get("FI_AUTO_INSTRUMENT")))
-        return 3
+        calls.append("call")
+        return 99
 
+    class Program:
+        def __init__(self, argv, env=None):
+            calls.append((list(argv[1:]), env.get("FI_AUTO_INSTRUMENT")))
+
+        def wait(self):
+            calls.append(signal.getsignal(signal.SIGINT))
+            return 3
+
+    before = signal.getsignal(signal.SIGINT)
     monkeypatch.setattr(_cli, "_WINDOWS", True, raising=False)
     monkeypatch.setattr(_cli.os, "execve", execve)
     monkeypatch.setattr(_cli.subprocess, "call", call)
+    monkeypatch.setattr(_cli.subprocess, "Popen", Program)
     assert _cli.main(["python", "app.py"]) == 3
-    assert calls == [(["app.py"], "true")]
+    assert calls == [(["app.py"], "true"), signal.SIG_IGN]
+    # The handler that was there before is back once the program has exited.
+    assert signal.getsignal(signal.SIGINT) == before
 
 
 def test_bootstrap_pins_web_server_packages_to_the_installed_instrumentation(tmp_path, monkeypatch):

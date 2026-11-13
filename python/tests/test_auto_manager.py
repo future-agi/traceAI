@@ -320,6 +320,20 @@ def test_an_incomplete_key_pair_warns_once(fresh_state, monkeypatch, caplog):
     assert "missing FI_SECRET_KEY" in warnings[0]
 
 
+def test_a_found_config_file_base_url_with_keys_from_elsewhere_keeps_the_agent_off(fresh_state, monkeypatch, caplog):
+    monkeypatch.delenv("FI_BASE_URL", raising=False)
+    (fresh_state / "futureagi.toml").write_text('base_url = "http://127.0.0.1:1"\n')
+    monkeypatch.setenv("FI_API_KEY", "fi-api-PLACEHOLDER")
+    monkeypatch.setenv("FI_SECRET_KEY", "fi-secret-PLACEHOLDER")
+    with caplog.at_level(logging.WARNING):
+        assert _manager.init() is None
+    # One warning, saying why; nothing is sent to the default collector instead.
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1, warnings
+    assert "export to Future AGI is off" in warnings[0]
+    assert isinstance(trace_api.get_tracer_provider(), trace_api.ProxyTracerProvider)
+
+
 def test_init_respects_otel_sdk_disabled(fresh_state, monkeypatch):
     monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
     assert _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER") is None
