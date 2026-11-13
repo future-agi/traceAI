@@ -63,6 +63,9 @@ class _State:
         self.cleanups: Dict[str, Any] = {}
         self.initialized = False
         self.stopped = False
+        # Set (to the report detail) when web servers must stay off: their request spans would
+        # reach a Future AGI export the agent cannot filter.
+        self.web_off = ""
 
 
 _state = _State()
@@ -345,15 +348,19 @@ def _plan(integration: Integration, settings: AutoConfig, lazy: bool) -> Tuple[I
     """
     status = IntegrationStatus(integration.name, NOT_INSTALLED, integration.category, integration.package)
     installed = [t for t in integration.targets if module_available(t)]
+    web_off = _state.web_off if integration.category == "web" else ""
     # A library or traceAI package that is not importable yet can still arrive (a later-sorting
     # .pth file, a sys.path change): wait for the library's first import and plan it again then.
-    later = (integration.kind in (INSTRUMENTOR, SETUP)
+    later = (not web_off and integration.kind in (INSTRUMENTOR, SETUP)
              and settings.is_selected(integration.name, integration.default))
     if not installed:
         return status, ("hook" if later else None), list(integration.targets)
     if not settings.is_selected(integration.name, integration.default):
         status.status = DISABLED
         status.detail = integration.note or "disabled by configuration"
+        return status, None, installed
+    if web_off:
+        status.status, status.detail = DISABLED, web_off
         return status, None, installed
     if integration.kind in (MANUAL, SERVICE):
         status.status, status.detail = STATUS_MANUAL, integration.note
@@ -499,12 +506,15 @@ class _ResourceOverlayProcessor(SpanProcessor):
     the agent's TraceConfig, mapped by the integrations' mappers and, on a provider the application
     configured, tagged with the project resource Future AGI needs for routing. The application's
     processors see the original spans. On the provider the agent created, the route wraps that
-    provider's exporter. Either way it can be closed at shutdown.
+    provider's exporter, and the agent closes it at shutdown. On a Future AGI provider the
+    application registered, it wraps that provider's Future AGI export processor in place
+    (``borrowed``): the agent never closes it, and the provider's own shutdown does.
     """
 
     def __init__(self, delegate: SpanProcessor, resource: Optional[Resource] = None,
                  sample_rate: float = 1.0, config: Any = None) -> None:
         self._traceai_route = True
+        self.borrowed = False
         self._delegate = delegate
         self._resource = resource
         self._config = config
@@ -693,6 +703,39 @@ def _fi_resource(settings: AutoConfig, project_type: Any, kwargs: Mapping[str, A
     })
 
 
+_WEB_OFF = "off: the agent cannot filter the Future AGI export of the provider the application registered"
+
+
+def _keep_web_servers_off() -> None:
+    """Every request would become a span that the application's Future AGI export sends unfiltered."""
+    _state.web_off = _WEB_OFF
+    logger.warning("traceAI: web server integrations are off: the agent cannot put its AI-only filter in front of "
+                   "the Future AGI export of the provider the application registered, so request spans would "
+                   "reach Future AGI unfiltered")
+
+
+def _route_registered_provider(provider: Any, settings: AutoConfig) -> Optional[_ResourceOverlayProcessor]:
+    """Put the route in front of the Future AGI export of a provider the application registered.
+
+    That export is the first processor, the one ``register()`` adds or the provider's default, as
+    on the provider the agent creates. Returns None when the first processor is something else.
+    """
+    from fi_instrumentation.otel import BatchSpanProcessor, SimpleSpanProcessor
+
+    active = getattr(provider, "_active_span_processor", None)
+    if active is None:
+        return None
+    with getattr(active, "_lock", None) or threading.Lock():
+        processors = tuple(getattr(active, "_span_processors", ()))
+        if not processors or not isinstance(processors[0], (SimpleSpanProcessor, BatchSpanProcessor)):
+            return None
+        route = _ResourceOverlayProcessor(processors[0], config=settings.trace_config)
+        route.borrowed = True
+        active._span_processors = (route,) + processors[1:]
+    _state.overlays[provider] = route
+    return route
+
+
 def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
                     supplied: Any = None) -> Tuple[Any, bool]:
     """The provider to trace with, and whether the agent created (and so owns) it."""
@@ -705,8 +748,11 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     kwargs = dict(register_kwargs)
     existing = supplied if supplied is not None else trace_api.get_tracer_provider()
     if isinstance(existing, FiTracerProvider) and not kwargs.get("span_exporter"):
-        # A Future AGI provider already exports to Future AGI: add nothing.
+        # A Future AGI provider already exports to Future AGI: put the same AI-only, masked route in
+        # front of that export instead of adding a second one.
         logger.info("traceAI: using the Future AGI provider the application registered")
+        if _route_registered_provider(existing, settings) is None:
+            _keep_web_servers_off()
         return existing, False
     if supplied is not None and not isinstance(supplied, SdkTracerProvider):
         # Not an SDK provider, so there is no processor chain to join: trace with it as given.
@@ -717,6 +763,10 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     if isinstance(existing, SdkTracerProvider) and (supplied is not None or kwargs.get("set_global_tracer_provider", True)):
         # The application configured OpenTelemetry: keep its sampler and exporters, and add
         # one Future AGI route next to them.
+        if isinstance(existing, FiTracerProvider):
+            # The agent exports through the exporter it was given; the provider's own Future AGI
+            # export stays as the application set it up, without the filter.
+            _keep_web_servers_off()
         if selected is None:
             return existing, False
         options = {k: kwargs[k] for k in ("max_queue_size", "schedule_delay_millis",
@@ -927,15 +977,18 @@ def shutdown(timeout_millis: int = 5000) -> None:
         return
     state.stopped = True
     if timeout_millis <= 0:
-        # No time for teardown, but the agent is stopped: close every Future AGI route now
-        # (a flag write, never a wait). Patches stay until the process exits.
+        # No time for teardown, but the agent is stopped: close every Future AGI route it added
+        # now (a flag write, never a wait). Patches stay until the process exits.
         for overlay in list(state.overlays.values()):
-            overlay.enabled = False
+            if not overlay.borrowed:
+                overlay.enabled = False
 
     def stop() -> None:
         with state.lock:
             cleanups, state.cleanups = state.cleanups, {}
-            overlays = list(state.overlays.values())
+            # A route in front of the application's own Future AGI export keeps filtering it; the
+            # application's provider closes it.
+            overlays = [overlay for overlay in state.overlays.values() if not overlay.borrowed]
             for entry in state.statuses.values():
                 if entry.status in (PENDING, INSTRUMENTED):
                     entry.status, entry.detail = DISABLED, "agent shut down; restart requires a new process"
