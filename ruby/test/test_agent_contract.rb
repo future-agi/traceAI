@@ -9,6 +9,16 @@ class EndToEndTest
   end
 
   def test_https_export_uses_loaded_tls_with_certificate_and_hostname_verification
+    assert_https_export("require 'openssl'; ")
+  end
+
+  # An application that only talks to a local http model server never loads
+  # OpenSSL itself. Export to the default https collector must still work.
+  def test_https_export_works_when_the_application_never_loaded_openssl
+    assert_https_export('')
+  end
+
+  def assert_https_export(prefix)
     require 'openssl'
     key = OpenSSL::PKey::RSA.new(2048)
     certificate = OpenSSL::X509::Certificate.new
@@ -42,7 +52,7 @@ class EndToEndTest
       ssl&.close; socket&.close unless socket&.closed?
     end
     server.report_on_exception = false
-    stdout, stderr, status = app("require 'openssl'; " + plain_code, {'FI_BASE_URL' => "https://127.0.0.1:#{port}", 'SSL_CERT_FILE' => file.path})
+    stdout, stderr, status = app(prefix + plain_code, {'FI_BASE_URL' => "https://127.0.0.1:#{port}", 'SSL_CERT_FILE' => file.path})
     assert status.success?, stderr; assert_equal CHAT, stdout
     assert server.join(2), 'TLS export did not finish'
     request = requests.pop(true)
