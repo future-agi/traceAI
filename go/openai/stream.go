@@ -20,6 +20,7 @@ type streamBody struct {
 	reqCtx context.Context
 	span   trace.Span
 	tc     TraceConfig
+	op     operation
 
 	mu     sync.Mutex
 	parser sseParser
@@ -27,8 +28,8 @@ type streamBody struct {
 	ended  bool
 }
 
-func newStreamBody(reqCtx context.Context, rc io.ReadCloser, span trace.Span, tc TraceConfig) io.ReadCloser {
-	return &streamBody{rc: rc, reqCtx: reqCtx, span: span, tc: tc, acc: newAccumulator()}
+func newStreamBody(reqCtx context.Context, rc io.ReadCloser, span trace.Span, tc TraceConfig, op operation) io.ReadCloser {
+	return &streamBody{rc: rc, reqCtx: reqCtx, span: span, tc: tc, op: op, acc: newAccumulator()}
 }
 
 func (s *streamBody) Read(p []byte) (int, error) {
@@ -66,7 +67,13 @@ func (s *streamBody) onEvent(data []byte) {
 		s.end(nil)
 		return
 	}
-	s.acc.addChunk(data)
+	if s.op == opResponses {
+		if s.acc.addResponseEvent(data) {
+			s.end(nil)
+		}
+	} else {
+		s.acc.addChunk(data)
+	}
 }
 
 // end must be called with s.mu held.
@@ -81,27 +88,39 @@ func (s *streamBody) end(err error) {
 		f := failureClass(s.reqCtx, err)
 		s.span.SetAttributes(attribute.String(ErrorType, f.errType))
 		s.span.SetStatus(codes.Error, f.desc)
-	case s.acc.streamErr != nil:
-		e := s.acc.streamErr
-		errType := "stream_error"
-		if safeToken(e.Type) {
-			errType = e.Type
-		}
-		desc := "error event in stream"
-		if safeToken(e.Code) {
-			desc += " " + e.Code
-		}
-		attrs := []attribute.KeyValue{attribute.String(ErrorType, errType)}
-		if msg := truncate(e.Message, maxErrorMessage); msg != "" {
-			attrs = append(attrs, attribute.String(ErrorMessage, msg))
-			if s.tc.errorMessageAllowed() {
-				desc += ": " + msg
-			}
-		}
-		s.span.SetAttributes(s.tc.Filter(attrs)...)
-		s.span.SetStatus(codes.Error, desc)
+	default:
+		setResponseError(s.span, s.acc.streamErr, s.tc, s.op)
 	}
 	s.span.End()
+}
+
+// setResponseError handles API-level failures in successful HTTP responses,
+// including Responses failed/incomplete results and streaming error events.
+func setResponseError(span trace.Span, e *apiError, tc TraceConfig, op operation) {
+	if e == nil {
+		return
+	}
+	errType, desc := "response_error", "error in response"
+	if op == opChat {
+		errType, desc = "stream_error", "error event in stream"
+	}
+	if safeToken(e.Type) {
+		errType = e.Type
+	} else if op != opChat && safeToken(e.Code) {
+		errType = e.Code
+	}
+	if safeToken(e.Code) {
+		desc += " " + e.Code
+	}
+	attrs := []attribute.KeyValue{attribute.String(ErrorType, errType)}
+	if msg := truncate(e.Message, maxErrorMessage); msg != "" {
+		attrs = append(attrs, attribute.String(ErrorMessage, msg))
+		if tc.errorMessageAllowed() {
+			desc += ": " + msg
+		}
+	}
+	span.SetAttributes(tc.Filter(attrs)...)
+	span.SetStatus(codes.Error, desc)
 }
 
 // sseParser splits a text/event-stream body into the data payload of each
