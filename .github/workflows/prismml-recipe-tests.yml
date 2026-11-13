@@ -16,13 +16,25 @@ permissions:
 
 jobs:
   recipe:
-    name: PrismML recipe (${{ matrix.packages }})
+    name: PrismML recipe (${{ matrix.packages }}, Python ${{ matrix.python }}, OpenAI ${{ matrix.openai }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        packages: [published, source]
+        include:
+          - packages: published
+            python: '3.10'
+            openai: '1.69.0'
+          - packages: source
+            python: '3.10'
+            openai: '1.69.0'
+          - packages: published
+            python: '3.13'
+            openai: '3.42.1'
+          - packages: source
+            python: '3.13'
+            openai: '3.42.1'
     env:
       FI_BASE_URL: http://127.0.0.1:9
       FI_GRPC_URL: http://127.0.0.1:9
@@ -35,11 +47,15 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python }}
       - name: Install published recipe pins and test tools
-        run: pip install -r python/examples/prismml/requirements.txt pytest httpx 'wrapt<2'
+        run: pip install -r python/examples/prismml/requirements.txt pytest httpx 'wrapt<2' PyYAML
+      - name: Select SDK compatibility version
+        run: pip install 'openai==${{ matrix.openai }}'
       - name: Install source distributions
         if: matrix.packages == 'source'
         run: pip install ./python ./python/frameworks/openai
+      - name: Check dependency consistency
+        run: pip check
       - name: Loopback-only recipe contracts
         run: pytest python/examples/prismml/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
