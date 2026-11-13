@@ -21,6 +21,7 @@ describe("TogetherInstrumentation", () => {
   });
 
   afterEach(async () => {
+    instrumentation.disable();
     memoryExporter.reset();
     await provider.shutdown();
   });
@@ -70,31 +71,13 @@ describe("TogetherInstrumentation", () => {
         },
       });
 
+      // The real SDK exports resource constructors, not resources on Together.prototype.
       const mockModule = {
-        Together: class Together {
-          chat = {
-            completions: {
-              create: mockCreate,
-            },
-          };
-          completions = {
-            create: jest.fn(),
-          };
-          embeddings = {
-            create: jest.fn(),
-          };
+        Together: {
+          Chat: { Completions: { prototype: { create: mockCreate } } },
+          Completions: { prototype: { create: jest.fn() } },
+          Embeddings: { prototype: { create: jest.fn() } },
         },
-      };
-
-      // Patch at prototype level
-      (mockModule.Together.prototype as unknown as Record<string, unknown>).chat = {
-        completions: { create: mockCreate },
-      };
-      (mockModule.Together.prototype as unknown as Record<string, unknown>).completions = {
-        create: jest.fn(),
-      };
-      (mockModule.Together.prototype as unknown as Record<string, unknown>).embeddings = {
-        create: jest.fn(),
       };
 
       instrumentation.manuallyInstrument(mockModule as unknown as Record<string, unknown>);

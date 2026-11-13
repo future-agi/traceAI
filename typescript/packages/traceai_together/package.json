@@ -58,7 +58,7 @@
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
-    "together-ai": ">=0.5.0"
+    "together-ai": ">=0.6.0 <2"
   },
   "engines": {
     "node": ">=18.0.0"
