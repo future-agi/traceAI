@@ -24,6 +24,7 @@ public final class TraceAIAuto {
     static final ThreadLocal<Boolean> IN_FLIGHT = ThreadLocal.withInitial(() -> false);
     private static final AtomicBoolean WARNED = new AtomicBoolean();
     private static volatile boolean active, initialized;
+    private static volatile Instrumentation AGENT_INSTRUMENTATION;
     private static final AtomicBoolean REPEATED = new AtomicBoolean();
     private static volatile AutoConfig config;
     static final class RuntimeState {
@@ -73,8 +74,11 @@ public final class TraceAIAuto {
         RuntimeState state = RUNTIME.get(); return state == null ? null : state.provider();
     }
     static synchronized void start(Map<String, ?> options, Instrumentation instrumentation) {
+        // A later init() after a -javaagent start without keys reuses the JVM's handle instead of attaching again.
+        if (instrumentation != null) AGENT_INSTRUMENTATION = instrumentation; else instrumentation = AGENT_INSTRUMENTATION;
         if (initialized) {
-            if (REPEATED.compareAndSet(false, true)) System.err.println("[traceai-auto] Already initialized; existing provider and configuration retained");
+            if (REPEATED.compareAndSet(false, true)) System.err.println("[traceai-auto] " + (RUNTIME.get() != null
+                ? "Already initialized; existing provider and configuration retained" : "Auto-instrumentation stays off in this process; this initialization changes nothing"));
             return;
         }
         initialized = true;
@@ -83,7 +87,11 @@ public final class TraceAIAuto {
             KnownSecrets.PROCESS.seed(config, System.getenv());
             reportLibraries();
             if (config.flag("OTEL_SDK_DISABLED")) { STATUS.put("wire", "disabled"); return; }
-            if (!config.credentials()) { STATUS.put("wire", "disabled (missing credentials)"); warn("FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is off"); return; }
+            if (!config.credentials()) {
+                // Nothing was installed, so a later init() that supplies keys can still start.
+                initialized = false;
+                STATUS.put("wire", "disabled (missing credentials)"); warn("FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is off"); return;
+            }
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
             Resource resource = resource(config);
