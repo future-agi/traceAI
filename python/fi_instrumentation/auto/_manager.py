@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import threading
+from collections import OrderedDict
 from copy import copy
 from dataclasses import dataclass, replace
 from functools import wraps
@@ -312,6 +313,10 @@ def _reconcile(integration: Integration) -> None:
                 result.status, result.detail = DISABLED, "agent shut down"
             elif cleanup is not None:
                 state.cleanups[integration.name] = cleanup
+            if result.status == INSTRUMENTED and result.detail != "already instrumented":
+                # The Future AGI route carries the spans of integrations the agent enabled.
+                for overlay in state.overlays.values():
+                    overlay.admit(integration)
             state.statuses[integration.name] = result
         # Shutdown either owns the published callback or the installer owns it, never both.
         if stopped:
@@ -452,29 +457,64 @@ def format_report(statuses: Optional[List[IntegrationStatus]] = None, include_ab
 # ---------------------------------------------------------------------------
 
 
+#: Instrumentation scopes whose spans are AI spans by construction: traceAI packages and the core.
+AI_SCOPES = ("traceai", "fi_instrumentation")
+# Traces with an AI span whose request root span has not ended yet. Bounded: a trace whose root
+# never ends must not hold memory, and a root that ends after eviction is simply not sent.
+_AI_TRACES_LIMIT = 4096
+
+
+def _masked(attributes: Mapping[str, Any], config: Any) -> Dict[str, Any]:
+    """The TraceConfig hide settings applied to every attribute, as FITracer applies them."""
+    masked = {}
+    for key, value in attributes.items():
+        value = config.mask(key, value)
+        if value is not None:
+            masked[key] = value
+    return masked
+
+
 class _ResourceOverlayProcessor(SpanProcessor):
     """The agent's Future AGI export route on a tracer provider.
 
-    On a provider the application configured, it forwards every span the application's sampler
-    kept to Future AGI, tagged with the project resource Future AGI needs for routing; the
-    application's own processors and exporters see the original spans. On the provider the agent
-    created, it wraps that provider's exporter. Either way the route can be closed at shutdown
-    and carry attribute mappers that apply to the Future AGI copy only.
+    Future AGI receives AI spans only: spans from traceAI instrumentation scopes and the library
+    spans of integrations the agent enabled, plus the request root span of a web server the agent
+    enabled when that request led to an AI span. Every other span the provider ends goes to the
+    application's own processors and exporters only. The copy sent to Future AGI is masked with
+    the agent's TraceConfig, mapped by the integrations' mappers and, on a provider the application
+    configured, tagged with the project resource Future AGI needs for routing. The application's
+    processors see the original spans. On the provider the agent created, the route wraps that
+    provider's exporter. Either way it can be closed at shutdown.
     """
 
     def __init__(self, delegate: SpanProcessor, resource: Optional[Resource] = None,
-                 sample_rate: float = 1.0) -> None:
+                 sample_rate: float = 1.0, config: Any = None) -> None:
         self._traceai_route = True
         self._delegate = delegate
         self._resource = resource
+        self._config = config
         # Ratio sampling decides by trace id, so a trace is kept or dropped as a whole.
         self._ratio = TraceIdRatioBased(sample_rate) if sample_rate < 1.0 else None
         self.mappers: list = []
+        self.span_mappers: list = []
+        self.scopes: Tuple[str, ...] = AI_SCOPES
+        self.server_scopes: Tuple[str, ...] = ()
+        self._ai_traces: "OrderedDict[int, None]" = OrderedDict()
+        self._ai_traces_lock = threading.Lock()
+        self._warned = False
         self.enabled = True
         self._operation = threading.Lock()
         self._shutdown_operation = threading.Lock()
         self._closed = False
         self._merged: Tuple[Any, Any] = (None, None)
+
+    def admit(self, integration: Integration) -> None:
+        """Carry the spans of an integration the agent enabled: its scopes, or its request roots."""
+        scopes = tuple(scope.lower() for scope in integration.scopes)
+        if integration.category == "web":
+            self.server_scopes += scopes
+        else:
+            self.scopes += scopes
 
     def on_start(self, span: Any, parent_context: Any = None) -> None:
         # Deliberately not forwarded: a processor that tracks open spans would end the
@@ -486,6 +526,28 @@ class _ResourceOverlayProcessor(SpanProcessor):
             return True
         return self._ratio.should_sample(None, span.context.trace_id, span.name).decision.is_sampled()
 
+    def _forwards(self, span: ReadableSpan) -> bool:
+        """Whether a span is an AI span, or the request root of a trace that had one."""
+        name = (getattr(getattr(span, "instrumentation_scope", None), "name", None) or "").lower()
+        trace_id = span.context.trace_id
+        if name.startswith(self.scopes):
+            with self._ai_traces_lock:
+                self._ai_traces[trace_id] = None
+                self._ai_traces.move_to_end(trace_id)
+                while len(self._ai_traces) > _AI_TRACES_LIMIT:
+                    self._ai_traces.popitem(last=False)
+            return True
+        if not self.server_scopes or not name.startswith(self.server_scopes):
+            return False
+        if span.kind != trace_api.SpanKind.SERVER or (span.parent is not None and not span.parent.is_remote):
+            return False
+        # A request's spans end before its root, so an AI call in it has been seen by now.
+        with self._ai_traces_lock:
+            if trace_id not in self._ai_traces:
+                return False
+            del self._ai_traces[trace_id]
+            return True
+
     def _routed_resource(self, resource: Any) -> Resource:
         source, merged = self._merged
         if source is not resource:
@@ -494,20 +556,40 @@ class _ResourceOverlayProcessor(SpanProcessor):
             self._merged = (resource, merged)
         return merged
 
+    def _future_agi_copy(self, span: ReadableSpan) -> Optional[ReadableSpan]:
+        for span_mapper in self.span_mappers:
+            span = span_mapper(span)
+            if span is None:
+                return None
+        # The application's processors keep their own view of the span.
+        span = copy(span)
+        attributes = dict(span.attributes or {})
+        for mapper in self.mappers:
+            attributes = mapper(attributes)
+        if self._config is not None:
+            attributes = _masked(attributes, self._config)
+        span._attributes = attributes
+        if self._resource is not None:
+            span._resource = self._routed_resource(span.resource)
+        return span
+
     def on_end(self, span: ReadableSpan) -> None:
         if not self.enabled or not self._keeps(span):
             return
-        if self.mappers or self._resource is not None:
-            # The application's processors keep their own view of the span.
-            span = copy(span)
-            if self.mappers:
-                attributes = dict(span.attributes or {})
-                for mapper in self.mappers:
-                    attributes = mapper(attributes)
-                span._attributes = attributes
-            if self._resource is not None:
-                span._resource = self._routed_resource(span.resource)
-        self._delegate.on_end(span)
+        try:
+            if not self._forwards(span):
+                return
+            routed = self._future_agi_copy(span)
+        except Exception as error:
+            # Never fail the application's span.end(); a copy that cannot be prepared is not sent.
+            if not self._warned:
+                self._warned = True
+                logger.warning("traceAI: a span could not be prepared for Future AGI and was not sent (%s)",
+                               type(error).__name__)
+            logger.debug("traceAI: Future AGI copy failed", exc_info=True)
+            return
+        if routed is not None:
+            self._delegate.on_end(routed)
 
     def _detach_shutdown(self) -> Optional[Tuple[Any, Any]]:
         """Detach the one owned route; never shut down application processors."""
@@ -603,7 +685,7 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
         processor = (BatchSpanProcessor(span_exporter=selected, **options) if kwargs.get("batch", True)
                      else SimpleSpanProcessor(span_exporter=selected))
         overlay = _ResourceOverlayProcessor(processor, _fi_resource(settings, project_type, kwargs),
-                                            settings.sample_rate)
+                                            settings.sample_rate, config=settings.trace_config)
         existing.add_span_processor(overlay)
         _state.overlays[existing] = overlay
         return existing, False
@@ -619,7 +701,7 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     provider = register(**kwargs)
     active = provider._active_span_processor
     processors = tuple(active._span_processors)
-    overlay = _ResourceOverlayProcessor(processors[0])
+    overlay = _ResourceOverlayProcessor(processors[0], config=settings.trace_config)
     active._span_processors = (overlay,) + processors[1:]
     _state.overlays[provider] = overlay
     # The agent flushes and closes its route at exit itself, bounded, and only once.
@@ -839,6 +921,7 @@ def _after_fork() -> None:
     for overlay in _state.overlays.values():
         overlay._operation = threading.Lock()
         overlay._shutdown_operation = threading.Lock()
+        overlay._ai_traces_lock = threading.Lock()
         processor = overlay._delegate
         if hasattr(processor, "_shutdown_lock"):
             processor._shutdown_lock = threading.Lock()

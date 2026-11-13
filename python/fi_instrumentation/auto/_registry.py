@@ -4,6 +4,11 @@ Each entry names the imports that trigger it (``targets``), the PyPI package tha
 and how to enable it. ``instrumentor`` entries are BaseInstrumentor-style classes; ``setup``
 entries call a function from ``SETUPS`` below; ``manual``, ``plugin`` and ``service`` entries
 cannot be enabled from inside the process and are reported with ``note``, which says what to do.
+
+The Future AGI route carries spans from traceAI instrumentation scopes. ``scopes`` adds the
+instrumentation scope prefixes of spans an integration routes but does not create itself: the
+library's own spans, which its traceAI package maps. For ``web`` entries they are the server
+instrumentation's scopes, and only request root spans of traces with an AI span are carried.
 """
 
 from dataclasses import dataclass
@@ -27,6 +32,7 @@ class Integration:
     category: str = "llm"
     default: bool = True
     note: str = ""
+    scopes: Tuple[str, ...] = ()
 
 
 def _covered_by_openai(provider: str) -> str:
@@ -46,7 +52,8 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("google_genai_live", ("google.genai",), "traceAI-google-genai-live", "traceai_google_genai_live", "GoogleGenAILiveInstrumentor", category="voice"),
     Integration("vertexai", ("vertexai",), "traceAI-vertexai", "traceai_vertexai", "VertexAIInstrumentor"),
     Integration("bedrock", ("boto3",), "traceAI-bedrock", "traceai_bedrock", "BedrockInstrumentor"),
-    Integration("mistralai", ("mistralai",), "traceAI-mistralai", "traceai_mistralai", "MistralAIInstrumentor"),
+    Integration("mistralai", ("mistralai",), "traceAI-mistralai", "traceai_mistralai", "MistralAIInstrumentor",
+                scopes=("mistralai",)),
     Integration("cohere", ("cohere",), "traceAI-cohere", "traceai_cohere", "CohereInstrumentor"),
     Integration("groq", ("groq",), "traceAI-groq", "traceai_groq", "GroqInstrumentor"),
     Integration("together", ("together",), "traceAI-together", "traceai_together", "TogetherInstrumentor"),
@@ -80,12 +87,15 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("smolagents", ("smolagents",), "traceAI-smolagents", "traceai_smolagents", "SmolagentsInstrumentor", category="framework"),
     Integration("pydantic_ai", ("pydantic_ai",), "traceai-pydantic-ai", "traceai_pydantic_ai", "PydanticAIInstrumentor", category="framework"),
     Integration("instructor", ("instructor",), "traceAI-instructor", "traceai_instructor", "InstructorInstrumentor", category="framework"),
-    Integration("semantic_kernel", ("semantic_kernel",), "traceAI-semantic-kernel", "traceai_semantic_kernel", "semantic_kernel", kind=SETUP, category="framework"),
+    Integration("semantic_kernel", ("semantic_kernel",), "traceAI-semantic-kernel", "traceai_semantic_kernel", "semantic_kernel", kind=SETUP, category="framework",
+                scopes=("semantic_kernel",)),
     Integration("strands", ("strands",), "traceai-strands", "traceai_strands", "strands", kind=SETUP, category="framework"),
     Integration("agno", ("agno",), "traceai-agno", "traceai_agno", "agno", kind=SETUP, category="framework"),
     Integration("beeai", ("beeai_framework",), "traceai-beeai", "traceai_beeai", "beeai", kind=SETUP, category="framework"),
-    Integration("agent_framework", ("agent_framework",), "traceAI-agent-framework", "traceai_agent_framework", "agent_framework", kind=SETUP, category="framework"),
-    Integration("ag2_classic", ("autogen",), "traceAI-ag2-classic", "traceai_ag2_classic", "ag2_classic", kind=SETUP, category="framework"),
+    Integration("agent_framework", ("agent_framework",), "traceAI-agent-framework", "traceai_agent_framework", "agent_framework", kind=SETUP, category="framework",
+                scopes=("agent_framework",)),
+    Integration("ag2_classic", ("autogen",), "traceAI-ag2-classic", "traceai_ag2_classic", "ag2_classic", kind=SETUP, category="framework",
+                scopes=("opentelemetry.instrumentation.ag2",)),
     Integration("ag2", ("autogen.beta",), "traceAI-ag2", "traceai_ag2", kind=MANUAL, category="framework",
                 note="AG2 telemetry middleware attaches per agent: install traceAI-ag2 and call traceai_ag2.setup(agent, ...) once your agents exist."),
     Integration("agentscope", ("agentscope",), "traceAI-agentscope", "traceai_agentscope", kind=MANUAL, category="framework",
@@ -103,14 +113,16 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("mcp", ("mcp",), "traceAI-mcp", "traceai_mcp", "MCPInstrumentor", category="tool"),
     Integration("mcp_use", ("mcp_use",), "traceAI-mcp-use", "traceai_mcp_use", kind=MANUAL, category="tool",
                 note="mcp-use reports through a callback: install traceAI-mcp-use and pass traceai_mcp_use.FutureAGICallback() to your MCPAgent."),
-    Integration("a2a", ("a2a",), "traceAI-a2a", "traceai_a2a", "A2AInstrumentor", category="tool"),
-    Integration("guardrails", ("guardrails",), "traceAI-guardrails", "traceai_guardrails", "GuardrailsInstrumentor", category="guardrail"),
+    Integration("a2a", ("a2a",), "traceAI-a2a", "traceai_a2a", "A2AInstrumentor", category="tool", scopes=("a2a",)),
+    Integration("guardrails", ("guardrails",), "traceAI-guardrails", "traceai_guardrails", "GuardrailsInstrumentor", category="guardrail",
+                scopes=("guardrails",)),
     Integration("hermes_agent", ("hermes",), "traceAI-hermes-agent", "traceai_hermes_agent", kind=PLUGIN, category="framework",
                 note="Hermes loads traceAI-hermes-agent itself through its plugin entry point; installing the package is enough."),
     # Voice agents
-    Integration("livekit", ("livekit.agents",), "traceAI-livekit", "traceai_livekit", "livekit", kind=SETUP, category="voice"),
+    Integration("livekit", ("livekit.agents",), "traceAI-livekit", "traceai_livekit", "livekit", kind=SETUP, category="voice",
+                scopes=("livekit",)),
     Integration("pipecat", ("pipecat",), "traceAI-pipecat", "traceai_pipecat", "pipecat", kind=SETUP, category="voice",
-                note="Pipecat only emits spans for a PipelineTask created with enable_tracing=True."),
+                note="Pipecat only emits spans for a PipelineTask created with enable_tracing=True.", scopes=("pipecat",)),
     Integration("elevenlabs_agents", ("elevenlabs",), "traceAI-elevenlabs-agents", "traceai_elevenlabs_agents", kind=SERVICE, category="voice",
                 note="ElevenLabs Agents run on ElevenLabs; forward their webhooks with `traceai-elevenlabs-agents serve`."),
     # Tools and search
@@ -133,15 +145,18 @@ INTEGRATIONS: Tuple[Integration, ...] = (
 
 # Web servers: incoming requests become root SERVER spans, so every AI call is nested under the
 # request that caused it. These use the OpenTelemetry contrib instrumentors;
-# `fi-instrument bootstrap --all` installs the ones the environment needs.
+# `fi-instrument bootstrap --all` installs the ones the environment needs. The Future AGI route
+# carries a request's root span only when that request made an AI call. FastAPI's server spans
+# come from the ASGI middleware it installs.
 WEB: Tuple[Integration, ...] = tuple(
-    Integration(name, (target,), f"opentelemetry-instrumentation-{dist}", f"opentelemetry.instrumentation.{module}", entry, category="web")
-    for name, target, dist, module, entry in (
-        ("fastapi", "fastapi", "fastapi", "fastapi", "FastAPIInstrumentor"),
-        ("flask", "flask", "flask", "flask", "FlaskInstrumentor"),
-        ("django", "django", "django", "django", "DjangoInstrumentor"),
-        ("falcon", "falcon", "falcon", "falcon", "FalconInstrumentor"),
-        ("tornado", "tornado", "tornado", "tornado", "TornadoInstrumentor"),
+    Integration(name, (target,), f"opentelemetry-instrumentation-{dist}", f"opentelemetry.instrumentation.{module}", entry,
+                category="web", scopes=(f"opentelemetry.instrumentation.{module}",) + extra)
+    for name, target, dist, module, entry, extra in (
+        ("fastapi", "fastapi", "fastapi", "fastapi", "FastAPIInstrumentor", ("opentelemetry.instrumentation.asgi",)),
+        ("flask", "flask", "flask", "flask", "FlaskInstrumentor", ()),
+        ("django", "django", "django", "django", "DjangoInstrumentor", ()),
+        ("falcon", "falcon", "falcon", "falcon", "FalconInstrumentor", ()),
+        ("tornado", "tornado", "tornado", "tornado", "TornadoInstrumentor", ()),
     )
 )
 
