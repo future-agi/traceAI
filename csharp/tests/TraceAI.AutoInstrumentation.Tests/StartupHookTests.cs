@@ -138,10 +138,14 @@ public class StartupHookTests
         catch { process.Kill(true); throw; }
         return new(process.ExitCode,await stdout,await stderr);
     }
+    private static string Configuration=>AppContext.BaseDirectory.Contains("/Release/")?"Release":"Debug";
+    /// <summary>The startup hook a user would publish for an application on this framework.</summary>
+    internal static string HookPath(string framework)=>
+        Path.Combine(WireFixtureTests.Repo,"csharp","src","TraceAI.AutoInstrumentation","bin",Configuration,framework,"TraceAI.AutoInstrumentation.dll");
     internal static Process StartApp(string url,string mode,Dictionary<string,string?> environment,string framework="net10.0",bool stock=false)
     {
         var csharp=Path.Combine(WireFixtureTests.Repo,"csharp");
-        var configuration=AppContext.BaseDirectory.Contains("/Release/")?"Release":"Debug";
+        var configuration=Configuration;
         var host=Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??Path.Combine(csharp,".dotnet","dotnet");
         var start=new ProcessStartInfo(host) { RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,UseShellExecute=false,WorkingDirectory=csharp };
         var app=Path.Combine(csharp,"tests","TraceAI.AutoInstrumentation.TestApp");
@@ -150,7 +154,7 @@ public class StartupHookTests
         start.ArgumentList.Add(url); start.ArgumentList.Add(mode);
         foreach(var key in start.Environment.Keys.Where(k=>k.StartsWith("FI_")||k.StartsWith("OTEL_")||k=="DOTNET_STARTUP_HOOKS").ToArray()) start.Environment.Remove(key);
         start.Environment["DOTNET_ROOT"]=Path.GetDirectoryName(host);
-        start.Environment["DOTNET_STARTUP_HOOKS"]=Path.Combine(csharp,"src","TraceAI.AutoInstrumentation","bin",configuration,framework,"TraceAI.AutoInstrumentation.dll");
+        start.Environment["DOTNET_STARTUP_HOOKS"]=HookPath(framework);
         foreach(var pair in environment) if(pair.Value==null) start.Environment.Remove(pair.Key); else start.Environment[pair.Key]=pair.Value;
         return Process.Start(start)!;
     }

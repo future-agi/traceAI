@@ -168,7 +168,7 @@ public class RoundFiveTests : InitIsolation
         request.Headers.TryAddWithoutValidation("Authorization","Bearer HEADER_OBSERVED_SECRET_9876");
         using var capture=new HttpCapture(Config(wire:false));
         using var suppression=SuppressInstrumentationScope.Begin();
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         var values=KnownSecrets.Snapshot();
         Assert.Contains("BUFFERED_BODY_SECRET_9876",values); Assert.Contains("QUERY_OBSERVED_SECRET_9876",values); Assert.Contains("HEADER_OBSERVED_SECRET_9876",values);
         Assert.Same(content,request.Content); Assert.Equal(encoded,await content.ReadAsByteArrayAsync());
@@ -187,7 +187,7 @@ public class RoundFiveTests : InitIsolation
         var options=new AutoOptions { ApiKey="explicit-api-key",SecretKey="explicit-secret-key",WireCapture=false,WireMaxBodyBytes=shape=="limit"?128:4194304,
             ConfigFile=Path.Combine(WireFixtureTests.Repo,"csharp","absent.toml") };
         var config=new AutoConfig(options); using var capture=new HttpCapture(config);
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         Assert.NotNull(KnownSecrets.Snapshot());
         using var original=new Activity("unrelated later call").Start(); original.SetTag("output.value","unrelated answer"); original.SetStatus(ActivityStatusCode.Error,"later failure"); original.Stop();
         var batch=new Batch<Activity>([original],1); var safe=Assert.Single(new AutoProcessor(config).PrepareExport(in batch,Resource.Empty).Spans);
@@ -206,7 +206,7 @@ public class RoundFiveTests : InitIsolation
             _=>new MultipartFormDataContent { { new StringContent("BCL_BUFFERED_SECRET_9876"),"client_secret" } } };
         using var request=new HttpRequestMessage(HttpMethod.Post,"https://unknown.test/other") { Content=content };
         using var capture=new HttpCapture(Config(wire:false));
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         Assert.Contains("BCL_BUFFERED_SECRET_9876",KnownSecrets.Snapshot()); Assert.Same(content,request.Content);
         // These fields would be populated by HttpContent.ReadAs*; observation must
         // leave both the encoded-body buffer and cached read stream untouched.

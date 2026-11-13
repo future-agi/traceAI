@@ -159,7 +159,7 @@ public class RoundFourSecondBlockerTests : InitIsolation
         request.Headers.Add("X-Amz-Security-Token","AWS_SESSION_SECRET_9876");
         using var model=new Activity("model").Start(); model.SetTag("gen_ai.span.kind","LLM");
         using var capture=new HttpCapture(Config());
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         Assert.Equal(0,content.Calls); Assert.Same(content,request.Content);
         Assert.Contains("AWS_SESSION_SECRET_9876",KnownSecrets.Snapshot());
         Assert.Null(model.GetCustomProperty("traceai.wire.secrets"));
@@ -173,7 +173,7 @@ public class RoundFourSecondBlockerTests : InitIsolation
         using var request=new HttpRequestMessage(HttpMethod.Post,"https://api.anthropic.com/v1/messages") {
             Content=new StringContent("{\"mcp_servers\":[{\"authorization_token\":\"BODY_SECRET_9876\"}]}",Encoding.UTF8,"application/json") };
         using var capture=new HttpCapture(new AutoConfig(options));
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         Assert.NotNull(KnownSecrets.Snapshot());
         Assert.Null(model.GetCustomProperty("traceai.wire.secrets"));
     }

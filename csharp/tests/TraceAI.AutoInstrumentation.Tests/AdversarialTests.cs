@@ -257,7 +257,7 @@ public class AdversarialTests : InitIsolation
         var exporter=new MemoryExporter(); using var agent=new Agent(new AutoConfig(new AutoOptions { ApiKey="explicit-api-key",SecretKey="explicit-secret-key",Exporter=exporter,WireCapture=false }));
         using var capture=new HttpCapture(Config(exporter));
         using var request=new HttpRequestMessage(HttpMethod.Post,known?Url:"https://unknown.invalid/v1/chat/completions") { Content=new StreamContent(new MemoryStream("do not read ahead"u8.ToArray())) };
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Exception",new { Request=request,Exception=new HttpRequestException("connection failed") }));
         Assert.True(agent.Flush(1000));
         if(!known) Assert.Empty(exporter.Spans);

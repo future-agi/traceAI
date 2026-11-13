@@ -42,7 +42,7 @@ public class RuntimeTests : InitIsolation
         Assert.True(agent.Flush(3000));
         Assert.Single(hostExporter.Spans);
         var wire=Assert.Single(fiExporter.Spans); Assert.Equal(parentId,wire.ParentSpanId); Assert.Equal(trace,wire.TraceId);
-        Assert.Equal(TraceConfig.RedactedValue,wire.GetTagItem("session.id")); Assert.Equal("user-42",wire.GetTagItem("user.id")); Assert.Equal(ActivityKind.Client,wire.Kind);
+        Assert.Equal("session-42",wire.GetTagItem("session.id")); Assert.Equal("user-42",wire.GetTagItem("user.id")); Assert.Equal(ActivityKind.Client,wire.Kind);
     }
     [Theory]
     [InlineData("otel")]
@@ -67,7 +67,8 @@ public class RuntimeTests : InitIsolation
         using var source=new ActivitySource("OpenAI.Chat");
         using(var activity=source.StartActivity("chat gpt",ActivityKind.Client,default(ActivityContext),new ActivityTagsCollection { ["gen_ai.operation.name"]="chat",["gen_ai.system"]="openai" }))
         {
-            Assert.NotNull(activity); Assert.Equal("LLM",activity.GetTagItem("gen_ai.span.kind"));
+            // The application's own activity is never changed; mapping applies to the export copy.
+            Assert.NotNull(activity); Assert.Null(activity.GetTagItem("gen_ai.span.kind"));
             activity.SetTag("gen_ai.input.messages.0.message.content","private"); activity.SetTag("output.value","private");
             activity.SetTag("gen_ai.request.parameters","{\"api_key\":\"foreign-api-key\",\"seed\":2}");
             activity.SetTag("input.value","runtime-key");
@@ -75,7 +76,7 @@ public class RuntimeTests : InitIsolation
         Assert.True(agent.Flush(3000)); var span=Assert.Single(exporter.Spans);
         Assert.Equal("__REDACTED__",span.GetTagItem("gen_ai.input.messages.0.message.content")); Assert.Equal("__REDACTED__",span.GetTagItem("output.value"));
         Assert.Equal(TraceConfig.RedactedValue,span.GetTagItem("input.value")); Assert.DoesNotContain("foreign-api-key",span.GetTagItem("gen_ai.request.parameters")!.ToString());
-        Assert.Equal("openai",span.GetTagItem("gen_ai.provider.name"));
+        Assert.Equal("openai",span.GetTagItem("gen_ai.provider.name")); Assert.Equal("LLM",span.GetTagItem("gen_ai.span.kind"));
     }
     [Fact]
     public void ImmutableSensitiveLibraryEventsAreSanitizedOnDetachedSnapshots()
@@ -166,7 +167,19 @@ public class RuntimeTests : InitIsolation
         using(ContextAttributes.UsingSession("reader-session"))
         using(ContextAttributes.UsingUser("reader-user")) await response.Content.ReadAsStringAsync();
         Assert.True(agent.Flush(3000)); Assert.Equal("request-user",Assert.Single(exporter.Spans).GetTagItem("user.id"));
-        Assert.Equal(TraceConfig.RedactedValue,Assert.Single(exporter.Spans).GetTagItem("session.id"));
+        Assert.Equal("request-session",Assert.Single(exporter.Spans).GetTagItem("session.id"));
+    }
+    [Fact]
+    public void SessionIdKeepsItsValueButStillLosesCredentials()
+    {
+        var processor=new AutoProcessor(Config(new MemoryExporter()));
+        Assert.Equal("session-42",processor.Mask("session.id","session-42"));
+        // Registered secrets and credential-shaped values are still removed from the value.
+        Assert.Equal("chat <redacted>",processor.Mask("session.id","chat runtime-secret"));
+        Assert.Equal("chat <redacted>",processor.Mask("session.id","chat "+"sk-"+"test-PLACEHOLDER-"+new string('0',10)));
+        // Only that exact key is exempt from the credential name rule.
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("session_token","session-42"));
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("session.key","session-42"));
     }
     [Fact]
     public async Task ProviderKeysEchoedInErrorsAreRedactedWithoutChangingTheResponse()

@@ -125,7 +125,7 @@ public class DiscoveryIsolationTests : InitIsolation
         var config=new AutoConfig(new AutoOptions { Exporter=new MemoryExporter(),ConfigFile=AbsentConfig,WireMaxBodyBytes=512 });
         var before=await content.ReadAsByteArrayAsync();
         using var capture=new HttpCapture(config);
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=Guid.NewGuid() }));
         Assert.Same(content,request.Content); Assert.Equal(before,await request.Content.ReadAsByteArrayAsync());
         Assert.Contains("EARLY_HEADER_SECRET_9876",KnownSecrets.Snapshot());
         Assert.DoesNotContain(KnownSecrets.Snapshot(),secret=>secret.Length>KnownSecrets.MaxLength);

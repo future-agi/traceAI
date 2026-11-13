@@ -143,9 +143,10 @@ public class RoundFourTransportTests
     {
         var exporter=new MemoryExporter(); using var capture=new HttpCapture(Config(exporter));
         using var request=new HttpRequestMessage(HttpMethod.Post,"https://api.openai.com/v1/chat/completions") { Content=new StringContent("{\"messages\":[]}",Encoding.UTF8,"application/json") };
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Start",new { Request=request }));
+        var id=Guid.NewGuid();
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Request",new { Request=request,LoggingRequestId=id }));
         using var content=new CustomContent(); using var response=new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content=content };
-        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.HttpRequestOut.Stop",new { Request=request,Response=response }));
+        capture.OnNext(new KeyValuePair<string,object?>("System.Net.Http.Response",new { Response=response,LoggingRequestId=id }));
         Assert.Same(content,response.Content); Assert.Equal(0,content.Reads);
         Assert.Same(content.Stream,await response.Content.ReadAsStreamAsync()); Assert.Equal("subclass helper",content.Stream.Helper()); Assert.Equal(1,content.Reads);
     }
