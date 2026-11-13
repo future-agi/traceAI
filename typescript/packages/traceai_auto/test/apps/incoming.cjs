@@ -10,4 +10,8 @@ const { createServer } = require('node:http');
   const response = await fetch(`http://127.0.0.1:${server.address().port}/handler`, { headers: process.env.REMOTE_PARENT ? { traceparent: process.env.REMOTE_PARENT } : {} }); await response.text();
   if (process.env.HEALTH === 'true') await (await fetch(`http://127.0.0.1:${server.address().port}/health`)).text();
   server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  if (process.env.PRINT_GLOBALS === 'true') {
+    const { context, propagation } = require('@opentelemetry/api');
+    console.log(JSON.stringify({ context: context._getContextManager().constructor.name, propagation: propagation._getGlobalPropagator().constructor.name }));
+  }
 })().catch(e => { console.error(e); process.exitCode = 1; });

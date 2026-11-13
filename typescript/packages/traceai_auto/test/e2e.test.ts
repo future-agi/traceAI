@@ -326,6 +326,14 @@ test("incoming HTTP joins the remote W3C parent through the application's propag
   expect(wire.traceId).toBe(serverSpan.traceId); expect(wire.parentSpanId).toBe(serverSpan.spanId);
   expect(allSpans()).toHaveLength(2);
 });
+test("without application OpenTelemetry, incoming HTTP joins the remote W3C parent through the agent's private propagator and registers none", async () => {
+  const output = await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01", PRINT_GLOBALS: "true" });
+  const serverSpan = allSpans().find(s => s.kind === 2), wire = wireSpans()[0];
+  expect(serverSpan.traceId).toBe("11111111111111111111111111111111"); expect(serverSpan.parentSpanId).toBe("2222222222222222");
+  expect(wire.traceId).toBe(serverSpan.traceId); expect(wire.parentSpanId).toBe(serverSpan.spanId);
+  expect(allSpans()).toHaveLength(2);
+  expect(JSON.parse(output.stdout.trim())).toEqual({ context: "NoopContextManager", propagation: "NoopTextMapPropagator" });
+});
 test("an application NodeSDK started after the preload registers its globals and keeps its spans; Future AGI receives only the AI span", async () => {
   const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "app-after" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
