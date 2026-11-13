@@ -182,7 +182,16 @@ test('raw then parsed access does not duplicate spans', async () => {
 });
 test('transport failure without caller parsing finishes the span', async () => {
   const r = request('chat', { fetchError: new Error('synthetic network failure') });
+  // As without tracing, a dropped failing request rejects unhandled, so the
+  // caller handles it first, through asResponse(), which never parses the body.
+  const outcome = r.promise.asResponse().then(() => null, error => error);
   await new Promise(resolve => setImmediate(resolve));
-  await span(2);
-  await assert.rejects(r.promise.withResponse(), /Connection error/);
+  const exported = await span(2);
+  assert.equal(exported.events.filter(event => event.name === 'exception').length, 1);
+  const error = await outcome;
+  assert.ok(error instanceof Error, 'the caller sees the transport failure');
+  assert.match(error.message, /Connection error/);
+  assert.equal(r.requests(), 1);
+  assert.equal(r.parses(), 0);
+  await assert.rejects(r.promise.withResponse(), caught => caught === error);
 });
