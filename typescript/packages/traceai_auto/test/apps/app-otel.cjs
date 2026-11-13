@@ -14,7 +14,8 @@ const registered = {
   trace: trace.setGlobalTracerProvider(provider),
   context: context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()),
   propagation: propagation.setGlobalPropagator(new W3CTraceContextPropagator()),
-  metrics: metrics.setGlobalMeterProvider({ getMeter: () => ({}) }),
+  // A complete no-op meter provider: instrumentations create their histograms on it.
+  metrics: metrics.setGlobalMeterProvider(metrics.getMeterProvider()),
 };
 if (process.env.APP_HTTP === 'true') {
   // The application's own incoming and outgoing HTTP spans, on its own provider.
