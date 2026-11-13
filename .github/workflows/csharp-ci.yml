@@ -33,13 +33,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otel: ['1.11.2', '1.20.1']
+        include:
+          - otel: '1.11.2'
+            # The startup hook pins its own OpenTelemetry and ignores this version, so its
+            # child-process suite runs once on macOS (the other leg) and in the Linux job.
+            tests: csharp/tests/FIInstrumentation.Tests/FIInstrumentation.Tests.csproj
+          - otel: '1.20.1'
+            tests: csharp/FIInstrumentation.sln
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false'
       # Keep vstest's IPC on IPv4 loopback, which the sandbox allows.
       DOTNET_SYSTEM_NET_DISABLEIPV6: '1'
       OTEL_VERSION: ${{ matrix.otel }}
+      TESTS: ${{ matrix.tests }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -69,7 +76,7 @@ jobs:
           (allow network-outbound (remote ip "localhost:*"))
           (allow network-outbound (remote unix-socket))
           SANDBOX
-          sandbox-exec -f "$RUNNER_TEMP/offline.sb" dotnet test csharp/FIInstrumentation.sln \
+          sandbox-exec -f "$RUNNER_TEMP/offline.sb" dotnet test "$TESTS" \
             --no-build --configuration Release -p:OpenTelemetryVersion="$OTEL_VERSION" \
             --logger 'trx;LogFilePrefix=tests' --results-directory TestResults
       - name: Upload test results
