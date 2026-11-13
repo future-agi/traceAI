@@ -235,7 +235,7 @@ func rc2HostKept(t *testing.T, host *tracetest.SpanRecorder, payload string) {
 
 // Count limits 32/128/140 and the SDK default, application spans with media
 // deep in long message lists, on a host provider and the agent-owned one.
-func TestRC2CountLimitEvictedHintOTLP(t *testing.T) {
+func TestCountLimitEvictedHintOTLP(t *testing.T) {
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{0, 32, 128, 140} { // 0: the SDK default (128).
 			for _, sh := range rc2Shapes() {
@@ -272,7 +272,7 @@ func TestRC2CountLimitEvictedHintOTLP(t *testing.T) {
 
 // Value-length limits 8/16/24: a truncated MIME/type value is never a safe
 // MIME, and a truncated payload prefix is still media.
-func TestRC2ValueLengthTruncatedHintOTLP(t *testing.T) {
+func TestValueLengthTruncatedHintOTLP(t *testing.T) {
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{-1, 8, 16, 24} {
 			for _, sh := range rc2Shapes() {
@@ -307,7 +307,7 @@ func TestRC2ValueLengthTruncatedHintOTLP(t *testing.T) {
 
 // Truncated JSON-encoded attributes keep media ancestry in fail-closed mode:
 // neither a payload prefix nor raw samples survive the partial scan.
-func TestRC2TruncatedJSONAttributeOTLP(t *testing.T) {
+func TestTruncatedJSONAttributeOTLP(t *testing.T) {
 	pcm, _ := json.Marshal(map[string]any{"mime_type": "audio/L16", "data": r6aPCM})
 	samples := fmt.Sprintf(`{"mime_type":"audio/L16","samples":[%d,%d,%d]}`, rc2SampleBase+1, rc2SampleBase+2, rc2SampleBase+3)
 	nested := `{"part":{"data":["` + r6aPCM + `","` + r6aPCM + `"],"mime_type":"audio/L16"}}`
@@ -333,7 +333,7 @@ func TestRC2TruncatedJSONAttributeOTLP(t *testing.T) {
 
 // Per-event and per-link count limits (and value-length limits) on events and
 // links: each attribute object fails closed on its own dropped count.
-func TestRC2EventAndLinkLimitsOTLP(t *testing.T) {
+func TestEventAndLinkLimitsOTLP(t *testing.T) {
 	for _, owned := range []bool{false, true} {
 		for _, mode := range []string{"count", "length"} {
 			for _, sh := range rc2Shapes() {
@@ -371,7 +371,7 @@ func TestRC2EventAndLinkLimitsOTLP(t *testing.T) {
 
 // A custom span processor replaces the FI exporter: its handoff is the same
 // fail-closed boundary, using the provider's limits.
-func TestRC2CustomProcessorHandoffFailsClosed(t *testing.T) {
+func TestCustomProcessorHandoffFailsClosed(t *testing.T) {
 	for _, mode := range []string{"count", "length"} {
 		t.Run(mode, func(t *testing.T) {
 			exporterRegressionSetup(t)
@@ -414,7 +414,7 @@ func TestRC2CustomProcessorHandoffFailsClosed(t *testing.T) {
 // R6A go final #1: protected-context fallback with MIME hints carried as a
 // native map, a JSON-object string or a generic slice, at count limits
 // 32/128/140; an unrelated 17,000-element attribute exhausts the first walk.
-func TestRC2ProtectedFallbackStructuredHintsOTLP(t *testing.T) {
+func TestProtectedFallbackStructuredHintsOTLP(t *testing.T) {
 	representations := map[string]attribute.KeyValue{
 		"native-map":    attribute.Map("gen_ai.usage.extension", attribute.String("mime_type", "audio/L16")),
 		"json-object":   attribute.String("gen_ai.usage.extension", `{"mime_type":"audio/L16"}`),
@@ -479,7 +479,7 @@ func TestRC2ProtectedFallbackStructuredHintsOTLP(t *testing.T) {
 
 // Agent-created wire spans under host value-length limits: context media is
 // recognized on the complete attribute set before the SDK truncates anything.
-func TestRC2WireSpanValueLengthOTLP(t *testing.T) {
+func TestWireSpanValueLengthOTLP(t *testing.T) {
 	for _, limit := range []int{8, 16, 24} {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
 			exporterRegressionSetup(t)
@@ -515,7 +515,7 @@ func TestRC2WireSpanValueLengthOTLP(t *testing.T) {
 // The agent's own A7 projection pins a hint in every representation (native
 // map, JSON object string, generic slice) to the groups it governs, at every
 // limit, deterministically.
-func TestRC2ProjectionPinsStructuredHints(t *testing.T) {
+func TestProjectionPinsStructuredHints(t *testing.T) {
 	base := []attribute.KeyValue{attribute.String("gen_ai.span.kind", "LLM"), attribute.String("traceai.capture.layer", "wire"), attribute.Int64("gen_ai.usage.total_tokens", 3), attribute.String("output.value", "ok")}
 	for i := 0; i < 6; i++ {
 		base = append(base, attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.content", i), "text"))
@@ -556,7 +556,7 @@ func TestRC2ProjectionPinsStructuredHints(t *testing.T) {
 }
 
 // Unit level: the fail-closed walk and its boundaries.
-func TestRC2FailClosedSanitizerUnit(t *testing.T) {
+func TestFailClosedSanitizerUnit(t *testing.T) {
 	walk := func(failClosed bool, attrs ...attribute.KeyValue) map[string]string {
 		s := &spanSanitizer{secrets: noSecrets, nodes: 16384, bytes: 32 * 1024 * 1024}
 		if failClosed {
@@ -609,7 +609,7 @@ func TestRC2FailClosedSanitizerUnit(t *testing.T) {
 }
 
 // The value-length adapter reads the provider's immutable configuration.
-func TestRC2ProviderValueLengthAdapter(t *testing.T) {
+func TestProviderValueLengthAdapter(t *testing.T) {
 	for _, limit := range []int{-1, 0, 8, 16, 24} {
 		sl := sdktrace.NewSpanLimits()
 		sl.AttributeValueLengthLimit = limit

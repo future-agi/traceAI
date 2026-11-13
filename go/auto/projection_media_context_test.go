@@ -55,11 +55,11 @@ func r6aLongChat(t *testing.T, ctx context.Context, messages int) {
 // go-s6 final #1 / A7: projection never separates MIME context from its
 // payload, and headerless audio identified only by that context never reaches
 // the host view or the OTLP export, at the default and smaller host limits.
-func TestR6aProjectionKeepsMediaContextOTLP(t *testing.T) {
+func TestProjectionKeepsMediaContextOTLP(t *testing.T) {
 	// Sweep limits so the edge with exactly one free metadata slot (the
 	// verifier's leak: payload admitted, MIME sibling dropped) is always hit.
 	// On the pre-fix code it recurred at every odd limit (21..135) for the
-	// long chat; TestR6aProjectionMediaCompanions sweeps every budget limit.
+	// long chat; TestProjectionMediaCompanions sweeps every budget limit.
 	limits := []int{63, 64, 127, 128, 129, 135, 136}
 	for limit := 16; limit <= 40; limit++ {
 		limits = append(limits, limit)
@@ -115,7 +115,7 @@ func TestR6aProjectionKeepsMediaContextOTLP(t *testing.T) {
 
 // The projection pins every MIME/type hint to each group holding a key under
 // the hint's parent, deterministically, whatever the limit or input order.
-func TestR6aProjectionMediaCompanions(t *testing.T) {
+func TestProjectionMediaCompanions(t *testing.T) {
 	base := []attribute.KeyValue{attribute.String("gen_ai.span.kind", "LLM"), attribute.String("traceai.capture.layer", "wire"), attribute.Int64("gen_ai.usage.total_tokens", 3), attribute.String("output.value", "ok"), attribute.String("output.mime_type", "text/plain")}
 	for i := 0; i < 6; i++ {
 		base = append(base, attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.role", i), "user"), attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.content", i), "text"))

@@ -59,7 +59,7 @@ func s6Attribute(value any) attribute.Value {
 
 // Exercise the native OTel adapter, not only the JSON/reference-facing helper.
 // attrs is the identical export path for spans, resources, events, links, scopes.
-func TestS6NativeExportPrivacyFixtures(t *testing.T) {
+func TestNativeExportPrivacyFixtures(t *testing.T) {
 	data, err := os.ReadFile("internal/wire/privacy-fixtures.json")
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestS6NativeExportPrivacyFixtures(t *testing.T) {
 	}
 }
 
-func TestS6AtomicCredentialPairs(t *testing.T) {
+func TestAtomicCredentialPairs(t *testing.T) {
 	for _, tc := range []struct {
 		name, envAPI, envSecret, fileAPI, fileSecret, codeAPI, codeSecret, wantAPI, wantSecret, missing string
 		withConfig                                                                                      bool
@@ -167,7 +167,7 @@ func TestS6AtomicCredentialPairs(t *testing.T) {
 	}
 }
 
-func TestS6TransportCatalogObservation(t *testing.T) {
+func TestTransportCatalogObservation(t *testing.T) {
 	var catalog struct {
 		Credentials struct {
 			Patterns   []struct{ Example string }
@@ -230,7 +230,7 @@ func TestS6TransportCatalogObservation(t *testing.T) {
 	}
 }
 
-func TestS6IndexedNonAudioMediaAllSurfaces(t *testing.T) {
+func TestIndexedNonAudioMediaAllSurfaces(t *testing.T) {
 	for _, key := range []string{"output.b64_json.0", "input.file_data.0", "input.images.0", "gen_ai.input.messages.0.parts.0.inlineData.data.0"} {
 		t.Run(key, func(t *testing.T) {
 			png := base64.StdEncoding.EncodeToString(append([]byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}, bytes.Repeat([]byte{1}, 3170)...))

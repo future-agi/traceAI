@@ -19,7 +19,7 @@ import (
 // that provider. An evicted or truncated MIME/type hint never lets its payload
 // reach OTLP, on span attributes, events and links; application bytes are
 // unchanged.
-func TestRC2ZeroCodeLimitsE2E(t *testing.T) {
+func TestZeroCodeSpanLimitsE2E(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "spanlimits")
 	build := hostCommand("go", "build", "-o", bin, "./testdata/spanlimits")
 	build.Env = cleanEnv()

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRC2fQueryJSONEscapeCut(t *testing.T) {
+func TestQueryJSONEscapeCut(t *testing.T) {
 	// Slash-escaped JSON is catalog-recognized too. A value limit can end in
 	// the middle of a JSON escape, after JPEG payload bytes have survived.
 	for _, escape := range []string{`\/`, `/`} {

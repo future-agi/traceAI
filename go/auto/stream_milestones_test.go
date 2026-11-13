@@ -108,7 +108,7 @@ func r6aDifferential(t *testing.T, handler http.HandlerFunc, url, body string, r
 // go-s6 final #2: an NDJSON record only exists after its newline. A response
 // failing before the terminal record's newline exports neither its usage nor
 // its output; complete earlier records still count.
-func TestR6aNDJSONFrameBoundaryOTLP(t *testing.T) {
+func TestNDJSONFrameBoundaryOTLP(t *testing.T) {
 	const (
 		first  = `{"model":"m","message":{"role":"assistant","content":"Hel"},"done":false}` + "\n"
 		usage  = `{"model":"m","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":4,"eval_count":2}` + "\n"
@@ -158,7 +158,7 @@ func TestR6aNDJSONFrameBoundaryOTLP(t *testing.T) {
 // go-s6 final #2 (empty-stream provenance): a stream whose transport delivers
 // zero body bytes before failing is still an NDJSON/SSE stream (goldens 207,
 // 218, 229), without inventing either milestone.
-func TestR6aEmptyStreamProvenanceOTLP(t *testing.T) {
+func TestEmptyStreamProvenanceOTLP(t *testing.T) {
 	for _, ct := range []string{"application/x-ndjson", "text/event-stream"} {
 		t.Run(ct, func(t *testing.T) {
 			span, app := r6aDifferential(t, func(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +185,7 @@ func TestR6aEmptyStreamProvenanceOTLP(t *testing.T) {
 
 // go-s6 final #3: a standard SSE `event:` line names the Cohere v2 delta when
 // the JSON payload omits the redundant type field (golden 85).
-func TestR6aSSEEventHeaderCohereOTLP(t *testing.T) {
+func TestSSEEventHeaderCohereOTLP(t *testing.T) {
 	const stream = "event: message-start\ndata: {\"id\":\"co-1\",\"delta\":{\"message\":{\"role\":\"assistant\"}}}\n\n" +
 		"event: content-delta\ndata: {\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"VISIBLE_COHERE_EVENT_TEXT\"}}}}\n\n" +
 		"event: message-end\ndata: {\"delta\":{\"finish_reason\":\"COMPLETE\",\"usage\":{\"tokens\":{\"input_tokens\":3,\"output_tokens\":2}}}}\n\n"
@@ -214,7 +214,7 @@ func TestR6aSSEEventHeaderCohereOTLP(t *testing.T) {
 // go-s6 final #4 / A10: time-to-first-text comes from the transport arrival of
 // the chunk completing the first non-empty output event, recorded before
 // parsing. Role-only and empty events establish first-chunk only.
-func TestR6aFirstTextFromArrivalOTLP(t *testing.T) {
+func TestFirstTextFromArrivalOTLP(t *testing.T) {
 	const gap = 80 * time.Millisecond
 	release := make(chan struct{})
 	role := "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n"
@@ -265,7 +265,7 @@ func TestR6aFirstTextFromArrivalOTLP(t *testing.T) {
 // A10 bounded association: past the record cap the transport stops recording.
 // A first output beyond the recorded prefix is omitted with the incomplete
 // marker, never replaced by parse time or first-chunk time.
-func TestR6aArrivalAssociationBoundOTLP(t *testing.T) {
+func TestArrivalAssociationBoundOTLP(t *testing.T) {
 	role := "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"
 	var stream strings.Builder
 	for i := 0; i < 4100; i++ {

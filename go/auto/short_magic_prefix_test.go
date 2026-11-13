@@ -16,7 +16,7 @@ import (
 // payload. A URL can reach this state with ordinary attribute limits (28-30),
 // not just limits smaller than four. Check the actual agent OTLP destination;
 // the host-owned exporter must retain its original view.
-func TestRC2fShortMagicPrefixesOTLP(t *testing.T) {
+func TestShortMagicPrefixesOTLP(t *testing.T) {
 	paths := []string{"app.arbitrary", "input.id.parts.9.arbitrary", "app.transcript.parts.83.arbitrary"}
 	for _, owned := range []bool{false, true} {
 		for _, prefix := range []string{"", "https://example.invalid/?v="} {

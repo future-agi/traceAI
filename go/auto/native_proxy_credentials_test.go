@@ -22,7 +22,7 @@ import (
 
 // Both saved aliases of the default native transport and explicitly registered
 // native transports must observe HTTP/1.1 targets before any response exists.
-func TestS5NativeHTTP1LateQueryWithoutResponse(t *testing.T) {
+func TestNativeHTTP1LateQueryWithoutResponse(t *testing.T) {
 	for _, installation := range []string{"saved-default-native", "explicit-native"} {
 		for _, coverage := range []string{"wire", "model-covered", "explicit-suppression", "unmatched-route"} {
 			t.Run(installation+"/"+coverage, func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestS5NativeHTTP1LateQueryWithoutResponse(t *testing.T) {
 	}
 }
 
-func TestS5NativeProxyHookErrorAndPanicParity(t *testing.T) {
+func TestNativeProxyHookErrorAndPanicParity(t *testing.T) {
 	for _, hook := range []string{"proxy", "connect-headers"} {
 		for _, failure := range []string{"error", "panic"} {
 			t.Run(hook+"/"+failure, func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestS5NativeProxyHookErrorAndPanicParity(t *testing.T) {
 	}
 }
 
-func TestS5NativeCloneRetainsStaticCONNECTConfiguration(t *testing.T) {
+func TestNativeCloneRetainsStaticCONNECTConfiguration(t *testing.T) {
 	ownedRegressionSetup(t)
 	if _, err := InitForTest(context.Background(), WithSpanProcessor(tracetest.NewSpanRecorder())); err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestS5NativeCloneRetainsStaticCONNECTConfiguration(t *testing.T) {
 	}
 }
 
-func TestS5NativeProxyCONNECTCredentials(t *testing.T) {
+func TestNativeProxyCONNECTCredentials(t *testing.T) {
 	for _, source := range []string{"static", "dynamic", "userinfo"} {
 		for _, coverage := range []string{"wire", "model-covered", "explicit-suppression", "unmatched-route"} {
 			t.Run(source+"/"+coverage, func(t *testing.T) {

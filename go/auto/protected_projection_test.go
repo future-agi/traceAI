@@ -20,7 +20,7 @@ import (
 // MIME-companion pin. At the default 128 limit (and at 12) headerless PCM then
 // reached OTLP after its MIME hint was dropped. The protected set is now the
 // spec's closed A7 set (exact identity/provenance keys, numeric usage counters).
-func TestR6aProtectedPrefixMediaKeepsContextOTLP(t *testing.T) {
+func TestProtectedPrefixMediaKeepsContextOTLP(t *testing.T) {
 	for _, root := range []string{"project_metadata.media", "gen_ai.usage.extension", "server.media"} {
 		for _, single := range []bool{false, true} {
 			for _, limit := range []int{12, 32, 127, 128, 129, 256} {
@@ -88,7 +88,7 @@ func TestR6aProtectedPrefixMediaKeepsContextOTLP(t *testing.T) {
 }
 
 // The protected set is the closed A7 set; prefixes alone protect nothing.
-func TestR6aProtectedSetIsExactAndTyped(t *testing.T) {
+func TestProtectedSetIsExactAndTyped(t *testing.T) {
 	for _, tc := range []struct {
 		kv   attribute.KeyValue
 		want bool
@@ -121,7 +121,7 @@ func TestR6aProtectedSetIsExactAndTyped(t *testing.T) {
 // R6A verifier OTHER #3: an ungrouped key whose name equals a content group's
 // name ("output" vs output.value/output.mime_type) made group priority depend
 // on Go map order, randomly dropping output. Same candidates, same selection.
-func TestR6aProjectionGroupNamesDoNotCollide(t *testing.T) {
+func TestProjectionGroupNamesDoNotCollide(t *testing.T) {
 	base := []attribute.KeyValue{attribute.String("gen_ai.span.kind", "LLM"), attribute.String("traceai.capture.layer", "wire"), attribute.String("gen_ai.provider.name", "openai"), attribute.Int64("gen_ai.usage.total_tokens", 10), attribute.String("output.value", "VISIBLE_OUTPUT"), attribute.String("output.mime_type", "text/plain")}
 	for i := 0; i < 80; i++ {
 		base = append(base, attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.role", i), "user"), attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.content", i), fmt.Sprintf("message %d", i)))
@@ -160,7 +160,7 @@ func TestR6aProjectionGroupNamesDoNotCollide(t *testing.T) {
 
 // One-line init, real loopback HTTP and OTLP: the colliding native context
 // attribute never displaces output, on every one of many identical requests.
-func TestR6aGroupCollisionKeepsOutputOTLP(t *testing.T) {
+func TestGroupCollisionKeepsOutputOTLP(t *testing.T) {
 	exporterRegressionSetup(t)
 	received := privacyCollector(t)
 	limits := sdktrace.NewSpanLimits()
@@ -189,7 +189,7 @@ func TestR6aGroupCollisionKeepsOutputOTLP(t *testing.T) {
 // Defense in depth: protected identity in context is walked jointly with its
 // siblings (a root MIME hint reaches it), yet is never lost when the joint walk
 // classifies the whole context object as an image block.
-func TestR6aContextIdentityWalkedJointly(t *testing.T) {
+func TestContextIdentityWalkedJointly(t *testing.T) {
 	out := captureContext([]attribute.KeyValue{attribute.String("mime_type", "audio/L16"), attribute.String("session.id", r6aPCM), attribute.String("user.id", "user-1")}, nil, Config{}, "chat")
 	got := map[string]string{}
 	for _, kv := range out {

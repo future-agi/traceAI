@@ -77,7 +77,7 @@ func r6aJointSessionID(t *testing.T) string {
 }
 
 // Unit level: neither fallback restores an unchecked protected value.
-func TestR6aCaptureContextFallbackNeverRestoresRaw(t *testing.T) {
+func TestCaptureContextFallbackNeverRestoresRaw(t *testing.T) {
 	for _, numeric := range []bool{false, true} {
 		for _, mode := range []string{"normal", "image-object", "budget"} {
 			t.Run(fmt.Sprintf("numeric=%v/%s", numeric, mode), func(t *testing.T) {
@@ -124,7 +124,7 @@ func TestR6aCaptureContextFallbackNeverRestoresRaw(t *testing.T) {
 
 // Second-tier failure: a protected value that itself exceeds the privacy
 // budget is dropped (never restored raw); scalar identity is still kept.
-func TestR6aCaptureContextOversizedProtectedFailsClosed(t *testing.T) {
+func TestCaptureContextOversizedProtectedFailsClosed(t *testing.T) {
 	fields := make([]attribute.KeyValue, 17000)
 	for i := range fields {
 		fields[i] = attribute.String(fmt.Sprintf("f%05d", i), r6aPCM)
@@ -159,7 +159,7 @@ func TestR6aCaptureContextOversizedProtectedFailsClosed(t *testing.T) {
 
 // Export level: an attribute object classified as one image block keeps its
 // protected identity in catalog-walked form, never the unchecked original.
-func TestR6aExportImageObjectKeepsScrubbedProtected(t *testing.T) {
+func TestExportImageObjectKeepsScrubbedProtected(t *testing.T) {
 	s := &spanSanitizer{config: Config{TraceConfig: TraceConfig{HideInputImages: true}}, secrets: noSecrets, nodes: 16384, bytes: 32 * 1024 * 1024}
 	out := s.attrs([]attribute.KeyValue{attribute.String("type", "image_url"), attribute.String("image_url", "https://example.invalid/x.png"), attribute.String("mime_type", "audio/L16"), attribute.String("session.id", r6aPCM), attribute.String("user.id", "user-1"), attribute.String("gen_ai.span.kind", "LLM")}, false, 0, 0)
 	got := map[string]string{}
@@ -179,7 +179,7 @@ func TestR6aExportImageObjectKeepsScrubbedProtected(t *testing.T) {
 
 // One-line init, real loopback HTTP, collector-received OTLP at the default
 // 128 limit (and a small one): no fallback exports catalog-recognized media.
-func TestR6aProtectedFallbackMediaOTLP(t *testing.T) {
+func TestProtectedFallbackMediaOTLP(t *testing.T) {
 	for _, numeric := range []bool{false, true} {
 		for _, mode := range []string{"normal", "image-object", "budget"} {
 			for _, limit := range []int{32, 128} {

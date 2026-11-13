@@ -37,7 +37,7 @@ func (p *s6HostProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSp
 func (p *s6HostProcessor) Shutdown(context.Context) error   { p.stopped.Add(1); return nil }
 func (p *s6HostProcessor) ForceFlush(context.Context) error { p.flushed.Add(1); return nil }
 
-func TestS6NeutralProviderActivation(t *testing.T) {
+func TestNeutralProviderActivation(t *testing.T) {
 	for _, mode := range []string{"explicit", "global", "processor"} {
 		t.Run(mode, func(t *testing.T) {
 			ownedRegressionSetup(t)
@@ -89,7 +89,7 @@ func s6ProtoAttrs(span *tracepb.Span) map[string]any {
 	return values
 }
 
-func TestS6SmallHostAttributeLimitsOTLP(t *testing.T) {
+func TestSmallHostAttributeLimitsOTLP(t *testing.T) {
 	for _, limit := range []int{16, 32, 128} {
 		t.Run(fmt.Sprint(limit), func(t *testing.T) {
 			exporterRegressionSetup(t)
@@ -150,7 +150,7 @@ func TestS6SmallHostAttributeLimitsOTLP(t *testing.T) {
 	}
 }
 
-func TestS6AttributeProjectionContracts(t *testing.T) {
+func TestAttributeProjectionContracts(t *testing.T) {
 	values := []attribute.KeyValue{attribute.String("gen_ai.span.kind", "LLM"), attribute.String("traceai.capture.layer", "wire"), attribute.String("user.id", "u"), attribute.String("session.id", "s"), attribute.Int64("gen_ai.usage.total_tokens", 9), attribute.Int64("traceai.capture.dropped_content_count", 2), attribute.String("output.value", "ok"), attribute.String("output.mime_type", "text/plain"), attribute.String("input.value", "old + new"), attribute.String("input.mime_type", "text/plain")}
 	for i := 0; i < 12; i++ {
 		values = append(values, attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.role", i), "user"), attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.message.content", i), "message"))
@@ -197,7 +197,7 @@ func TestS6AttributeProjectionContracts(t *testing.T) {
 	}
 }
 
-func TestS6UsageFrameBoundaryOTLP(t *testing.T) {
+func TestUsageFrameBoundaryOTLP(t *testing.T) {
 	const usage = `{"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`
 	const gemini = `{"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}`
 	for _, tc := range []struct {

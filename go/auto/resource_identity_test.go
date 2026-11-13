@@ -15,7 +15,7 @@ import (
 // A6 (2026-10-31): the application's resource identity is authoritative in the
 // FI export view; FI routing is the separate project_name attribute; the agent
 // never uses the FI project (or its working-directory default) as service.name.
-func TestR6aResourceIdentityOTLP(t *testing.T) {
+func TestResourceIdentityOTLP(t *testing.T) {
 	exe, _ := os.Executable()
 	fallback := "unknown_service:" + filepath.Base(exe)
 	for _, tc := range []struct {

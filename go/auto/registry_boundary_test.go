@@ -27,7 +27,7 @@ func smallPNG(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(out.Bytes())
 }
 
-func TestS5RegistryLearnedAfterSpanEnd(t *testing.T) {
+func TestRegistryLearnedAfterSpanEnd(t *testing.T) {
 	const secret = "S5_POST_END_CREDENTIAL_PRIVATE"
 	raw := tracetest.NewSpanRecorder()
 	p := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(raw))
@@ -47,7 +47,7 @@ func TestS5RegistryLearnedAfterSpanEnd(t *testing.T) {
 	}
 }
 
-func TestS5CaptureDefersValueMasking(t *testing.T) {
+func TestCaptureDefersValueMasking(t *testing.T) {
 	const prefix = "S5_OVERLAP_DIAGNOSTIC_PREFIX"
 	const longer = prefix + "_LATE_REGISTERED_SUFFIX_PRIVATE"
 	RegisterSecret(prefix)
@@ -68,7 +68,7 @@ func TestS5CaptureDefersValueMasking(t *testing.T) {
 	}
 }
 
-func TestS5SuppressedObservationNeverBuffersBody(t *testing.T) {
+func TestSuppressedObservationNeverBuffersBody(t *testing.T) {
 	for _, mode := range []string{"model", "explicit", "nested-capture"} {
 		t.Run(mode, func(t *testing.T) {
 			ownedRegressionSetup(t)

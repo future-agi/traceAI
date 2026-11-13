@@ -20,7 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestS6HiddenImageReferencesOTLP(t *testing.T) {
+func TestHiddenImageReferencesOTLP(t *testing.T) {
 	const imageURI = "http://127.0.0.1/images/PRIVATE_IMAGE_REFERENCE.png"
 	const safeURI = "http://127.0.0.1/safe-neighbor"
 	const root = "gen_ai.input.messages.0.parts.0"
@@ -85,7 +85,7 @@ func TestS6HiddenImageReferencesOTLP(t *testing.T) {
 	}
 }
 
-func TestS6LongCaptureKeepsSpan(t *testing.T) {
+func TestLongCaptureKeepsSpan(t *testing.T) {
 	for _, side := range []string{"input", "output"} {
 		for _, size := range []int{512 * 1024, 1024 * 1024, 1600000, 2 * 1024 * 1024, wire.DefaultMaxBodyBytes - 1024} {
 			t.Run(fmt.Sprintf("%s/%d", side, size), func(t *testing.T) {
@@ -171,7 +171,7 @@ func s6LongExchange(t *testing.T, side string, size int) {
 	}
 }
 
-func TestS6LongCaptureOTLP(t *testing.T) {
+func TestLongCaptureOTLP(t *testing.T) {
 	for _, side := range []string{"input", "output"} {
 		for _, size := range []int{1600000, wire.DefaultMaxBodyBytes - 1024} {
 			t.Run(fmt.Sprintf("%s/%d", side, size), func(t *testing.T) {

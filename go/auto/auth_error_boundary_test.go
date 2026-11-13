@@ -19,7 +19,7 @@ import (
 
 // Response.Request observation alone is not sufficient: a native transport can
 // transmit auth headers, then fail without returning any response at all.
-func TestS5PostHookAuthErrorWithoutResponse(t *testing.T) {
+func TestPostHookAuthErrorWithoutResponse(t *testing.T) {
 	for _, coverage := range []string{"wire", "model-covered", "explicit-suppression", "unmatched-route"} {
 		t.Run(coverage, func(t *testing.T) {
 			p := exporterRegressionSetup(t)
@@ -101,7 +101,7 @@ func (t *s5LegacyResponseTransport) RoundTrip(r *http.Request) (*http.Response, 
 }
 func (t *s5LegacyResponseTransport) CancelRequest(r *http.Request) { t.canceled = r }
 
-func TestS5ObservationOnlyCancellationAndBodyParity(t *testing.T) {
+func TestObservationOnlyCancellationAndBodyParity(t *testing.T) {
 	for _, coverage := range []string{"unmatched-route", "explicit-suppression"} {
 		t.Run(coverage, func(t *testing.T) {
 			ownedRegressionSetup(t)

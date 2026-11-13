@@ -9,7 +9,7 @@ import (
 // rc2 candidate-2 (2026-10-31): a value-length limit cuts recognized media to
 // a prefix without its full signature. A cut prefix consistent with catalog
 // magic is media; incompatible decoded bytes and non-base64 text are not.
-func TestRC2bMagicPrefix(t *testing.T) {
+func TestMagicPrefix(t *testing.T) {
 	// "AAAA", "AAAAEG" and the CR/LF-wrapped forms are an ftyp box size with
 	// the signature cut off (rc2c): consistent with ftyp, so media.
 	for _, hit := range []string{"iVBORw0K", "UklGRjAw", "AAAAEGZ0", "/9j/4AAQ", "SUQzBAAA", "T2dnUwAC", "ZkxhQwAA", "JVBERi0x", "iVBO", "R0lGODlh", "A", "AQ", "AQI", "AAAA", "AAAAEG", "AAAA\r\nEG", "AAAA\r\n\r\n\r\n\r\n\r\nEG", "\r\nAAAA", "A\r\n\r\n\r\n"} {
@@ -36,7 +36,7 @@ func TestRC2bMagicPrefix(t *testing.T) {
 // MIME-style and doubled wrapping), every non-empty cut that still
 // carries a data character is recognized: no cut can remove all evidence
 // while leaving catalog-recognized media bytes.
-func TestRC2cMagicPrefixCompleteness(t *testing.T) {
+func TestMagicPrefixCompleteness(t *testing.T) {
 	for r, rule := range privacyRules.magic {
 		raw := []byte(strings.Repeat("0", privacyRules.Media.PrefixBytes+16))
 		for _, test := range rule {
@@ -72,7 +72,7 @@ func TestRC2cMagicPrefixCompleteness(t *testing.T) {
 
 // The fail-closed walk omits every non-empty value under an at-risk
 // media-capable path, whatever its length or alphabet, and nothing else.
-func TestRC2bFailClosedEveryCapableValue(t *testing.T) {
+func TestFailClosedEveryCapableValue(t *testing.T) {
 	values := map[string]any{
 		"app.transcript.parts.83.data": "AQ",
 		"input.id.parts.9.data":        "\x01\x02\x03\x04\x05",
@@ -113,7 +113,7 @@ func TestRC2bFailClosedEveryCapableValue(t *testing.T) {
 // The fail-closed export walk omits every cut of wrapped ftyp media at an
 // arbitrary key and below metadata boundaries; a cut data URI is omitted once
 // its comma survives (before that it carries no payload).
-func TestRC2cFailClosedCutValues(t *testing.T) {
+func TestFailClosedCutValues(t *testing.T) {
 	e := base64.StdEncoding.EncodeToString(append([]byte{0, 0, 0, 0x10, 'f', 't', 'y', 'p'}, []byte(strings.Repeat("0", 32))...))
 	for _, media := range []string{e[:4] + "\r\n" + e[4:], e[:4] + strings.Repeat("\r\n", 9) + e[4:], "data:video/mp4;base64," + e} {
 		for n := 1; n <= len(media); n++ {

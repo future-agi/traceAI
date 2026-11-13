@@ -77,7 +77,7 @@ func rc2cHostHas(v attribute.Value, text string) bool {
 // id/transcript metadata boundaries, in every attribute representation, on
 // span attributes, events and links. Raw media never reaches FI OTLP; the
 // application's own exporter keeps its original view.
-func TestRC2cWrappedMagicPrefixOTLP(t *testing.T) {
+func TestWrappedMagicPrefixOTLP(t *testing.T) {
 	paths := []string{"app.arbitrary", "input.id.parts.9.arbitrary", "app.transcript.parts.83.arbitrary"}
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{-1, 8, 16, 24} {

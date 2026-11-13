@@ -14,7 +14,7 @@ import (
 
 // rc2f: SDK truncation can remove a URL query's MIME sibling or the magic
 // bytes of its final value. The containing attribute need not be a media path.
-func TestRC2fQueryValueLimitsOTLP(t *testing.T) {
+func TestQueryValueLimitsOTLP(t *testing.T) {
 	fixture := "https://example.invalid/?content=AQIDBA%3D%3D&mimeType=audio%2Fwav&model=keep#anchor"
 	pcm := strings.Repeat("AQIDBAUG", 30)
 	magic := "AAAAIGZ0eXBpc29tMDAwMDAwMDAwMDAwMDAwMDAwMDAw"

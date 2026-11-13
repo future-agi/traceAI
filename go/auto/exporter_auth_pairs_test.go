@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestS6AtomicPairsExporterAuth(t *testing.T) {
+func TestAtomicPairsExporterAuth(t *testing.T) {
 	for _, half := range []string{"API_KEY", "SECRET_KEY"} {
 		t.Run(half, func(t *testing.T) {
 			provider := exporterRegressionSetup(t)

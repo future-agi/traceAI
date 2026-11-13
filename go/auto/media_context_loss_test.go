@@ -104,7 +104,7 @@ func rc2bOmitted(v *commonpb.AnyValue) bool {
 // Default and count limits 32/128/140: the payload sits deep in a long message
 // list below a metadata boundary (app.transcript), its MIME is evicted; on
 // span attributes, events and links, host and agent-owned providers.
-func TestRC2bCountLimitShortBinaryPayloadsOTLP(t *testing.T) {
+func TestCountLimitShortBinaryPayloadsOTLP(t *testing.T) {
 	const dataKey, hintKey = "app.transcript.parts.83.data", "app.transcript.parts.83.mime_type"
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{0, 32, 128, 140} { // 0: SDK defaults (128).
@@ -156,7 +156,7 @@ func TestRC2bCountLimitShortBinaryPayloadsOTLP(t *testing.T) {
 
 // Value-length limits 8/16/24 below a metadata boundary (input.id): a MIME the
 // catalog accepts (leading whitespace) is cut, so it is never a safe MIME.
-func TestRC2bValueLengthCutMIMEBelowIDOTLP(t *testing.T) {
+func TestValueLengthCutMIMEBelowIDOTLP(t *testing.T) {
 	const dataKey, hintKey = "input.id.parts.9.data", "input.id.parts.9.mime_type"
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{-1, 8, 16, 24} {
@@ -205,7 +205,7 @@ func rc2bMagic() map[string]string {
 
 // A value-length limit cuts recognized PNG/WAV/MP4 base64 under an arbitrary
 // key to a prefix with no full signature: still media.
-func TestRC2bTruncatedMagicPrefixOTLP(t *testing.T) {
+func TestTruncatedMagicPrefixOTLP(t *testing.T) {
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{-1, 8, 16, 24} {
 			for name, media := range rc2bMagic() {
@@ -260,7 +260,7 @@ func rc2bChat(t *testing.T, ctx context.Context, reply string) {
 // Agent-created wire span: a context hint (output.type=input_audio) governs
 // the wire's own output.value; it is applied at capture, before the SDK cuts
 // the hint to "input_au".
-func TestRC2bWireContextHintGovernsWirePayloadOTLP(t *testing.T) {
+func TestWireContextHintGovernsWirePayloadOTLP(t *testing.T) {
 	for _, owned := range []bool{false, true} {
 		for _, limit := range []int{-1, 8, 16, 24} {
 			t.Run(fmt.Sprintf("owned=%v/length=%d", owned, limit), func(t *testing.T) {
@@ -300,7 +300,7 @@ func TestRC2bWireContextHintGovernsWirePayloadOTLP(t *testing.T) {
 }
 
 // Without a context hint the wire span's capture is unchanged.
-func TestRC2bCaptureWireUnchangedWithoutContextHint(t *testing.T) {
+func TestCaptureWireUnchangedWithoutContextHint(t *testing.T) {
 	values := []attribute.KeyValue{attribute.String("output.value", "AQI"), attribute.String("output.mime_type", "text/plain")}
 	got := captureWire(values, []attribute.KeyValue{attribute.String("user.id", "u")}, Config{}, "chat")
 	if len(got) != 2 || got[0] != values[0] || got[1] != values[1] {
@@ -320,7 +320,7 @@ func TestRC2bCaptureWireUnchangedWithoutContextHint(t *testing.T) {
 
 // Risk scoping: a cut value only puts its hint parent's subtree at risk;
 // dropped attributes put everything at risk.
-func TestRC2bMediaRiskScopes(t *testing.T) {
+func TestMediaRiskScopes(t *testing.T) {
 	attrs := []attribute.KeyValue{attribute.String("input.id.parts.9.mime_type", " applica"), attribute.String("input.id.parts.9.data", "AQI"), attribute.String("other.value", "plain"), attribute.String("app.note", "ok")}
 	walk := func(risk *wire.MediaRisk) map[string]string {
 		s := &spanSanitizer{secrets: noSecrets, nodes: 16384, bytes: 32 * 1024 * 1024, risk: risk}

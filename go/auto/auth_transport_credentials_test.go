@@ -33,7 +33,7 @@ func s5FreshCredential(label string) string {
 	return fmt.Sprintf("S5_%s_PRIVATE_%016d", label, s5CredentialSerial.Add(1))
 }
 
-func TestS5PostHookAuthRawTransport(t *testing.T) {
+func TestPostHookAuthRawTransport(t *testing.T) {
 	for _, protocol := range []string{"http1", "http2", "xnet-http2"} {
 		for _, composition := range []string{"wrapped-saved-native", "preinstalled-default"} {
 			for _, coverage := range []string{"wire", "model-covered", "explicit-suppression", "unmatched-route"} {
@@ -169,7 +169,7 @@ func TestS5PostHookAuthRawTransport(t *testing.T) {
 	}
 }
 
-func TestS5AdditionalCredentialHeaders(t *testing.T) {
+func TestAdditionalCredentialHeaders(t *testing.T) {
 	for _, header := range []string{"X-Amz-Security-Token", "X-Auth-Token", "Authorization"} {
 		t.Run(header, func(t *testing.T) {
 			p := exporterRegressionSetup(t)
@@ -215,7 +215,7 @@ func TestS5AdditionalCredentialHeaders(t *testing.T) {
 	}
 }
 
-func TestS5IndexedCredentialFieldsOTLP(t *testing.T) {
+func TestIndexedCredentialFieldsOTLP(t *testing.T) {
 	for _, key := range []string{"http.request.header.authorization.0", "gen_ai.tool.call.arguments.api_key.0", "http.request.header.authorization", "gen_ai.tool.call.arguments.api_key.0.1"} {
 		t.Run(key, func(t *testing.T) {
 			p := exporterRegressionSetup(t)

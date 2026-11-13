@@ -95,5 +95,5 @@ func runUsageFixtures(t *testing.T, algebraOnly bool) {
 	}
 }
 
-func TestS6TokenAlgebraFixtures(t *testing.T)  { runUsageFixtures(t, true) }
-func TestS6ObservedUsageFixtures(t *testing.T) { runUsageFixtures(t, false) }
+func TestTokenAlgebraFixtures(t *testing.T)  { runUsageFixtures(t, true) }
+func TestObservedUsageFixtures(t *testing.T) { runUsageFixtures(t, false) }

@@ -10,7 +10,7 @@ import (
 
 // Every non-empty decoded-character magic prefix remains private inside a query,
 // including cuts in percent escapes, URL-safe alphabets and CR/LF wrapping.
-func TestRC2fQueryMagicCuts(t *testing.T) {
+func TestQueryMagicCuts(t *testing.T) {
 	for r, rule := range privacyRules.magic {
 		raw := []byte(strings.Repeat("0", privacyRules.Media.PrefixBytes+16))
 		for _, test := range rule {
@@ -46,7 +46,7 @@ func TestRC2fQueryMagicCuts(t *testing.T) {
 	}
 }
 
-func TestRC2fQueryLostHint(t *testing.T) {
+func TestQueryLostHint(t *testing.T) {
 	for _, name := range []string{"content", "data", "parts.0.content.chunk", "id.parts[9].content", "transcript.parts.83.data"} {
 		parent := hintParent(name)
 		if name == "parts.0.content.chunk" {
@@ -71,7 +71,7 @@ func TestRC2fQueryLostHint(t *testing.T) {
 
 // Count-only degradation cannot cut a query's internal hints. A value-limit
 // elsewhere likewise must not change complete ordinary query strings.
-func TestRC2fQueryUncutControls(t *testing.T) {
+func TestQueryUncutControls(t *testing.T) {
 	// No minimum length/alphabet applies once a query's MIME may be missing.
 	for _, payload := range []string{"AQ", "%", "%0", "%01%02", "AQID+BA"} {
 		value := "https://example.invalid/?content=" + payload

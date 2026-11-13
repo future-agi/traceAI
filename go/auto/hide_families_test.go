@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestS5HideFlattenedAttributeFamiliesOTLP(t *testing.T) {
+func TestHideFlattenedAttributeFamiliesOTLP(t *testing.T) {
 	for _, tc := range []struct {
 		name, root, operation string
 		config                TraceConfig
@@ -66,7 +66,7 @@ func TestS5HideFlattenedAttributeFamiliesOTLP(t *testing.T) {
 	}
 }
 
-func TestS5TranscriptFamilyCorrectSideAndDefaultCapture(t *testing.T) {
+func TestTranscriptFamilyCorrectSideAndDefaultCapture(t *testing.T) {
 	for _, tc := range []struct {
 		operation string
 		config    TraceConfig

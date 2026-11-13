@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestS5RegistryBoundLRUAndLongestFirst(t *testing.T) {
+func TestRegistryBoundLRUAndLongestFirst(t *testing.T) {
 	var r secretRegistry
 	r.register("short")
 	for i := 0; i < secretLimit; i++ {
@@ -50,7 +50,7 @@ func TestS5RegistryBoundLRUAndLongestFirst(t *testing.T) {
 	}
 }
 
-func TestS5RegistryConcurrentObservationAndExport(t *testing.T) {
+func TestRegistryConcurrentObservationAndExport(t *testing.T) {
 	var r secretRegistry
 	var wg sync.WaitGroup
 	for worker := 0; worker < 8; worker++ {
@@ -72,7 +72,7 @@ func TestS5RegistryConcurrentObservationAndExport(t *testing.T) {
 	}
 }
 
-func TestS5NestedAuthTransportResponseParity(t *testing.T) {
+func TestNestedAuthTransportResponseParity(t *testing.T) {
 	const headerSecret = "S5_INNER_AUTH_CREDENTIAL_PRIVATE"
 	const querySecret = "S5_INNER_QUERY_CREDENTIAL_PRIVATE"
 	for _, mode := range []string{"wire", "model-covered", "explicit-suppression"} {
@@ -187,7 +187,7 @@ func TestS5NestedAuthTransportResponseParity(t *testing.T) {
 	}
 }
 
-func TestS5RegistryEveryExportSurface(t *testing.T) {
+func TestRegistryEveryExportSurface(t *testing.T) {
 	const environment = "S5_ENVIRONMENT_CREDENTIAL_PRIVATE"
 	const explicit = "S5_REGISTERED_CREDENTIAL_PRIVATE"
 	const fiKey = "S5_OPTION_FI_KEY_PRIVATE"
@@ -245,7 +245,7 @@ func TestS5RegistryEveryExportSurface(t *testing.T) {
 	}
 }
 
-func TestS5ParsedBodyCredentialsReachOtherSpans(t *testing.T) {
+func TestParsedBodyCredentialsReachOtherSpans(t *testing.T) {
 	for _, shape := range []string{"json", "multipart"} {
 		t.Run(shape, func(t *testing.T) {
 			ownedRegressionSetup(t)
@@ -293,7 +293,7 @@ func TestS5ParsedBodyCredentialsReachOtherSpans(t *testing.T) {
 	}
 }
 
-func TestS5IndexedAndMimeSiblingMediaOTLP(t *testing.T) {
+func TestIndexedAndMimeSiblingMediaOTLP(t *testing.T) {
 	payload := shortWAV()
 	for _, tc := range []struct {
 		name  string

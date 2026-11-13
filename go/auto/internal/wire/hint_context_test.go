@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestS6MixedRepresentationMediaHints(t *testing.T) {
+func TestMixedRepresentationMediaHints(t *testing.T) {
 	const root = "gen_ai.input.messages.0.parts.0.source"
 	const payload = "AQIDBA==" // No magic and below the generic base64 threshold.
 	for _, mime := range []any{map[string]any{"mimeType": "image/png"}, `{"mimeType":"image/png"}`} {
@@ -25,7 +25,7 @@ func TestS6MixedRepresentationMediaHints(t *testing.T) {
 	}
 }
 
-func TestS6ImageHintBudgetFailsClosed(t *testing.T) {
+func TestImageHintBudgetFailsClosed(t *testing.T) {
 	cyclic := map[string]any{}
 	cyclic["next"] = cyclic
 	if got := HideImageReferences(cyclic, "hidden"); got != "hidden" {
