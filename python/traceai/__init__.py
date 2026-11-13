@@ -188,7 +188,7 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
 
         # Create and instrument
         instrumentor = instrumentor_class()
-        instrumentor.instrument()
+        instrumentor.instrument(tracer_provider=_tracer_provider)
 
         if verbose:
             print(f"|  Auto-instrumented: {lib_name}")
