@@ -31,10 +31,10 @@ Make an AI request, consume the response, then open **Observe → my-ai-app** in
 With the FI variables above already set, use `NODE_OPTIONS` for an npm script or process launcher:
 
 ```sh
-NODE_OPTIONS="--import @traceai/auto/register" npm start
+NODE_OPTIONS="--require @traceai/auto/register" npm start
 ```
 
-Preserve any other Node flags your deployment already needs. For CommonJS, either use the same `--import` preload or:
+Use `--require` in `NODE_OPTIONS`: every Node version accepts it, while a Node without `--import` refuses to start when `NODE_OPTIONS` contains it. On an unsupported Node version the agent prints one warning and the application runs untraced. Preserve any other Node flags your deployment already needs. For CommonJS, either use the same `--import` preload or:
 
 ```sh
 node --require @traceai/auto/register app.cjs
@@ -72,10 +72,11 @@ The **Try it with OpenAI** example, as it appears in Future AGI (a real run with
 
 - **Model calls without per-call wrappers.** OpenAI instrumentation is included. Recognized AI requests through the process's global `fetch` are also captured, including compatible gateways.
 - **More context from installed integrations.** Dedicated packages can add framework, agent, tool, retrieval and database spans. They retain their own method/version limits; auto-registration does not expand their coverage.
-- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression. Existing providers keep their sampler, context and application processors.
+- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression.
+- **Your OpenTelemetry setup stays yours.** The agent registers no global tracer provider, context manager or propagator, and never adds a processor to your provider. An SDK you start before or after the preload registers normally and its exporters keep receiving your spans. AI spans still parent under your active span.
 - **Standard OpenTelemetry.** Send to Future AGI by default, or use an [application-owned provider/exporter](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#bring-your-own-opentelemetry-destination) without FI credentials.
 
-This is AI instrumentation, not a general-purpose APM agent. Outgoing non-AI HTTP calls, arbitrary application functions and every possible AI transport are not automatically traced.
+This is AI instrumentation, not a general-purpose APM agent. **Future AGI receives only AI spans**: wire spans and spans from traceAI integrations. Your HTTP, database, cache and custom spans stay with your own provider. Incoming HTTP spans are off unless `FI_INSTRUMENTATIONS` lists `http`; even then a request span is sent only when the request made an AI call. Database integrations that the agent enables (pgvector, Redis, MongoDB) trace only vector operations. Outgoing non-AI HTTP calls, arbitrary application functions and every possible AI transport are not automatically traced. To also send your application's own spans, as earlier releases did, set `FI_FORWARD_APP_SPANS=true` (or `forwardApplicationSpans: true` in `init()`); see [forwarding application spans](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#forwarding-application-spans).
 
 ## Supported libraries and protocols
 
@@ -172,6 +173,7 @@ Recognition needs a matching endpoint and request shape, not just an AI-looking 
 | PII pattern redaction | **Off** | `FI_PII_REDACTION=true`; pattern matching is not comprehensive PII detection |
 | Base64 media and raw audio | Recognized payloads omitted; no audio bytes exported | Image cap defaults to `0`; increasing it does not enable base64 image export |
 | Embeddings | Catalog wire formats record dimensions, not vectors | `FI_HIDE_EMBEDDING_VECTORS=true` also hides vectors on library/forwarded and generic-JSON routes |
+| Your application's own spans | **Not sent** to Future AGI | `FI_FORWARD_APP_SPANS=true` sends them; `FI_HIDE_*` then also hides other AI tracers' prompt and response keys on them |
 | Extra instrumentors / server bundler plugins | Extra instrumentors are not installed; build plugins are inactive until configured | Install the integration or explicitly add a server bundler plugin |
 
 The agent sanitizes a detached copy for its own exporter. **Other exporters retain their own privacy policies.** Explicit application-owned processors are not silently rewritten. Host SDK limits may force the FI view to withhold content as `<unknown: host-truncated>` rather than export a partial value. Unknown, transformed or unobserved secrets cannot always be recognized; use the hide flags for sensitive content.
@@ -187,10 +189,11 @@ The most-used settings are below. Set them **before** loading the agent; later `
 | `FI_API_KEY` + `FI_SECRET_KEY` | Unset | Complete pair for the default Future AGI destination |
 | `FI_PROJECT_NAME` | See full reference | Project in Observe; set explicitly for stable routing |
 | `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL or full traces endpoint |
-| `FI_INSTRUMENTATIONS` | All eligible integrations | Comma-separated allowlist, e.g. `openai,wire` |
+| `FI_INSTRUMENTATIONS` | All eligible integrations, except `http` | Comma-separated allowlist, e.g. `openai,wire`; incoming HTTP spans need `http` listed here |
 | `FI_DISABLED_INSTRUMENTATIONS` | Empty | Denylist; takes precedence over the allowlist |
 | `FI_WIRE_CAPTURE` | `true` | Enable global-fetch capture and transport credential observation |
-| `FI_SAMPLE_RATE` | `1` | Root sampling ratio on agent-owned providers; existing providers keep their sampler |
+| `FI_SAMPLE_RATE` | `1` | Root sampling ratio of the agent's own provider |
+| `FI_FORWARD_APP_SPANS` | `false` | Also send the application's own spans to Future AGI |
 | `FI_AUTO_DEBUG` | `false` | Print the masked startup report |
 | `OTEL_SDK_DISABLED` | `false` | Disable auto-instrumentation |
 
@@ -286,7 +289,7 @@ HTTP/HTTPS receipt, TLS, body/error parity and lifecycle on your deployed Node v
 | esbuild, Vite SSR, Rollup or webpack | Opt into the Node-server adapter and deploy the complete agent payload; keep AI SDKs external for library hooks |
 | AWS Lambda | Initialize once outside the handler and flush at each invocation boundary, not just process exit |
 | Edge / browser | The Node preload is not supported. The `/edge` subpath is a low-level fetch observer, not a configured tracing SDK |
-| Existing OpenTelemetry setup | Keep one global provider; configure a single export route for each destination |
+| Existing OpenTelemetry setup | Start your SDK as usual, before or after the preload; the agent keeps its own provider and sends only AI spans |
 
 [Framework recipes and packaging requirements](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/FRAMEWORKS.md)
 
@@ -308,7 +311,7 @@ npx --no-install traceai-auto doctor --no-check
 
 | Symptom | What to check |
 | --- | --- |
-| Everything is `disabled` | Supply both FI keys in the same source, or configure an application destination. Check `OTEL_SDK_DISABLED` and the allowlist/denylist. |
+| Everything is `disabled` | Supply both FI keys in the same source, or pass a destination to `init()`. An application provider alone is not a destination. Check `OTEL_SDK_DISABLED` and the allowlist/denylist. |
 | `collector: failed` | Check `FI_BASE_URL`, both keys, outbound connectivity and collector access. Initialization itself never probes the collector. |
 | `collector: not_tested` | No completed test export yet, `--no-check`, zero sampling, or an application-owned destination. It is not a success signal. |
 | `missing_instrumentor` | Install the suggested dedicated package from bootstrap, then restart. |

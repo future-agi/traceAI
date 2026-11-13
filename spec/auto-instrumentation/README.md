@@ -750,7 +750,8 @@ remains authoritative even for projected identity/metadata.
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, else the working directory's name, else `DEFAULT_PROJECT_NAME` | FI routing project, recorded separately as `project_name`; never assigns or replaces the application's `service.name` or resource identity (A6). |
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment` for the zero-code path. |
 | `FI_AUTO_INSTRUMENT` | unset | Python only: `true` instruments every interpreter in the environment, with no command change. |
-| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of integration names. |
+| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of integration names. Incoming HTTP (`http`) is the exception: it is on only when this list names it. |
+| `FI_FORWARD_APP_SPANS` | `false` | `true` also sends the application's own spans to Future AGI, as before this rule (Node: `forwardApplicationSpans`). Off by default: Future AGI receives only AI spans. |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist. `wire` disables the wire layer. |
 | `FI_WIRE_CAPTURE` | `true` | `false` disables the wire layer. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Body buffering limit. |
@@ -763,34 +764,51 @@ remains authoritative even for projected identity/metadata.
 
 ## Agent behaviour
 
-The zero-code entry points behave like an APM agent: install and run with an application-owned
-OpenTelemetry destination, or optionally set a complete FI credential pair for FI export.
-Content capture remains **ON by default**, subject to the same hide controls on every route.
+Zero-code tracing starts only when the user explicitly turns it on. Once on, every installed
+AI integration is traced with content captured by default (`FI_HIDE_*` hides it), and Future
+AGI receives only the AI spans, masked by the shared privacy catalog, while the application's
+own OpenTelemetry provider and its other spans are left untouched. It is AI instrumentation,
+not a general-purpose APM agent. Run it with a complete FI credential pair for FI export, or
+with a destination supplied in code. Content capture remains **ON by default**, subject to
+the same hide controls on every route.
 
 - **Neutral activation (A11, 2026-10-30).** An application-supplied SDK tracer provider,
   exporter **or** span processor is sufficient to activate the library and wire instrumentors,
-  with no FI keys. A supplied provider is reused; a supplied exporter/processor without a
-  provider is attached to the agent-created provider. Do not construct an FI exporter, resolve
+  with no FI keys. A supplied provider receives the AI spans when there is no FI route; a
+  supplied exporter/processor is the only processor of the agent-created provider. Do not construct an FI exporter, resolve
   an FI collector connection, test FI authentication, or warn about absent FI keys in this
   mode. A complete FI pair adds an FI destination only when that route is requested. With
-  neither an application destination nor a complete FI pair, skip exporter setup and warn
-  once; do not install a replacement provider or disturb existing application behaviour.
-  `OTEL_SDK_DISABLED=true` and explicit instrumentation disables still win.
+  neither a destination supplied in code nor a complete FI pair, install nothing (no
+  provider, hooks or globals) and warn once; a partial pair is part of that one warning. An
+  application provider found at runtime is not a destination. `OTEL_SDK_DISABLED=true` and
+  explicit instrumentation disables still win.
 - **Fail open.** An unreachable collector, a broken instrumentor or an unsupported library
-  version logs one warning and leaves the application running untouched. A missing/partial
-  FI pair never disables an application-owned destination. Nothing on the startup path makes
-  a network call or raises.
+  version logs one warning and leaves the application running untouched. An unsupported
+  runtime version logs one warning. A missing/partial FI pair never disables a destination
+  supplied in code. Nothing on the startup path makes a network call or raises.
 - **No signal-handler takeover.** The agent never replaces how the application handles
   SIGINT/SIGTERM. It flushes on normal exit (`atexit`, `beforeExit`, `AppDomain.ProcessExit`,
   shutdown hook) and exposes an explicit `shutdown()`/`flush()` for short-lived processes.
   Where a SIGTERM kills the process without running exit hooks (Python and Node: servers such
   as uvicorn re-raise SIGTERM after their own graceful shutdown), the agent chains in front of
   the existing SIGTERM handler: it flushes (bounded, 5 s), then runs the previous handler, or
-  restores the default action and re-raises, so the exit code is unchanged.
-- **Coexists with OpenTelemetry.** Reuse an application's global SDK tracer provider; add
-  only explicitly configured destinations and never replace existing processors/exporters.
-  When no provider exists, the agent may install one for the supplied destination or FI pair.
-  Initialization is once per process (S2); repeated initialization cannot rewire ownership.
+  restores the default action and re-raises, so the exit code is unchanged. It holds a
+  SIGTERM only while the FI route has spans to send, and not after the collector has failed.
+- **Coexists with OpenTelemetry.** The agent never registers a global tracer provider,
+  context manager or propagator, so an application SDK started before or after it registers
+  normally and its exporters receive its own spans. The agent keeps its own isolated
+  provider whose only processor is the FI route, binds every instrumentor and the wire layer
+  to it, and never attaches the FI route to the application's provider. AI spans still parent
+  under the application's active span, read through the application's context manager; with
+  none, the agent keeps parent links between its own spans privately. Future AGI receives
+  only spans from agent-bound tracers (wire and traceAI integration spans). The forwarding
+  switch (`FI_FORWARD_APP_SPANS=true`; Node `forwardApplicationSpans: true`) also attaches the
+  FI route to the application's provider, as before this rule; `FI_HIDE_*` then also hides
+  other AI tracers' content keys (`ai.prompt*`, `ai.response.*`, `ai.toolCall.*`,
+  `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input/output`)
+  on those spans. Vector database integrations enabled by the agent trace only vector
+  operations. Initialization is once per process (S2); repeated initialization cannot rewire
+  ownership.
 - **Resource identity (A6, 2026-10-30).** Preserve every application resource attribute,
   including `service.name`, `service.namespace`, `service.instance.id`, deployment and cloud
   identity; merging traceAI defaults must not drop unknown application keys. If the application
@@ -801,10 +819,12 @@ Content capture remains **ON by default**, subject to the same hide controls on 
   (and existing project-type/version metadata). Add routing on the FI-owned export snapshot
   when the provider is host-owned; do not mutate its resource or other exporters' view.
   Resource preservation does not bypass S1 credential/media scrubbing of the FI export view.
-- **Transactions.** Incoming HTTP requests become root `SERVER` spans when a server
-  instrumentation is available for the framework in use (FastAPI, Flask, Django, Express,
-  ASP.NET Core, Spring), so every AI call is nested under the request that caused it.
-  Outgoing non-AI HTTP calls are not traced by default.
+- **Transactions.** Incoming HTTP instrumentation is off by default. Only an explicit
+  allowlist entry turns it on (`FI_INSTRUMENTATIONS` including `http`). Even then, a `SERVER`
+  span is sent to Future AGI only when an AI span was seen in the same trace, so requests
+  with no AI call, such as health checks, are never sent. AI calls inside the application's
+  own request spans parent under them through the application's context manager. Outgoing
+  non-AI HTTP calls are not traced.
 - **Report.** At startup, with `FI_AUTO_DEBUG=true`, and on demand through a `doctor`
   command, the agent prints the status of every integration (see statuses above), the
   resolved configuration with secrets masked, and whether the collector accepted a test

@@ -25,19 +25,24 @@ For short-lived programs, finish reading responses, then `await forceFlush()` or
 The preload does not perform network I/O. The first real completed span initiates
 a bounded batch export, or `doctor` can explicitly send a test span. FI credentials
 are required only for the default FI destination. `init({ exporter })`,
-`init({ spanProcessor })`, `init({ provider })`, or an existing application OTel provider
-activates instrumentation without FI credentials and without creating an FI export route.
-With neither a destination nor a complete FI pair, both layers are disabled with one warning.
+`init({ spanProcessor })` or `init({ provider })` activates instrumentation without FI
+credentials and without creating an FI export route. With neither a destination given in
+code nor a complete FI pair, nothing is installed and one warning is printed (a half pair
+is named in that same warning); an application provider on the OpenTelemetry API is not a
+destination. On an unsupported Node version the preload prints one warning and loads nothing.
 FI project routing never replaces application `service.name` or environment resource
 identity. Export/integration failures warn once per
 failure category, do not log credentials/provider bodies, and leave the app running.
 A one-shot `beforeExit` handler flushes completed spans. The agent adds no SIGINT
 handler. Its SIGTERM listener starts a bounded flush and preserves app-owned listeners;
 without one, it restores the default action and re-raises SIGTERM (preserving the signal
-exit). Explicit flush/shutdown have a five-second deadline. Shutdown reserves up to
+exit). It holds a SIGTERM for that flush only while the FI route has spans to send and the
+collector has not failed; otherwise the signal reaches the application at once. Explicit
+flush/shutdown have a five-second deadline. Shutdown reserves up to
 2.5 seconds for flush and then invokes exporter shutdown with the remaining 2.5 seconds,
-even if flush never resolves. A failed initialization rolls back this agent's hooks,
-processor and newly installed globals; app-owned globals are retained. The first
+even if flush never resolves. Shutdown also removes the wire layer's promise hook and gives
+back `process.emit`. A failed initialization rolls back this agent's hooks and
+processor; the agent installs no OpenTelemetry globals. The first
 configuration remains terminal, so a later `init()` cannot retry or rewire the
 process. SIGKILL/forced termination cannot guarantee delivery.
 
@@ -122,7 +127,10 @@ Hidden transcripts use `[REDACTED]`, exactly like hidden input/output values.
 ### Privacy
 
 One export-time boundary sanitizes **every span sent through the agent's exporter**:
-wire spans, dedicated-library spans and forwarded application spans. It builds a
+wire spans and dedicated-library spans, plus application spans when the forwarding
+switch sends them. On forwarded application spans, `FI_HIDE_*` also hides other AI
+tracers' prompt and response keys, and session and user ids keep the credential name
+rule, which only spans made by an FI tracer are exempt from. It builds a
 detached snapshot of the ended native span; other exporters keep the original
 span/resource/context unchanged by that export policy. In auto destination mode,
 foreign attributes are never rewritten by FI policy. FI-authored attributes still
@@ -243,18 +251,34 @@ additive processor registration (`exclusiveProcessor:false`), preserving applica
 processors. Shutdown recognizes processor/class-registry ownership as well as
 shimmer wrappers, and leaves application-owned patches intact.
 
-If `@opentelemetry/instrumentation-http` is installed and resolvable in the app, it is enabled for incoming SERVER spans only. Outgoing non-AI HTTP spans are not enabled by default.
+Incoming HTTP is off by default. With `http` in `FI_INSTRUMENTATIONS` and `@opentelemetry/instrumentation-http` installed and resolvable in the app, it is enabled for incoming SERVER spans only, on the agent's provider. A SERVER span is sent only when an AI span was seen in the same trace: the agent keeps a small bounded set of recent trace ids with AI work and checks it when the SERVER span ends. Outgoing non-AI HTTP spans are not enabled.
+
+When the agent enables pgvector, Redis or MongoDB, it passes `vectorOnly: true`, so only vector operations create spans. An installed release that does not report `vectorOnly` is left `manual`.
 
 ### Existing OTel SDKs
 
-An existing global SDK provider is retained, with the FI processor added beside its
-existing processors. Its sampler/context manager remain authoritative. OTel JS 2.x
+The agent never registers a global tracer provider, context manager or propagator,
+from the preload, `init()`, the launcher or the bundler plugins. It keeps an isolated
+provider whose only processor is the FI route and binds every instrumentor and the wire
+layer to it, so an application SDK started before or after the preload registers
+normally and keeps its sampler, context manager, propagator, processors and exporters.
+The FI route is never attached to the application's provider, and Future AGI receives
+only spans from agent-bound tracers. AI spans read the active context through the
+OpenTelemetry API, so they parent under the application's active span when it has a
+context manager. Without one, the agent's tracers keep parent links between the agent's
+own spans with a private `AsyncLocalStorage` that is never registered globally: a span
+an agent tracer starts becomes the parent of the work its caller starts next, until it
+ends. Spans started together from the same synchronous code may therefore nest.
+
+With the forwarding switch (`FI_FORWARD_APP_SPANS=true` or `forwardApplicationSpans`),
+the application's provider keeps its processors and the FI processor is added beside
+them, as earlier releases did; AI spans are then created on that provider. OTel JS 2.x
 has no public late-add-processor API, so this uses the live MultiSpanProcessor list;
-the public 1.x API is also recognized. FI project resource attributes are enriched
+the public 1.x API is also recognized. A provider registered after the preload is joined
+when the first agent span starts. FI project resource attributes are enriched
 only on the FI export copy. If a custom provider does not expose either supported
-attachment mechanism, the agent warns and uses an isolated AI provider without
-replacing the global provider. This is a degraded fallback, not a promise of
-processor attachment to arbitrary OTel implementations.
+attachment mechanism, the agent warns and keeps AI spans on its own provider. This is a
+degraded fallback, not a promise of processor attachment to arbitrary OTel implementations.
 
 ## SDK attribute limits and streaming timing
 
