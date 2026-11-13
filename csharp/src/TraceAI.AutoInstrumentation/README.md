@@ -8,60 +8,57 @@ behaviors described below. It does not capture every possible AI call.
 ## Install and run without changing application code
 
 Build from the repository root with a .NET 10 SDK; the application needs only its
-own runtime, not a .NET 10 installation. Publish **one framework per directory**:
+own runtime, not a .NET 10 installation. One published directory serves both .NET 8
+and .NET 10 applications:
 
 ```sh
-# .NET 8 application (no application package/code changes required)
 dotnet publish csharp/src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj \
-  -c Release -f net8.0 -o csharp/artifacts/auto/net8.0
-export FI_API_KEY='...'
-export FI_SECRET_KEY='...'
-export DOTNET_STARTUP_HOOKS="$PWD/csharp/artifacts/auto/net8.0/TraceAI.AutoInstrumentation.dll"
-dotnet /absolute/path/to/YourNet8Application.dll
-
-# For .NET 10, publish with -f net10.0 -o csharp/artifacts/auto/net10.0,
-# then point DOTNET_STARTUP_HOOKS at that directory's DLL instead.
+  -c Release -o csharp/artifacts/auto
+FI_API_KEY='...' FI_SECRET_KEY='...' \
+DOTNET_STARTUP_HOOKS="$PWD/csharp/artifacts/auto/TraceAI.AutoInstrumentation.dll" \
+  dotnet /absolute/path/to/YourApplication.dll
 ```
 
-### Supported runtime matrix
+Set the variables on the application's command line, as above, not with `export` in
+your shell: an exported `DOTNET_STARTUP_HOOKS` also attaches the hook to later
+`dotnet build`, `dotnet test` or `dotnet run` commands. Child processes started by the
+application inherit the variable, and with it the hook, unless the application
+removes it from their environment.
 
-| Application runtime | Hook payload | Shared DiagnosticSource | Verification / limits |
-| --- | --- | --- | --- |
-| .NET 8 LTS | `net8.0` | Runtime 8.x, or application-provided 9.x/10.x | Offline real-hook tests on .NET 8.0.33/macOS arm64 cover stock 8.x and app-provided 9.0.0; all wire/startup modes, OpenAI 2.8.0 and ASP.NET Core 8. |
-| .NET 10 | `net10.0` | Runtime 10.x | Same real-hook matrix on .NET 10.0.14/macOS arm64, OpenAI 2.8.0 and ASP.NET Core 10. |
-| .NET 9, .NET Framework, .NET 6/7 or earlier | None supported | — | Not part of the supported/tested matrix. |
-| NativeAOT, trimmed/single-file deployments, browser/WASM | None verified | — | Not supported by this verification; do not assume startup-hook availability. |
+Tracing starts only when you set `DOTNET_STARTUP_HOOKS` (or call `TraceAIAuto.Init()`).
+Once on, every installed AI integration below is traced with content captured by
+default; the `FI_HIDE_*` switches hide it. Future AGI receives only the AI spans,
+masked by the shared privacy catalog, and the incoming web request spans of requests
+that made an AI call (set `FI_DISABLED_INSTRUMENTATIONS=aspnetcore` to send none).
+The application's own OpenTelemetry provider, its sampling and its other spans are
+left untouched. The hook does set these process-wide library switches when the
+matching integration is enabled, after it has started successfully:
+`OpenAI.Experimental.EnableOpenTelemetry`,
+`Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics`, and
+`Azure.Experimental.EnableActivitySource` (which turns on activity sources in every
+Azure SDK client, not only AI clients).
 
-Payloads are managed code with no native profiler. Windows/Linux and architectures
-other than macOS arm64 have not been exercised here. Use the matching payload;
-**a `net10.0` hook cannot load in a .NET 8 process**. DiagnosticSource majors outside
-8–10 fail open with a warning rather than creating conflicting Activity types.
-Application-provided DiagnosticSource 10 on .NET 8 is accepted but not a separately
-exercised combination. The hook never upgrades the app's chosen DiagnosticSource.
+### Supported runtimes
+
+| Application runtime | Shared DiagnosticSource | Notes |
+| --- | --- | --- |
+| .NET 8 LTS | Runtime 8.x, or application-provided 9.x/10.x | Tested with real child processes, including a stock console application and an application that ships an older OpenTelemetry. |
+| .NET 10 | Runtime 10.x | Same tests. |
+| .NET 9, .NET Framework, .NET 6/7 or earlier | — | Not supported or tested. |
+| NativeAOT, trimmed/single-file deployments, browser/WASM | — | Not supported; do not assume startup-hook availability. |
+
+The payload is managed code built for `net8.0`, with no native profiler; it runs in
+.NET 8 and .NET 10 processes. Continuous integration runs the tests on macOS and
+Linux. DiagnosticSource majors outside 8–10 fail open with a warning rather than
+creating conflicting Activity types. The hook never upgrades the app's chosen
+DiagnosticSource.
 
 Keep **all** files in the published agent directory together, not just the hook
-DLL. Attach to the application process, not `dotnet build`, `dotnet test`, or
-`dotnet run` (which can attach it to build/test infrastructure as well). On Windows
-set the same environment variables in PowerShell. Multiple startup hooks are
-separated by the OS path separator (`:` on Unix; `;` on Windows).
-
-For a local NuGet installation, package the dependencies and agent:
-
-```sh
-dotnet pack csharp/src/TraceAI.AutoInstrumentation/Net8Sdk/TraceAI.AutoInstrumentation.Net8Sdk.csproj \
-  -c Release -o csharp/artifacts/packages
-dotnet pack csharp/src/TraceAI.AutoInstrumentation/AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj \
-  -c Release -o csharp/artifacts/packages
-dotnet pack csharp/src/TraceAI.AutoInstrumentation -c Release -o csharp/artifacts/packages
-```
-
-Add that directory as a package source and reference `TraceAI.AutoInstrumentation`
-version `0.1.0`. These packages have not been published by this change. The .NET 8
-support package compiles the unchanged shared FI SDK sources for .NET 8 against the
-hook's own pinned OpenTelemetry; both the `net8.0` and `net10.0` payloads load that
-copy, so the SDK project's OpenTelemetry version matrix never changes the hook.
-For version-conflict isolation prefer the separate published hook directory rather
-than mixing agent dependencies into an application's own output.
+DLL. On Windows set the same environment variables in PowerShell. Multiple startup
+hooks are separated by the OS path separator (`:` on Unix; `;` on Windows). The hook
+compiles the unchanged shared FI SDK sources for .NET 8 against its own pinned
+OpenTelemetry, so the SDK project's OpenTelemetry version matrix never changes the
+hook. NuGet packages for the agent are not published by this change.
 
 The alternative **in-process** code entry point is (choose one entry point so
 lifecycle/diagnostic APIs run in the context that owns the agent):
@@ -137,13 +134,19 @@ debug = false
 | `FI_DISABLED_INSTRUMENTATIONS` | Empty; denylist takes priority. `wire` disables HTTP capture. |
 | `FI_WIRE_CAPTURE` | `true`. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` (4 MiB), separately for request/response capture. |
-| `FI_SAMPLE_RATE` | `1`; parent-based trace-id ratio sampling, clamped to 0–1. |
+| `FI_SAMPLE_RATE` | `1`; share of traces sent to Future AGI, clamped to 0–1. The decision is per trace: an upstream service's sampled flag decides its trace, other traces use this ratio on the trace id. It never changes the application's own sampling. |
 | `FI_AUTO_DEBUG` | `false`; print masked configuration/integration diagnostics at startup. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent entirely, without missing-key warnings. |
 
 All `FI_HIDE_*` switches from `FIInstrumentation.TraceConfig` are honored in this
 path, including flattened message attributes and audio transcript text. Their
-lower-case file equivalents work too (`hide_inputs = true`, etc.). Agent-created
+lower-case file equivalents work too (`hide_inputs = true`, etc.). As in
+`TraceConfig`, error details are hidden whenever any input or output content flag
+is set, because provider error text can repeat the prompt; an explicit
+`FI_HIDE_ERROR_DETAILS=true` or `false` overrides that. Hidden error details keep
+the status code and `error.type` but drop the status description, `error.message`,
+`exception.message`, `exception.stacktrace` and `otel.status_description` on every
+span, including the provider's error text on HTTP client spans. Agent-created
 wire attributes are masked before Activity creation and attribute projection, even
 with only a supplied provider: its listeners/exporters never receive hidden wire
 content. Detached export sanitization remains a second pass on agent destinations;
@@ -207,15 +210,22 @@ hook and default load contexts. It holds at most 1,024 values of eight or more
 characters, evicting the least recently registered/observed value first. At
 initialization it learns every supplied FI key (including ignored incomplete explicit
 pairs and overridden TOML/environment values) and credential-like environment values
-(names containing KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH).
+(names containing KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH). Such an
+environment value longer than 4,096 characters is skipped with one warning that names
+the variable, never its value.
 `TraceAIAuto.RegisterSecret(value)` lets an integration register additional values;
-shorter values are ignored. The export boundary takes one immutable, longest-first
+shorter values are ignored. If the registry itself must fail closed (for example an
+overlong registered value), the agent says so once on standard error and exports
+spans with identity and timing but no content for the rest of the process. The export boundary takes one immutable, longest-first
 snapshot per batch and replaces these values in every exported string, including
 unrelated and later spans. There is no per-request secret set, span-start inheritance
 or ancestor credential propagation. Registry values never appear in diagnostics.
 
-The HttpClient observer always collects credentials, before wire matching, sampling,
-model-span de-duplication, suppression or `FI_WIRE_CAPTURE=false` can skip capture.
+The HttpClient observer always collects credentials, before sampling, model-span
+de-duplication, suppression or `FI_WIRE_CAPTURE=false` can skip capture. For a request
+that is not an AI call it reads headers, the query and buffered bodies of at most
+16 KiB, so a large request body is never parsed before an ordinary request is sent;
+AI requests keep full body discovery.
 Header values retain their individual boundaries with HTTP whitespace trimmed;
 credential/signed-URL query values are registered in encoded and decoded forms.
 URL discovery and export scrubbing share one credential-query vocabulary, including
@@ -264,7 +274,10 @@ options are respected; otherwise `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` overrides
 no content is admitted: degradation, identity, outcome, provider/model/operation,
 usage, timing and provenance families retain their lexical prefix. A zero limit produces a
 bounded one-time diagnostic rather than increasing the host's limit. Host Activities,
-resources and other exporters' views are unchanged.
+resources and other exporters' views are unchanged: the agent never writes tags to an
+application's Activity. What it needs at start (whether the activity is a model call,
+and the FI context of the moment) is kept in custom properties, which exporters do not
+read, and the mapping and FI context are applied to the detached export copy.
 
 Value traversal has a shared 4,096-node/4-MiB text budget and a 64-level depth bound;
 cycles, expanding graphs and oversized values redact the affected attribute.
@@ -276,7 +289,9 @@ characters per value. Registry capacity is 1,024; discovery/value-budget failure
 fail closed, while capacity overflow uses LRU eviction. A snapshot failure discards
 all content but retains identity, flags and timing. Snapshot shells use the tested
 DiagnosticSource 8–10 private content fields to preserve IDs without invoking
-ActivitySource constructors or application listeners. An unrecognized layout omits
+ActivitySource constructors or application listeners. These and the other private
+runtime and OpenTelemetry members the agent uses are resolved once; at start the
+agent prints one warning naming any that are missing. An unrecognized layout omits
 telemetry rather than reverting to the unsafe shared Activity. These privacy rules
 apply to the agent's exporter, not an application's separately configured exporters.
 The agent does not enable libraries' sensitive-content diagnostics automatically.
@@ -291,13 +306,17 @@ The agent does not enable libraries' sensitive-content diagnostics automatically
 | `azure_inference` | `Azure.AI.Inference*`; enables `Azure.Experimental.EnableActivitySource`. |
 | `azure_openai` | `Azure.AI.OpenAI*`; modern clients also emit `OpenAI.*` (enable `openai` too). |
 | `agents` | `Experimental.Microsoft.Agents.AI*`, `Microsoft.Agents.AI*`; the framework must opt in to its OpenTelemetry wrapper. |
-| `aspnetcore` | `Microsoft.AspNetCore*`; listens to built-in incoming SERVER activities; preserves remote parents. |
-| `wire` | `HttpHandlerDiagnosticListener` / `HttpRequestOut`. |
+| `aspnetcore` | The exact `Microsoft.AspNetCore` source (not other framework sources under it); incoming SERVER activities, preserving remote parents. A request span is sent only when an AI span of the same trace was captured, so health checks, static files and other plain routes are not sent. |
+| `wire` | `HttpHandlerDiagnosticListener` request, response and exception events. |
 
 Listeners cover sources created after startup. `gen_ai.system` and legacy token
 usage attributes are mapped to current conventions, and operation names map to
-`gen_ai.span.kind` (`LLM`, `EMBEDDING`, `AGENT`, `TOOL`, etc.). No blanket outgoing
-HTTP instrumentation is installed. Framework AGENT/CHAIN/TOOL spans allow child
+`gen_ai.span.kind` (`LLM`, `EMBEDDING`, `AGENT`, `TOOL`, etc.), on the export copy
+only. No blanket outgoing HTTP instrumentation is installed: the wire layer listens
+to the HTTP client's request, response and exception events, which create no
+Activity, so a request made without an ambient Activity gets no `traceparent` or
+`tracestate` header because of the agent. Inside an existing Activity the runtime
+sends those headers as it does without the agent. Framework AGENT/CHAIN/TOOL spans allow child
 wire capture; model/embedding/reranker/guardrail spans suppress it through the
 entire ancestor chain, even with intermediate SDK-native client/retry spans. The
 agent marks covered model activities and passively tracks native descendants,
@@ -336,7 +355,7 @@ proxy hosts still require a validated body. Binary audio request sizes are
 available when Content-Length is known. Endpoint paths/query fields can supply
 model/voice identifiers, but do not bypass required-body validation.
 
-At HttpClient Stop, the original response and `HttpContent` are retained. For the
+At the HTTP client's response event, the original response and `HttpContent` are retained. For the
 standard SocketsHttpHandler framework response content, the agent taps its owned
 stream via the tested `_stream` field; it never calls a custom content factory or
 reads an unread body. Read-stream and content serialization/copy paths forward
@@ -451,7 +470,7 @@ never on the application's shutdown thread.
 
 The global, internal `StartupHook` bootstrap assembly contains only framework types,
 so application DI/plugin scanners can safely call `GetTypes()` on it. It loads
-`TraceAI.AutoInstrumentation.Runtime.dll`, the FI SDK, patched OpenTelemetry **1.15.3** and supporting
+`TraceAI.AutoInstrumentation.Runtime.dll`, the FI SDK, pinned OpenTelemetry **1.15.3** and supporting
 Microsoft.Extensions dependencies in a private `traceai-auto` AssemblyLoadContext.
 They do not bind to or replace the application's OTel assemblies. The sole shared
 DiagnosticSource assembly is resolved through the default context, so HttpClient,
@@ -477,101 +496,97 @@ The real-hook coexistence probe deliberately ships OTel 1.11.2 and DiagnosticSou
 checks host suppression and parentage, scans the bootstrap types, and verifies that only one
 DiagnosticSource exists. OTel 1.11.2 is a **test-only conflict fixture**, not a
 recommended application version. Arbitrary OTel versions/integrations are not all
-certified. Invalid hook paths/CLR-level loading failures occur before Initialize
-and cannot be caught by the agent.
+certified. A `DOTNET_STARTUP_HOOKS` path that does not exist fails in the runtime
+before the agent runs and cannot be caught by it; the published payload itself loads
+in both .NET 8 and .NET 10 processes, and if its runtime files are missing the agent
+prints one line and the application continues without tracing.
 
 .NET uses additive ActivitySource listeners rather than one replaceable global
 provider. By default the agent builds a side-by-side provider/exporter. With
 `AutoOptions.Provider`, it reuses the caller's provider and adds only explicitly
 supplied destinations; neither mode disposes or replaces a host provider. Existing
-host exporters keep working; overlapping
-host source subscriptions may intentionally export the same activity to their
-own destinations. Parent-based sampling is rechecked at the agent export boundary
-so another listener recording a shared activity does not override its sampling
-policy; the host's exporters are unaffected.
+host exporters keep working; overlapping host source subscriptions may
+intentionally export the same activity to their own destinations. An activity takes
+the most permissive vote of all listeners, so the agent's own provider only ever
+asks for recording, never for the sampled flag: the application's sampler alone
+decides what the application records, exports and propagates downstream, and the
+application's exporters see the same sampled flags as without the agent. The
+agent's batch processor makes the Future AGI decision itself, the same for every span
+of a trace. With a supplied provider, the application's sampled flag also gates the
+agent's added destination.
 
 ## Tests
 
 ```sh
 export DOTNET_HOST_PATH="$(dirname "$(readlink -f "$(command -v dotnet)")")/dotnet"
-dotnet build csharp/FIInstrumentation.sln -c Release
-dotnet test csharp/FIInstrumentation.sln -c Release
+dotnet build csharp/FIInstrumentation.sln -c Release -m:1
+dotnet test csharp/FIInstrumentation.sln -c Release --no-build
 ```
 
-The child-process tests need the .NET 8 runtime (including ASP.NET Core) installed
-next to the .NET 10 SDK in the same `dotnet` root; `DOTNET_HOST_PATH` names that
-root's `dotnet` executable (without it, the tests look for `csharp/.dotnet/dotnet`).
-Tests use no live provider or Future AGI credentials. The net10 test runner builds
-both framework payloads and launches actual .NET 8 and .NET 10 child processes.
-Stock console probes have **no package or telemetry references**; richer probes
-exercise ASP.NET Core, OpenAI and an older host OTel provider. All send HTTP to a
-local mock provider; a local collector decodes the actual OTLP protobuf. The suite
-reads every current shared fixture (including Gemini JSON-array streams, multipart
-messages and Cohere v2 SSE); fixture files are never copied or changed by tests.
-Synchronous processor chains and exporter entry/release events make privacy and
-blocked-flush regressions deterministic, without sleeps. Independent-verifier
-regressions additionally exercise environment resource privacy through stock .NET
-8/10 startup-hook processes, branching cycles/shared DAGs through Activity.Stop,
-gated user-defined ToString overrides at start/stop/export and HTTP de-duplication,
-and streaming/non-streaming endpoint variants across five response framings.
-`RoundThreeRegressionTests` adds gated getter-safety checks at stop/export for
-mutable tags, immutable events/links and custom JSON values, HTTP credential OWS,
-actual OTLP native-content masking, Anthropic/OpenAI image URLs, nested Bedrock
-vectors, diagnostic client-secret masking, application destination-write aborts,
-and request-time suppression preserved across deferred completion. The older-host
-coexistence probe also consumes an accepted response under the host's separate
-suppression scope on both runtimes. Compatibility protobuf
-is checked against the patched upstream exporter for resource/attribute values,
-timestamps, events, links and error status, plus its message-size bound. Cases cover JSON,
-SSE byte preservation, async/default-buffered/synchronous reads, de-duplication,
-missing credentials, disabled SDK, sampling (including overlapping host listeners),
-masking, binary counting, truncation, idle-startup/no-network behavior and dead
-collectors. A real ASP.NET Core host verifies SERVER-to-wire parentage, and an
-OpenAI .NET 2.8.0 client uses the mock server to verify native library telemetry.
-The separate legacy `csharp/e2e_tests` console program calls a live provider and is
-not part of this offline verification.
+Build on one node (`-m:1`): the startup hook tests also build their .NET 8 child
+applications. The child-process tests need the .NET 8 runtime (including ASP.NET
+Core) installed next to the .NET 10 SDK in the same `dotnet` root; `DOTNET_HOST_PATH`
+(not the startup hook variable) names that root's `dotnet` executable (without it,
+the tests look for `csharp/.dotnet/dotnet`). Tests use no live provider or Future AGI
+credentials. The net10 test runner builds the payload and launches actual .NET 8 and
+.NET 10 child processes. Stock console probes have **no package or telemetry
+references**; richer probes exercise ASP.NET Core, OpenAI and an older host OTel
+provider. All send HTTP to a local mock provider; a local collector decodes the
+actual OTLP protobuf. The suite reads every current shared fixture (including Gemini
+JSON-array streams, multipart messages and Cohere v2 SSE); fixture files are never
+copied or changed by tests. Synchronous processor chains and exporter entry/release
+events make privacy and blocked-flush regressions deterministic, without sleeps.
 
-`RoundFourPrivacyTests` covers concurrent enrichment after snapshotting through
-actual OTLP, every privacy surface through native and compatibility transports,
-non-finite scalars/arrays, string-array and Gemini file-backed images, ambient
-getter safety and fail-closed snapshot budgets. `RoundFourTransportTests` compares
-fresh no-hook and hooked processes on .NET 8/10 for buffered/synchronous/streaming,
-zero-byte/canceled/partial/unread bodies and content/response helper identity;
-it also checks real-hook scope/tracestate/event/link privacy, intermediate native
-span de-duplication, custom content preservation and transport timestamps before
-parsing/Activity callbacks. `RoundFourBlockerTests` covers query credential error
-echoes through actual .NET 8/10 hook exports (wire, deduplicated library and wire-off
-privacy-only paths), every recognized auth header on all export surfaces without
-request discovery, and SIGTERM against no-hook baselines. Signal cases check both
-default exit 143 and repeated application-canceled signals followed by new spans.
-`RoundFourSecondBlockerTests` adds actual OTLP checks for `.text` hide families on
-every privacy surface, percent-escaped/mixed data URLs, AWS session tokens and MCP
-body-credential error echoes under covered native descendants (wire/library/wire-off
-paths). Real-hook .NET 8/10 exact Content-Length probes compare no-agent bytes and
-export before any EOF read/disposal; an in-process assertion checks flush with both
-response and stream still open. Credential budget failures and custom-content
-serializer/length safety have dedicated regressions.
-`RoundFiveTests` covers directional GenAI message events on both actual OTLP
-transports, shared URL/header credential vocabularies, a bounded/thread-safe LRU,
-longest-first immutable snapshots, public registration across private/default load
-contexts, environment seeding, all export surfaces and unrelated/later spans.
-Actual .NET 8/10 startup-hook probes compare compressed request behavior with
-no-hook baselines for wire/library/privacy-only paths, verify default-context public
-registration against the isolated exporter, and exercise message-hide flags.
-Incomplete gzip/Brotli/deflate/zlib, decoded-size limits, safe buffered BCL content
-shapes, diagnostic echoes and indexed/short MIME-tagged media have regressions.
-`RoundFiveBlockerTests` checks multipart part-header and serialized-length stability,
-byte-for-byte sync/async .NET 8/10 upload parity, process-wide registration from
-observed streaming multipart fields (including duplicate/nested credentials), and
-short audio/non-base64 data URIs on every actual OTLP privacy surface. Real-hook
-probes verify later unrelated spans and native library media on both runtimes.
-`RoundFiveMediaPathTests` adds the independent verifier's exact flattened MIME/audio
-JSON and indexed image-attribute reproductions. It checks both actual OTLP
-transports across span/event/link/resource/scope surfaces, status/event names,
-JSON DOM/array values, case-insensitive MIME aliases, indexed MIME values,
-order independence, segment-boundary controls and original-Activity isolation.
-.NET 8/10 startup-hook cases compare flattened/indexed media exports and application
-output with no-hook baselines.
+- `StartupHookTests`: JSON, SSE byte preservation, async/default-buffered/synchronous
+  reads, de-duplication, missing credentials, disabled SDK, sampling, masking, binary
+  counting, truncation, idle startup with no network, dead collectors, SERVER-to-wire
+  parentage in a real ASP.NET Core host, and native OpenAI .NET client telemetry.
+- `HostIsolationTests`: the application with and without the hook. Its own sampling
+  at AlwaysOff and at 1% while the hook samples at 1.0, what its exporter sees on a
+  shared source, its outgoing request headers, which web request spans are sent, and
+  the cost of per-activity lookups and of large non-AI request bodies.
+- `ErrorDetailPrivacyTests`: hidden content also hides error details, including a
+  provider error that repeats the prompt, in real .NET 8 and .NET 10 applications.
+- `AgentStartupTests`: every private runtime member the agent uses resolves on .NET 8
+  and .NET 10, a .NET 8 application keeps running with the published payload or with
+  its runtime files missing, and credential registry warnings.
+- `ValueGraphAndStreamingFlagTests`: environment resource privacy through stock
+  startup-hook processes, cyclic and shared value graphs, user-defined `ToString`
+  overrides that must never run, and streaming endpoint flags across five framings.
+- `GetterSafetyAndHideFlagTests`: getter safety at stop and export, credential header
+  whitespace, native content masking in actual OTLP, image URLs, nested Bedrock
+  vectors, diagnostic secret masking, destination-write aborts and request-time
+  suppression across deferred completion.
+- `ExportSnapshotPrivacyTests`: concurrent enrichment after snapshotting, every privacy
+  surface through native and compatibility transports, non-finite values, file-backed
+  images, ambient getter safety and fail-closed snapshot budgets.
+- `TransportParityTests`: fresh no-hook and hooked processes for buffered, synchronous,
+  streaming, zero-byte, canceled, partial and unread bodies and helper identity, plus
+  scope, tracestate, event and link privacy, de-duplication and transport timestamps.
+- `QueryHeaderCredentialAndSigtermTests`: query credential echoes, every recognized
+  auth header on all export surfaces, and SIGTERM against no-hook baselines (default
+  exit 143 and repeated application-canceled signals followed by new spans).
+- `TextHideAndExactLengthTests`: `.text` hide families, percent-escaped data URLs,
+  session-token and body-credential echoes under covered native spans, and exact
+  Content-Length completion before any EOF read or disposal.
+- `KnownSecretRegistryTests`: message events, credential URL vocabularies, the bounded
+  LRU registry, registration across load contexts, environment seeding and compressed
+  request bodies.
+- `MultipartUploadParityTests` and `MediaPathTests`: multipart upload parity and
+  credentials, structural audio, data URIs and MIME-tagged media paths on every actual
+  OTLP surface, with no-hook baselines.
+- `CredentialEchoAndFlushTests`, `LateProcessorAndExporterOwnershipTests`,
+  `ActivationAndProjectionTests` and `FrameworkLayoutTests`: header echoes and blocked
+  flushes, late application processors and borrowed exporters, neutral activation and
+  attribute projection limits, and the HTTP client and Activity layouts the agent uses.
+
+Compatibility protobuf is checked against the pinned upstream exporter for resource
+and attribute values, timestamps, events, links and error status, plus its
+message-size bound. The older-host coexistence probe also consumes an accepted
+response under the host's separate suppression scope on both runtimes. The separate
+legacy `csharp/e2e_tests` console program calls a live provider and is not part of
+this offline verification.
+
 Unit lifecycle tests explicitly simulate fresh processes using test-only reflection;
 production has no reset or reconfiguration API.
 
@@ -589,13 +604,14 @@ to their component, not independent credentials. Credential value shapes apply t
 every exported string after registered secrets.
 
 Catalog version 3 has no contextual logprob exemption: at generic sites a logprob
-`token` is a credential name like any other. `ProviderResponse.Scrub` is the explicit
-parsed provider-response root from the catalog's `logprob_tokens` list (OpenAI chat
-completions and their buffered chunk arrays). There, tokens are checked against
-registered secrets and value shapes instead, a masked token also loses its `bytes`,
-and a choice whose message or joined streamed text changes under value masking loses
-its whole logprobs block. Wire spans export parsed messages, not provider response
-bodies, so the hook does not call it today.
+`token` is a credential name like any other. Wire spans export parsed messages, not
+provider response bodies, so the catalog's `logprob_tokens` provider-response paths
+are not used by this agent.
+
+The FI context session id, the exact attribute key `session.id`, is exempt from the
+credential name rule on every export surface, as in the other SDKs, so session
+grouping works. Its value still has registered secrets and credential-shaped values
+removed. Other session-named attributes, such as session tokens, keep the name rule.
 
 `PrivacyCatalog.MediaString` is the one media predicate. It recognizes bounded
 decoded magic prefixes under any key, exact whole-value data URIs, all catalog
@@ -612,12 +628,12 @@ privacy case through production scrubbing and repeats it for idempotence. Actual
 OTLP tests cover both exporter routes, resources, scopes, events, links and span
 attributes, plus .NET 8/10 no-hook parity and suppressed-call secret harvesting.
 
-`RoundSixBlockerTests` exercises ignored/overridden FI credentials after LRU churn,
-public no-credential initialization, independent application resource identity,
-actual native/compatibility OTLP limits (128, 8 and 0), dropped counts, snapshot
-isolation and gated real-HttpClient streaming milestones. `WireFixtureTests`
-recurses through every shared fixture directory, including all Round-6 fixtures,
-and replays exact chunk sizes, arrival offsets and mid-frame failures.
+`ActivationAndProjectionTests` exercises ignored/overridden FI credentials after LRU
+churn, public no-credential initialization, independent application resource
+identity, actual native/compatibility OTLP limits (128, 8 and 0), dropped counts,
+snapshot isolation and gated real-HttpClient streaming milestones. `WireFixtureTests`
+recurses through every shared fixture directory, including `fixtures/round6/`, and
+replays exact chunk sizes, arrival offsets and mid-frame failures.
 
 Current wire fixtures also apply A8 inclusive token algebra once after merging
 raw cumulative snapshots. Anthropic/Bedrock input includes cache reads/writes;
@@ -634,18 +650,17 @@ invented as zero; absent optional additions use provider-schema defaults.
   the agent does not reflectively rewrite its subscriptions or sampler. A
   standalone processor can be installed on that provider before initialization;
   there is no direct `AutoOptions.Processor` convenience entry point.
-- **2026-10-31 — Host-listener sampling (S6 verifier OTHER):** a host listener can
-  record a root rejected by the agent's ratio sampler; a child may then inherit
-  that host-recorded parent and pass the parent-based sampler, exporting an orphan
-  child even at agent sample rate zero. This is a sampling-policy limitation, not
-  whole-provider sampling control; host exporters remain unaffected.
+- **Web request spans:** a request span is sent only when an AI span of its trace
+  ended before the request did. An AI call that the request starts but does not wait
+  for is sent without its request span. The set of traces with AI spans is bounded
+  (4,096 recent traces), as is the set of upstream sampling decisions.
 - **2026-10-31 — Attribute limits:** no implementation can retain protected fields
   beyond a host limit smaller than that protected set. Such limits deliberately
   drop content and retain the A7 family/lexical prefix; zero emits no attributes
   and warns once. OTel's SDK eviction count and the projection's accumulated
   content-key loss count describe different stages and are not conflated.
 
-- **2026-10-31 — Concatenated gzip members (round-six verifier OTHER):** credential
+- **2026-10-31 — Concatenated gzip members:** credential
   discovery's strict gzip trailer validation compares the combined decoded output
   with the last member's trailer. Valid concatenated-member requests can therefore
   conservatively suppress that request's captured content, even though the BCL/app
@@ -653,7 +668,7 @@ invented as zero; absent optional additions use provider-schema defaults.
   registry or unrelated later spans. Request bytes and application behavior are
   unchanged. Prefer a single gzip member, or use the `FI_HIDE_*` controls when
   captured content is unnecessary. Multi-member strict decoding is not fixed here.
-- **2026-10-31 — Streaming milestone bounds / encoded and binary streams (R6a verifier OTHER):**
+- **2026-10-31 — Streaming milestone bounds / encoded and binary streams:**
   arrival tracking retains at most 4,096 nonempty transport reads per response.
   First-output events beyond those checkpoints, discarded/truncated content,
   unsupported/binary framing or still-encoded compressed bodies have no first-text
@@ -668,9 +683,9 @@ invented as zero; absent optional additions use provider-schema defaults.
   are unaffected, and generated audio is not claimed to be played audio. This
   timestamp-association/marker limitation is not fixed here.
 - **2026-10-30 — S6 recognition trade-offs:** catalog credential patterns also mask
-  application `session.id` and names containing unexcluded `sig`/`key`/`auth`
-  components. These are shared recognition semantics, not per-SDK exceptions.
-  Use non-credential identifiers for telemetry that must remain visible. Unknown
+  names containing unexcluded `sig`/`key`/`auth` components (the exact `session.id`
+  key is exempt, see above). These are shared recognition semantics, not per-SDK
+  exceptions. Use non-credential identifiers for telemetry that must remain visible. Unknown
   or transformed secrets/media outside structural catalog rules still require the
   `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, message/text/image and parameter hide controls
   or explicit `TraceAIAuto.RegisterSecret` registration.
@@ -701,7 +716,7 @@ invented as zero; absent optional additions use provider-schema defaults.
   unsafe identity strings are redacted rather than copied. Image hiding uses the
   same catalog traversal limits and fails closed per attribute, not by dropping
   the whole wire span.
-- **2026-10-30 — TOML eval_tags (round-three C7):** string arrays in the flat TOML
+- **2026-10-30 — TOML eval_tags:** string arrays in the flat TOML
   reader are comma-joined, so `eval_tags = ["first,with-comma", "second"]` loses its
   JSON element boundaries. Use `AutoOptions.EvalTags` or a JSON-encoded
   `FI_EVAL_TAGS` environment string when boundaries matter. This is not fixed here.
@@ -720,13 +735,13 @@ invented as zero; absent optional additions use provider-schema defaults.
   helpers are deliberately untouched. Their bodies are not captured unless the
   normal SocketsHttpHandler framework stream is available. WebSocket/gRPC and
   handlers bypassing normal HttpClient diagnostics remain outside wire coverage.
-- **2026-10-30 — Recoverable response-read failures (round-four/round-five verifier OTHER):**
+- **2026-10-30 — Recoverable response-read failures:**
   an already-canceled read or invalid-argument read finalizes capture as ERROR.
   If the application catches it and subsequently consumes the response successfully,
   the application still receives its original HTTP status/bytes, but telemetry can
   remain ERROR with missing output. Capture does not resume after that first failure.
   This telemetry inaccuracy is not fixed here.
-- **2026-10-30 — Multipart body limit (round-four/round-five verifier OTHER):** multipart text
+- **2026-10-30 — Multipart body limit:** multipart text
   capture uses a separate 64-KiB allowance per field (up to 128 fields), not the
   configured aggregate `FI_WIRE_MAX_BODY_BYTES`. Consequently a 1,024-byte prompt
   can be captured with that option set to 128 or zero without marking truncation.
@@ -739,7 +754,7 @@ invented as zero; absent optional additions use provider-schema defaults.
   does not take over application signal handling; flush/shutdown remain bounded.
   If runtime signal registration is unavailable, the agent warns and retains only
   normal-exit flushing.
-- **2026-10-30 — Platform coverage:** verification here is macOS arm64/.NET 8.0.33
-  and 10.0.14, including older-host telemetry isolation. Other OS/architecture
-  combinations need their own certification. Compatibility OTLP on older
-  DiagnosticSource versions does not synthesize remote-parent span flags.
+- **2026-10-30 — Platform coverage:** continuous integration runs the hook tests,
+  including older-host telemetry isolation, on macOS and Linux with .NET 8 and .NET 10
+  child processes. Windows and other architectures are not exercised. Compatibility
+  OTLP on older DiagnosticSource versions does not synthesize remote-parent span flags.
