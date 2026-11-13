@@ -5,20 +5,59 @@ same wire catalog and golden fixtures as traceAI's other auto agents. This is
 an alpha transport agent, not runtime bytecode instrumentation: Go requires one
 import and a rebuild. Dedicated library middleware remains opt-in.
 
+## Quick start
+
+1. Add the module. Until the first `go/auto/v0.1.0` tag is released, use `@dev`
+   instead of `@latest`:
+
+   ```sh
+   go get github.com/future-agi/traceAI/go/auto@dev
+   ```
+
+2. Import it once, anywhere in your program, and flush before `main` returns:
+
+   ```go
+   import (
+       "context"
+       "time"
+
+       "github.com/future-agi/traceAI/go/auto"
+   )
+
+   func main() {
+       defer func() {
+           ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+           defer cancel()
+           _ = auto.Shutdown(ctx) // Go has no exit hook; this sends queued spans.
+       }()
+       // Your code. AI calls through http.DefaultTransport, or clients built
+       // on it, are traced without any other change.
+   }
+   ```
+
+   A long-running service can use `import _ "github.com/future-agi/traceAI/go/auto"`
+   instead and call nothing.
+
+3. Set your Future AGI keys and rebuild:
+
+   ```sh
+   export FI_API_KEY=... FI_SECRET_KEY=...
+   export FI_PROJECT_NAME=my-service
+   go run .
+   ```
+
+Each AI call becomes one CLIENT span with the model, messages, usage and timing,
+after the privacy rules below. [`example/main.go`](example/main.go) is a complete
+program; `go run github.com/future-agi/traceAI/go/auto/cmd/traceai-doctor` prints
+the resolved configuration with keys masked. The rest of this page is the
+detailed reference.
+
 ## Install and run
 
 Requires Go 1.26 (the OpenTelemetry 1.47 dependency minimum). With a recent Go
-installation, `GOTOOLCHAIN=auto` downloads the required toolchain.
-
-```sh
-go get github.com/future-agi/traceAI/go/auto@latest
-export FI_API_KEY=... FI_SECRET_KEY=...
-export FI_PROJECT_NAME=my-service
-go run .
-```
-
-Until the first `go/auto/v*` release, install from the branch containing this
-module rather than assuming an existing public release.
+installation, `GOTOOLCHAIN=auto` downloads the required toolchain. The module
+requires only OpenTelemetry, protobuf and `golang.org/x/net`; it does not add
+or upgrade any AI SDK in your build.
 
 Add the blank import before building; no per-call tracing code is needed:
 
@@ -242,14 +281,26 @@ Replacement is longest-first on immutable export snapshots. The shipping
 `internal/wire/privacy.json` and `privacy-fixtures.json` are byte-identical copies
 of `spec/auto-instrumentation/`; one catalog-loaded name predicate and one media
 predicate serve every recognition site. Credential markers include session/cookie
-fields (including `session.id`), while token usage/limits, key identifiers and
-logprob-token text retain the catalog's explicit, component-local exemptions.
+fields (including `session.id`), while token usage/limits, token timing and
+throughput names (`time_to_first_token`, `tokens_per_second`, ...) and key
+identifiers retain the catalog's explicit, component-local exemptions. A `token`
+field inside logprobs is redacted like any other token field. Catalog value
+shapes (long `sk-` keys, AWS access key IDs, JWTs, `Bearer`/`Basic` values and
+private-key PEM blocks) are redacted in any text, whatever the key; the
+`Bearer`/`Basic` shape is case-insensitive, so `basic` followed by a word of
+eight or more letters is redacted too. The exact usage counters the catalog
+declares as metrics, such as `gen_ai.usage.input_tokens.audio`, keep valid
+numeric values even though their names contain `audio`.
 Inline base64 media uses `<omitted: N base64 chars>`. Magic-byte media is recognized
 under any key, including short PNG/JPEG/GIF/WAV/WEBP/MP3/Ogg/FLAC/MP4/PDF values;
 only unrecognized base64 in catalog media fields uses the >256-character threshold.
 Data URIs of any encoding use exact scalar/query-value boundaries; free text is
 scanned without consuming neighboring URLs, query parameters or fragments. MIME
-siblings retain exact array-index isolation. Audio payloads of any size, including
+siblings retain exact array-index isolation. An image or video `type`
+(`image`, `input_image`, `image_url`, `video`, `input_video`) or `modality`
+establishes the same media context as an image or video MIME type; under an
+image declaration, encoded `image`, `image_url` and `url` values are omitted
+while plain HTTP image URLs stay text. Audio payloads of any size, including
 numeric samples, are omitted; raw audio/file bytes are never attributes. These
 rules cover flattened/bracket-indexed paths, native OTel maps/arrays and JSON
 source objects. Safe audio metadata and
@@ -300,7 +351,8 @@ time, span end or first-chunk time are never substituted; without qualifying
 output it is omitted.
 
 The hook wraps `http.DefaultTransport`, which covers default `http.Client`s.
-Verified in the module cache and against local servers with the actual SDKs:
+Verified against local servers with the actual SDKs in the separate
+`sdkcompat` test module (so this module never requires them):
 openai-go/v3 **v3.71.1** starts with `http.DefaultClient` and falls back to
 `http.DefaultTransport`; anthropic-sdk-go **v1.82.0** starts with
 `http.DefaultClient`. Their default HTTP calls produce wire spans through
@@ -320,8 +372,12 @@ corresponding `github.com/future-agi/traceAI/go/<module>` separately):
 | `genai` | `genai.ClientConfig{HTTPClient: traceaigenai.NewHTTPClient()}` |
 | `eino` | `callbacks.AppendGlobalHandlers(traceaieino.NewHandler())` |
 | `a2a` | `a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor())` |
+| `bedrock` | `traceaibedrock.NewClient(bedrockruntimeClient)` |
+| `langchaingo` | `openai.WithCallback(traceailangchaingo.NewHandler())` |
+| `lambda` | `lambda.StartHandler(traceailambda.WrapHandler(handler, provider))` |
 
-Eino agent/chain/tool steps and A2A RPCs need their manual instrumentors;
+Eino agent/chain/tool steps, LangChainGo chain, tool and retriever steps, A2A
+RPCs and Lambda invocations need their manual instrumentors;
 wire coverage fills only their underlying model HTTP calls. `Installed` uses
 Go build info, not runtime package discovery. A standalone doctor binary cannot
 inspect another executable's linked dependencies. Status vocabulary follows
@@ -365,7 +421,12 @@ go run github.com/future-agi/traceAI/go/auto/cmd/traceai-doctor
 # From this module:
 GOTOOLCHAIN=auto go build ./...
 GOTOOLCHAIN=auto go test -race ./...
+# Real OpenAI and Anthropic SDK clients, from sdkcompat/ (a separate test module):
+GOTOOLCHAIN=auto go test -race ./...
 ```
+
+`TRACEAI_TEST_HOST_GATE` may name a wrapper script that the end-to-end tests use
+to start child builds on a shared machine; leave it unset everywhere else.
 
 Doctor prints masked resolved config, integration statuses/options and coverage.
 Collector acceptance is explicitly **not tested**: doctor never sends an
@@ -377,8 +438,10 @@ baseline plus the additive `round6/` goldens), replays each with its transport
 chunk partition, failure boundary and arrival offsets on a controlled clock,
 and checks every expectation. The ten synthetic Bedrock decoded-payload cases
 (`milestone-a10-bedrock-*`) run in the decoded-event recognizer harness, as the
-spec directs, not as wire cases. It also verifies catalog identity, exercises actual SDK default clients, and builds a separate plain
-blank-import application against local provider and OTLP mock servers.
+spec directs, not as wire cases. It also verifies catalog identity, runs all
+shared privacy fixtures, and builds the shipped example and separate plain
+blank-import applications against local provider and OTLP mock servers. The
+`sdkcompat` module exercises actual SDK default clients.
 Tests never contact a real AI provider or Future AGI. Deduplication tests use
 real active SDK spans with each library-layer kind, rather than requiring the
 sibling middleware modules as runtime dependencies. The separate blank-import

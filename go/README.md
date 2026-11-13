@@ -19,6 +19,35 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 
 The provider modules are not interchangeable: the OpenAI module does not trace the Responses API or embeddings, and the Gen AI module does not claim Vertex AI support. See each module's limitations before choosing it. Instrumentors use the tracer provider you supply (or the OpenTelemetry global provider); none configures an exporter automatically.
 
+## Zero-code tracing with one import
+
+[`go/auto`](auto/README.md) traces AI calls without per-SDK code. Import it once and rebuild; it wraps `http.DefaultTransport`, so calls made by any client built on the default transport (including the default OpenAI and Anthropic Go clients) become wire-layer spans, exported to Future AGI with the same privacy rules as traceAI's other SDKs. It configures its own exporter from `FI_API_KEY` and `FI_SECRET_KEY`.
+
+```sh
+go get github.com/future-agi/traceAI/go/auto@dev
+```
+
+```go
+import (
+    "context"
+    "time"
+
+    "github.com/future-agi/traceAI/go/auto"
+)
+
+func main() {
+    // Go has no exit hook: flush queued spans before main returns.
+    defer func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+        _ = auto.Shutdown(ctx)
+    }()
+    // Your existing code, unchanged.
+}
+```
+
+Use `@dev` until the first `go/auto/v0.1.0` tag exists. A long-running service can use `import _ "github.com/future-agi/traceAI/go/auto"` and skip the `Shutdown` call. Wire spans cover the HTTP call (model, messages, usage, timing); agent, chain and tool steps still need the modules above. Custom transports need `auto.Transport(base)`, and gRPC, WebSocket and realtime audio are not covered. See the [go/auto README](auto/README.md) and its [example](auto/example/main.go).
+
 ## Install
 
 **Before the first release:** these modules live on `dev`, not the default branch. Use `@dev` in place of `@latest` until their first release tags exist. Go records the resolved pseudo-version in your application's `go.mod`; commit that file and `go.sum` to pin it. For example:
