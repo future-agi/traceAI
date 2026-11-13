@@ -68,7 +68,7 @@ def attributes(records):
 
 @pytest.mark.parametrize("key", ["input.value", "raw.input"])
 @pytest.mark.parametrize("options,hidden", [
-    # F2 (RL 2310bu): the default image cap is 0, so the data: image is hidden unless a
+    # The default image cap is 0, so the data: image is hidden unless a
     # positive cap is set; each default row keeps a twin at the previous default cap.
     ({}, [IMAGE]),
     ({"base64_image_max_length": 32_000}, []),

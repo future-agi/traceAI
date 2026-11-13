@@ -1,4 +1,4 @@
-"""Fail-closed r4 witness controls (fi-security 628059fc; RL 2310ah). Lead-authored from the fail-closed r3 lens witnesses; RED on the r3 base."""
+"""Fail-closed r4 witness controls, derived from the fail-closed r3 witnesses; they fail on the r3 code."""
 from fi_instrumentation.instrumentation._image_cap import cap_base64_images
 
 BS = chr(92)

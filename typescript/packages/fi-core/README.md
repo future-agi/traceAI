@@ -659,7 +659,7 @@ API while making zero-code ownership explicit.
 ### Media policy and image cap for this release
 
 For this release, the ratified
-`LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1` decision makes I1 media
+media policy makes I1 media
 omission dominant at every cap in the FI retained/export view. Recognized
 base64/media and data URLs are omitted, including images at or below a positive
 cap; recognized base64 image payloads in payload fields or `data:` URLs use

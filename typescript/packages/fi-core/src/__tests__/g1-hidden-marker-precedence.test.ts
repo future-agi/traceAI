@@ -70,7 +70,7 @@ describe.each(flags)("%s marker precedence", flag => {
     for (const key of aliases) expect(JSON.parse(clean.attributes[key] as string)).toEqual(input());
     expect(clean.status.message).toBe(providerError);
     // PENDING I1xF2-PRECEDENCE T71-T74: TS I1 media omission dominates positive caps.
-    // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1. Default zero uses the
+    // Default zero uses the
     // F2 marker; the explicit positive-cap twin retains the original I1 marker.
     const mediaInput = span(input(png)), before = JSON.stringify(mediaInput);
     for (const [filter, expected] of [

@@ -160,7 +160,6 @@ it("exports MIME-pair and member-name repairs through real SDK attributes", () =
   expect(results[0].attributes.mime).toBe(MARK);
   expect(results[0].attributes.keyDocument).toBe('{"__REDACTED__":"keep"}');
   // PENDING I1xF2-PRECEDENCE T58: TS I1 media omission dominates positive caps.
-  // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1.
   expect(results[0].attributes.exact).toBe("<omitted: 29 base64 chars>");
   const exported = JSON.stringify({ attributes: results[0].attributes, events: results[0].events, status: results[0].status });
   expect(exported).not.toContain(EXACT.slice(HEADER.length));

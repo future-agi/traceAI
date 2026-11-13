@@ -901,7 +901,7 @@ function transportedMimeMatch(raw: string, view: View, runs: Uint32Array, chains
  * non-ASCII isspace() members are outside this set (disclosed residual). */
 const ZERO_CAP_SPACE = /[\t\n\v\f\r\x1c-\x20]/g;
 
-/** F2 zero-cap trigger (LANE-CALL-NIKM4-5A-F2-CAP0-OVERREDACTION-r2): within
+/** F2 zero-cap trigger: within
  * one view of one Q1 scope, a case-insensitive "data:" followed later by
  * "image/" followed later by ",". RFC 2397 puts the comma before any payload,
  * so a scope without one carries none. No MIME grammar, subtype, flag, window

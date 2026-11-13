@@ -12,7 +12,7 @@ const CLASSES: Array<[string, string]> = [
   ["123-45-6789", "<SSN>"],
   ["4111 1111 1111 1111", "<CREDIT_CARD>"],
   ["192.168.1.1", "<IP_ADDRESS>"],
-  [["sk", "test", "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(0, 24)].join("_"), "<API_KEY>"], // synthetic test value (fi-security RLIT-TRACEAI-R15-3888B65C-GH013-STRIPE-FIXTURES-r1-FISEC)
+  [["sk", "test", "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(0, 24)].join("_"), "<API_KEY>"], // synthetic test value
   ["pk-live-ABCDEFGHIJKLMNOPQRSTUVWX", "<API_KEY>"],
   ["555-123-4567", "<PHONE_NUMBER>"],
 ];
@@ -33,7 +33,7 @@ describe("PII admission is a conservative superset", () => {
   });
 
   it("keeps existing pattern precedence, not just phone admission", () => {
-    const raw = "123-45-6789@example.test | 123-45-6789 | 4111 1111 1111 1111 | 192.168.1.1 | " + ["sk", "test", "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(0, 24)].join("_") + " | 5551234567"; // synthetic test value (fi-security RLIT-TRACEAI-R15-3888B65C-GH013-STRIPE-FIXTURES-r1-FISEC)
+    const raw = "123-45-6789@example.test | 123-45-6789 | 4111 1111 1111 1111 | 192.168.1.1 | " + ["sk", "test", "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(0, 24)].join("_") + " | 5551234567"; // synthetic test value
     expect(redactPiiInString(raw)).toBe("<EMAIL_ADDRESS> | <SSN> | <CREDIT_CARD> | <IP_ADDRESS> | <API_KEY> | <PHONE_NUMBER>");
   });
 

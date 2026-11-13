@@ -29,6 +29,6 @@ const disabled = spawnSync(cli, ['disable', 'cursor-cli', '--json'], { env, enco
 assert.equal(disabled.status, 0, disabled.stderr);
 for (const filename of ['hook.cjs', 'observer.cjs', 'cloud-hook.cjs', 'cloud-runtime.cjs']) {
   const text = fs.readFileSync(path.join(root, 'node_modules/@traceai/cursor-plugin/runtime', filename), 'utf8');
-  assert.ok(!text.includes('/Volumes/nik-ext-1/'), 'tarball must not reference local source paths');
+  assert.doesNotMatch(text, /\/(?:Volumes|Users)\/[\w.-]+/, 'tarball must not reference local source paths');
 }
 console.log(JSON.stringify({ test: 'clean-packed-cursor-cli', result: 'PASS', sharedHooksQualified: true, printStreamQualified: false, registration: value.registration, activation: value.activation }));

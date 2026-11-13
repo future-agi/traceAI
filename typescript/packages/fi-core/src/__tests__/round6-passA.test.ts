@@ -144,7 +144,7 @@ test("R-C07", async () => {
     register({ endpoint: "http://127.0.0.1:1", headers: {}, projectName: "routing-project", setGlobalTracerProvider: false, transport: Transport.GRPC, batch: true }),
     new FITracerProvider({ endpoint: "http://127.0.0.1:1", headers: {}, batch: true })]) {
     const processors = (provider as any)._activeSpanProcessor._spanProcessors;
-    // RL2299h: explicit batch routes remain bounded through the dev registry.
+    // Explicit batch routes remain bounded through the dev registry.
     expect(processors[0]).toBeInstanceOf(require("@opentelemetry/sdk-trace-base").BatchSpanProcessor);
     expect(Number.isFinite(processors[0]._maxQueueSize) && processors[0]._maxQueueSize > 0).toBe(true);
     expect(Number.isFinite(processors[0]._maxExportBatchSize) && processors[0]._maxExportBatchSize > 0).toBe(true);
