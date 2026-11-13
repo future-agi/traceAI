@@ -39,6 +39,34 @@ class EndToEndTest < Minitest::Test
     a = assert_chat_span(export_spans)
     assert_equal 'wire', a['traceai.capture.layer']; assert_equal 'Hello from Ruby', a['output.value']; assert_equal 5, a['gen_ai.usage.total_tokens']
   end
+  # A container started with LANG=C reads files and the environment as US-ASCII.
+  # The agent must still load, read its UTF-8 config and export non-ASCII text.
+  def test_posix_locale_loads_agent_and_exports_utf8_wire_span
+    text = "Olá \u{1f600}"
+    reply = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini', choices: [{index: 0, message: {role: 'assistant', content: text}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5})
+    @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, reply] }
+    config = File.join(ROOT, '.bundle/tmp', "posix-locale-#{Process.pid}.toml")
+    File.binwrite(config, "project_name = \"café \u{1f600}\"\n".b)
+    # The child code stays ASCII: a non-ASCII literal in -e is invalid under LANG=C.
+    code = plain_code + <<~RUBY
+      name = TraceAI::Auto.config['project_name']
+      abort 'config value is ' + name.encoding.name unless name.encoding == Encoding::UTF_8 && name.valid_encoding?
+    RUBY
+    locale = {'LANG' => 'C', 'LC_ALL' => 'C', 'LC_CTYPE' => nil, 'LANGUAGE' => nil}
+    stdout, stderr, status = app(code, locale.merge('FI_PROJECT_NAME' => nil, 'FI_CONFIG_FILE' => config, 'FI_PROJECT_VERSION_NAME' => "vé"))
+    assert status.success?, stderr.b
+    assert_equal reply.b, stdout.b
+    spans = export_spans
+    assert_equal 1, spans.length
+    span, resource = spans.first
+    a = attrs(span.attributes)
+    assert_equal 'wire', a['traceai.capture.layer']
+    assert_equal text, a['output.value']
+    assert_equal "café \u{1f600}", resource['project_name']
+    assert_equal "vé", resource['project_version_name']
+  ensure
+    File.unlink(config) if config && File.exist?(config)
+  end
   def test_bundle_exec_with_rubyopt
     stdout, stderr, status = app(plain_code, {}, bundled: true)
     assert status.success?, stderr; assert_equal CHAT, stdout; assert_chat_span(export_spans)

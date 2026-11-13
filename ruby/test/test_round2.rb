@@ -387,7 +387,7 @@ class SafetyTest
     end
     fixture = Dir[File.join(FixtureHarness::SPEC, 'fixtures/18-*.json')].first
     refute_nil fixture
-    result = FixtureHarness.run(JSON.parse(File.read(fixture)))
+    result = FixtureHarness.run(JSON.parse(File.read(fixture, encoding: 'UTF-8')))
     assert_equal 'Why did the chicken cross?', result.attributes['output.value']
   end
 end

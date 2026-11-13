@@ -15,7 +15,7 @@ class PrivacyCatalogTest < Minitest::Test
   end
 
   def test_s6_every_spec_privacy_fixture
-    cases = JSON.parse(File.read(File.join(SHIPPING, 'privacy-fixtures.json'))).fetch('cases')
+    cases = JSON.parse(File.read(File.join(SHIPPING, 'privacy-fixtures.json'), encoding: 'UTF-8')).fetch('cases')
     failures = []
     cases.each do |fixture|
       input = fixture.fetch('input')

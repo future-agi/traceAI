@@ -25,8 +25,8 @@ class PrivacyCatalogV3Test < Minitest::Test
               gen_ai.server.time_per_output_token gen_ai.server.request.duration].freeze
 
   def test_shipped_catalog_and_fixture_bundle_are_both_version_3
-    catalog = JSON.parse(File.read(File.join(SPEC, 'privacy.json')))
-    bundle = JSON.parse(File.read(File.join(SPEC, 'privacy-fixtures.json')))
+    catalog = JSON.parse(File.read(File.join(SPEC, 'privacy.json'), encoding: 'UTF-8'))
+    bundle = JSON.parse(File.read(File.join(SPEC, 'privacy-fixtures.json'), encoding: 'UTF-8'))
     assert_equal catalog['version'], bundle['catalog_version']
     assert_equal 3, P::CATALOG['version']
     assert_equal [], P::CATALOG['credentials']['contextual_exclusions']

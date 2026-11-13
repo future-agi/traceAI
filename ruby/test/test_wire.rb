@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 require 'minitest/autorun'
+require 'json'
 require 'stringio'
+require 'timeout'
+require 'zlib'
 require_relative '../lib/traceai/auto/wire'
 module FixtureHarness
   SPEC = File.expand_path('../../spec/auto-instrumentation', __dir__)
@@ -69,7 +72,8 @@ class WireFixturesTest < Minitest::Test
     # never claim AWS binary event-stream support through this wire harness.
     next if (157..166).cover?(File.basename(file).to_i)
     define_method("test_#{File.basename(file, '.json').tr('-', '_')}") do
-      fixture = JSON.parse(File.read(file)); result = FixtureHarness.run(fixture); e = fixture.fetch('expect')
+      # Fixtures are UTF-8 whatever the process locale (LANG=C reads US-ASCII).
+      fixture = JSON.parse(File.read(file, encoding: 'UTF-8')); result = FixtureHarness.run(fixture); e = fixture.fetch('expect')
       unless e['captured']
         assert_nil result, fixture['name']; next
       end

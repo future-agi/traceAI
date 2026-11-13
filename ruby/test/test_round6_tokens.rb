@@ -20,7 +20,7 @@ class Round6TokenAlgebraTest < Minitest::Test
   end
 
   Dir[File.join(FixtureHarness::SPEC, 'fixtures/**/*.json')].sort.each do |file|
-    fixture = JSON.parse(File.read(file))
+    fixture = JSON.parse(File.read(file, encoding: 'UTF-8'))
     expected = fixture.fetch('expect')
     keys = expected.fetch('attributes', {}).keys + expected.fetch('absent', [])
     next unless keys.any? { |key| key.start_with?('gen_ai.usage.') }

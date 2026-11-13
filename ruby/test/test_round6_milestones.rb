@@ -118,7 +118,7 @@ class DecodedBedrockMilestonesTest < Minitest::Test
   Dir[File.join(FixtureHarness::SPEC, 'fixtures/round6/*.json')].sort.each do |file|
     next unless (157..166).cover?(File.basename(file).to_i)
     define_method("test_decoded_#{File.basename(file, '.json').tr('-', '_')}") do
-      fixture = JSON.parse(File.read(file)); response = fixture.fetch('response')
+      fixture = JSON.parse(File.read(file, encoding: 'UTF-8')); response = fixture.fetch('response')
       frames = response.fetch('sse').each_with_index.map { |event, index| [event, index + 1] }
       arrivals = response.fetch('arrival_offsets_ms').each_with_index.map { |offset, index| [index + 1, offset / 1000.0] }
       value = TraceAI::Auto::Wire::Milestones.first_text('bedrock.converse', frames, arrivals)
