@@ -31,6 +31,9 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         var copy=(Activity)Clone(original);
         foreach(var field in new[] { "_tags","_events","_links","_baggage","_customProperties","<Parent>k__BackingField" }) Set(copy,field,null);
         Set(copy,"_parentId",parentId);
+        // The agent asks only for recording, so a shared Activity's sampled flag stays the
+        // application's. Every span that reaches this point was sampled for Future AGI.
+        copy.ActivityTraceFlags|=ActivityTraceFlags.Recorded;
         // This reference is not exported, and must not retain an application's activity graph.
         typeof(Activity).GetField("_previousActiveActivity",Fields)?.SetValue(copy,null);
         return copy;

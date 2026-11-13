@@ -161,7 +161,7 @@ internal sealed class Agent : IDisposable
         if(config.Enabled("openai")) AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry",true);
         if(config.Enabled("semantic_kernel")) AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics",true);
         if(config.Enabled("azure_inference")||config.Enabled("azure_openai")) AppContext.SetSwitch("Azure.Experimental.EnableActivitySource",true);
-        var sampler=new ParentBasedSampler(new TraceIdRatioBasedSampler(config.SampleRate));
+        var sampler=new ExportSampler(config.SampleRate);
         var privacy=new AutoProcessor(config,()=>Volatile.Read(ref _disposed)==0);
         _ownsProvider=config.Options.Provider==null;
         TracerProviderBuilder? builder=null;
@@ -184,7 +184,7 @@ internal sealed class Agent : IDisposable
         },privacy,_completion);
         if(exporter!=null)
         {
-            _batch=new PrivacyBatchProcessor(exporter,sampler,()=>Volatile.Read(ref _disposed)==0);
+            _batch=new PrivacyBatchProcessor(exporter,sampler,requireRecorded:!_ownsProvider,()=>Volatile.Read(ref _disposed)==0);
             builder?.AddProcessor(_batch);
         }
         _provider=builder?.Build()??config.Options.Provider!;
@@ -411,7 +411,54 @@ internal sealed class ExportCompletion
     }
 }
 
-internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,Sampler sampler,Func<bool> enabled)
+/// <summary>Future AGI sampling that never sets the application's sampled flag. It asks
+/// only for recording (AllData, not AllDataAndRecorded), so the application's own sampler
+/// alone decides the Recorded flag that its exporters, its parent-based child samplers and
+/// downstream services see. The Future AGI decision is the same for every span of a trace:
+/// an upstream service's sampled flag on a remote parent decides that trace, and any other
+/// trace uses the trace-id ratio. The batch processor applies the same decision at export.</summary>
+internal sealed class ExportSampler(double rate) : Sampler
+{
+    private readonly TraceIdRatioBasedSampler _ratio=new(rate);
+    private readonly TraceMemory _upstream=new();
+    public override SamplingResult ShouldSample(in SamplingParameters parameters)=>
+        new(Export(parameters.TraceId,parameters.ParentContext)?SamplingDecision.RecordOnly:SamplingDecision.Drop);
+    internal bool Export(ActivityTraceId trace,ActivityContext parent=default)
+    {
+        if(parent.IsRemote && parent.TraceId==trace)
+        {
+            bool sampled=(parent.TraceFlags&ActivityTraceFlags.Recorded)!=0;
+            _upstream.Set(trace,sampled);
+            return sampled;
+        }
+        // Local parents carry the application's flag, not ours: remember the trace instead.
+        if(_upstream.TryGet(trace,out bool remembered)) return remembered;
+        return _ratio.ShouldSample(new SamplingParameters(default,trace,"",ActivityKind.Internal)).Decision==SamplingDecision.RecordAndSample;
+    }
+}
+
+/// <summary>Recent trace ids with a value, bounded; the oldest trace is forgotten first.
+/// Lookups take no lock.</summary>
+internal sealed class TraceMemory(int capacity=4096)
+{
+    private readonly ConcurrentDictionary<ActivityTraceId,bool> _values=new();
+    private readonly Queue<ActivityTraceId> _order=new();
+    internal void Set(ActivityTraceId trace,bool value)
+    {
+        lock(_order)
+        {
+            if(!_values.ContainsKey(trace))
+            {
+                _order.Enqueue(trace);
+                if(_order.Count>capacity) _values.TryRemove(_order.Dequeue(),out _);
+            }
+            _values[trace]=value;
+        }
+    }
+    internal bool TryGet(ActivityTraceId trace,out bool value)=>_values.TryGetValue(trace,out value);
+}
+
+internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,ExportSampler sampler,bool requireRecorded,Func<bool> enabled)
     : BatchExportProcessor<Activity>(exporter,2048,1000,2500,512)
 {
     private long _submitted;
@@ -421,17 +468,14 @@ internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,Samp
         try
         {
             if(!enabled() || data.GetCustomProperty("traceai.suppressed") is true) return;
-            var parent=data.Parent?.Context??default;
-            if(parent==default && data.ParentId!=null) ActivityContext.TryParse(data.ParentId,data.TraceStateString,true,out parent);
-            var parameters=new SamplingParameters(parent,data.TraceId,data.DisplayName,data.Kind,data.TagObjects,data.Links);
-            // Another provider may request recording even when our own listener sampled this trace out.
-            if(data.Recorded && sampler.ShouldSample(in parameters).Decision==SamplingDecision.RecordAndSample)
-            {
-                // Include dropped queue entries: telemetry lost to overload must not
-                // turn a later Flush into a false claim that all submissions completed.
-                Interlocked.Increment(ref _submitted);
-                OnExport(data);
-            }
+            // On a supplied provider the application's sampler owns every span. On the
+            // agent's own provider the Recorded flag is the application's, never ours.
+            if(requireRecorded && !data.Recorded) return;
+            if(!sampler.Export(data.TraceId)) return;
+            // Include dropped queue entries: telemetry lost to overload must not
+            // turn a later Flush into a false claim that all submissions completed.
+            Interlocked.Increment(ref _submitted);
+            OnExport(data);
         }
         catch { }
     }
