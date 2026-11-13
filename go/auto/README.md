@@ -7,8 +7,8 @@ import and a rebuild. Dedicated library middleware remains opt-in.
 
 ## Quick start
 
-1. Add the module. Until the first `go/auto/v0.1.0` tag is released, use `@dev`
-   instead of `@latest`:
+1. Add the module. Until its first go/auto tag is released, use `@dev` instead
+   of `@latest`:
 
    ```sh
    go get github.com/future-agi/traceAI/go/auto@dev
@@ -47,10 +47,32 @@ import and a rebuild. Dedicated library middleware remains opt-in.
    ```
 
 Each AI call becomes one CLIENT span with the model, messages, usage and timing,
-after the privacy rules below. [`example/main.go`](example/main.go) is a complete
-program; `go run github.com/future-agi/traceAI/go/auto/cmd/traceai-doctor` prints
-the resolved configuration with keys masked. The rest of this page is the
-detailed reference.
+after the privacy rules below. Only AI spans leave the process for Future AGI:
+these wire spans and spans from traceAI modules (marked `gen_ai.span.kind` or
+`fi.span.kind`). Your other spans, such as HTTP server, database or application
+spans, are never sent to Future AGI. [`example/main.go`](example/main.go) is a
+complete program; `go run github.com/future-agi/traceAI/go/auto/cmd/traceai-doctor`
+prints the resolved configuration with keys masked.
+
+**Your OpenTelemetry setup stays yours.** The agent never replaces the global
+tracer provider. It starts on the first AI call (or an explicit `auto.Init`,
+whichever comes first) and then attaches to your global SDK provider if you
+have installed one, so its wire spans join your traces; otherwise it keeps a
+private provider for them. A tracer you cache at package level keeps working.
+To use options such as `auto.WithTracerProvider(tp)`, call
+`auto.Init(ctx, options...)` before the first AI call.
+
+**`http.DefaultTransport` changes type.** With FI keys set and wire capture on,
+package initialization replaces `http.DefaultTransport` with the agent's wrapper,
+which is not an `*http.Transport`. An unchecked
+`http.DefaultTransport.(*http.Transport)` assertion, for example
+`http.DefaultTransport.(*http.Transport).Clone()`, then panics; a checked
+assertion (`t, ok := ...`) takes its fallback. Build custom transports from
+`&http.Transport{...}` and wrap them with `auto.Transport`, or turn wire capture
+off with `FI_WIRE_CAPTURE=false` (`wire_capture = false` in `futureagi.toml`) if
+a dependency makes the unchecked assertion.
+
+The rest of this page is the detailed reference.
 
 ## Install and run
 
@@ -71,20 +93,29 @@ Or use the named import and one-line explicit initialization:
 shutdown, err := auto.Init(ctx)
 ```
 
-Initialization is fail-open, network-free, and never installs signal handlers.
-Without FI credentials, instrumentation still activates when the application
-supplies an SDK tracer provider (explicitly or as the existing global provider)
-or a span processor. With none of these destinations, it warns once and leaves
-the default transport and tracer provider unchanged. An invalid explicit configuration
-returns an error; importing the package never propagates an error to the app.
+Initialization is fail-open, network-free, and never installs signal handlers
+or a global tracer provider. Package initialization only arms wire capture,
+and only when the environment or config file has a complete FI pair, wire
+capture is on and the agent is not disabled: it wraps `http.DefaultTransport`
+and nothing else. The agent then activates once, at the first explicit `Init`
+or the first captured AI request, whichever comes first. Activation uses, in
+this order, the `WithTracerProvider` provider, the application's global SDK
+provider if one is installed by then, or a private provider for the agent's
+wire spans. A failed activation leaves requests passing through unchanged,
+with one warning. Without FI credentials, an explicit `Init` still activates
+when the application supplies an SDK tracer provider (explicitly or as the
+existing global provider) or a span processor. With none of these
+destinations, it warns once and leaves the default transport and tracer
+provider unchanged. An invalid explicit configuration returns an error;
+importing the package never propagates an error to the app.
 Collector failures are bounded by the batch queue and exporter timeout, emit a
 single warning, and drop failed batches rather than interrupting application
 traffic. Errors and warnings do not contain credential values or request URLs.
 
 **Go has no atexit.** Short-lived programs must flush explicitly. A blank import
 cannot ensure delivery at exit: a program that returns from `main` right after
-its last AI call can exit with that span still queued. When the agent activates
-at package initialization with its own batching FI exporter, it prints one
+its last AI call can exit with that span still queued. When package
+initialization arms wire capture with a complete FI pair, it prints one
 startup line (`auto.ShutdownHint`) saying exactly this. For reliable delivery,
 use a named import and call the exported `auto.Shutdown(ctx)` before `main`
 returns (`auto.ForceFlush(ctx)` flushes without shutting down):
@@ -115,15 +146,18 @@ EOF or close their bodies: that is when the wire span completes.
 ## API and OpenTelemetry coexistence
 
 - `Init(ctx, ...Option) (func(context.Context) error, error)` configures the agent
-  once per process. Later calls return the original shutdown function, ignore
-  options without evaluating them, and log one line (once). They never replace
-  the provider, processor, resource, sampling policy or transports. A blank import
-  that cannot activate (missing credentials, disabled or invalid configuration)
-  leaves the first successful explicit initialization available. Set environment
-  variables/config before startup; code options cannot override an active
-  blank-import agent. Disable-after-enable and restart-after-shutdown are unsupported.
+  once per process. Call it before the first AI call: the first captured AI
+  request activates the agent with environment and config-file settings, and
+  from then on, like any later call, `Init` returns the original shutdown
+  function, ignores options without evaluating them, and logs one line (once).
+  Those calls never replace the provider, processor, resource, sampling policy
+  or transports. A package initialization that cannot arm (missing credentials,
+  disabled or invalid configuration) leaves the first successful explicit
+  initialization available. Disable-after-enable and restart-after-shutdown are
+  unsupported.
 - `Shutdown(ctx)` removes the agent's processor and restores its default
   transport, but does not shut down a provider owned by your application.
+  Called before the first AI call, it only removes the armed wrapper.
 - `ForceFlush(ctx)` flushes queued spans without disabling capture. Flush and
   shutdown respect the caller's deadline, with a five-second upper bound, and
   guard reentrant callbacks.
@@ -136,22 +170,34 @@ EOF or close their bodies: that is when the wire span completes.
   OTel exposes no universal public instrumentation-suppression context key;
   this does not recognize another library's private suppression key.
 - `ContextWithSessionID`, `ContextWithUserID`, and `ContextWithAttributes` carry
-  context attributes to child wire spans. Other modules' context keys are
-  private, so their session/user helpers do not automatically bridge to this
-  package. OTel parent span context still works across modules.
+  context attributes to child wire spans. The session id set with
+  `ContextWithSessionID` is exported as its value, with known secrets and
+  credential-shaped values inside it still redacted; a `session.id` passed to
+  `ContextWithAttributes` is redacted like any credential-named key. Other
+  modules' context keys are private, so their session/user helpers do not
+  automatically bridge to this package. OTel parent span context still works
+  across modules.
 
 Options include `WithCredentials`, `WithProject`, `WithSampleRate`,
 `WithWireCapture`, `WithTraceConfig`, `WithTracerProvider`, `WithSpanProcessor`,
-and `WithConfig` (a complete replacement, not a sparse merge). A custom span
-processor replaces the agent's network exporter and does not need credentials.
+and `WithConfig` (a complete replacement, not a sparse merge). Options apply
+only to the call that activates the agent, so pass them before the first AI
+call. A custom span processor replaces the agent's network exporter and does
+not need credentials; on an application-owned provider it receives every span
+of that provider, through the same privacy sanitizer.
 An application-owned SDK provider is also sufficient without FI credentials:
 no FI exporter is created, wire spans go to its existing processors, and
 `ForceFlush` delegates to that provider. The host owns its privacy/export policy;
 agent shutdown only removes observation hooks, never shuts down host processors.
 
-If a global `*sdktrace.TracerProvider` exists at initialization, the agent adds
-its processor; existing exporters and the application's sampling policy are
-untouched. Future AGI project resource attributes are applied to copies sent to
+The agent never calls `otel.SetTracerProvider`. If a `*sdktrace.TracerProvider`
+is passed with `WithTracerProvider`, or is the global provider when the agent
+activates, the agent adds its processor; existing exporters and the
+application's sampling policy are untouched. On such an application-owned
+provider the Future AGI exporter forwards only AI spans: the agent's wire spans
+and spans that carry `gen_ai.span.kind` or `fi.span.kind`. Every other span
+still reaches the application's own exporters and never Future AGI. Future AGI
+project resource attributes are applied to copies sent to
 its exporter, not to other exporters. The application's resource identity is
 authoritative in that copy too (A6): every application resource attribute,
 including `service.name`, is kept exactly, even when `OTEL_SERVICE_NAME`,
@@ -160,18 +206,23 @@ including `service.name`, is kept exactly, even when `OTEL_SERVICE_NAME`,
 application did not set. An agent-owned provider uses normal OpenTelemetry
 resource detection (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, SDK identity,
 `unknown_service:<executable>` fallback); the FI project or its working-directory
-default is never used as `service.name`. If no SDK provider exists, the agent
-creates a parent-based ratio-sampled provider. An installed third-party API
-provider is not replaced; a private SDK provider exports wire spans with their
-original parent contexts. Installing another global provider *after* this
-package's successful init cannot move its processor; a second `Init` cannot
-attach it to that new provider. Configure the provider before the first successful
-initialization (or use `WithTracerProvider` on that first explicit call).
+default is never used as `service.name`. If no SDK provider exists when the
+agent activates, it creates a private, parent-based ratio-sampled provider that
+only its wire spans use; it is never made global, and wire spans keep their
+request-time parent, so they stay in the application's traces. An installed
+third-party API provider is not replaced. A global provider installed *after*
+activation does not receive the agent's processor, and a second `Init` cannot
+attach it. Install your provider before the first AI call, or pass it with
+`WithTracerProvider` to an `Init` before the first AI call.
 
 Do not initialize, shut down or replace `http.DefaultTransport` concurrently
-with HTTP requests. Existing clients that cached a different concrete transport
-need `Transport(base)`. Cached agent wrappers stop capturing after shutdown;
-calling `Transport(cached)` then returns its uninstrumented base, not a new agent.
+with HTTP requests. While wire capture is on, `http.DefaultTransport` is the
+agent's wrapper, not an `*http.Transport` (see the quick start). Existing
+clients that cached a different concrete transport need `Transport(base)`;
+`Transport` also works before activation, and such clients activate the agent
+like the default transport. Cached agent wrappers stop capturing after
+shutdown; calling `Transport(cached)` then returns its uninstrumented base, not
+a new agent.
 
 Wire attributes are projected before entering the provider's actual attribute
 container, including smaller host limits. Identity, outcome, usage, provenance
@@ -226,9 +277,9 @@ can supply a complete profile pair through the environment.
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment`; no experiment registration/startup request |
 | `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | `DEFAULT_PROJECT_VERSION_NAME` / generated UUID | Project resource keys |
 | `FI_SAMPLE_RATE` | `1` | Parent-based root ratio when the agent owns the SDK provider; existing SDK sampling wins |
-| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of `wire`, `openai`, `anthropic`, `genai`, `eino`, `a2a` |
+| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of `wire`, `openai`, `anthropic`, `genai`, `eino`, `a2a`, `bedrock`, `langchaingo`, `lambda` |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist; `wire` disables all transport capture |
-| `FI_WIRE_CAPTURE` | `true` | Wire-layer switch |
+| `FI_WIRE_CAPTURE` | `true` | Wire-layer switch; `false` also keeps `http.DefaultTransport` an `*http.Transport` |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Per-direction text/JSON capture cap; over-limit spans survive with `traceai.wire.truncated=true` |
 | `FI_AUTO_DEBUG` | `false` | Print masked local coverage/config report at startup |
 | `FI_CONFIG_FILE` | `./futureagi.toml` | Flat config path |
@@ -281,7 +332,9 @@ Replacement is longest-first on immutable export snapshots. The shipping
 `internal/wire/privacy.json` and `privacy-fixtures.json` are byte-identical copies
 of `spec/auto-instrumentation/`; one catalog-loaded name predicate and one media
 predicate serve every recognition site. Credential markers include session/cookie
-fields (including `session.id`), while token usage/limits, token timing and
+fields (including `session.id` from headers, bodies and other attributes; only
+the session id the agent writes from `ContextWithSessionID` keeps its value,
+with known secrets and credential shapes in it still redacted), while token usage/limits, token timing and
 throughput names (`time_to_first_token`, `tokens_per_second`, ...) and key
 identifiers retain the catalog's explicit, component-local exemptions. A `token`
 field inside logprobs is redacted like any other token field. Catalog value
@@ -311,14 +364,29 @@ the root and all flattened/indexed descendants (for example,
 without matching similarly named neighboring families.
 Content is captured by default: use hide switches when sending sensitive data.
 One export-time sanitizer applies these switches and credential/media scrubbing
-to **every span forwarded by the agent's exporter**, including application and
-native SDK spans: all attribute types, status descriptions, events, links,
-resources, scope metadata and tracestate. It sanitizes immutable snapshots;
+to **every span the agent forwards**: wire spans and traceAI module spans to the
+Future AGI exporter, and every span handed to a custom span processor. It
+covers all attribute types, status descriptions, events, links, resources,
+scope metadata and tracestate. It sanitizes immutable snapshots;
 independent third-party exporters still receive their original data. Nonfinite
 numbers become `"NaN"`, `"Infinity"` or `"-Infinity"`; typed byte attributes are
 omitted (they may contain raw media). Traversal is bounded to depth 32, 16,384
 nodes and 32 MiB of string work per span. If sanitization fails, unchecked
 content/metadata is dropped while span identity, timing and status code survive.
+
+### Privacy differences from other traceAI SDKs
+
+The agent embeds a byte-identical copy of the shared privacy catalog (version 3)
+and runs its shared fixtures. Three catalog rules are not ported yet; in each,
+Go removes more than the other SDKs, never less:
+
+- **Logprob tokens:** the provider-response policy for logprob tokens is not
+  ported. Every `token` field inside logprobs is redacted by name, so logprob
+  text is lost.
+- **Credential source ownership:** known secrets are replaced longest first,
+  rather than by the catalog's ownership rules across JSON and URL syntax.
+- **Zero-valued usage details:** zero-valued detail counters stay protected
+  instead of yielding attribute capacity to content.
 
 ## Coverage and dedicated middleware
 
@@ -450,42 +518,59 @@ tracing calls; production programs should use `Shutdown` instead.
 
 ## Known limitations
 
-As of **2026-10-30 / 2026-10-31** (OTHER-class items, not claims of runtime parity
-outside the supported HTTP/1.1 and HTTP/2 provider paths):
+These limitations apply to the supported HTTP/1.1 and HTTP/2 provider paths;
+nothing here claims runtime parity outside them.
 
-- **2026-10-31 — compressed streams and first-text:** when the agent sees encoded
+- **`http.DefaultTransport` changes type:** with FI keys set and wire capture
+  on, package initialization replaces `http.DefaultTransport` with the agent's
+  wrapper, which is not an `*http.Transport`. An unchecked
+  `http.DefaultTransport.(*http.Transport)` assertion in the application or a
+  dependency panics from then on; a checked assertion takes its fallback. Build
+  custom transports from `&http.Transport{...}` and wrap them with
+  `auto.Transport`, or set `FI_WIRE_CAPTURE=false` (`wire_capture = false` in
+  `futureagi.toml`). After a failed activation on the first AI call the wrapper
+  stays in place and passes requests through, so the type change remains.
+- **Activation on the first AI call:** with only the blank import, the agent
+  activates inside the first request that matches the wire catalog. Options
+  passed to a later `Init` are ignored, a global provider installed after that
+  request does not receive the agent's processor, and credentials seen in
+  earlier non-AI requests are not in the known-secret registry (credential
+  names and shapes are still redacted). traceAI module spans started before
+  activation are still forwarded when they end, but cannot suppress a wire span
+  through intermediate native spans.
+- **Compressed streams and first-text:** when the agent sees encoded
   bytes (the application set `Accept-Encoding` itself, so `net/http` did not
   decompress), chunk arrival offsets are in compressed space. Output and usage
   are still decoded and parsed, but `gen_ai.response.time_to_first_text` is
   omitted rather than estimated. `net/http`'s default transparent gzip path
   observes decoded bytes and is not affected.
-- **2026-10-31 — NDJSON without a trailing newline:** per the spec's NDJSON rule a
+- **NDJSON without a trailing newline:** per the spec's NDJSON rule a
   record exists only once its newline arrives, so a server that ends the stream
   without a final newline (even on clean EOF) loses that last record's output and
   usage (often Ollama's `done` record). Standard Ollama/Cohere servers terminate
   every record.
-- **2026-10-31 — arrival association bound:** at most 4096 non-empty `Read`
+- **Arrival association bound:** at most 4096 non-empty `Read`
   observations are recorded per response. If the first qualifying output frame
   completes after that bound (for example a consumer reading a few bytes at a
   time), `time_to_first_text` is omitted and `traceai.wire.incomplete=true` is
   set (the spec's marker; the Python reference currently names it
   `traceai.wire.timing_truncated`); output, usage and first-chunk time are kept.
-- **2026-10-31 — unlisted first-output shapes:** first-text recognizes exactly the
+- **Unlisted first-output shapes:** first-text recognizes exactly the
   spec's A10 qualifying-delta table (a port of its oracle). Shapes the spec lists as
   not yet covered (custom-tool chat deltas, streamed transcription deltas, Responses
   shell-tool events, Cohere v1 search queries, SSE speech audio, ElevenLabs
   timestamped NDJSON audio) yield a later or missing first-text; first-chunk,
   output and usage are unaffected.
-- **2026-10-31 — Bedrock decoded payloads:** the spec's `milestone-a10-bedrock-*`
+- **Bedrock decoded payloads:** the spec's `milestone-a10-bedrock-*`
   fixtures are verified by the decoded-event recognizer only. Real Bedrock binary
   event streams remain request/status-only, so they carry no first-text milestone.
-- **2026-10-31 — immediate return without Shutdown:** a blank-import program that
+- **Immediate return without Shutdown:** a blank-import program that
   returns from `main` right after its AI call can exit before the 200 ms batch
   export; the startup hint and the example above give the fix (`auto.Shutdown`).
   A launcher-generated shutdown call is the fi CLI's responsibility. The hint is
-  printed by any binary that links the package and activates with FI credentials,
-  including `traceai-doctor` (stderr only).
-- **2026-10-31 — media hints across attribute families:** projection pins direct
+  printed by any binary that links the package and arms wire capture with FI
+  credentials, including `traceai-doctor` (stderr only).
+- **Media hints across attribute families:** projection pins direct
   MIME/type hint keys to their payload keys, and all context attributes (protected
   identity included) are scrubbed jointly. No fallback restores an unchecked
   input value: when hide-images classifies a whole attribute object as one image
@@ -497,12 +582,12 @@ outside the supported HTTP/1.1 and HTTP/2 provider paths):
   `project_type`, `project_version_name`, `project_version_id`), `server.address`/
   `server.port`, and numeric `gen_ai.usage.*` counters. Other `project_*`,
   `server.*` or non-numeric `gen_ai.usage.*` attributes are ordinary metadata
-  (fitted after content, kept with their MIME context). **2026-10-31 (rc2):**
-  projection pins hints in every representation the export sanitizer reads
+  (fitted after content, kept with their MIME context). Projection also
+  pins hints in every representation the export sanitizer reads
   (direct strings, string arrays, native maps, generic slices and JSON object
   strings), so a payload is never admitted without its hint; a hint value too
   large to index is pinned to every group (fail-closed).
-- **2026-10-31 — span limits and media context (rc2, candidate 2):** the SDK
+- **Span limits and media context:** the SDK
   reports dropped attribute counts but never value truncation. The export
   boundary reads the provider's value-length limit (the same read-only adapter
   as the count limit; an unreadable layout fails closed to 0) and decides, per
@@ -518,38 +603,38 @@ outside the supported HTTP/1.1 and HTTP/2 provider paths):
   and its indexed/flattened descendants, up to an audio metadata field such as
   `transcript` or `id` (a capable field below that starts again). A possibly
   cut string whose decodable base64 prefix is consistent with catalog magic
-  (PNG, WAV, MP4, ...) is omitted at any path. **2026-10-31 (rc2c):**
-  "consistent" means some continuation could satisfy a catalog rule, including
+  (PNG, WAV, MP4, ...) is omitted at any path.
+  "Consistent" means some continuation could satisfy a catalog rule, including
   a prefix that ends before the signature (an MP4 `ftyp` box size, all that
   survives when CR/LF wrapping uses the length budget), so every cut retaining
-  a payload character of catalog magic media is omitted. Consequence (OTHER): any cut
+  a payload character of catalog magic media is omitted. As a consequence, any cut
   base64-alphabet value with at most 6 data characters (CR/LF skipped, up to
   the first `=`) is omitted at any path, e.g. CR/LF-separated alphanumeric
   text under a limit of 8, or every such value under a limit of 6 or less.
-  **2026-10-31 (rc2f):** cut status also follows strings into URL query
+  Cut status also follows strings into URL query
   values, prose and decoded JSON tokens, before rewriting can shorten the
   evidence. Query payload fields fail closed when a later MIME/type hint may
   have been cut off; a final magic prefix also fails closed, including cuts
   inside a percent escape or an unfinished JSON slash/Unicode escape. Ordinary
   query payload fields in such strings may
   therefore be omitted too; count-only loss does not truncate a URL's internal
-  query object. **2026-10-31 (rc2f follow-up):** prefixes retaining only 1–3
+  query object. Prefixes retaining only 1–3
   base64 characters also fail closed. These occur both under very small value
   limits and inside URL query values under ordinary limits (e.g. 28–30), where
   the URL prefix consumes most of the attribute budget.
-  **2026-10-31 (structural truncation boundary):** a possibly cut string also
+  A possibly cut string also
   receives a bounded lexical scan independent of JSON/MIME reconstruction:
   every base64-alphabet run of 8+ characters (standard or URL-safe, with or
   without padding, including an undecodable final quantum) and every `data:`
   URI fragment is replaced with its usual omission marker. This applies inside
   quotes and nested JSON strings, and at the cut's very end. The attribute and
-  its OTel representation are retained. Consequence (OTHER): an all-letter or
+  its OTel representation are retained. As a consequence, an all-letter or
   all-digit run of that length is indistinguishable from base64 and is omitted
   in a cut value too; short words, punctuation and non-base64 text survive.
   Untruncated values retain precise catalog behavior, and cut state does not
   spread to their sibling values. Full magic recognition also checks the
   decodable prefix when a trailing partial quantum has length 1 modulo 4.
-  **2026-10-31 (registry ordering and quoted prefixes):** whole registered
+  Whole registered
   secrets are masked before the lexical scan, which preserves `<redacted>`;
   rewriting a long base64-shaped segment cannot expose the secret's shorter
   punctuated segments. Decoded quoted tokens inherit their enclosing value's
@@ -558,7 +643,7 @@ outside the supported HTTP/1.1 and HTTP/2 provider paths):
   hook, so application spans are recognized at this export boundary. Agent wire spans walk each wire
   value with every context and wire MIME/type hint at capture, before
   projection and the SDK, and the capture-time protected-context re-check is
-  itself fail-closed. Known consequences (OTHER): in such an object ordinary
+  itself fail-closed. Known consequences: in such an object ordinary
   text under those paths (`content`, `value`, `data`, `body`, `delta`, ...,
   e.g. message contents or `output.value`) is exported as an omission marker,
   and a truncated JSON string with a number/bool under one becomes
@@ -568,21 +653,22 @@ outside the supported HTTP/1.1 and HTTP/2 provider paths):
   the host's attribute limits to keep that content. The SDK's collection depth
   limit (default 64) is not reported either; it removes whole nested
   collections, so a scalar MIME sibling and its payload are kept or removed
-  together. Host-owned exporters keep the application's original view (S8).
-- **2026-10-31 — service.name default (A6 change):** an agent-owned provider without
-  `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` now reports OpenTelemetry's
-  `unknown_service:<executable>` instead of the working-directory name; the FI
-  project (`project_name`) is unchanged. A host provider's `service.name` is no
-  longer replaced in the FI view by `OTEL_SERVICE_NAME` or `WithConfig`.
-
-- **2026-10-30 — host attribute limits:** The pinned OTel SDK exposes no public
-  provider-limit getter. The agent reads its immutable numeric limit once using
+  together. Host-owned exporters keep the application's original view.
+- **service.name default:** an agent-owned provider without
+  `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` reports OpenTelemetry's
+  `unknown_service:<executable>`, not the working-directory name; the FI
+  project (`project_name`) is separate. A host provider's `service.name` is
+  never replaced in the FI view by `OTEL_SERVICE_NAME` or `WithConfig`.
+- **Host attribute limits:** The pinned OTel SDK exposes no public
+  provider-limit getter. The agent reads its immutable numeric limits once using
   a narrow, read-only reflection adapter (no unsafe access or synthetic spans),
-  covered by provider-configuration regressions. An unrecognized SDK layout
-  fails closed to zero attributes with a bounded warning. Zero-slot providers
+  covered by provider-configuration regressions that CI also runs against the
+  latest OpenTelemetry SDK. An unrecognized SDK layout fails closed to zero
+  attributes and treats every exported value as cut, with a one-time warning
+  that names the OpenTelemetry SDK. Zero-slot providers
   cannot retain attribute-based identity or degradation markers; span IDs,
   status and timing remain structural. The application provider is never changed.
-- **2026-10-30 — opaque, uninstrumented native transports (OTHER):** An auth
+- **Opaque, uninstrumented native transports:** An auth
   `RoundTripper` or closure can hide a saved `*http.Transport` that was neither
   the default at `Init` nor passed to `auto.Transport`. Credentials added inside
   that hidden transport did not cross an instrumented transport; its HTTP/1.1
@@ -594,34 +680,33 @@ outside the supported HTTP/1.1 and HTTP/2 provider paths):
   or call `auto.RegisterSecret`. Static and
   dynamic CONNECT headers on concrete transports the agent does hook are
   observed. Use `FI_HIDE_INPUTS`/`FI_HIDE_OUTPUTS` and the text/message hide
-  controls for sensitive errors and payloads. Re-confirmed unchanged on
-  2026-10-31 (an independent verifier reproduced it with a hidden transport and
-  confirmed explicit `auto.Transport` registration closes it).
-- **2026-10-30 — credential scope:** Secrets transformed by application code before
+  controls for sensitive errors and payloads. Explicit `auto.Transport`
+  registration of the hidden transport closes this gap.
+- **Credential scope:** Secrets transformed by application code before
   telemetry (signature extraction into plain text, JSON encoded inside strings,
   numeric re-typing, base64 or splitting), and unmarked credentials that never
   crossed an instrumented transport, cannot always be recognized. Use
   `FI_HIDE_INPUTS`/`FI_HIDE_OUTPUTS`, the text/message/image hide switches above,
   or explicitly call `auto.RegisterSecret` with the actual string to be exported.
-- **2026-10-30 — manual paths and retention:** Without the agent's transport hooks,
+- **Manual paths and retention:** Without the agent's transport hooks,
   only FI keys, credential-like environment values present at initialization and
   explicit `auto.RegisterSecret` calls seed value-based masking. Late environment
   changes are not rescanned. The 1024-value LRU may evict older credentials; values
   shorter than eight bytes are not registered (credential-named fields still
   redact structurally). Already-exported telemetry cannot be scrubbed retroactively.
   Keep transport hooks enabled and use the hide controls for sensitive workloads.
-- **2026-10-30 — privacy work budgets:** The catalog limits a walk to 4 MiB of
+- **Privacy work budgets:** The catalog limits a walk to 4 MiB of
   text, 16,384 nodes and depth 32. Repeated raw/decoded/flattened representations
   share that budget, so even a request below the body limit may lose captured
   content. Wire capture retains span identity, timing, outcome, protocol metadata
   and usage, with `traceai.wire.privacy_degraded=true`; unchecked content is never
   used as a fallback. An invalid/over-budget identity retains only fixed wire
-  provenance and the degradation marker. **2026-10-31:** when the application's
+  provenance and the degradation marker. When the application's
   context attributes exhaust the budget, their content is dropped and protected
   context keys (`user.id`, `project_name`, ...) are kept only after a bounded
   re-check together with every MIME/type hint of that context (then scalar keys
   alone); a protected value that still cannot be checked is dropped, never
-  restored unchecked. That re-check runs fail-closed (rc2, see span limits
+  restored unchecked. That re-check runs fail-closed (see span limits
   above), so samples whose hint was a native map, JSON string or generic slice
   are omitted too.
 - Go has no atexit hook. Abrupt exit and SIGTERM without application-managed
@@ -629,8 +714,8 @@ outside the supported HTTP/1.1 and HTTP/2 provider paths):
   handlers. Read/close response bodies and flush in your graceful-shutdown path.
 - Go cannot patch compiled libraries. Dedicated middleware, custom transports,
   incoming SERVER spans and third-party private context/suppression keys require
-  explicit integration. Replacing the global provider after first initialization
-  cannot be detected or rewired; `Init` is once-only.
+  explicit integration. A global provider installed after activation cannot be
+  detected or rewired; `Init` is once-only.
 - Response bodies remain `io.ReadCloser` observers, not the original concrete body
   type. Arbitrary user-defined body extension methods/type assertions are not
   forwarded. HTTP 101 upgrades are passed through untouched and are not captured;

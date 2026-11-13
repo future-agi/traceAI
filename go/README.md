@@ -21,7 +21,7 @@ The provider modules are not interchangeable: the OpenAI module does not trace t
 
 ## Zero-code tracing with one import
 
-[`go/auto`](auto/README.md) traces AI calls without per-SDK code. Import it once and rebuild; it wraps `http.DefaultTransport`, so calls made by any client built on the default transport (including the default OpenAI and Anthropic Go clients) become wire-layer spans, exported to Future AGI with the same privacy rules as traceAI's other SDKs. It configures its own exporter from `FI_API_KEY` and `FI_SECRET_KEY`.
+[`go/auto`](auto/README.md) traces AI calls without per-SDK code. Import it once and rebuild; it wraps `http.DefaultTransport`, so calls made by any client built on the default transport (including the default OpenAI and Anthropic Go clients) become wire-layer spans, exported to Future AGI under the same shared privacy catalog (version 3) as traceAI's other SDKs, with [a few differences](auto/README.md#privacy-differences-from-other-traceai-sdks). It configures its own exporter from `FI_API_KEY` and `FI_SECRET_KEY`. Only AI spans are sent to Future AGI: the wire spans and spans from the modules above. It never replaces your OpenTelemetry tracer provider; if you install one, do it before the first AI call, or pass it to `auto.Init(ctx, auto.WithTracerProvider(tp))` before that call.
 
 ```sh
 go get github.com/future-agi/traceAI/go/auto@dev
@@ -42,11 +42,13 @@ func main() {
         defer cancel()
         _ = auto.Shutdown(ctx)
     }()
-    // Your existing code, unchanged.
+    // Your code. AI calls through http.DefaultTransport are traced.
 }
 ```
 
-Use `@dev` until the first `go/auto/v0.1.0` tag exists. A long-running service can use `import _ "github.com/future-agi/traceAI/go/auto"` and skip the `Shutdown` call. Wire spans cover the HTTP call (model, messages, usage, timing); agent, chain and tool steps still need the modules above. Custom transports need `auto.Transport(base)`, and gRPC, WebSocket and realtime audio are not covered. See the [go/auto README](auto/README.md) and its [example](auto/example/main.go).
+**`http.DefaultTransport` changes type.** With FI keys set and wire capture on, `http.DefaultTransport` is the agent's wrapper, not an `*http.Transport`, from package initialization on. An unchecked `http.DefaultTransport.(*http.Transport)` assertion, such as `http.DefaultTransport.(*http.Transport).Clone()`, then panics; a checked assertion takes its fallback. Build custom transports from `&http.Transport{...}` and wrap them with `auto.Transport`, or set `FI_WIRE_CAPTURE=false` if a dependency makes the unchecked assertion.
+
+Use `@dev` until its first go/auto tag exists. A long-running service can use `import _ "github.com/future-agi/traceAI/go/auto"` and skip the `Shutdown` call. Wire spans cover the HTTP call (model, messages, usage, timing); agent, chain and tool steps still need the modules above. Custom transports need `auto.Transport(base)`, and gRPC, WebSocket and realtime audio are not covered. See the [go/auto README](auto/README.md) and its [example](auto/example/main.go).
 
 ## Install
 
