@@ -2,16 +2,16 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
-internal static class RoundFourProbe
+internal static class TransportProbe
 {
     internal static async Task Run(string url,string mode)
     {
-        if(mode.StartsWith("round4_term_",StringComparison.Ordinal)) { await Termination(url,mode); return; }
-        if(mode.StartsWith("round4_credentials_",StringComparison.Ordinal))
+        if(mode.StartsWith("transport_term_",StringComparison.Ordinal)) { await Termination(url,mode); return; }
+        if(mode.StartsWith("transport_credentials_",StringComparison.Ordinal))
         {
             bool aws=mode.Contains("_aws_",StringComparison.Ordinal);
             string secret=aws?"AWS_SESSION_SECRET_9876":"MCP_BODY_SECRET_9876";
-            using var source=new ActivitySource("OpenAI.Round4.BodyCredentials");
+            using var source=new ActivitySource("OpenAI.Transport.BodyCredentials");
             using var model=mode.EndsWith("_wire",StringComparison.Ordinal)?null:source.StartActivity("chat credentials",ActivityKind.Client);
             using var native=model==null?null:new Activity("native sdk client").Start();
             using var retry=model==null?null:new Activity("native retry").Start();
@@ -24,9 +24,9 @@ internal static class RoundFourProbe
             model?.AddEvent(new ActivityEvent("exception",tags:new ActivityTagsCollection { ["exception.message"]=new[] { secret },["exception.stacktrace"]="provider error "+secret }));
             Console.WriteLine($"response={(int)credentialResponse.StatusCode};body={Convert.ToBase64String(body)}"); return;
         }
-        if(mode=="round4_second_privacy")
+        if(mode=="transport_text_privacy")
         {
-            using var source=new ActivitySource("OpenAI.Round4.SecondPrivacy");
+            using var source=new ActivitySource("OpenAI.Transport.TextPrivacy");
             using(var span=source.StartActivity("chat privacy",ActivityKind.Client))
             {
                 span?.SetTag("input.text","PRIVATE_DOT_TEXT"); span?.SetTag("output.text",new[] { "PRIVATE_DOT_TEXT" });
@@ -36,7 +36,7 @@ internal static class RoundFourProbe
             }
             Console.WriteLine("privacy-complete"); return;
         }
-        if(mode.StartsWith("round4_exact_",StringComparison.Ordinal))
+        if(mode.StartsWith("transport_exact_",StringComparison.Ordinal))
         {
             // Deliberately do not dispose any response/stream, or issue an EOF read.
             // Both explicit Flush and ProcessExit must see the already-completed span.
@@ -61,33 +61,33 @@ internal static class RoundFourProbe
             Console.WriteLine(Convert.ToBase64String(received));
             GC.KeepAlive(exactResponse); GC.KeepAlive(exactStream); GC.KeepAlive(exactClient); return;
         }
-        if(mode.StartsWith("round4_query_",StringComparison.Ordinal))
+        if(mode.StartsWith("transport_query_",StringComparison.Ordinal))
         {
-            using var source=new ActivitySource("OpenAI.Round4.QueryCredentials");
-            using var model=mode=="round4_query_wire"?null:source.StartActivity("chat query",ActivityKind.Client);
+            using var source=new ActivitySource("OpenAI.Transport.QueryCredentials");
+            using var model=mode=="transport_query_wire"?null:source.StartActivity("chat query",ActivityKind.Client);
             using var queryClient=new HttpClient();
             using var queryResponse=await queryClient.PostAsync(url,new StringContent("{\"contents\":[]}",Encoding.UTF8,"application/json"));
             byte[] body=await queryResponse.Content.ReadAsByteArrayAsync();
             model?.SetStatus(ActivityStatusCode.Error,Encoding.UTF8.GetString(body));
             Console.WriteLine($"response={(int)queryResponse.StatusCode};body={Convert.ToBase64String(body)}"); return;
         }
-        if(mode=="round4_header")
+        if(mode=="transport_header")
         {
-            using var source=new ActivitySource("OpenAI.Round4.HeaderCredentials");
+            using var source=new ActivitySource("OpenAI.Transport.HeaderCredentials");
             using(var span=source.StartActivity("chat header",ActivityKind.Client))
                 span?.SetTag("http.request.header.Ocp-Apim-Subscription-Key",new[] { "SUBSCRIPTION_SECRET_9876" });
             Console.WriteLine("header-complete"); return;
         }
-        if(mode=="round4_once")
+        if(mode=="transport_once")
         {
             var hook=AppDomain.CurrentDomain.GetAssemblies().First(a=>a.GetName().Name=="TraceAI.AutoInstrumentation").GetType("StartupHook")!;
             hook.GetMethod("Initialize")!.Invoke(null,null); hook.GetMethod("Initialize")!.Invoke(null,null);
             using var onceClient=new HttpClient(); using var onceResponse=await onceClient.PostAsync(url,new StringContent("{\"messages\":[]}",Encoding.UTF8,"application/json"));
             Console.WriteLine(await onceResponse.Content.ReadAsStringAsync()); return;
         }
-        if(mode=="round4_privacy")
+        if(mode=="transport_privacy")
         {
-            using var source=new ActivitySource("OpenAI.Round4.explicit-api-key","explicit-secret-key");
+            using var source=new ActivitySource("OpenAI.Transport.explicit-api-key","explicit-secret-key");
             var link=new ActivityLink(new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"vendor=explicit-api-key",true),
                 new ActivityTagsCollection { ["input.value"]="PRIVATE_LINK_INPUT",["password"]="PRIVATE_LINK_PASSWORD" });
             using(var activity=source.StartActivity("chat privacy",ActivityKind.Client,default(ActivityContext),links:new[] { link }))
@@ -99,7 +99,7 @@ internal static class RoundFourProbe
             }
             Console.WriteLine("privacy-complete"); return;
         }
-        string operation=mode["round4_parity_".Length..];
+        string operation=mode["transport_parity_".Length..];
         using var client=new HttpClient(); using var request=new HttpRequestMessage(HttpMethod.Post,url) {
             Content=new StringContent("{\"messages\":[]}",Encoding.UTF8,"application/json") };
         using var response=operation=="sync"?client.Send(request,HttpCompletionOption.ResponseHeadersRead):
@@ -150,7 +150,7 @@ internal static class RoundFourProbe
         using var handler=cancel?System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM,context=> {
             context.Cancel=true; signals.Release();
         }):null;
-        using var source=new ActivitySource("OpenAI.Round4.Termination");
+        using var source=new ActivitySource("OpenAI.Transport.Termination");
         using var client=new HttpClient();
         async Task Send()
         {

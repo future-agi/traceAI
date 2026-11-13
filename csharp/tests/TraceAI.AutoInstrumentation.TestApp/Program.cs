@@ -9,8 +9,8 @@ using Microsoft.Extensions.Logging;
 
 // No traceAI reference. Only the conflict and host isolation probes initialize the app's older OTel.
 if(args.Length>1 && args[1].StartsWith("host_",StringComparison.Ordinal)) { await HostIsolationProbe.Run(args[0],args[1]); return; }
-if(args.Length>1 && args[1].StartsWith("round5_",StringComparison.Ordinal)) { await RoundFiveProbe.Run(args[0],args[1]); return; }
-if(args.Length>1 && args[1].StartsWith("round4_",StringComparison.Ordinal)) { await RoundFourProbe.Run(args[0],args[1]); return; }
+if(args.Length>1 && args[1].StartsWith("privacy_",StringComparison.Ordinal)) { await PrivacyProbe.Run(args[0],args[1]); return; }
+if(args.Length>1 && args[1].StartsWith("transport_",StringComparison.Ordinal)) { await TransportProbe.Run(args[0],args[1]); return; }
 if (args.Contains("dependency_conflict")) { await DependencyConflictProbe.Run(args[0]); return; }
 const string requestJson = "{\"model\":\"local-test\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
 if (args.Contains("idle")) { Console.WriteLine(""); return; }

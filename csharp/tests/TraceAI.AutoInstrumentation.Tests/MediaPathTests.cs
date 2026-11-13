@@ -11,7 +11,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFiveMediaPathTests : InitIsolation
+public class MediaPathTests : InitIsolation
 {
     private const string FlatAudio="{\"parts.1.inlineData.mimeType\":\"audio/wav\",\"parts.1.inlineData.data\":\"QUJDREVG\",\"parts.1.inlineData.transcript\":\"spoken words\"}";
     private static AutoConfig Config()=>new(new AutoOptions { ApiKey="explicit-api-key",SecretKey="explicit-secret-key",
@@ -56,7 +56,7 @@ public class RoundFiveMediaPathTests : InitIsolation
         await using var collector=new MockServer([],"application/json");
         var privacy=new AutoProcessor(Config());
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions { Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
-        using var source=new ActivitySource("Round5.MediaPaths",FlatAudio,tags:tags);
+        using var source=new ActivitySource("Privacy.MediaPaths",FlatAudio,tags:tags);
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(tags.Select(pair=>new KeyValuePair<string,object>(pair.Key,pair.Value!))))
             .AddProcessor(privacy).AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
@@ -85,7 +85,7 @@ public class RoundFiveMediaPathTests : InitIsolation
     {
         await using var server=new MockServer([],"application/json");
         var environment=new Dictionary<string,string?> { ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url };
-        string mode="round5_media_paths_"+shape;
+        string mode="privacy_media_paths_"+shape;
         var baseline=await StartupHookTests.RunApp(server.Url,mode,new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
         var traced=await StartupHookTests.RunApp(server.Url,mode,environment,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error);

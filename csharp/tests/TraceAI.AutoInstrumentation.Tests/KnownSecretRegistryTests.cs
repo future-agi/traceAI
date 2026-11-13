@@ -13,7 +13,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFiveTests : InitIsolation
+public class KnownSecretRegistryTests : InitIsolation
 {
     private static AutoConfig Config(TraceConfig? mask=null,bool wire=true)=>new(new AutoOptions {
         ApiKey="explicit-api-key",SecretKey="explicit-secret-key",TraceConfig=mask,WireCapture=wire,
@@ -32,7 +32,7 @@ public class RoundFiveTests : InitIsolation
         await using var collector=new MockServer([],"application/json");
         var privacy=new AutoProcessor(Config(mask));
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions { Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
-        using var source=new ActivitySource("Round5.MessageEvents");
+        using var source=new ActivitySource("Privacy.MessageEvents");
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name).AddProcessor(privacy).AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
         using(var span=source.StartActivity("message event privacy"))
         {
@@ -59,7 +59,7 @@ public class RoundFiveTests : InitIsolation
         await using var collector=new MockServer([],"application/json");
         var privacy=new AutoProcessor(Config());
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions { Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
-        using var source=new ActivitySource("Round5.UrlBoundary",tags:tags);
+        using var source=new ActivitySource("Privacy.UrlBoundary",tags:tags);
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(tags.Select(p=>new KeyValuePair<string,object>(p.Key,p.Value!))))
             .AddProcessor(privacy).AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
@@ -118,7 +118,7 @@ public class RoundFiveTests : InitIsolation
     [Fact]
     public void RegistrySeedsCredentialLikeEnvironmentExactlyAtInitialization()
     {
-        string[] names=["ROUND5_API_KEY","ROUND5_TOKEN","ROUND5_SECRET","ROUND5_PASSWORD","ROUND5_PASSWD","ROUND5_CREDENTIAL","ROUND5_AUTH","ROUND5_ORDINARY"];
+        string[] names=["REGISTRY_TEST_API_KEY","REGISTRY_TEST_TOKEN","REGISTRY_TEST_SECRET","REGISTRY_TEST_PASSWORD","REGISTRY_TEST_PASSWD","REGISTRY_TEST_CREDENTIAL","REGISTRY_TEST_AUTH","REGISTRY_TEST_ORDINARY"];
         var old=names.ToDictionary(name=>name,Environment.GetEnvironmentVariable);
         try
         {
@@ -140,7 +140,7 @@ public class RoundFiveTests : InitIsolation
         await using var collector=new MockServer([],"application/json");
         var privacy=new AutoProcessor(Config());
         var tags=new ActivityTagsCollection { ["note"]=new[] { secret } };
-        using var source=new ActivitySource("Round5."+secret,secret,tags:tags);
+        using var source=new ActivitySource("Privacy."+secret,secret,tags:tags);
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions { Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(new Dictionary<string,object> { ["note"]=new[] { secret } }))
@@ -225,8 +225,8 @@ public class RoundFiveTests : InitIsolation
     public async Task RealHookSharesPublicRegistrationWithDefaultContextAndSeedsEnvironment(string framework)
     {
         await using var server=new MockServer([],"application/json");
-        var child=await StartupHookTests.RunApp(server.Url,"round5_registration",new Dictionary<string,string?> {
-            ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url,["ROUND5_PROVIDER_AUTH"]="ENV_CREDENTIAL_SECRET_9876" },framework);
+        var child=await StartupHookTests.RunApp(server.Url,"privacy_registration",new Dictionary<string,string?> {
+            ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url,["REGISTRY_TEST_PROVIDER_AUTH"]="ENV_CREDENTIAL_SECRET_9876" },framework);
         Assert.True(child.ExitCode==0,child.Error); Assert.Equal("",child.Error); Assert.Equal("registration-complete",child.Output.Trim());
         byte[] bytes=Assert.Single(server.Exports); Assert.Single(Otlp.Spans(bytes)); string actual=Encoding.UTF8.GetString(bytes);
         Assert.DoesNotContain("PUBLIC_API_REGISTERED_SECRET_9876",actual); Assert.DoesNotContain("ENV_CREDENTIAL_SECRET_9876",actual);
@@ -295,7 +295,7 @@ public class RoundFiveTests : InitIsolation
         var environment=new Dictionary<string,string?> { ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url };
         if(layer=="privacy_only") environment["FI_WIRE_CAPTURE"]="false";
         var baselineEnvironment=new Dictionary<string,string?>(environment) { ["DOTNET_STARTUP_HOOKS"]=null };
-        string mode="round5_compressed_"+coding+"_"+layer;
+        string mode="privacy_compressed_"+coding+"_"+layer;
         var baseline=await StartupHookTests.RunApp(server.Url+"v1/messages",mode,baselineEnvironment,framework);
         var traced=await StartupHookTests.RunApp(server.Url+"v1/messages",mode,environment,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error); Assert.Equal(baseline.Output,traced.Output);
@@ -312,7 +312,7 @@ public class RoundFiveTests : InitIsolation
         await using var server=new MockServer([],"application/json");
         var environment=new Dictionary<string,string?> { ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url,
             [flag=="all"?"FI_HIDE_INPUTS":"FI_HIDE_INPUT_MESSAGES"]="true",[flag=="all"?"FI_HIDE_OUTPUTS":"FI_HIDE_OUTPUT_MESSAGES"]="true" };
-        var child=await StartupHookTests.RunApp(server.Url,"round5_events",environment,framework);
+        var child=await StartupHookTests.RunApp(server.Url,"privacy_events",environment,framework);
         Assert.True(child.ExitCode==0,child.Error); Assert.Equal("",child.Error); Assert.Equal("events-complete",child.Output.Trim());
         Assert.Single(server.Exports.SelectMany(Otlp.Spans));
         Assert.All(server.Exports,bytes=> { string actual=Encoding.UTF8.GetString(bytes); Assert.DoesNotContain("PRIVATE_EVENT_CONTENT",actual); Assert.DoesNotContain("URL_UNDISCOVERED_SECRET_9876",actual); });

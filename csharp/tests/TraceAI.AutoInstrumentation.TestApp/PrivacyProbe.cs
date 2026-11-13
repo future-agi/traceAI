@@ -2,12 +2,12 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
 
-internal static class RoundFiveProbe
+internal static class PrivacyProbe
 {
     internal static async Task Run(string url,string mode)
     {
-        using var source=new ActivitySource("OpenAI.Round5");
-        if(mode=="round5_s6_catalog")
+        using var source=new ActivitySource("OpenAI.Privacy");
+        if(mode=="privacy_catalog_credentials")
         {
             const string echo="S6_HEADER_CREDENTIAL_9876 S6_BODY_KEY_9876 S6_ARRAY_KEY_9876 S6_QUERY_CREDENTIAL_9876";
             using(var model=source.StartActivity("chat catalog credentials",ActivityKind.Client,default(ActivityContext),new ActivityTagsCollection { ["gen_ai.span.kind"]="LLM" }))
@@ -29,7 +29,7 @@ internal static class RoundFiveProbe
             }
             return;
         }
-        if(mode=="round5_registration")
+        if(mode=="privacy_registration")
         {
             var runtime=AppDomain.CurrentDomain.GetAssemblies().First(a=>a.GetName().Name=="TraceAI.AutoInstrumentation.Runtime");
             var manual=System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(runtime.Location);
@@ -41,7 +41,7 @@ internal static class RoundFiveProbe
             }
             Console.WriteLine("registration-complete"); return;
         }
-        if(mode=="round5_events")
+        if(mode=="privacy_events")
         {
             using(var span=source.StartActivity("chat message events",ActivityKind.Client))
             {
@@ -52,7 +52,7 @@ internal static class RoundFiveProbe
             }
             Console.WriteLine("events-complete"); return;
         }
-        if(mode=="round5_structural_media")
+        if(mode=="privacy_structural_media")
         {
             using(var span=source.StartActivity("chat structural media",ActivityKind.Client))
             {
@@ -61,7 +61,7 @@ internal static class RoundFiveProbe
             }
             Console.WriteLine("media-complete"); return;
         }
-        if(mode.StartsWith("round5_media_paths_",StringComparison.Ordinal))
+        if(mode.StartsWith("privacy_media_paths_",StringComparison.Ordinal))
         {
             using(var span=source.StartActivity("chat media paths",ActivityKind.Client))
             {
@@ -74,7 +74,7 @@ internal static class RoundFiveProbe
             }
             Console.WriteLine("media-paths-complete"); return;
         }
-        if(mode.StartsWith("round5_multipart_",StringComparison.Ordinal))
+        if(mode.StartsWith("privacy_multipart_",StringComparison.Ordinal))
         {
             bool streamed=mode.Contains("stream",StringComparison.Ordinal);
             using var file=new ByteArrayContent("multipart-file-bytes"u8.ToArray()); file.Headers.ContentType=new("audio/wav");

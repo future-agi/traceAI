@@ -10,7 +10,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFourSecondBlockerTests : InitIsolation
+public class TextHideAndExactLengthTests : InitIsolation
 {
     private static AutoConfig Config(TraceConfig? mask=null,BaseExporter<Activity>? exporter=null)=>new(new AutoOptions {
         ApiKey="explicit-api-key",SecretKey="explicit-secret-key",TraceConfig=mask,Exporter=exporter,
@@ -27,7 +27,7 @@ public class RoundFourSecondBlockerTests : InitIsolation
             Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
         string[] keys=["input.text","output.text","gen_ai.input.messages.0.parts.0.text","gen_ai.output.messages.0.parts.0.text"];
         var tags=new ActivityTagsCollection(keys.Select(key=>new KeyValuePair<string,object?>(key,new[] { "PRIVATE_DOT_TEXT" })));
-        using var source=new ActivitySource("Round4.DotText",tags:tags);
+        using var source=new ActivitySource("Privacy.DotText",tags:tags);
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(tags.Select(pair=>new KeyValuePair<string,object>(pair.Key,pair.Value!))))
             .AddProcessor(privacy).AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
@@ -77,7 +77,7 @@ public class RoundFourSecondBlockerTests : InitIsolation
         byte[] body=Encoding.UTF8.GetBytes("{\"error\":{\"message\":\"bad "+secret+"\"}}");
         await using var server=new MockServer(body,"application/json") { StatusCode=401 };
         var environment=EnvironmentFor(server); if(layer=="privacy_only") environment["FI_WIRE_CAPTURE"]="false";
-        string mode="round4_credentials_"+credential+"_"+layer;
+        string mode="transport_credentials_"+credential+"_"+layer;
         var baselineEnvironment=new Dictionary<string,string?>(environment) { ["DOTNET_STARTUP_HOOKS"]=null };
         var baseline=await StartupHookTests.RunApp(server.Url+"v1/messages",mode,baselineEnvironment,framework);
         var traced=await StartupHookTests.RunApp(server.Url+"v1/messages",mode,environment,framework);
@@ -95,7 +95,7 @@ public class RoundFourSecondBlockerTests : InitIsolation
     {
         await using var collector=new MockServer([],"application/json");
         var environment=EnvironmentFor(collector); environment["FI_HIDE_INPUT_TEXT"]="true"; environment["FI_HIDE_OUTPUT_TEXT"]="true";
-        var child=await StartupHookTests.RunApp(collector.Url,"round4_second_privacy",environment,framework);
+        var child=await StartupHookTests.RunApp(collector.Url,"transport_text_privacy",environment,framework);
         Assert.True(child.ExitCode==0,child.Error); Assert.Equal("",child.Error); Assert.Equal("privacy-complete",child.Output.Trim());
         byte[] bytes=Assert.Single(collector.Exports); string actual=Encoding.UTF8.GetString(bytes);
         Assert.DoesNotContain("PRIVATE_DOT_TEXT",actual); Assert.DoesNotContain("%51%55%4A%44",actual); Assert.DoesNotContain("AWS_SESSION_SECRET_9876",actual);
@@ -111,7 +111,7 @@ public class RoundFourSecondBlockerTests : InitIsolation
     {
         byte[] bytes=binary?Enumerable.Range(0,257).Select(i=>(byte)i).ToArray():"{\"choices\":[{\"message\":{\"content\":\"all response bytes\"}}]}"u8.ToArray();
         await using var server=new MockServer(bytes,binary?"audio/mpeg":"application/json") { UseContentLength=true };
-        string path=binary?"v1/audio/speech":"v1/chat/completions",mode="round4_exact_"+read;
+        string path=binary?"v1/audio/speech":"v1/chat/completions",mode="transport_exact_"+read;
         var environment=EnvironmentFor(server); var baselineEnvironment=new Dictionary<string,string?>(environment) { ["DOTNET_STARTUP_HOOKS"]=null };
         var baseline=await StartupHookTests.RunApp(server.Url+path,mode,baselineEnvironment,framework);
         var traced=await StartupHookTests.RunApp(server.Url+path,mode,environment,framework);

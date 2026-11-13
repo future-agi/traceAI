@@ -11,7 +11,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFourPrivacyTests : InitIsolation
+public class ExportSnapshotPrivacyTests : InitIsolation
 {
     private static AutoOptions Options(BaseExporter<Activity>? exporter=null,TraceConfig? mask=null)=>new() {
         ApiKey="explicit-api-key",SecretKey="explicit-secret-key",Exporter=exporter,TraceConfig=mask,
@@ -83,7 +83,7 @@ public class RoundFourPrivacyTests : InitIsolation
         var privacy=new AutoProcessor(new AutoConfig(Options(mask:new TraceConfig { HideInputs=true,HideOutputs=true })));
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions {
             Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
-        using var source=new ActivitySource("Round4.Scope.explicit-api-key","explicit-secret-key",new Dictionary<string,object?> {
+        using var source=new ActivitySource("Privacy.Scope.explicit-api-key","explicit-secret-key",new Dictionary<string,object?> {
             ["password"]="PRIVATE_SCOPE_PASSWORD",["input.value"]="PRIVATE_SCOPE_INPUT",["safe"]="retained" });
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(new Dictionary<string,object> {
@@ -117,8 +117,8 @@ public class RoundFourPrivacyTests : InitIsolation
         await using var server=new MockServer(Encoding.UTF8.GetBytes(payload),"application/json") { StatusCode=401 };
         var options=Options(); options.BaseUrl=server.Url; options.WireCapture=wire; options.Metadata=new() { ["echo"]=credential };
         using var agent=new Agent(new AutoConfig(options));
-        using var source=new ActivitySource("OpenAI.Round4.LibrarySecrets",credential);
-        using var nativeSource=new ActivitySource("Native.Round4.SecretClient");
+        using var source=new ActivitySource("OpenAI.Privacy.LibrarySecrets",credential);
+        using var nativeSource=new ActivitySource("Native.Privacy.SecretClient");
         using var listener=new ActivityListener { ShouldListenTo=s=>s.Name==nativeSource.Name,Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded };
         ActivitySource.AddActivityListener(listener);
         using(var model=source.StartActivity("wrapper",ActivityKind.Client,default(ActivityContext),new ActivityTagsCollection { ["gen_ai.span.kind"]=kind }))

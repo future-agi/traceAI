@@ -10,7 +10,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFiveBlockerTests : InitIsolation
+public class MultipartUploadParityTests : InitIsolation
 {
     private static AutoConfig Config()=>new(new AutoOptions { ApiKey="explicit-api-key",SecretKey="explicit-secret-key",
         ConfigFile=Path.Combine(WireFixtureTests.Repo,"csharp","absent.toml") });
@@ -44,7 +44,7 @@ public class RoundFiveBlockerTests : InitIsolation
         await using var collector=new MockServer([],"application/json");
         var privacy=new AutoProcessor(Config());
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions { Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
-        using var source=new ActivitySource("Round5.StructuralMedia",tags:tags);
+        using var source=new ActivitySource("Privacy.StructuralMedia",tags:tags);
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(tags.Select(pair=>new KeyValuePair<string,object>(pair.Key,pair.Value!))))
             .AddProcessor(privacy).AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
@@ -100,7 +100,7 @@ public class RoundFiveBlockerTests : InitIsolation
     public async Task RealHookBufferedMultipartUploadsPreserveBytesAndPartHeaders(string framework,string send)
     {
         await using var server=new MockServer("{\"text\":\"transcribed\"}"u8.ToArray(),"application/json");
-        var environment=EnvironmentFor(server); string mode="round5_multipart_buffered_"+send;
+        var environment=EnvironmentFor(server); string mode="privacy_multipart_buffered_"+send;
         var baseline=await StartupHookTests.RunApp(server.Url+"v1/audio/transcriptions",mode,new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
         var traced=await StartupHookTests.RunApp(server.Url+"v1/audio/transcriptions",mode,environment,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error);
@@ -116,7 +116,7 @@ public class RoundFiveBlockerTests : InitIsolation
     public async Task RealHookObservedMultipartCredentialsProtectUnrelatedLaterSpans(string framework)
     {
         await using var server=new MockServer("{\"text\":\"transcribed\"}"u8.ToArray(),"application/json");
-        var environment=EnvironmentFor(server); const string mode="round5_multipart_stream_credentials";
+        var environment=EnvironmentFor(server); const string mode="privacy_multipart_stream_credentials";
         var baseline=await StartupHookTests.RunApp(server.Url+"v1/audio/transcriptions",mode,new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
         var traced=await StartupHookTests.RunApp(server.Url+"v1/audio/transcriptions",mode,environment,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error);
@@ -130,8 +130,8 @@ public class RoundFiveBlockerTests : InitIsolation
     public async Task RealHookRemovesShortAudioAndNonBase64DataUrisWithBaselineParity(string framework)
     {
         await using var server=new MockServer([],"application/json"); var environment=EnvironmentFor(server);
-        var baseline=await StartupHookTests.RunApp(server.Url,"round5_structural_media",new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
-        var traced=await StartupHookTests.RunApp(server.Url,"round5_structural_media",environment,framework);
+        var baseline=await StartupHookTests.RunApp(server.Url,"privacy_structural_media",new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
+        var traced=await StartupHookTests.RunApp(server.Url,"privacy_structural_media",environment,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error);
         Assert.Equal("",baseline.Error); Assert.Equal("",traced.Error); Assert.Equal(baseline.Output,traced.Output);
         byte[] bytes=Assert.Single(server.Exports); Assert.Single(Otlp.Spans(bytes)); string actual=Encoding.UTF8.GetString(bytes);

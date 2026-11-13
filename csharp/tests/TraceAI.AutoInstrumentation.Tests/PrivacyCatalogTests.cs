@@ -138,8 +138,8 @@ public class PrivacyCatalogTests : InitIsolation
     {
         await using var server=new MockServer("{}"u8.ToArray(),"application/json");
         var environment=new Dictionary<string,string?> { ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url };
-        var baseline=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","round5_s6_catalog",new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
-        var traced=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","round5_s6_catalog",environment,framework);
+        var baseline=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","privacy_catalog_credentials",new(environment) { ["DOTNET_STARTUP_HOOKS"]=null },framework);
+        var traced=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","privacy_catalog_credentials",environment,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error);
         Assert.Equal("",baseline.Error); Assert.Equal("",traced.Error); Assert.Equal(baseline.Output,traced.Output);
         var bodies=server.RequestBodies.ToArray(); Assert.Equal(2,bodies.Length); Assert.Equal(bodies[0],bodies[1]);

@@ -8,7 +8,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class IndependentVerifierRegressionTests
+public class ValueGraphAndStreamingFlagTests
 {
     private static AutoConfig Config(BaseExporter<Activity> exporter) => new(new AutoOptions {
         ApiKey="explicit-api-key",SecretKey="explicit-secret-key",Exporter=exporter,

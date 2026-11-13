@@ -9,7 +9,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundSixBlockerTests : InitIsolation
+public class ActivationAndProjectionTests : InitIsolation
 {
     private sealed class EnvironmentScope : IDisposable
     {
@@ -215,7 +215,7 @@ public class RoundSixBlockerTests : InitIsolation
             }
             if(route=="provider") Assert.Empty(agentExporter.Spans);
             // Agent-created wire content is masked at creation; host/library content
-            // must still keep its original view for the host-owned destination (S8).
+            // must still keep its original view for the host-owned destination.
             using var library=new ActivitySource("OpenAI.HideControl");
             using(var span=library.StartActivity("chat host")) span!.SetTag("output.value",answer);
             Assert.True(TraceAIAuto.Flush());

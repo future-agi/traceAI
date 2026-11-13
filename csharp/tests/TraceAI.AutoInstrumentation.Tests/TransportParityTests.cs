@@ -7,7 +7,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFourTransportTests
+public class TransportParityTests
 {
     private static AutoConfig Config(BaseExporter<Activity> exporter)=>new(new AutoOptions { ApiKey="explicit-api-key",SecretKey="explicit-secret-key",Exporter=exporter,
         ConfigFile=Path.Combine(WireFixtureTests.Repo,"csharp","absent.toml") });
@@ -23,8 +23,8 @@ public class RoundFourTransportTests
         await using var server=new MockServer(bytes,framing=="json"?"application/json":"text/event-stream") { UseContentLength=framing=="json" };
         var env=new Dictionary<string,string?> { ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url };
         var baselineEnv=new Dictionary<string,string?>(env) { ["DOTNET_STARTUP_HOOKS"]=null };
-        var baseline=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","round4_parity_"+mode,baselineEnv,framework);
-        var traced=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","round4_parity_"+mode,env,framework);
+        var baseline=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","transport_parity_"+mode,baselineEnv,framework);
+        var traced=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","transport_parity_"+mode,env,framework);
         Assert.True(baseline.ExitCode==0,baseline.Error); Assert.True(traced.ExitCode==0,traced.Error);
         Assert.Equal("",baseline.Error); Assert.Equal("",traced.Error); Assert.Equal(baseline.Output,traced.Output);
         var span=Assert.Single(server.Exports.SelectMany(Otlp.Spans)); Assert.Equal("wire",span.Attributes["traceai.capture.layer"]);
@@ -35,7 +35,7 @@ public class RoundFourTransportTests
     public async Task RealHookBootstrapInitializesOnlyOnceAndLogsOneRepeatLine(string framework)
     {
         await using var server=new MockServer("{}"u8.ToArray(),"application/json");
-        var child=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","round4_once",new() {
+        var child=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","transport_once",new() {
             ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=server.Url },framework);
         Assert.Equal(0,child.ExitCode); Assert.Equal("{}",child.Output.Trim());
         Assert.Equal(1,child.Error.Split("Agent already initialized").Length-1);
@@ -46,7 +46,7 @@ public class RoundFourTransportTests
     public async Task RealHookSanitizesScopeTracestateEventsAndLinksOnBothSupportedRuntimes(string framework)
     {
         await using var collector=new MockServer([],"application/json");
-        var child=await StartupHookTests.RunApp(collector.Url,"round4_privacy",new() {
+        var child=await StartupHookTests.RunApp(collector.Url,"transport_privacy",new() {
             ["FI_API_KEY"]="explicit-api-key",["FI_SECRET_KEY"]="explicit-secret-key",["FI_BASE_URL"]=collector.Url,["FI_HIDE_INPUTS"]="true" },framework);
         Assert.True(child.ExitCode==0,child.Error); Assert.Equal("",child.Error);
         byte[] bytes=Assert.Single(collector.Exports); string actual=Encoding.UTF8.GetString(bytes);
@@ -73,7 +73,7 @@ public class RoundFourTransportTests
     {
         var exporter=new MemoryExporter(); using var agent=new Agent(Config(exporter));
         await using var server=new MockServer("{}"u8.ToArray(),"application/json");
-        using var models=new ActivitySource("OpenAI.Round4.ContextModel"); using var nativeSource=new ActivitySource("Native.Round4.Client");
+        using var models=new ActivitySource("OpenAI.Dedup.ContextModel"); using var nativeSource=new ActivitySource("Native.Dedup.Client");
         using var listener=new ActivityListener { ShouldListenTo=s=>s.Name==nativeSource.Name,Sample=(ref ActivityCreationOptions<ActivityContext> _)=>ActivitySamplingResult.AllDataAndRecorded };
         ActivitySource.AddActivityListener(listener);
         var ambient=Activity.Current;

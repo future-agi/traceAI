@@ -13,7 +13,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFourRegressionTests : InitIsolation
+public class FrameworkLayoutTests : InitIsolation
 {
     private static AutoOptions Options(BaseExporter<Activity>? exporter=null,TraceConfig? mask=null)=>new() {
         ApiKey="explicit-api-key",SecretKey="explicit-secret-key",Exporter=exporter,TraceConfig=mask,

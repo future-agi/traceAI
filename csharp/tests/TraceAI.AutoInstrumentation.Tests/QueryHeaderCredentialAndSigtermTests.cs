@@ -11,7 +11,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundFourBlockerTests : InitIsolation
+public class QueryHeaderCredentialAndSigtermTests : InitIsolation
 {
     private static AutoConfig Config()=>new(new AutoOptions { ApiKey="explicit-api-key",SecretKey="explicit-secret-key",
         ConfigFile=Path.Combine(WireFixtureTests.Repo,"csharp","absent.toml") });
@@ -59,7 +59,7 @@ public class RoundFourBlockerTests : InitIsolation
         var privacy=new AutoProcessor(Config());
         using var exporter=new TrackingOtlpExporter(new OtlpExporterOptions {
             Endpoint=new Uri(collector.Url+"tracer/v1/traces"),Protocol=OtlpExportProtocol.HttpProtobuf },privacy,new ExportCompletion(),compatibility);
-        using var source=new ActivitySource("Round4.HeaderBoundary",tags:new Dictionary<string,object?> { [key]=new[] { secret } });
+        using var source=new ActivitySource("Privacy.HeaderBoundary",tags:new Dictionary<string,object?> { [key]=new[] { secret } });
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(source.Name)
             .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(new Dictionary<string,object> { [key]=new[] { secret } }))
             .AddProcessor(privacy).AddProcessor(new SimpleActivityExportProcessor(exporter)).Build();
@@ -85,7 +85,7 @@ public class RoundFourBlockerTests : InitIsolation
         byte[] body=Encoding.UTF8.GetBytes("{\"error\":{\"message\":\"bad "+secret+"\"}}");
         await using var server=new MockServer(body,"application/json") { StatusCode=401 };
         var environment=EnvironmentFor(server); if(layer=="privacy_only") environment["FI_WIRE_CAPTURE"]="false";
-        var child=await StartupHookTests.RunApp(server.Url+"v1beta/models/m:generateContent?key="+secret,"round4_query_"+layer,environment,framework);
+        var child=await StartupHookTests.RunApp(server.Url+"v1beta/models/m:generateContent?key="+secret,"transport_query_"+layer,environment,framework);
         Assert.True(child.ExitCode==0,child.Error); Assert.Equal("",child.Error);
         Assert.Equal("response=401;body="+Convert.ToBase64String(body),child.Output.Trim());
         var bytes=Assert.Single(server.Exports); Assert.DoesNotContain(secret,Encoding.UTF8.GetString(bytes));
@@ -98,7 +98,7 @@ public class RoundFourBlockerTests : InitIsolation
     public async Task RealHookAuthHeaderStringArrayIsRedactedWithoutAnOutgoingRequest(string framework)
     {
         await using var server=new MockServer([],"application/json");
-        var child=await StartupHookTests.RunApp(server.Url,"round4_header",EnvironmentFor(server),framework);
+        var child=await StartupHookTests.RunApp(server.Url,"transport_header",EnvironmentFor(server),framework);
         Assert.True(child.ExitCode==0,child.Error); Assert.Equal("",child.Error); Assert.Equal("header-complete",child.Output.Trim());
         var bytes=Assert.Single(server.Exports); Assert.DoesNotContain("SUBSCRIPTION_SECRET_9876",Encoding.UTF8.GetString(bytes));
         Assert.Equal(TraceConfig.RedactedValue,Assert.Single(Otlp.Spans(bytes)).Attributes["http.request.header.Ocp-Apim-Subscription-Key"]);
@@ -114,7 +114,7 @@ public class RoundFourBlockerTests : InitIsolation
         if(OperatingSystem.IsWindows()) return; // SIGTERM and libc do not exist on Windows.
         await using var baselineServer=new MockServer("{}"u8.ToArray(),"application/json");
         await using var tracedServer=new MockServer("{}"u8.ToArray(),"application/json");
-        string mode="round4_term_"+(cancel?"cancel_":"default_")+layer;
+        string mode="transport_term_"+(cancel?"cancel_":"default_")+layer;
         var baseline=await Terminate(baselineServer,mode,framework,hook:false,cancel);
         var traced=await Terminate(tracedServer,mode,framework,hook:true,cancel);
         Assert.Equal(baseline.ExitCode,traced.ExitCode); Assert.Equal(cancel?0:143,traced.ExitCode);

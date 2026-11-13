@@ -8,7 +8,7 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.Tests;
 
-public class RoundTwoRegressionTests : InitIsolation
+public class CredentialEchoAndFlushTests : InitIsolation
 {
     private static AutoOptions Options(BaseExporter<Activity>? exporter=null) => new() {
         ApiKey="explicit-api-key",SecretKey="explicit-secret-key",Exporter=exporter,
