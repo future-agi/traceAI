@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { context, ROOT_CONTEXT, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
+import { context, ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
+import { HTTP_SCOPE, incomingParent } from "./incoming-parent";
 
 /**
  * The agent never registers an OpenTelemetry context manager, tracer provider
@@ -103,11 +104,15 @@ export function contextBoundProvider(provider: TracerProvider): TracerProvider {
   const facade = Object.create(provider) as TracerProvider;
   Object.defineProperty(facade, "getTracer", { value: (...args: Parameters<TracerProvider["getTracer"]>) => {
     const native = provider.getTracer(...args);
+    const http = args[0] === HTTP_SCOPE;
     let bound = tracers.get(native);
     if (!bound) {
       bound = Object.create(native) as Tracer;
       Object.defineProperties(bound, {
-        startSpan: { value: (name: string, options?: SpanOptions, ctx?: Context) => startSpan(native, name, options, ctx) },
+        // Incoming SERVER spans join a remote parent read by the private propagator
+        // when the application has none.
+        startSpan: { value: (name: string, options?: SpanOptions, ctx?: Context) =>
+          startSpan(native, name, options, http && options?.kind === SpanKind.SERVER ? incomingParent(ctx) : ctx) },
         startActiveSpan: { value: (...rest: unknown[]) => startActiveSpan(native, rest) },
       });
       tracers.set(native, bound);

@@ -13,6 +13,7 @@ import { captureSecrets, SpanResult } from "./wire/core";
 import { withDeadline } from "./deadline";
 import { privacyFilter } from "./export-privacy";
 import { contextBoundProvider, isAgentSpan, markAgentSpan } from "./agent-context";
+import { HTTP_SCOPE } from "./incoming-parent";
 import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
 
 const VERSION = "0.1.4"; // x-release-please-version
@@ -109,7 +110,6 @@ function forwardLater(agent: AgentState, processor: SpanProcessor): void {
   agent.cancelForward = () => { agent.tryForward = undefined; clearImmediate(immediate); };
 }
 // Incoming HTTP SERVER spans reach Future AGI only for traces with AI work.
-const HTTP_SCOPE = "@opentelemetry/instrumentation-http";
 interface ServerGate { note(traceId: unknown): void; start(span: any): void; admit(span: any): boolean }
 function serverGate(): ServerGate {
   const traces = new Set<string>();

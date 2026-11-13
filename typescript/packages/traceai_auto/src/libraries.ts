@@ -10,6 +10,7 @@ import type { TracerProvider } from "@opentelemetry/api";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config, enabled, explicitlyEnabled, Options } from "./config";
+import { readIncomingParent } from "./incoming-parent";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
 /** vectorOnly: the database integration traces only vector operations when the agent enables it. */
@@ -251,7 +252,8 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       const { HttpInstrumentation } = appRequire()(path);
       // Outgoing propagation has its own privacy/policy boundary; it creates no
       // HTTP CLIENT spans and must not be enabled by this incoming-only package.
-      const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true });
+      // The start hook reads a W3C parent privately when the application has no propagator.
+      const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true, startIncomingSpanHook: readIncomingParent });
       removers.push(registerInstrumentations({ tracerProvider: provider, instrumentations: [instance] }));
       statuses.push({ name: "http", status: "instrumented", reason: esm ? "Incoming SERVER spans only" : "Incoming SERVER spans, CommonJS only; ESM loader unavailable" });
     } catch { statuses.push({ name: "http", status: "not_installed", reason: "Optional @opentelemetry/instrumentation-http" }); }
