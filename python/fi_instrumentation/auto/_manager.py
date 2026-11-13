@@ -327,8 +327,9 @@ def _reconcile(integration: Integration) -> None:
                 result.status, result.detail = DISABLED, "agent shut down"
             elif cleanup is not None:
                 state.cleanups[integration.name] = cleanup
-            if result.status == INSTRUMENTED and result.detail != "already instrumented":
-                # The Future AGI route carries the spans of integrations the agent enabled.
+            if result.status == INSTRUMENTED:
+                # The Future AGI route carries the spans of integrations that are on, whether the
+                # agent or the application turned them on; request roots still need an AI span.
                 for overlay in state.overlays.values():
                     overlay.admit(integration)
             state.statuses[integration.name] = result
@@ -527,9 +528,9 @@ class _ResourceOverlayProcessor(SpanProcessor):
     """The agent's Future AGI export route on a tracer provider.
 
     Future AGI receives AI spans only: spans from traceAI instrumentation scopes, spans from any
-    scope that carry an AI span kind, and the library spans of integrations the agent enabled,
-    plus the request root span of a web server the agent enabled when that request led to an AI
-    span. Every other span the provider ends goes to the application's own processors and
+    scope that carry an AI span kind, and the library spans of integrations that are on (the agent
+    or the application turned them on), plus the request root span of such a web server when that
+    request led to an AI span. Every other span the provider ends goes to the application's own processors and
     exporters only. The copy sent to Future AGI is mapped by the integrations' mappers, loses the
     query strings and captured headers of a web server span, has the agent's TraceConfig applied to
     its attributes, events and links (with hidden error details, it also loses its exception events
@@ -585,7 +586,7 @@ class _ResourceOverlayProcessor(SpanProcessor):
             self._delegate.span_exporter = exporter
 
     def admit(self, integration: Integration) -> None:
-        """Carry the spans of an integration the agent enabled: its scopes, or its request roots."""
+        """Carry the spans of an integration that is on: its scopes, or its request roots."""
         scopes = tuple(scope.lower() for scope in integration.scopes)
         if integration.category == "web":
             self.server_scopes += scopes
