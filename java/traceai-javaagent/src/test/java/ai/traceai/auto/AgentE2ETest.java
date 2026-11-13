@@ -179,8 +179,8 @@ class AgentE2ETest {
         assertEquals(1, spans.size(), spans.toString());
         var wire = spans.get(0); assertWireSpan(wire);
         assertEquals(line(log, "PARENT="), wire.get("parentSpanId")); assertFalse(WireCore.dump(collectorPayloads).contains("application-parent"));
-        // S6 deliberately classifies session identifiers as credential-named fields.
-        assertEquals("<redacted>", attributes(wire).get("session.id"));
+        // The session id set through ContextAttributes.usingSession is exported as set, under both of its keys.
+        assertEquals("e2e-session", attributes(wire).get("session.id")); assertEquals("e2e-session", attributes(wire).get("gen_ai.conversation.id"));
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void librarySpanSuppressesWire(String client) throws Exception { assertLibrarySpanStaysLocalAndOnlyTheControlCallIsTraced(run(client, "dedup", Map.of(), true)); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void frameworkIsParentAndContextIsCaptured(String client) throws Exception {
