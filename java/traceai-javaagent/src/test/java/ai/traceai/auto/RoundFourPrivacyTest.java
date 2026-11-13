@@ -36,12 +36,10 @@ class RoundFourPrivacyTest {
     }
     @Test void allSpanSurfacesAreSanitizedAndNonFiniteNumbersRemainSerializable() throws Exception {
         var original = original(); var config = AutoConfig.resolve(Map.of("api_key", "PRIVATE_CONFIG_KEY"), Map.of());
-        for (SpanData data : List.of(original, ApplicationOtel.snapshot(original, getClass().getClassLoader(), config, TraceAIAuto.resource(config)))) {
-            String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
-            assertFalse(json.contains("PRIVATE_CONFIG_KEY")); assertFalse(json.contains("PRIVATE_SECRET")); assertFalse(json.contains("PRIVATE_DIAGNOSTIC"));
-            for (String value : List.of("NaN", "Infinity", "-Infinity")) assertTrue(json.contains(value));
-            assertTrue(json.contains("events")); assertTrue(json.contains("links")); assertTrue(json.contains("scope-<redacted>"));
-        }
+        String json = WireCore.dump(new OtlpJsonExporter(config).serialize(original));
+        assertFalse(json.contains("PRIVATE_CONFIG_KEY")); assertFalse(json.contains("PRIVATE_SECRET")); assertFalse(json.contains("PRIVATE_DIAGNOSTIC"));
+        for (String value : List.of("NaN", "Infinity", "-Infinity")) assertTrue(json.contains(value));
+        assertTrue(json.contains("events")); assertTrue(json.contains("links")); assertTrue(json.contains("scope-<redacted>"));
         assertEquals("PRIVATE_CONFIG_KEY", original.getLinks().get(0).getSpanContext().getTraceState().get("vendor"));
         assertEquals("PRIVATE_INPUT", original.getAttributes().get(AttributeKey.stringKey("input.value")));
     }
@@ -73,12 +71,10 @@ class RoundFourPrivacyTest {
             for (String flag : List.of("none", "hide_inputs", "hide_input_text", "hide_input_messages", "hide_outputs", "hide_output_text", "hide_output_messages", "both")) {
                 var config = AutoConfig.resolve(flag.equals("none") ? Map.of() : flag.equals("both") ? Map.of("hide_inputs", true, "hide_outputs", true) : Map.of(flag, true), Map.of());
                 boolean hideInput = flag.startsWith("hide_input") || flag.equals("both"), hideOutput = flag.startsWith("hide_output") || flag.equals("both");
-                for (var candidate : List.of(data, ApplicationOtel.snapshot(data, getClass().getClassLoader(), config, TraceAIAuto.resource(config)))) {
-                    String json = WireCore.dump(new OtlpJsonExporter(config).serialize(candidate));
-                    assertEquals(!hideInput, json.contains("PRIVATE_COHERE_SYSTEM_PROMPT"), flag);
-                    for (String value : List.of("PRIVATE_COHERE_TOOL_ROOT", "PRIVATE_COHERE_TOOL_NAME", "PRIVATE_COHERE_TOOL_ARGUMENT", "PRIVATE_COHERE_TOOL_ARRAY")) assertEquals(!hideOutput, json.contains(value), flag + ":" + value);
-                    assertTrue(json.contains("public-model")); assertTrue(json.contains("existing-cohere-wrapper")); assertTrue(json.contains("links"));
-                }
+                String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
+                assertEquals(!hideInput, json.contains("PRIVATE_COHERE_SYSTEM_PROMPT"), flag);
+                for (String value : List.of("PRIVATE_COHERE_TOOL_ROOT", "PRIVATE_COHERE_TOOL_NAME", "PRIVATE_COHERE_TOOL_ARGUMENT", "PRIVATE_COHERE_TOOL_ARRAY")) assertEquals(!hideOutput, json.contains(value), flag + ":" + value);
+                assertTrue(json.contains("public-model")); assertTrue(json.contains("existing-cohere-wrapper")); assertTrue(json.contains("links"));
             }
             assertEquals(attributes.asMap(), original.getAttributes().asMap()); assertEquals(attributes.asMap(), original.getResource().getAttributes().asMap());
             assertEquals(attributes.asMap(), original.getLinks().get(0).getAttributes().asMap());
@@ -125,7 +121,7 @@ class RoundFourPrivacyTest {
             }
         });
     }
-    @Test void forwardedCredentialHeaderAttributesAreSanitizedWithoutObservingTransport() throws Exception {
+    @Test void credentialHeaderAttributesAreSanitizedWithoutObservingTransport() throws Exception {
         var config = AutoConfig.resolve(Map.of(), Map.of());
         for (boolean arrays : List.of(false, true)) {
             var memory = InMemorySpanExporter.create();
@@ -137,12 +133,10 @@ class RoundFourPrivacyTest {
                 var original = memory.getFinishedSpanItems().get(memory.getFinishedSpanItems().size() - 1);
                 var scope = io.opentelemetry.sdk.common.InstrumentationScopeInfo.builder("headers").setAttributes(attributes).build();
                 var data = (SpanData)Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{SpanData.class}, (proxy, method, args) -> method.getName().equals("getInstrumentationScopeInfo") ? scope : method.invoke(original, args));
-                for (var candidate : List.of(data, ApplicationOtel.snapshot(data, getClass().getClassLoader(), config, TraceAIAuto.resource(config)))) {
-                    String json = WireCore.dump(new OtlpJsonExporter(config).serialize(candidate));
-                    for (String value : HeaderPrivacyApp.HEADERS.values()) assertFalse(json.contains(value), value);
-                    assertFalse(json.contains("second-private-value"));
-                    assertTrue(json.contains("http.request.header.x-goog-api-key")); assertTrue(json.contains("<redacted>"));
-                }
+                String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
+                for (String value : HeaderPrivacyApp.HEADERS.values()) assertFalse(json.contains(value), value);
+                assertFalse(json.contains("second-private-value"));
+                assertTrue(json.contains("http.request.header.x-goog-api-key")); assertTrue(json.contains("<redacted>"));
                 assertEquals(attributes.asMap(), original.getAttributes().asMap()); assertEquals(attributes.asMap(), original.getEvents().get(0).getAttributes().asMap());
                 assertEquals(attributes.asMap(), original.getLinks().get(0).getAttributes().asMap()); assertEquals(attributes.asMap(), original.getResource().getAttributes().asMap());
             }

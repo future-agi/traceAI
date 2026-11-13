@@ -45,18 +45,6 @@ class VerifierRegressionTest {
         var result = AdversarialTest.build(AdversarialTest.chat("api.openai.com"), AdversarialTest.response("text/event-stream", sse));
         assertEquals("hello", result.attributes().get("output.value")); assertEquals(5L, result.attributes().get("gen_ai.usage.total_tokens"));
     }
-    @Test void applicationProcessorDoesNotInvokeUnrequestedEndCallbacks() {
-        var ends = new java.util.concurrent.atomic.AtomicInteger();
-        var original = new io.opentelemetry.sdk.trace.SpanProcessor() {
-            public void onStart(io.opentelemetry.context.Context context, io.opentelemetry.sdk.trace.ReadWriteSpan span) { }
-            public boolean isStartRequired() { return false; }
-            public void onEnd(io.opentelemetry.sdk.trace.ReadableSpan span) { ends.incrementAndGet(); }
-            public boolean isEndRequired() { return false; }
-        };
-        var forwarding = (io.opentelemetry.sdk.trace.SpanProcessor)ApplicationOtel.processor(original);
-        assertTrue(forwarding.isEndRequired()); forwarding.onEnd(null); assertEquals(0, ends.get());
-        assertSame(forwarding, ApplicationOtel.processor(original), "lookup must not accumulate processors");
-    }
     @Test void bedrockInvokeAcceptsEveryJsonTypeButNotInvalidBodies() {
         for (String json : List.of("[1,2]", "\"native input\"", "42", "true", "null", "{}")) {
             var request = new WireCore.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/native%2Bmodel/invoke");

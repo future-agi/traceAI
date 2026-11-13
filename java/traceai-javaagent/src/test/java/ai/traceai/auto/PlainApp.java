@@ -22,6 +22,7 @@ public final class PlainApp {
         if (args[2].equals("legacy_okhttp")) { legacyOkhttp(args); return; }
         if (args[2].equals("verify_wrapper") || args[2].equals("verify_parent") || args[2].equals("verify_cohere")) { VerifierApp.run(args); return; }
         if (args[2].startsWith("dedup") || args[2].startsWith("framework")) { ContextApp.run(args); return; }
+        if (args[2].equals("wrapper_init")) { WrapperInitApp.run(args); return; }
         if (args[2].equals("suppressed")) {
             try (AutoCloseable scope = (AutoCloseable)Class.forName("ai.traceai.auto.TraceAIAuto").getMethod("suppress").invoke(null)) { call(args); }
             return;

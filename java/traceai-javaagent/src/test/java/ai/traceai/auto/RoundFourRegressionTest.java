@@ -25,14 +25,10 @@ class RoundFourRegressionTest {
             span.end(); var original = memory.getFinishedSpanItems().get(0);
             for (String flag : List.of("hide_inputs", "hide_input_text", "hide_input_messages")) {
                 var config = AutoConfig.resolve(Map.of(flag, true), Map.of());
-                var forwarded = ApplicationOtel.snapshot(original, getClass().getClassLoader(), config, TraceAIAuto.resource(config));
-                for (var data : List.of(original, forwarded)) {
-                    var exported = new OtlpJsonExporter(config).serialize(data);
-                    String json = WireCore.dump(exported);
-                    assertFalse(json.contains("PRIVATE_INPUT"), flag);
-                    assertTrue(json.contains("public output")); assertTrue(json.contains("gen_ai.reranker.model"));
-                    assertTrue(json.contains("gen_ai.reranker.input_documents")); assertTrue(json.contains("gen_ai.embeddings.dimension.count"));
-                }
+                String json = WireCore.dump(new OtlpJsonExporter(config).serialize(original));
+                assertFalse(json.contains("PRIVATE_INPUT"), flag);
+                assertTrue(json.contains("public output")); assertTrue(json.contains("gen_ai.reranker.model"));
+                assertTrue(json.contains("gen_ai.reranker.input_documents")); assertTrue(json.contains("gen_ai.embeddings.dimension.count"));
             }
             assertEquals("PRIVATE_INPUT_embedding.input_text.0", original.getAttributes().get(AttributeKey.stringKey("embedding.input_text.0")));
             assertEquals("PRIVATE_INPUT_gen_ai.reranker.query", original.getAttributes().get(AttributeKey.stringKey("gen_ai.reranker.query")));
@@ -49,11 +45,9 @@ class RoundFourRegressionTest {
             span.addEvent("exception", Attributes.of(AttributeKey.stringKey("exception.message"), text, AttributeKey.stringKey("exception.stacktrace"), text));
             span.end(); var original = memory.getFinishedSpanItems().get(0);
             var config = AutoConfig.resolve(Map.of("api_key", "CONFIGURED_PRIVATE_KEY"), Map.of());
-            for (var data : List.of(original, ApplicationOtel.snapshot(original, getClass().getClassLoader(), config, TraceAIAuto.resource(config)))) {
-                String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
-                for (String secret : List.of("PRIVATE_PASSWORD", "PRIVATE_SIGNATURE", "QUJDRA==", "CONFIGURED_PRIVATE_KEY")) assertFalse(json.contains(secret), secret);
-                assertTrue(json.contains("<redacted>")); assertTrue(json.contains("<omitted: 8 base64 chars>"));
-            }
+            String json = WireCore.dump(new OtlpJsonExporter(config).serialize(original));
+            for (String secret : List.of("PRIVATE_PASSWORD", "PRIVATE_SIGNATURE", "QUJDRA==", "CONFIGURED_PRIVATE_KEY")) assertFalse(json.contains(secret), secret);
+            assertTrue(json.contains("<redacted>")); assertTrue(json.contains("<omitted: 8 base64 chars>"));
             assertEquals(text, original.getAttributes().get(AttributeKey.stringKey("input.value")));
             assertEquals(text, original.getStatus().getDescription());
         }

@@ -23,6 +23,8 @@ class AgentE2ETest {
     final List<Map<String, Object>> spans = new CopyOnWriteArrayList<>();
     final List<Object> collectorPayloads = new CopyOnWriteArrayList<>();
     final List<Map<String, Object>> resources = new CopyOnWriteArrayList<>();
+    /** Spans the existing wrappers' own exporter (TraceAI.init) sent, as OTLP protobuf. */
+    final List<Map<String, Object>> wrapperSpans = new CopyOnWriteArrayList<>();
     volatile String sentRequest;
     final Map<String, String> receivedHeaders = new ConcurrentHashMap<>();
     volatile byte[] payload;
@@ -61,7 +63,15 @@ class AgentE2ETest {
         };
         server.createContext("/v1/", application); server.createContext("/api/", application);
         server.createContext("/tracer/v1/traces", exchange -> {
-            Object root = WireCore.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = exchange.getRequestBody().readAllBytes();
+            if (String.valueOf(exchange.getRequestHeaders().getFirst("Content-Type")).contains("protobuf")) {
+                var request = io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest.parseFrom(body);
+                for (var resource : request.getResourceSpansList()) for (var scope : resource.getScopeSpansList()) for (var span : scope.getSpansList()) {
+                    wrapperSpans.add(Map.of("name", span.getName(), "spanId", HexFormat.of().formatHex(span.getSpanId().toByteArray())));
+                }
+                exchange.getResponseHeaders().add("Content-Type", "application/x-protobuf"); exchange.sendResponseHeaders(200, -1); exchange.close(); return;
+            }
+            Object root = WireCore.parse(new String(body, StandardCharsets.UTF_8));
             collectorPayloads.add(root);
             for (Object resource : WireCore.list(WireCore.get(root, "resourceSpans"))) {
                 resources.add(attributes(WireCore.map(WireCore.get(resource, "resource"))));
@@ -125,6 +135,9 @@ class AgentE2ETest {
         }
         return attrs;
     }
+    static String line(String log, String prefix) {
+        return log.lines().filter(l -> l.startsWith(prefix)).findFirst().orElseThrow(() -> new AssertionError(prefix + " missing: " + log)).substring(prefix.length());
+    }
     void assertSpan() {
         assertEquals(1, spans.size(), spans.toString()); assertWireSpan(spans.get(0));
     }
@@ -141,7 +154,8 @@ class AgentE2ETest {
         assertTrue(spans.isEmpty());
         String traced = run(client, "resource_identity", Map.of("FI_PROJECT_NAME", "routing-only", "OTEL_SERVICE_NAME", "wrong-fallback"), true);
         assertEquals(baseline.lines().filter(l -> l.startsWith("BODY=") || l.startsWith("HOST_RESOURCE=")).toList(), traced.lines().filter(l -> l.startsWith("BODY=") || l.startsWith("HOST_RESOURCE=")).toList());
-        assertEquals(2, spans.size()); assertEquals(2, uploads.get());
+        // Only the wire span is exported; the application's CHAIN span stays with its own provider.
+        assertEquals(1, spans.size(), spans.toString()); assertWireSpan(spans.get(0)); assertEquals(2, uploads.get());
         for (var resource : resources) {
             assertEquals("resource-app-service", resource.get("service.name")); assertEquals("resource-app-space", resource.get("service.namespace"));
             assertEquals("resource-app-instance", resource.get("service.instance.id")); assertEquals("application-owned", resource.get("custom.identity"));
@@ -153,25 +167,27 @@ class AgentE2ETest {
         payload = STREAM.getBytes(StandardCharsets.UTF_8); type = "text/event-stream"; run(client, "stream", Map.of(), true); assertSpan(); assertEquals(true, attributes(spans.get(0)).get("gen_ai.request.stream")); assertTrue(attributes(spans.get(0)).containsKey("gen_ai.response.time_to_first_chunk"));
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void asynchronousStreaming(String client) throws Exception { payload = STREAM.getBytes(StandardCharsets.UTF_8); type = "text/event-stream"; run(client, "async", Map.of(), true); assertSpan(); }
-    void assertLibrarySpanWithoutDuplicateWire() {
-        assertEquals(1, spans.size(), spans.toString()); assertEquals("application-parent", spans.get(0).get("name"));
-        assertEquals("LLM", attributes(spans.get(0)).get("gen_ai.span.kind")); assertFalse(attributes(spans.get(0)).containsKey("traceai.capture.layer"));
+    /** The application's LLM span and the call under it stay local; the control call after the span is traced. */
+    void assertLibrarySpanStaysLocalAndOnlyTheControlCallIsTraced(String log) {
+        assertEquals(1, spans.size(), spans.toString()); assertWireSpan(spans.get(0));
+        assertNull(spans.get(0).get("parentSpanId"), "the control call runs outside every application span");
+        assertNotEquals(line(log, "PARENT="), spans.get(0).get("parentSpanId"));
+        assertFalse(WireCore.dump(collectorPayloads).contains("application-parent")); assertEquals(2, uploads.get());
     }
     void assertFrameworkParent(String log) {
-        assertEquals(2, spans.size(), spans.toString());
-        assertEquals(1L, resources.stream().map(resource -> resource.get("project_version_id")).distinct().count(), "wire and application spans share the runtime's resource identity");
-        var wire = spans.stream().filter(s -> "wire".equals(attributes(s).get("traceai.capture.layer"))).findFirst().orElseThrow(); assertWireSpan(wire);
-        String parent = log.lines().filter(l -> l.startsWith("PARENT=")).findFirst().orElseThrow().substring(7);
+        // Only the wire span is exported. Its parent is the application's CHAIN span, which stays with the application.
+        assertEquals(1, spans.size(), spans.toString());
+        var wire = spans.get(0); assertWireSpan(wire);
+        assertEquals(line(log, "PARENT="), wire.get("parentSpanId")); assertFalse(WireCore.dump(collectorPayloads).contains("application-parent"));
         // S6 deliberately classifies session identifiers as credential-named fields.
-        assertEquals(parent, wire.get("parentSpanId")); assertEquals("<redacted>", attributes(wire).get("session.id"));
-        assertTrue(spans.stream().anyMatch(s -> parent.equals(s.get("spanId")) && "application-parent".equals(s.get("name"))));
+        assertEquals("<redacted>", attributes(wire).get("session.id"));
     }
-    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void librarySpanSuppressesWire(String client) throws Exception { run(client, "dedup", Map.of(), true); assertLibrarySpanWithoutDuplicateWire(); }
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void librarySpanSuppressesWire(String client) throws Exception { assertLibrarySpanStaysLocalAndOnlyTheControlCallIsTraced(run(client, "dedup", Map.of(), true)); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void frameworkIsParentAndContextIsCaptured(String client) throws Exception {
         assertFrameworkParent(run(client, "framework", Map.of(), true));
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void missingCredentialsFailOpenWithOneWarning(String client) throws Exception { String log = run(client, "basic", Map.of(), false); assertTrue(spans.isEmpty()); assertEquals(1, log.lines().filter(l -> l.contains("[traceai-auto]")).count(), log); }
-    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void asynchronousLibrarySpanSuppressesWire(String client) throws Exception { run(client, "dedup_async", Map.of(), true); assertLibrarySpanWithoutDuplicateWire(); }
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void asynchronousLibrarySpanSuppressesWire(String client) throws Exception { assertLibrarySpanStaysLocalAndOnlyTheControlCallIsTraced(run(client, "dedup_async", Map.of(), true)); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void asynchronousFrameworkContextSurvivesExecutorHandoff(String client) throws Exception {
         assertFrameworkParent(run(client, "framework_async", Map.of(), true));
     }
@@ -306,12 +322,12 @@ class AgentE2ETest {
         assertEquals(true, attributes(span).get("traceai.wire.incomplete"));
         assertEquals("200", attributes(span).get("http.response.status_code")); assertFalse(attributes(span).containsKey("error.type"));
     }
-    @Test void truncatedExistingWrapperJsonNeverExportsCredentials() throws Exception {
+    @Test void existingWrapperSpanStaysWithTheApplicationAndTheCallUnderItIsNotTracedAgain() throws Exception {
         String log = run("jdk", "verify_wrapper", Map.of(), true); assertTrue(log.contains("WRAPPER_RAW_UNCHANGED=true"));
-        assertEquals(1, spans.size()); assertEquals("existing-wrapper", spans.get(0).get("name"));
-        String exported = WireCore.dump(spans);
-        assertFalse(exported.contains("WRAPPER_PRIVATE_PASSWORD")); assertFalse(exported.contains("WRAPPER_EVENT_PASSWORD"));
-        assertEquals("<redacted>", attributes(spans.get(0)).get("fi.raw_input")); assertEquals("<redacted>", attributes(spans.get(0)).get("fi.raw_output"));
+        // Only the control call made after the wrapper span reaches Future AGI.
+        assertEquals(1, spans.size(), spans.toString()); assertWireSpan(spans.get(0)); assertNull(spans.get(0).get("parentSpanId"));
+        String exported = WireCore.dump(collectorPayloads);
+        for (String text : List.of("existing-wrapper", "WRAPPER_PRIVATE_PASSWORD", "WRAPPER_EVENT_PASSWORD", "PRIVATE_WRAPPER_EMBEDDING_INPUT", "PRIVATE_WRAPPER_RERANK_QUERY")) assertFalse(exported.contains(text), text);
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void parentTracestateSurvivesShadedBridge(String client) throws Exception {
         run(client, "verify_parent", Map.of(), true); assertSpan();
@@ -380,22 +396,22 @@ class AgentE2ETest {
         assertEquals("text/plain", attributes(span).get("gen_ai.audio.mime_type")); assertFalse(WireCore.dump(spans).contains("PRIVATE_FILE_PAYLOAD"));
     }
     @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_INPUT_TEXT"})
-    void existingWrapperInputNamespacesAreHiddenInShadedOtlpWithoutChangingApplicationSpan(String flag) throws Exception {
+    void inputHideFlagsApplyToWireSpansWhileTheWrapperSpanStaysWithTheApplication(String flag) throws Exception {
         String log = run("jdk", "verify_wrapper", Map.of(flag, "true"), true);
-        assertTrue(log.contains("WRAPPER_RAW_UNCHANGED=true")); assertEquals(1, spans.size());
-        String exported = WireCore.dump(spans);
-        for (String secret : List.of("PRIVATE_WRAPPER_EMBEDDING_INPUT", "PRIVATE_WRAPPER_RERANK_QUERY", "WRAPPER_PRIVATE_PASSWORD", "WRAPPER_EVENT_PASSWORD")) assertFalse(exported.contains(secret), secret);
-        assertEquals("3", attributes(spans.get(0)).get("gen_ai.reranker.input_documents"));
-        assertFalse(attributes(spans.get(0)).containsKey("embedding.input_text.0")); assertFalse(attributes(spans.get(0)).containsKey("gen_ai.reranker.query"));
+        assertTrue(log.contains("WRAPPER_RAW_UNCHANGED=true")); assertEquals(1, spans.size(), spans.toString());
+        String exported = WireCore.dump(collectorPayloads);
+        for (String secret : List.of("existing-wrapper", "PRIVATE_WRAPPER_EMBEDDING_INPUT", "PRIVATE_WRAPPER_RERANK_QUERY", "WRAPPER_PRIVATE_PASSWORD", "WRAPPER_EVENT_PASSWORD")) assertFalse(exported.contains(secret), secret);
+        var attrs = attributes(spans.get(0));
+        assertEquals("wire", attrs.get("traceai.capture.layer")); assertFalse(attrs.containsKey("input.value")); assertEquals("Hello world", attrs.get("output.value"));
     }
-    @Test void cohereDirectPreambleAndToolCallsAreHiddenInShadedOtlpEvenWithUpstreamMasking() throws Exception {
+    @Test void cohereWrapperSpanStaysWithTheApplicationUnderHideFlags() throws Exception {
         String log = run("jdk", "verify_cohere", Map.of("FI_HIDE_INPUTS", "true", "FI_HIDE_OUTPUTS", "true"), true);
-        assertTrue(log.contains("COHERE_APPLICATION_UNCHANGED=true")); assertEquals(1, spans.size());
-        assertEquals("Cohere Chat", spans.get(0).get("name"));
-        String exported = WireCore.dump(List.of(spans, resources, scopes));
+        assertTrue(log.contains("COHERE_APPLICATION_UNCHANGED=true")); assertEquals(1, spans.size(), spans.toString());
+        assertEquals("chat test-model", spans.get(0).get("name")); assertNull(spans.get(0).get("parentSpanId"));
+        String exported = WireCore.dump(collectorPayloads);
+        assertFalse(exported.contains("Cohere Chat")); assertFalse(exported.contains("existing-cohere-wrapper"));
         assertFalse(exported.contains("PRIVATE_COHERE")); assertFalse(exported.contains("PRIVATE_NORMAL_COHERE"));
-        assertFalse(attributes(spans.get(0)).containsKey("cohere.preamble"));
-        assertFalse(attributes(spans.get(0)).containsKey("message.tool_calls.0.tool_call.function.arguments"));
+        assertFalse(attributes(spans.get(0)).containsKey("input.value")); assertFalse(attributes(spans.get(0)).containsKey("output.value"));
     }
     @Test void questionMarkPromptKeepsJdkAsyncCompletionDeadlineAndBytesAtNoAgentBaseline() throws Exception {
         String baseline = run("jdk", "signed_query_async", Map.of("TRACEAI_TEST_NO_AGENT", "true"), true); assertTrue(spans.isEmpty());
@@ -416,50 +432,54 @@ class AgentE2ETest {
         holdStreams = true; payload = STREAM.getBytes(StandardCharsets.UTF_8); type = "text/event-stream";
         run(client, "reconfigure_inflight", Map.of(), true); assertEquals(2, spans.size(), spans.toString()); for (var span : spans) assertWireSpan(span);
     }
-    @ParameterizedTest @ValueSource(strings = {"coexist_premain", "coexist_existing"}) void applicationOwnedSdkKeepsItsExporterAndAlsoExportsToFutureAgi(String scenario) throws Exception {
-        String log = run("jdk", scenario, Map.of(), true); assertEquals(1, spans.size(), spans.toString());
-        assertEquals("application-library-call", spans.get(0).get("name")); assertFalse(attributes(spans.get(0)).containsKey("traceai.capture.layer"));
-        assertTrue(log.contains("APP_PROVIDER_ALIVE=true")); String id = log.lines().filter(line -> line.startsWith("LIBRARY_SPAN=")).findFirst().orElseThrow().substring(13);
-        assertEquals(id, spans.get(0).get("spanId"));
-    }
-    @ParameterizedTest @ValueSource(strings = {"coexist_premain", "coexist_existing"}) void forwardedOtlpRetainsEventsLinksServiceScopeAndEnforcesPrivacy(String scenario) throws Exception {
-        run("jdk", scenario, Map.of("FI_HIDE_INPUTS", "true", "FI_HIDE_OUTPUTS", "true"), true);
-        assertEquals(1, spans.size()); var span = spans.get(0);
-        assertEquals(2, WireCore.list(span.get("events")).size()); assertEquals(1, WireCore.list(span.get("links")).size());
-        assertEquals("real-application-service", resources.get(0).get("service.name"));
-        assertEquals("real-application-scope", scopes.get(0).get("name")); assertEquals("2.3.4", scopes.get(0).get("version"));
-        assertEquals("", WireCore.get(span.get("status"), "message"));
-        String json = WireCore.dump(spans);
-        for (String secret : List.of("PRIVATE_INPUT", "PRIVATE_OUTPUT", "test-api-key", "ATTRIBUTE_PRIVATE_PASSWORD", "STATUS_PRIVATE_TOKEN", "EVENT_PRIVATE_TOKEN", "EVENT_PRIVATE_KEY")) assertFalse(json.contains(secret), secret);
+    @ParameterizedTest @ValueSource(strings = {"coexist_premain", "coexist_existing"})
+    void applicationOwnedSdkKeepsItsProcessorAndExporterAndNoneOfItsSpansReachFutureAgi(String scenario) throws Exception {
+        String log = run("jdk", scenario, Map.of(), true);
+        assertTrue(log.contains("APP_PROVIDER_ALIVE=true")); assertTrue(log.contains("APP_PROCESSOR_UNCHANGED=true"), log);
+        // The application's LLM span and the call under it stay local; the control call after the span is traced.
+        assertEquals(1, spans.size(), spans.toString()); assertWireSpan(spans.get(0)); assertNull(spans.get(0).get("parentSpanId"));
+        String json = WireCore.dump(collectorPayloads);
+        for (String text : List.of("application-library-call", "real-application-scope", "PRIVATE_INPUT", "PRIVATE_OUTPUT", "ATTRIBUTE_PRIVATE_PASSWORD", "STATUS_PRIVATE_TOKEN", "EVENT_PRIVATE_TOKEN", "EVENT_PRIVATE_KEY")) assertFalse(json.contains(text), text);
     }
     @ParameterizedTest @ValueSource(strings = {"verify_headers_scalars", "verify_headers_arrays"})
-    void forwardedProviderCredentialHeadersArePrivateEvenOnUninstrumentedTransport(String scenario) throws Exception {
+    void plainSpanOnAPrivateUnregisteredProviderNeverReachesFutureAgi(String scenario) throws Exception {
         String log = run("urlconnection", scenario, Map.of(), true);
         assertTrue(log.contains("REAL_HEADER_REQUEST_STATUS=200")); assertTrue(log.contains("APP_HEADERS_UNCHANGED=true"));
         HeaderPrivacyApp.HEADERS.forEach((name, value) -> assertEquals(value, receivedHeaders.get(name.toLowerCase(Locale.ROOT)), name));
-        assertEquals(1, spans.size()); var span = spans.get(0);
-        assertEquals("forwarded-header-privacy", span.get("name")); assertFalse(attributes(span).containsKey("traceai.capture.layer"));
-        assertEquals(1, WireCore.list(span.get("events")).size()); assertEquals(1, WireCore.list(span.get("links")).size());
-        assertEquals("header-privacy-service", resources.get(0).get("service.name")); assertEquals("header-privacy-scope", scopes.get(0).get("name"));
-        String exported = WireCore.dump(List.of(spans, resources, scopes));
+        // Only the AI call made under the plain span is exported, as a wire span whose parent is that span.
+        assertEquals(1, spans.size(), spans.toString()); var wire = spans.get(0); assertWireSpan(wire);
+        assertEquals(line(log, "PLAIN_SPAN="), wire.get("parentSpanId"));
+        String exported = WireCore.dump(collectorPayloads);
+        assertFalse(exported.contains("private-provider-plain-span")); assertFalse(exported.contains("header-privacy-scope"));
         for (String value : HeaderPrivacyApp.HEADERS.values()) assertFalse(exported.contains(value), value);
         assertFalse(exported.contains("second-private-value"));
-        for (String header : HeaderPrivacyApp.HEADERS.keySet()) assertEquals("<redacted>", attributes(span).get("http.request.header." + header.toLowerCase(Locale.ROOT)), header);
     }
-    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void intermediateNativeSpansDoNotBreakDedup(String client) throws Exception {
-        run(client, "dedup_native_async", Map.of(), true);
-        assertEquals(2, spans.size()); assertTrue(spans.stream().noneMatch(span -> attributes(span).containsKey("traceai.capture.layer")));
-        assertTrue(spans.stream().anyMatch(span -> span.get("name").equals("native-client")));
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void intermediatePlainApplicationSpansNeverReachFutureAgi(String client) throws Exception {
+        String log = run(client, "dedup_native_async", Map.of(), true);
+        assertTrue(spans.stream().allMatch(span -> "wire".equals(attributes(span).get("traceai.capture.layer"))), spans.toString());
+        String exported = WireCore.dump(collectorPayloads);
+        assertFalse(exported.contains("application-parent")); assertFalse(exported.contains("native-client"));
+        // Deduplication reads only the active span: a call under a plain span is traced even when a library span
+        // is further up. The control call after the library span is traced as well.
+        assertEquals(2, spans.size(), spans.toString());
+        assertEquals(1, spans.stream().filter(span -> line(log, "NATIVE=").equals(span.get("parentSpanId"))).count());
     }
-    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void suppressedWireStillRemembersCredentialsForForwardedDiagnostics(String client) throws Exception {
-        run(client, "dedup_privacy", Map.of(), true); assertLibrarySpanWithoutDuplicateWire();
-        String exported = WireCore.dump(spans);
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void applicationLibrarySpanThatEchoesCredentialsNeverReachesFutureAgi(String client) throws Exception {
+        assertLibrarySpanStaysLocalAndOnlyTheControlCallIsTraced(run(client, "dedup_privacy", Map.of(), true));
+        String exported = WireCore.dump(collectorPayloads);
         assertFalse(exported.contains("PROVIDER_CREDENTIAL_987654321")); assertFalse(exported.contains("JSON_PASSWORD_PRIVATE_123"));
-        assertTrue(exported.contains("<redacted>"));
     }
-    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void forwardedPrivacyStillObservesCredentialsWhenWireCaptureIsDisabled(String client) throws Exception {
-        run(client, "dedup_privacy", Map.of("FI_WIRE_CAPTURE", "false"), true); assertLibrarySpanWithoutDuplicateWire();
-        assertFalse(WireCore.dump(spans).contains("PROVIDER_CREDENTIAL_987654321"));
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void wireCaptureOffExportsNothingAtAll(String client) throws Exception {
+        run(client, "dedup_privacy", Map.of("FI_WIRE_CAPTURE", "false"), true);
+        assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty()); assertEquals(2, uploads.get());
+    }
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
+    void wrapperInitBesideTheAgentExportsEachWrapperSpanOnceAndTheCallUnderItIsNotTracedAgain(String client) throws Exception {
+        String log = run(client, "wrapper_init", Map.of(), true);
+        // TraceAI.init's own exporter sends the wrapper span once; the agent adds no copy and no wire span under it.
+        assertEquals(List.of("wrapper-llm-call"), wrapperSpans.stream().map(span -> span.get("name")).toList());
+        assertEquals(line(log, "WRAPPER_SPAN="), wrapperSpans.get(0).get("spanId"));
+        assertTrue(spans.isEmpty(), spans.toString()); assertEquals(1, uploads.get());
     }
     @ParameterizedTest @ValueSource(strings = {"parity_string", "parity_bytes", "parity_mapping", "parity_file", "parity_lines", "parity_publisher", "parity_stream", "parity_unread"})
     void jdkBodyHandlersAndSubscribersMatchNoAgentBaseline(String scenario) throws Exception { parity("jdk", scenario); }
@@ -486,11 +506,16 @@ class AgentE2ETest {
         String baseline = run(client, "registry", Map.of("TRACEAI_TEST_NO_AGENT", "true", "ROUND5_AUTH_TOKEN", RegistryApp.ENV), true); assertTrue(spans.isEmpty());
         String observed = run(client, "registry", Map.of("ROUND5_AUTH_TOKEN", RegistryApp.ENV), true);
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=")).toList());
-        assertEquals(3, spans.size(), observed); assertTrue(spans.stream().noneMatch(span -> attributes(span).containsKey("traceai.capture.layer")));
-        var unrelated = spans.stream().filter(span -> "registry-unrelated".equals(span.get("name"))).findFirst().orElseThrow();
-        assertEquals("<redacted> <redacted> <redacted> <redacted>", attributes(unrelated).get("echo"));
-        String exported = WireCore.dump(List.of(spans, resources, scopes));
+        assertOnlyWireSpans(1, observed);
+        String exported = WireCore.dump(collectorPayloads);
         for (String secret : List.of(RegistryApp.HEADER, RegistryApp.QUERY, RegistryApp.API, RegistryApp.ENV)) assertFalse(exported.contains(secret), secret);
+    }
+    /** Application spans (registry-library, registry-native, registry-unrelated) never reach Future AGI. */
+    void assertOnlyWireSpans(int count, String log) {
+        assertEquals(count, spans.size(), log + spans);
+        assertTrue(spans.stream().allMatch(span -> "wire".equals(attributes(span).get("traceai.capture.layer")) || "<redacted>".equals(span.get("name"))), spans.toString());
+        String exported = WireCore.dump(collectorPayloads);
+        for (String text : List.of("registry-", "PUBLIC_BODY_CONTROL")) assertFalse(exported.contains(text), text);
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
     void proxyCredentialsAreObservedUnderSuppressionAndProtectLaterSpansWithBaselineParity(String client) throws Exception {
@@ -501,10 +526,9 @@ class AgentE2ETest {
         String observed = run(client, "registry_proxy", options, true);
         assertEquals(RegistryApp.PROXY, receivedHeaders.get("proxy-authorization")); assertEquals(2, uploads.get());
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=")).toList());
-        assertEquals(3, spans.size(), observed); assertTrue(spans.stream().noneMatch(span -> attributes(span).containsKey("traceai.capture.layer")));
+        assertOnlyWireSpans(1, observed);
         String exported = WireCore.dump(collectorPayloads);
         for (String secret : List.of(RegistryApp.PROXY, RegistryApp.PROXY_PAYLOAD, RegistryApp.QUERY, RegistryApp.API, RegistryApp.ENV)) assertFalse(exported.contains(secret), secret);
-        assertTrue(exported.contains("<redacted>")); assertTrue(exported.contains("registry-unrelated"));
     }
     @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,true", "okhttp,true", "jdk,false", "okhttp,false"})
     void awsSessionTokensAreObservedUnderSuppressionWithBaselineParity(String client, boolean wireEnabled) throws Exception {
@@ -515,11 +539,8 @@ class AgentE2ETest {
         String observed = run(client, "registry_session", options, true);
         assertEquals(RegistryApp.SESSION, receivedHeaders.get("x-amz-security-token")); assertEquals(2, uploads.get());
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList());
-        assertEquals(3, spans.size(), observed); assertTrue(spans.stream().noneMatch(span -> attributes(span).containsKey("traceai.capture.layer")));
-        String exported = WireCore.dump(collectorPayloads);
-        assertFalse(exported.contains(RegistryApp.SESSION)); assertTrue(exported.contains("PUBLIC_BODY_CONTROL"));
-        var unrelated = spans.stream().filter(span -> "registry-unrelated-<redacted>".equals(span.get("name"))).findFirst().orElseThrow();
-        assertEquals("<redacted>", attributes(unrelated).get("http.request.header.x-amz-security-token"));
+        assertOnlyWireSpans(wireEnabled ? 1 : 0, observed);
+        assertFalse(WireCore.dump(collectorPayloads).contains(RegistryApp.SESSION));
     }
     @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,true", "okhttp,true", "jdk,false", "okhttp,false"})
     void s6AuthTokenHeadersProtectLaterSpansUnderSuppressionEvenWhenWireDisabled(String client, boolean wireEnabled) throws Exception {
@@ -529,8 +550,8 @@ class AgentE2ETest {
         String observed = run(client, "registry_auth", options, true);
         assertEquals(RegistryApp.SESSION, receivedHeaders.get("x-auth-token")); assertEquals(2, uploads.get());
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList());
-        assertEquals(3, spans.size()); assertTrue(spans.stream().noneMatch(span -> attributes(span).containsKey("traceai.capture.layer")));
-        String exported = WireCore.dump(collectorPayloads); assertFalse(exported.contains(RegistryApp.SESSION)); assertTrue(exported.contains("PUBLIC_BODY_CONTROL"));
+        assertOnlyWireSpans(wireEnabled ? 1 : 0, observed);
+        assertFalse(WireCore.dump(collectorPayloads).contains(RegistryApp.SESSION));
     }
     @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,registry_bodypasswd", "okhttp,registry_bodypasswd", "jdk,registry_bodyarray", "okhttp,registry_bodyarray"})
     void s6ParsedPasswdAndCredentialArraysProtectUnrelatedSpansWithBaselineParity(String client, String scenario) throws Exception {
@@ -538,9 +559,8 @@ class AgentE2ETest {
         String observed = run(client, scenario, Map.of(), true);
         assertEquals(2, uploads.get());
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList());
-        assertEquals(4, spans.size());
-        String exported = WireCore.dump(collectorPayloads); assertFalse(exported.contains(RegistryApp.BODY_SECRET)); assertTrue(exported.contains("PUBLIC_BODY_CONTROL"));
-        assertEquals(1, spans.stream().filter(span -> attributes(span).containsKey("traceai.capture.layer")).count());
+        assertOnlyWireSpans(1, observed); assertEquals("wire", attributes(spans.get(0)).get("traceai.capture.layer"));
+        assertFalse(WireCore.dump(collectorPayloads).contains(RegistryApp.BODY_SECRET));
     }
     @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,0", "okhttp,0", "jdk,8200", "okhttp,8200"})
     void parsedBodyBudgetExhaustionFailsClosedForLaterSpansWithoutChangingRequests(String client, int padding) throws Exception {
@@ -549,10 +569,9 @@ class AgentE2ETest {
         String observed = run(client, scenario, Map.of(), true);
         assertEquals(2, uploads.get()); assertTrue(sentRequest.length() < 20000);
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("APP_CREDENTIALS_UNCHANGED=")).toList());
-        assertEquals(4, spans.size(), observed);
-        String exported = WireCore.dump(collectorPayloads); assertFalse(exported.contains(RegistryApp.BODY_SECRET));
-        assertEquals(padding == 0, exported.contains("PUBLIC_BODY_CONTROL"));
-        if (padding == 0) assertEquals(1, spans.stream().filter(span -> attributes(span).containsKey("traceai.capture.layer")).count());
+        assertOnlyWireSpans(1, observed);
+        assertFalse(WireCore.dump(collectorPayloads).contains(RegistryApp.BODY_SECRET));
+        if (padding == 0) assertEquals("wire", attributes(spans.get(0)).get("traceai.capture.layer"));
         else for (var span : spans) {
             assertEquals("<redacted>", span.get("name"));
             for (String content : List.of("attributes", "status", "events", "links")) assertFalse(span.containsKey(content), content);
@@ -561,16 +580,13 @@ class AgentE2ETest {
         }
     }
     @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,true", "okhttp,true", "jdk,false", "okhttp,false"})
-    void imageHideInspectsForwardedMessageJsonWithoutChangingRequestsOrApplicationSpans(String client, boolean hide) throws Exception {
+    void applicationMessageSpansNeverReachFutureAgiWithOrWithoutImageHiding(String client, boolean hide) throws Exception {
         String baseline = run(client, "registry_media", Map.of("TRACEAI_TEST_NO_AGENT", "true"), true); assertTrue(spans.isEmpty());
         String observed = run(client, "registry_media", Map.of("FI_HIDE_INPUT_IMAGES", Boolean.toString(hide), "ROUND5_AUTH_TOKEN", RegistryApp.ENV), true);
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("MEDIA_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("MEDIA_UNCHANGED=")).toList());
-        assertEquals(3, spans.size(), observed); assertTrue(spans.stream().noneMatch(span -> attributes(span).containsKey("traceai.capture.layer")));
+        assertOnlyWireSpans(1, observed); assertEquals(2, uploads.get());
         String exported = WireCore.dump(collectorPayloads);
-        assertEquals(!hide, exported.contains(RegistryApp.IMAGE)); assertFalse(exported.contains("QUJD"));
-        assertTrue(exported.contains("PUBLIC_MESSAGE_TEXT")); assertTrue(exported.contains("PUBLIC_ARRAY_TEXT")); assertTrue(exported.contains("PUBLIC_FLAT_TEXT"));
-        var library = spans.stream().filter(span -> "registry-library".equals(span.get("name"))).findFirst().orElseThrow();
-        assertEquals(!hide, attributes(library).containsKey("input.value")); assertEquals(2, uploads.get());
+        for (String text : List.of(RegistryApp.IMAGE, "QUJD", "PUBLIC_MESSAGE_TEXT", "PUBLIC_ARRAY_TEXT", "PUBLIC_FLAT_TEXT")) assertFalse(exported.contains(text), text);
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
     void paddedMagicMediaIsPrivateInShadedAgentWithoutChangingApplicationData(String client) throws Exception {
@@ -579,16 +595,13 @@ class AgentE2ETest {
         String observed = run(client, "magic_media", Map.of(), true);
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("MEDIA_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("MEDIA_UNCHANGED=")).toList());
         assertTrue(observed.contains("MEDIA_UNCHANGED=true")); assertTrue(observed.contains("REQUEST_WRITES=1"));
-        assertEquals(2, uploads.get()); assertEquals(2, spans.size(), observed);
+        // Only the wire span is exported; the application span that carries the media stays local.
+        assertEquals(2, uploads.get()); assertEquals(1, spans.size(), observed);
         String exported = WireCore.dump(collectorPayloads), omitted = "<omitted: 44 base64 chars>";
         assertFalse(exported.contains(MagicMediaApp.MEDIA));
         assertFalse(exported.contains(java.net.URLEncoder.encode(MagicMediaApp.MEDIA, StandardCharsets.UTF_8)));
-        var application = spans.stream().filter(span -> "magic-media-application".equals(span.get("name"))).findFirst().orElseThrow();
-        var attrs = attributes(application);
-        assertEquals(omitted, attrs.get("probe")); assertTrue(attrs.get("probe.json").toString().contains(omitted));
-        assertTrue(attrs.get("http.response.url").toString().endsWith("?public=keep&sample=" + omitted));
-        assertEquals("PUBLIC_MAGIC_CONTROL", attrs.get("public"));
-        var wire = spans.stream().filter(span -> "wire".equals(attributes(span).get("traceai.capture.layer"))).findFirst().orElseThrow();
+        assertFalse(exported.contains("magic-media-application")); assertFalse(exported.contains("PUBLIC_MAGIC_CONTROL"));
+        var wire = spans.get(0); assertEquals("wire", attributes(wire).get("traceai.capture.layer"));
         assertTrue(attributes(wire).get("input.value").toString().contains(omitted));
         assertEquals(omitted, attributes(wire).get("output.value"));
     }

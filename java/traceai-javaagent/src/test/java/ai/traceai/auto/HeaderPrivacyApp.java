@@ -11,7 +11,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/** Credentials from an uninstrumented transport must still be removed from forwarded spans. */
+/** A plain span on a private provider that is never registered globally, carrying credential headers. */
 public final class HeaderPrivacyApp {
     static final Map<String, String> HEADERS = Map.of(
         "Authorization", "Bearer AUTHORIZATION_PRIVATE_HEADER",
@@ -34,18 +34,23 @@ public final class HeaderPrivacyApp {
         try (var provider = SdkTracerProvider.builder().setResource(resource).addSpanProcessor(SimpleSpanProcessor.create(memory)).build()) {
             var link = SpanContext.create("12345678901234567890123456789012", "1234567890123456", TraceFlags.getSampled(), TraceState.getDefault());
             var span = provider.tracerBuilder("header-privacy-scope").setInstrumentationVersion("1.0").build()
-                .spanBuilder("forwarded-header-privacy").addLink(link, attributes).setAllAttributes(attributes).startSpan();
-            HttpURLConnection connection = (HttpURLConnection)URI.create(args[1]).toURL().openConnection();
-            try {
-                connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
-                connection.setRequestMethod("POST"); connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", "application/json"); HEADERS.forEach(connection::setRequestProperty);
-                try (var output = connection.getOutputStream()) { output.write(PlainApp.request(args[2]).getBytes(StandardCharsets.UTF_8)); }
-                int status = connection.getResponseCode();
-                if (status != 200) throw new AssertionError("Unexpected request status: " + status);
-                try (var input = connection.getInputStream()) { System.out.println("BODY=" + Base64.getEncoder().encodeToString(input.readAllBytes())); }
-                System.out.println("REAL_HEADER_REQUEST_STATUS=" + status);
-            } finally { connection.disconnect(); span.addEvent("request-headers", attributes); span.end(); }
+                .spanBuilder("private-provider-plain-span").addLink(link, attributes).setAllAttributes(attributes).startSpan();
+            System.out.println("PLAIN_SPAN=" + span.getSpanContext().getSpanId());
+            try (var scope = span.makeCurrent()) {
+                HttpURLConnection connection = (HttpURLConnection)URI.create(args[1]).toURL().openConnection();
+                try {
+                    connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
+                    connection.setRequestMethod("POST"); connection.setDoOutput(true);
+                    connection.setRequestProperty("Content-Type", "application/json"); HEADERS.forEach(connection::setRequestProperty);
+                    try (var output = connection.getOutputStream()) { output.write(PlainApp.request(args[2]).getBytes(StandardCharsets.UTF_8)); }
+                    int status = connection.getResponseCode();
+                    if (status != 200) throw new AssertionError("Unexpected request status: " + status);
+                    try (var input = connection.getInputStream()) { System.out.println("BODY=" + Base64.getEncoder().encodeToString(input.readAllBytes())); }
+                    System.out.println("REAL_HEADER_REQUEST_STATUS=" + status);
+                } finally { connection.disconnect(); }
+                // An AI call through an instrumented client under the same plain span.
+                PlainApp.call(new String[]{"jdk", args[1], args[2]});
+            } finally { span.addEvent("request-headers", attributes); span.end(); }
             var original = memory.getFinishedSpanItems().get(0);
             if (!attributes.asMap().equals(original.getAttributes().asMap()) || !attributes.asMap().equals(original.getEvents().get(0).getAttributes().asMap())
                 || !attributes.asMap().equals(original.getLinks().get(0).getAttributes().asMap()) || !resource.equals(original.getResource())) {

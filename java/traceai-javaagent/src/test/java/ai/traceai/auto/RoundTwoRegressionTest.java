@@ -101,32 +101,26 @@ class RoundTwoRegressionTest {
             span.end(); return exporter.getFinishedSpanItems().get(0);
         }
     }
-    @Test void forwardedSpansPreserveEventsLinksResourceAndFullScope() throws Exception {
+    @Test void exportKeepsEventsLinksAndFullScopeWithoutSecrets() throws Exception {
         SpanData original = originalSpan(); var config = AutoConfig.resolve(Map.of("api_key", "CONFIG_PRIVATE_KEY"), Map.of());
-        var forwarded = ApplicationOtel.snapshot(original, getClass().getClassLoader(), config, TraceAIAuto.resource(config));
-        assertEquals(2, forwarded.getEvents().size()); assertEquals(1, forwarded.getLinks().size());
-        assertEquals(original.getEvents().get(0).getEpochNanos(), forwarded.getEvents().get(0).getEpochNanos());
-        assertEquals(original.getLinks().get(0).getSpanContext(), forwarded.getLinks().get(0).getSpanContext());
-        assertEquals("real-application-service", forwarded.getResource().getAttributes().get(AttributeKey.stringKey("service.name")));
-        assertEquals("real-application-scope", forwarded.getInstrumentationScopeInfo().getName()); assertEquals("2.3.4", forwarded.getInstrumentationScopeInfo().getVersion());
-        assertEquals("https://schema.example/v1", forwarded.getInstrumentationScopeInfo().getSchemaUrl());
-        String json = WireCore.dump(new OtlpJsonExporter(config).serialize(forwarded));
+        String json = WireCore.dump(new OtlpJsonExporter(config).serialize(original));
         for (String secret : List.of("CONFIG_PRIVATE_KEY", "LINK_PRIVATE_CREDENTIAL", "ATTRIBUTE_PRIVATE_PASSWORD", "EVENT_PRIVATE_TOKEN", "EVENT_PRIVATE_KEY", "SIGNED_PRIVATE", "AAAA".repeat(100))) assertFalse(json.contains(secret), secret);
-        var scope = WireCore.get(WireCore.first(WireCore.get(WireCore.parse(json), "scopeSpans")), "scope");
+        var spans = WireCore.first(WireCore.get(WireCore.parse(json), "scopeSpans"));
+        var scope = WireCore.get(spans, "scope");
         assertEquals("real-application-scope", WireCore.get(scope, "name")); assertEquals("2.3.4", WireCore.get(scope, "version"));
+        var span = WireCore.first(WireCore.get(spans, "spans"));
+        assertEquals(2, WireCore.list(WireCore.get(span, "events")).size()); assertEquals(1, WireCore.list(WireCore.get(span, "links")).size());
         assertEquals("PRIVATE_INPUT", original.getAttributes().get(AttributeKey.stringKey("fi.raw_input")));
         assertTrue(original.getEvents().get(0).getAttributes().get(AttributeKey.stringKey("exception.message")).contains("CONFIG_PRIVATE_KEY"));
     }
-    @Test void exportBoundaryMasksOwnAndForwardedLibrarySpansIncludingStatusAndEvents() throws Exception {
+    @Test void exportBoundaryMasksLibrarySpansIncludingStatusAndEvents() throws Exception {
         SpanData original = originalSpan();
         for (String flag : List.of("hide_inputs", "hide_input_text", "hide_input_messages", "hide_outputs", "hide_output_text", "hide_output_messages")) {
             var config = AutoConfig.resolve(Map.of(flag, true, "api_key", "CONFIG_PRIVATE_KEY"), Map.of());
-            for (SpanData data : List.of(original, ApplicationOtel.snapshot(original, getClass().getClassLoader(), config, TraceAIAuto.resource(config)))) {
-                String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
-                assertFalse(json.contains(flag.contains("output") ? "PRIVATE_OUTPUT" : "PRIVATE_INPUT"), flag);
-                assertFalse(json.contains("exception.message")); assertFalse(json.contains("exception.stacktrace"));
-                assertFalse(json.contains("CONFIG_PRIVATE_KEY")); assertFalse(json.contains("SIGNED_PRIVATE"));
-            }
+            String json = WireCore.dump(new OtlpJsonExporter(config).serialize(original));
+            assertFalse(json.contains(flag.contains("output") ? "PRIVATE_OUTPUT" : "PRIVATE_INPUT"), flag);
+            assertFalse(json.contains("exception.message")); assertFalse(json.contains("exception.stacktrace"));
+            assertFalse(json.contains("CONFIG_PRIVATE_KEY")); assertFalse(json.contains("SIGNED_PRIVATE"));
         }
     }
 }

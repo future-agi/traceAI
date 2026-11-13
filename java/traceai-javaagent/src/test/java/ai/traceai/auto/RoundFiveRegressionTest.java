@@ -194,11 +194,9 @@ class RoundFiveRegressionTest {
                 var data = (io.opentelemetry.sdk.trace.data.SpanData)java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{io.opentelemetry.sdk.trace.data.SpanData.class}, (proxy, method, args) -> method.getName().equals("getInstrumentationScopeInfo") ? scope : method.invoke(original, args));
                 for (boolean hide : List.of(false, true)) {
                     var config = AutoConfig.resolve(Map.of("hide_input_images", hide), Map.of());
-                    for (var candidate : List.of(data, ApplicationOtel.snapshot(data, getClass().getClassLoader(), config, TraceAIAuto.resource(config)))) {
-                        String json = WireCore.dump(new OtlpJsonExporter(config).serialize(candidate));
-                        assertEquals(!hide, json.contains(uri), String.valueOf(block));
-                        assertFalse(json.contains("QUJD")); assertTrue(json.contains("PUBLIC_MESSAGE_TEXT")); assertTrue(json.contains("PUBLIC_ARRAY_TEXT"));
-                    }
+                    String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
+                    assertEquals(!hide, json.contains(uri), String.valueOf(block));
+                    assertFalse(json.contains("QUJD")); assertTrue(json.contains("PUBLIC_MESSAGE_TEXT")); assertTrue(json.contains("PUBLIC_ARRAY_TEXT"));
                 }
                 assertEquals(attrs.asMap(), original.getAttributes().asMap()); assertEquals(attrs.asMap(), original.getResource().getAttributes().asMap());
                 assertEquals(attrs.asMap(), original.getEvents().get(0).getAttributes().asMap()); assertEquals(attrs.asMap(), original.getLinks().get(0).getAttributes().asMap());

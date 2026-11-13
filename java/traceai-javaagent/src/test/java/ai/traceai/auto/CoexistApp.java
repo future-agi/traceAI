@@ -29,10 +29,19 @@ public final class CoexistApp {
             if (memory.getFinishedSpanItems().size() != 1) throw new AssertionError("Existing application exporter did not receive exactly one span");
             var own = memory.getFinishedSpanItems().get(0);
             if (own.getEvents().size() != 2 || own.getLinks().size() != 1 || !"PRIVATE_INPUT".equals(own.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("fi.raw_input")))) throw new AssertionError("Agent changed application span data");
+            // The provider's span processor is the application's own object, not a replacement.
+            var shared = SdkTracerProvider.class.getDeclaredField("sharedState"); shared.setAccessible(true);
+            Object state = shared.get(provider);
+            var active = state.getClass().getDeclaredMethod("getActiveSpanProcessor"); active.setAccessible(true);
+            Object processor = active.invoke(state);
+            if (java.lang.reflect.Proxy.isProxyClass(processor.getClass())) throw new AssertionError("Agent replaced the application's span processor: " + processor.getClass().getName());
+            System.out.println("APP_PROCESSOR_UNCHANGED=true");
+            // A control call outside every application span: the agent is running and traces it.
+            PlainApp.call(args);
             agent.getMethod("flush").invoke(null); agent.getMethod("shutdown").invoke(null);
             tracer.spanBuilder("application-after-shutdown").startSpan().end();
             if (memory.getFinishedSpanItems().size() != 2) throw new AssertionError("Agent took ownership of application SDK");
-            System.out.println("APP_PROVIDER_ALIVE=true"); System.out.println("LIBRARY_SPAN=" + span.getSpanContext().getSpanId());
+            System.out.println("APP_PROVIDER_ALIVE=true");
         } finally { provider.shutdown(); }
     }
 }

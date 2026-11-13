@@ -40,6 +40,8 @@ public final class VerifierApp {
             if (!"PRIVATE_WRAPPER_EMBEDDING_INPUT".equals(own.getAttributes().get(AttributeKey.stringKey(ai.traceai.SemanticConventions.EMBEDDING_INPUT_TEXT + ".0")))
                 || !"PRIVATE_WRAPPER_RERANK_QUERY".equals(own.getAttributes().get(AttributeKey.stringKey(ai.traceai.SemanticConventions.GEN_AI_RERANKER_QUERY)))) throw new AssertionError("Application wrapper attributes changed");
             System.out.println("WRAPPER_RAW_UNCHANGED=true");
+            // A control call outside the wrapper span: the agent is running and traces it.
+            PlainApp.call(args);
             Class.forName("ai.traceai.auto.TraceAIAuto").getMethod("flush").invoke(null);
         }
     }
@@ -60,6 +62,7 @@ public final class VerifierApp {
             if (!preamble.equals(own.get(AttributeKey.stringKey("cohere.preamble"))) || !arguments.equals(own.get(AttributeKey.stringKey(tool + ai.traceai.SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS)))) throw new AssertionError("Application Cohere attributes changed");
             if (own.get(AttributeKey.stringKey("input.value")) != null || own.get(AttributeKey.stringKey("output.value")) != null) throw new AssertionError("Application FITracer hide flags were not enabled");
             System.out.println("COHERE_APPLICATION_UNCHANGED=true");
+            PlainApp.call(args);
             Class.forName("ai.traceai.auto.TraceAIAuto").getMethod("flush").invoke(null);
         }
     }

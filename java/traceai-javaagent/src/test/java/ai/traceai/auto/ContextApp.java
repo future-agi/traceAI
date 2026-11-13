@@ -17,6 +17,7 @@ public final class ContextApp {
         try (var scope = parent.makeCurrent(); var session = ContextAttributes.usingSession("e2e-session")) {
             if (args[2].contains("native")) {
                 Span nativeSpan = GlobalOpenTelemetry.getTracer("native-sdk").spanBuilder("native-client").startSpan();
+                System.out.println("NATIVE=" + nativeSpan.getSpanContext().getSpanId());
                 try (var nativeScope = nativeSpan.makeCurrent()) { PlainApp.call(args); } finally { nativeSpan.end(); }
             } else PlainApp.call(args);
             if (args[2].contains("privacy")) {
@@ -25,6 +26,10 @@ public final class ContextApp {
                 parent.recordException(new java.io.IOException("echo " + echoed + " {\"password\":\"JSON_PASSWORD_PRIVATE_123\"}"));
             }
         }
-        finally { parent.end(); provider.shutdown(); }
+        finally { parent.end(); }
+        try {
+            // A control call outside every application span: the agent is running and traces it.
+            if (args[2].startsWith("dedup")) PlainApp.call(args);
+        } finally { provider.shutdown(); }
     }
 }
