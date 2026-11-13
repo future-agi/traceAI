@@ -35,16 +35,18 @@ export const AGENT_SPAN_ERROR_TYPE = "AgentSpanError";
 interface AgentTrace {
   traceId: string;
   name: string;
+  groupId?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 interface AgentSpan {
   spanId: string;
   traceId: string;
-  parentId?: string;
-  startedAt?: string;
-  endedAt?: string;
+  parentId?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
   spanData: SpanData;
-  error?: { message: string; data?: string | Record<string, unknown> };
+  error?: { message: string; data?: string | Record<string, unknown> } | null;
 }
 
 /**
@@ -66,6 +68,12 @@ interface SpanData {
   /** Handoff spans. */
   from_agent?: string;
   to_agent?: string;
+  /** Guardrail and MCP tool-discovery spans. */
+  triggered?: boolean;
+  server?: string;
+  result?: string[];
+  /** User data on custom spans. */
+  data?: Record<string, unknown>;
 }
 
 /**
@@ -75,15 +83,24 @@ interface SpanData {
 export const SUPPORTED_AGENTS_VERSIONS = [">=0.4.0 <0.22.0"];
 
 interface TracingProcessor {
-  onTraceStart(trace: AgentTrace): void;
-  onTraceEnd(trace: AgentTrace): void;
-  onSpanStart(span: AgentSpan): void;
-  onSpanEnd(span: AgentSpan): void;
-  forceFlush(): void;
-  shutdown(): void;
+  onTraceStart(trace: AgentTrace): Promise<void>;
+  onTraceEnd(trace: AgentTrace): Promise<void>;
+  onSpanStart(span: AgentSpan): Promise<void>;
+  onSpanEnd(span: AgentSpan): Promise<void>;
+  forceFlush(): Promise<void>;
+  shutdown(): Promise<void>;
 }
 
-export interface OpenAIAgentsInstrumentationConfig {
+export interface FITracingProcessorOptions {
+  /**
+   * Top-level SDK trace metadata keys approved for export. Defaults to none.
+   * Values (including nested content) are exported as metadata, not input/output;
+   * only allow keys whose entire value is safe to send to your tracing backend.
+   */
+  traceMetadataKeys?: readonly string[];
+}
+
+export interface OpenAIAgentsInstrumentationConfig extends FITracingProcessorOptions {
   instrumentationConfig?: Record<string, unknown>;
   traceConfig?: TraceConfigOptions;
   /**
@@ -108,23 +125,35 @@ export class FITracingProcessor implements TracingProcessor {
   private _otelSpans: Map<string, Span> = new Map();
   private _traceInputs: Map<string, unknown> = new Map();
   private _traceOutputs: Map<string, unknown> = new Map();
-  private _handoffs: Map<string, string> = new Map();
+  private _handoffs: Map<string, Map<string, string>> = new Map();
+  private readonly _traceMetadataKeys: readonly string[];
+  private _shutdown = false;
 
-  constructor(tracer: FITracer) {
+  constructor(tracer: FITracer, options: FITracingProcessorOptions = {}) {
     this._tracer = tracer;
+    this._traceMetadataKeys = [...(options.traceMetadataKeys ?? [])];
   }
 
-  onTraceStart(agentTrace: AgentTrace): void {
+  async onTraceStart(agentTrace: AgentTrace): Promise<void> {
+    if (this._shutdown || this._rootSpans.has(agentTrace.traceId)) return;
+    // Do not serialize the trace object: it can also carry exporter credentials.
+    const traceMetadata = agentTrace.metadata ?? {};
+    const metadata = Object.fromEntries(this._traceMetadataKeys
+      .filter(key => Object.prototype.hasOwnProperty.call(traceMetadata, key))
+      .map(key => [key, traceMetadata[key]]));
     const span = this._tracer.startSpan(agentTrace.name, {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.AGENT,
+        ...(agentTrace.groupId != null ? { [SemanticConventions.SESSION_ID]: agentTrace.groupId } : {}),
+        ...(Object.keys(metadata).length ? { [SemanticConventions.METADATA]: safeJsonStringify(metadata) } : {}),
       },
     });
     this._rootSpans.set(agentTrace.traceId, span);
   }
 
-  onTraceEnd(agentTrace: AgentTrace): void {
+  async onTraceEnd(agentTrace: AgentTrace): Promise<void> {
+    if (this._shutdown) return;
     const rootSpan = this._rootSpans.get(agentTrace.traceId);
     if (!rootSpan) return;
 
@@ -159,10 +188,11 @@ export class FITracingProcessor implements TracingProcessor {
     this._rootSpans.delete(agentTrace.traceId);
     this._traceInputs.delete(agentTrace.traceId);
     this._traceOutputs.delete(agentTrace.traceId);
+    this._handoffs.delete(agentTrace.traceId);
   }
 
-  onSpanStart(agentSpan: AgentSpan): void {
-    if (!agentSpan.startedAt) return;
+  async onSpanStart(agentSpan: AgentSpan): Promise<void> {
+    if (this._shutdown || !agentSpan.startedAt || this._otelSpans.has(agentSpan.spanId)) return;
 
     const parentSpan = agentSpan.parentId
       ? this._otelSpans.get(agentSpan.parentId)
@@ -177,10 +207,12 @@ export class FITracingProcessor implements TracingProcessor {
       spanName,
       {
         kind: SpanKind.INTERNAL,
+        startTime: nativeTime(agentSpan.startedAt),
+        // Do not dump spanData into raw.input: it may already contain outputs,
+        // which would bypass hideOutputs. Capture directional fields at end.
         attributes: {
           [SemanticConventions.FI_SPAN_KIND]: getSpanKind(agentSpan.spanData),
           [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
-          [SemanticConventions.RAW_INPUT]: safeJsonStringify(agentSpan.spanData),
         },
       },
       parentContext
@@ -189,7 +221,8 @@ export class FITracingProcessor implements TracingProcessor {
     this._otelSpans.set(agentSpan.spanId, span);
   }
 
-  onSpanEnd(agentSpan: AgentSpan): void {
+  async onSpanEnd(agentSpan: AgentSpan): Promise<void> {
+    if (this._shutdown) return;
     const span = this._otelSpans.get(agentSpan.spanId);
     if (!span) return;
 
@@ -203,16 +236,29 @@ export class FITracingProcessor implements TracingProcessor {
       this.handleGenerationSpan(span, agentSpan);
     } else if (data.type === "function") {
       this.handleFunctionSpan(span, data);
+    } else if (data.type === "guardrail" && typeof data.triggered === "boolean") {
+      span.setAttribute("guardrail.triggered", data.triggered);
+    } else if (data.type === "mcp_tools") {
+      span.setAttribute(SemanticConventions.TOOL_NAME, "list_tools");
+      if (data.server) span.setAttribute("mcp.server.name", data.server);
+      if (data.result !== undefined) {
+        span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJsonStringify(data.result));
+        span.setAttribute(SemanticConventions.OUTPUT_MIME_TYPE, MimeType.JSON);
+      }
+    } else if (data.type === "custom" && data.data !== undefined) {
+      span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJsonStringify(data.data));
+      span.setAttribute(SemanticConventions.OUTPUT_MIME_TYPE, MimeType.JSON);
     } else if (data.type === "handoff" && data.to_agent && data.from_agent) {
-      const key = `${data.to_agent}:${agentSpan.traceId}`;
-      this._handoffs.set(key, data.from_agent);
+      const handoffs = this._handoffs.get(agentSpan.traceId) ?? new Map<string, string>();
+      handoffs.set(data.to_agent, data.from_agent);
+      this._handoffs.set(agentSpan.traceId, handoffs);
     } else if (data.type === "agent" && data.name) {
       span.setAttribute(SemanticConventions.GRAPH_NODE_ID, data.name);
-      const key = `${data.name}:${agentSpan.traceId}`;
-      const parentNode = this._handoffs.get(key);
+      const handoffs = this._handoffs.get(agentSpan.traceId);
+      const parentNode = handoffs?.get(data.name);
       if (parentNode) {
         span.setAttribute(SemanticConventions.GRAPH_NODE_PARENT_ID, parentNode);
-        this._handoffs.delete(key);
+        handoffs?.delete(data.name);
       }
     }
 
@@ -235,7 +281,7 @@ export class FITracingProcessor implements TracingProcessor {
       span.setStatus({ code: SpanStatusCode.OK });
     }
 
-    span.end();
+    span.end(nativeTime(agentSpan.endedAt));
     this._otelSpans.delete(agentSpan.spanId);
   }
 
@@ -352,12 +398,20 @@ export class FITracingProcessor implements TracingProcessor {
     }
   }
 
-  forceFlush(): void {
-    // No-op for now
+  async forceFlush(): Promise<void> {
+    // This bridge has no export queue. Flush the owning OTel provider instead.
   }
 
-  shutdown(): void {
-    // Clean up maps
+  async shutdown(): Promise<void> {
+    if (this._shutdown) return;
+    // The SDK has no removeTraceProcessor API and may retain these callbacks.
+    this._shutdown = true;
+    const endTime = new Date();
+    // Children are started after their parents. Close deepest spans first.
+    for (const span of [...this._otelSpans.values()].reverse().concat([...this._rootSpans.values()])) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: "Tracing processor shut down before completion" });
+      span.end(endTime);
+    }
     this._rootSpans.clear();
     this._otelSpans.clear();
     this._traceInputs.clear();
@@ -376,6 +430,8 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
   private _traceConfig?: TraceConfigOptions;
   private _processor?: FITracingProcessor;
   private _exclusiveProcessor: boolean;
+  private _traceMetadataKeys: readonly string[];
+  private _patchedModule?: typeof import("@openai/agents") & { _fiPatched?: boolean };
 
   constructor(config: OpenAIAgentsInstrumentationConfig = {}) {
     super(
@@ -385,6 +441,7 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
     );
     this._traceConfig = config.traceConfig;
     this._exclusiveProcessor = config.exclusiveProcessor ?? true;
+    this._traceMetadataKeys = [...(config.traceMetadataKeys ?? [])];
     // InstrumentationBase calls enable() from its constructor, before
     // _traceConfig is set. Build the tracer again so the config applies.
     this.fiTracer = this._createFITracer();
@@ -393,6 +450,14 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
   override enable(): void {
     super.enable();
     this.fiTracer = this._createFITracer();
+  }
+
+  override disable(): void {
+    super.disable();
+    // require hooks do not call unpatch for ESM/manual registration.
+    if (this._patchedModule) this.unpatch(this._patchedModule);
+    this._processor?.shutdown();
+    this._processor = undefined;
   }
 
   private _createFITracer(): FITracer {
@@ -432,8 +497,7 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
 
     // Create the processor. Rebuild the tracer first so it uses the provider
     // from setTracerProvider() when that was called after construction.
-    this.fiTracer = this._createFITracer();
-    this._processor = new FITracingProcessor(this.fiTracer);
+    const processor = this.getProcessor();
 
     // Register our processor with the agents SDK. By default it replaces the
     // SDK's processors; with exclusiveProcessor: false it is added alongside
@@ -443,14 +507,18 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
         this._exclusiveProcessor &&
         typeof agentsModule.setTraceProcessors === "function"
       ) {
-        agentsModule.setTraceProcessors([this._processor]);
+        agentsModule.setTraceProcessors([processor]);
       } else if (typeof agentsModule.addTraceProcessor === "function") {
-        agentsModule.addTraceProcessor(this._processor);
+        agentsModule.addTraceProcessor(processor);
+      } else {
+        return agentsModule;
       }
     } catch (error) {
       this._diag.warn("Failed to register trace processor with @openai/agents", error);
+      return agentsModule;
     }
 
+    this._patchedModule = agentsModule;
     markModulePatched(agentsModule, true);
     _isFIPatched = true;
     return agentsModule;
@@ -459,13 +527,12 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
   private unpatch(
     agentsModule: typeof import("@openai/agents") & { _fiPatched?: boolean }
   ): void {
-    if (this._processor) {
-      this._processor.shutdown();
-      this._processor = undefined;
-    }
-    if (agentsModule) {
-      markModulePatched(agentsModule, false);
-    }
+    // Another instrumentation instance may own this module's registration.
+    if (this._patchedModule !== agentsModule) return;
+    this._processor?.shutdown();
+    this._processor = undefined;
+    this._patchedModule = undefined;
+    markModulePatched(agentsModule, false);
     _isFIPatched = false;
   }
 
@@ -476,7 +543,8 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
    */
   getProcessor(): FITracingProcessor {
     if (!this._processor) {
-      this._processor = new FITracingProcessor(this.fiTracer);
+      this.fiTracer = this._createFITracer();
+      this._processor = new FITracingProcessor(this.fiTracer, { traceMetadataKeys: this._traceMetadataKeys });
     }
     return this._processor;
   }
@@ -513,6 +581,12 @@ export function _resetPatchedStateForTesting(): void {
 }
 
 // Helper functions
+
+function nativeTime(value?: string | null): Date | undefined {
+  if (!value) return undefined;
+  const time = new Date(value);
+  return Number.isFinite(time.getTime()) ? time : undefined;
+}
 
 function safeJsonStringify(obj: unknown): string {
   try {
@@ -571,7 +645,10 @@ function getSpanKind(data: SpanData): string {
       return FISpanKind.AGENT;
     case "function":
     case "handoff":
+    case "mcp_tools":
       return FISpanKind.TOOL;
+    case "guardrail":
+      return FISpanKind.GUARDRAIL;
     case "generation":
     case "response":
       return FISpanKind.LLM;
