@@ -77,7 +77,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         foreach(var pair in AttributeProjection.Order(materialized))
         {
             var key=redact(pair.Key);
-            var value=pair.Value==null?null:safe(pair.Key,WirePrivacy.Scrub(pair.Value,path:pair.Key,hints:hints),operation);
+            var value=pair.Value==null?null:safe(pair.Key,WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints),operation);
             budget.Value(value);
             if(value is string text) value=redact(text);
             result[key]=value;

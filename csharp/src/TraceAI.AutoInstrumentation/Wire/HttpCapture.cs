@@ -327,7 +327,7 @@ internal sealed class Capture
             var candidates=tags.Select(pair=> {
                 try
                 {
-                    var value=pair.Value==null?null:WirePrivacy.Scrub(pair.Value,path:pair.Key,hints:hints);
+                    var value=pair.Value==null?null:WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints);
                     if(value!=null && _privacy!=null) value=_privacy.Mask(pair.Key,value,operation);
                     return new KeyValuePair<string,object?>(pair.Key,value);
                 }

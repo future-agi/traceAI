@@ -574,7 +574,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         foreach(var activity in batch) activities.Add(activity);
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
-        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:key),operation);
+        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
         return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails);
     }
@@ -593,7 +593,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
         return ExportSnapshot.SanitizeResource(resource,
-            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:key)),
+            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key))),
             text=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets));
     }
     private static string EventKey(string name,string key) => name switch {
@@ -601,9 +601,14 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         "gen_ai.assistant.message" or "gen_ai.choice" => "gen_ai.output.messages.0.message.content."+key,
         _=>key
     };
+    /// <summary>The FI context session id groups traces. As in the other SDKs, this exact key
+    /// is exempt from the credential name rule; registered secrets and credential-shaped
+    /// values are still removed from its value.</summary>
+    internal const string SessionKey="session.id";
+    internal static string ScrubPath(string key)=>key==SessionKey?"":key;
     internal object? Mask(string key,object value,string? operation=null)
     {
-        if(WirePrivacy.CredentialKey(key)||IsSensitiveKey(key)) return TraceConfig.RedactedValue;
+        if(key!=SessionKey && (WirePrivacy.CredentialKey(key)||IsSensitiveKey(key))) return TraceConfig.RedactedValue;
         bool tool=key.StartsWith("gen_ai.tool.",StringComparison.Ordinal);
         bool nativeOutput=key.StartsWith("gen_ai.tool.call.result",StringComparison.Ordinal)||key.StartsWith("gen_ai.tool.output",StringComparison.Ordinal);
         bool toolInput=key.StartsWith("gen_ai.tool.call.arguments",StringComparison.Ordinal)||key.StartsWith("gen_ai.tool.parameters",StringComparison.Ordinal)||
@@ -633,7 +638,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         if(decision==TraceConfig.RedactedValue) return TraceConfig.RedactedValue;
         if(_mask.HideErrorDetails && key=="otel.status_description") return null;
         if(_mask.HideInputImages && (key.Contains("image",StringComparison.OrdinalIgnoreCase)||key.Contains("file_uri",StringComparison.OrdinalIgnoreCase)||key.Contains("fileUri",StringComparison.Ordinal)||key.Contains("file_url",StringComparison.OrdinalIgnoreCase)||key.Contains("file.uri",StringComparison.OrdinalIgnoreCase)||key.Contains("file.url",StringComparison.OrdinalIgnoreCase))) return TraceConfig.RedactedValue;
-        value=WirePrivacy.Scrub(value,path:key);
+        value=WirePrivacy.Scrub(value,path:ScrubPath(key));
         if(value is string str)
         {
             str=_config.RedactSecrets(str);
