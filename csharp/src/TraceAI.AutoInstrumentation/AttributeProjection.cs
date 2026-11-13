@@ -26,16 +26,23 @@ internal static class AttributeProjection
     internal static IOrderedEnumerable<KeyValuePair<string,object?>> Order(IEnumerable<KeyValuePair<string,object?>> tags)=>
         tags.OrderBy(pair=>Family(pair.Key)).ThenBy(pair=>pair.Key,StringComparer.Ordinal);
 
+    // Protected families in retention order: degradation, identity, outcome,
+    // provider/model/operation, usage, timing, provenance. Unprotected is last.
+    private const int Unprotected=7;
     private static int Family(string key)=>key switch {
         DroppedContent or "traceai.wire.incomplete" or "traceai.wire.truncated" or "traceai.wire.undecoded_encoding" or "traceai.wire.body_unavailable"=>0,
         "gen_ai.span.kind" or "gen_ai.response.id" or "project_name" or "project_type" or "project_version_name" or "project_version_id"=>1,
         "error.type" or "http.response.status_code" or "gen_ai.response.finish_reasons"=>2,
         "gen_ai.operation.name" or "gen_ai.provider.name" or "gen_ai.request.model" or "gen_ai.response.model"=>3,
         _ when key.StartsWith("gen_ai.usage.",StringComparison.Ordinal)=>4,
-        "traceai.capture.layer" or "traceai.wire.endpoint" or "server.address" or "server.port" or "http.request.method"=>5,
-        _=>6
+        // Exact timing keys when present; never a prefix family.
+        "gen_ai.response.latency" or "gen_ai.response.time_to_first_chunk" or "gen_ai.response.time_to_first_text" or
+        "gen_ai.response.time_to_first_token" or "gen_ai.server.time_to_first_token" or "gen_ai.server.time_per_output_token" or
+        "gen_ai.server.request.duration"=>5,
+        "traceai.capture.layer" or "traceai.wire.endpoint" or "server.address" or "server.port" or "http.request.method"=>6,
+        _=>Unprotected
     };
-    internal static bool Protected(string key)=>Family(key)<6;
+    internal static bool Protected(string key)=>Family(key)<Unprotected;
     internal static bool ContentKey(string key)=>key.StartsWith("input.",StringComparison.Ordinal)||key.StartsWith("output.",StringComparison.Ordinal)||
         key.StartsWith("gen_ai.input.",StringComparison.Ordinal)||key.StartsWith("gen_ai.output.",StringComparison.Ordinal)||
         key.StartsWith("gen_ai.tool.",StringComparison.Ordinal)||key.StartsWith("gen_ai.system_instructions",StringComparison.Ordinal)||
@@ -77,9 +84,9 @@ internal static class AttributeProjection
         long prior=tags.GetValueOrDefault(DroppedContent) switch { long n when n>0=>n,int n when n>0=>n,_=>0 };
         tags.Remove(DroppedContent);
         string? operation=tags.GetValueOrDefault("gen_ai.operation.name") as string;
-        var protectedTags=Order(tags.Where(pair=>Family(pair.Key)<6)).ToList();
+        var protectedTags=Order(tags.Where(pair=>Protected(pair.Key))).ToList();
         var groups=new Dictionary<string,Group>(StringComparer.Ordinal);
-        foreach(var tag in tags.Where(pair=>Family(pair.Key)==6).OrderBy(pair=>pair.Key,StringComparer.Ordinal))
+        foreach(var tag in tags.Where(pair=>!Protected(pair.Key)).OrderBy(pair=>pair.Key,StringComparer.Ordinal))
         {
             var key=GroupKey(tag.Key,operation);
             if(!groups.TryGetValue(key.Name,out var group)) groups[key.Name]=group=new(key.Name,key.Priority,key.Index);
