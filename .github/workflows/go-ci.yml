@@ -4,11 +4,14 @@ on:
   pull_request:
     paths:
       - 'go/**'
+      # go/auto embeds byte-identical copies of the shared privacy catalogs.
+      - 'spec/auto-instrumentation/**'
       - '.github/workflows/go-ci.yml'
   push:
     branches: [dev, main]
     paths:
       - 'go/**'
+      - 'spec/auto-instrumentation/**'
       - '.github/workflows/go-ci.yml'
   workflow_dispatch:
 
@@ -27,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [a2a, anthropic, bedrock, eino, genai, lambda, langchaingo, openai]
+        module: [a2a, anthropic, auto, bedrock, eino, genai, lambda, langchaingo, openai]
         go: ['1.26.0', stable]
     defaults:
       run:
@@ -64,6 +67,29 @@ jobs:
         run: go build -o "$RUNNER_TEMP/traceai-example" ./example
       - name: Render package documentation
         run: go doc .
+
+  auto-sdk-compatibility:
+    name: auto / real OpenAI and Anthropic SDK clients
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # A separate, unpublished test module, so go/auto never requires either SDK.
+        working-directory: go/auto/sdkcompat
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/auto/sdkcompat/go.sum
+      - name: Vet and race tests through the SDK default clients
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
 
   genai-sdk-compatibility:
     name: genai / SDK ${{ matrix.sdk }}
