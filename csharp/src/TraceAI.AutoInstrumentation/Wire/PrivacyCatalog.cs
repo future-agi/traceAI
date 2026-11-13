@@ -28,6 +28,10 @@ internal static class PrivacyCatalog
         "i"=>new Regex(n["regex"]!.GetValue<string>(),RegexOptions.CultureInvariant|RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(250)),
         _=>throw new InvalidDataException("Unsupported value shape flags")
     }).ToArray();
+    // Closed, versioned provider-response logprob token paths; see ProviderResponse.
+    internal static readonly IReadOnlyDictionary<string,(string[][] Paths,string[][] TextPaths)> LogprobTokens=Catalog["logprob_tokens"]!["formats"]!.AsArray()
+        .ToDictionary(n=>n!["format"]!.GetValue<string>(),n=>(TokenPaths(n!["paths"]!),TokenPaths(n!["text_paths"]!)),StringComparer.Ordinal);
+    private static string[][] TokenPaths(JsonNode node)=>node.AsArray().Select(path=>Strings(path!)).ToArray();
     private static readonly HashSet<string> Signed=Strings(Catalog["signed_url"]!["parameters"]!).Select(Normalize).ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<char> Alphabet=Media["base64_alphabet"]!.GetValue<string>().ToHashSet();
     private static readonly HashSet<string> Unrecognized=Strings(Media["unrecognized_base64_fields"]!).ToHashSet(StringComparer.Ordinal);
