@@ -52,6 +52,15 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(plan['skipped'][0]['name'], 'traceai-roast')
         self.assertIn('RubyGems publishing', plan['skipped'][0]['reason'])
 
+    def test_go_auto_is_inventoried_but_held_until_its_first_tag_is_approved(self):
+        root = release_plan.REPO_ROOT
+        auto = [p for p in release_plan.other_packages(root) if p['dir'] == 'go/auto']
+        self.assertEqual([(p['name'], p['version'], p['tag']) for p in auto],
+                         [('github.com/future-agi/traceAI/go/auto', '0.1.0', 'go/auto/v0.1.0')])
+        plan = release_plan.plan(auto, release_plan.load_config(), offline=True)
+        self.assertEqual(plan['go'], [])
+        self.assertEqual([p['name'] for p in plan['skipped']], ['github.com/future-agi/traceAI/go/auto'])
+
     def test_go_proxy_case_escaping(self):
         with patch.object(release_plan, '_get_json', return_value={'Version': 'v0.1.0'}) as get:
             p = {'ecosystem': 'go', 'name': 'github.com/future-agi/traceAI/go/openai', 'version': '0.1.0'}
