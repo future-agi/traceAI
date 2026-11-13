@@ -110,7 +110,7 @@ func TestInitPlainHTTPAndParent(t *testing.T) {
 	if s.StartTime().Before(before) || s.StartTime().After(s.EndTime()) {
 		t.Fatal("invalid explicit times")
 	}
-	for k, want := range map[string]any{"output.value": "Hello", "gen_ai.usage.total_tokens": int64(3), "session.id": "<redacted>"} {
+	for k, want := range map[string]any{"output.value": "Hello", "gen_ai.usage.total_tokens": int64(3), "session.id": "session-1"} {
 		if got := value(s, k); got != want {
 			t.Errorf("%s = %v want %v", k, got, want)
 		}
