@@ -35,7 +35,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
-    "@pinecone-database/pinecone": "^2.0.0 || ^3.0.0 || ^4.0.0"
+    "@pinecone-database/pinecone": ">=2.0.0 <10.0.0"
   },
   "devDependencies": {
     "@opentelemetry/sdk-trace-base": "^2.0.1",
