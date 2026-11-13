@@ -294,7 +294,8 @@ module TraceAI
             destination = ResourceExporter.new(supplied_exporter, ExportResource.new({}), sdk_records: true)
             add_owned_processor(destination)
           end
-          add_owned_processor(ResourceExporter.new(WireExporter.new, resource)) if fi_route
+          # Future AGI receives only AI spans from the provider in use.
+          add_owned_processor(ResourceExporter.new(WireExporter.new, resource), ai_only: true) if fi_route
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
@@ -327,10 +328,10 @@ module TraceAI
         warn_once("initialization failed (#{e.class.name}); application left running")
         self
       end
-      def add_owned_processor(destination)
+      def add_owned_processor(destination, ai_only: false)
         processor = OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(destination, exporter_timeout: 4000, max_queue_size: 512, max_export_batch_size: 64)
         processor.singleton_class.prepend(QuietBatchResult)
-        attach_processor(processor)
+        attach_processor(ai_only ? AISpanFilter.new(processor) : processor)
         @owned_processors << processor
         @processor = processor; @exporter = destination
       end
@@ -666,6 +667,52 @@ module TraceAI
       def on_finish(span); end
       def force_flush(timeout: nil) = 0
       def shutdown(timeout: nil) = 0
+    end
+    # The Future AGI route receives only AI spans: the agent's own wire spans,
+    # spans carrying gen_ai.span.kind or traceai.capture.layer, and a server
+    # span whose trace contained one of those. Other application spans, such as
+    # database, queue or HTTP client spans, stay with the application's own
+    # exporters. Server spans end after their children, so AI trace ids are
+    # remembered in a small bounded set until then.
+    class AISpanFilter
+      MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
+      TRACE_LIMIT = 4096
+      def initialize(delegate)
+        @delegate = delegate
+        @traces = {}
+        @mutex = Mutex.new
+      end
+      def on_start(span, parent_context) = @delegate.on_start(span, parent_context)
+      def on_finish(span)
+        trace_id = span.context.trace_id
+        if ai_span?(span)
+          remember(trace_id)
+          @delegate.on_finish(span)
+        elsif span.kind == :server && seen?(trace_id)
+          @delegate.on_finish(span)
+        end
+      rescue StandardError => e
+        Auto.debug(e)
+      end
+      def force_flush(timeout: nil) = @delegate.force_flush(timeout: timeout)
+      def shutdown(timeout: nil) = @delegate.shutdown(timeout: timeout)
+      private
+      def ai_span?(span)
+        attributes = span.attributes || {}
+        return true if MARKERS.any? { |key| attributes.key?(key) }
+        # Wire spans keep their scope even if a tight attribute limit dropped
+        # traceai.capture.layer.
+        scope = span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil
+        !!(scope && scope.name == 'traceai-auto')
+      end
+      def remember(trace_id)
+        @mutex.synchronize do
+          @traces.delete(trace_id)
+          @traces[trace_id] = true
+          @traces.shift while @traces.size > TRACE_LIMIT
+        end
+      end
+      def seen?(trace_id) = @mutex.synchronize { @traces.key?(trace_id) }
     end
     module QuietBatchResult
       private
