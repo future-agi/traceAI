@@ -67,7 +67,7 @@
     "node": ">=20.6"
   },
   "dependencies": {
-    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-core": "workspace:*",
     "@traceai/openai": "workspace:^",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",

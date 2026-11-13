@@ -9,10 +9,11 @@ import { readFileSync } from "node:fs";
 import type { TracerProvider } from "@opentelemetry/api";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Config, enabled, Options } from "./config";
+import { Config, enabled, explicitlyEnabled, Options } from "./config";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
-export interface Integration { name: string; package: string; targets: string[]; modules: string[]; className?: string; manual?: string; enable?: string }
+/** vectorOnly: the database integration traces only vector operations when the agent enables it. */
+export interface Integration { name: string; package: string; targets: string[]; modules: string[]; className?: string; manual?: string; enable?: string; vectorOnly?: boolean }
 export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string }
 export const integrations: Integration[] = catalog as Integration[];
 export function appRequire() { return createRequire(join(process.cwd(), "__traceai_auto__.cjs")); }
@@ -96,7 +97,7 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
   let esm = true;
   try {
     const pending = integrations.filter(i => statuses.find(s => s.name === i.name)?.status === "pending");
-    const http = enabled("http", config) && resolvable("@opentelemetry/instrumentation-http");
+    const http = explicitlyEnabled("http", config) && resolvable("@opentelemetry/instrumentation-http");
     installLoader([...pending.flatMap(i => [...i.targets, ...i.modules]), ...(http ? ["http", "https", "node:http", "node:https"] : [])], [...pending.map(i => i.package), ...(http ? ["@opentelemetry/instrumentation-http"] : [])]);
   } catch { esm = false; warn("esm", "ESM loader could not be installed; CommonJS and fetch capture remain available."); }
   for (const entry of integrations) {
@@ -123,7 +124,12 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       }
       const Instrumentor = exports[entry.className!];
       if (typeof Instrumentor !== "function") throw new Error("Missing exported Instrumentation class");
-      instance = new Instrumentor({ instrumentationConfig: { enabled: false }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false });
+      instance = new Instrumentor({ instrumentationConfig: { enabled: false, ...(entry.vectorOnly ? { vectorOnly: true } : {}) }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false });
+      if (entry.vectorOnly && instance.vectorOnly !== true) {
+        // An older release would trace every database call, not only vector operations.
+        instance.disable(); status.status = "manual"; status.reason = "Installed version traces every database call; update it so the agent traces only vector operations";
+        continue;
+      }
       const known = (instance._modules ?? []).map((definition: any) => ({ definition, version: moduleVersion(definition.name) })).filter((item: any) => item.version);
       if (known.length && known.every(({ definition, version }: any) => !definition.supportedVersions.some((range: string) => satisfies(version, range, { includePrerelease: definition.includePrerelease })))) {
         instance.disable(); status.status = "failed"; status.reason = "Installed target version is outside the instrumentor's supported range";
@@ -237,7 +243,9 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       warn(entry.name, `Integration ${entry.name} failed; the application will continue.`);
     }
   }
-  if (enabled("http", config)) {
+  // Incoming requests are application traffic: only an explicit allowlist entry
+  // enables them, and the agent sends a SERVER span only for a trace with AI work.
+  if (explicitlyEnabled("http", config)) {
     try {
       const path = appRequire().resolve("@opentelemetry/instrumentation-http");
       const { HttpInstrumentation } = appRequire()(path);
@@ -247,7 +255,7 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       removers.push(registerInstrumentations({ tracerProvider: provider, instrumentations: [instance] }));
       statuses.push({ name: "http", status: "instrumented", reason: esm ? "Incoming SERVER spans only" : "Incoming SERVER spans, CommonJS only; ESM loader unavailable" });
     } catch { statuses.push({ name: "http", status: "not_installed", reason: "Optional @opentelemetry/instrumentation-http" }); }
-  } else statuses.push({ name: "http", status: "disabled" });
+  } else statuses.push({ name: "http", status: "disabled", ...(enabled("http", config) ? { reason: "Off unless FI_INSTRUMENTATIONS lists http" } : {}) });
   return () => {
     for (const remove of removers.reverse()) { try { remove(); } catch { /* Leave host running. */ } }
   };

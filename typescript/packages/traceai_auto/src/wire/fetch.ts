@@ -1,4 +1,4 @@
-import { context, createContextKey, trace, Context } from "@opentelemetry/api";
+import { createContextKey, trace, Context } from "@opentelemetry/api";
 import { autoModelResponsibility, autoModelWireAllowed, hasAutoModelCoverage } from "@traceai/fi-core";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { createFetchHook } from "./fetch-runtime";
@@ -6,6 +6,7 @@ import { decodeNodeBody } from "./encoding-node";
 import { observePromise, preparePromiseObservation } from "./promise-node";
 import type { SpanResult } from "./core";
 import { observeOutgoing } from "./observe-node";
+import { activeContext, withContext } from "../agent-context";
 export type { FetchHook } from "./fetch-runtime";
 const IN_FLIGHT = createContextKey("traceai.auto.wire.in_flight");
 const DEDUP_KINDS = new Set(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"]);
@@ -35,11 +36,17 @@ function wireAllowed(ctx: Context, phase: "guard" | "inspect" | "request"): bool
 export function shouldSkip(ctx: Context, consultOperation = true): boolean {
   return isTracingSuppressed(ctx) || !!ctx.getValue(IN_FLIGHT) || !wireAllowed(ctx, consultOperation ? "inspect" : "guard");
 }
-export function patchFetch(max: number, emit: (result: SpanResult, parent: Context, start: number, end: number) => void, secrets: string[] = []) {
+/** onCapture runs when a supported AI request is captured, with its parent context. */
+export function patchFetch(max: number, emit: (result: SpanResult, parent: Context, start: number, end: number) => void, secrets: string[] = [], onCapture?: (parent: Context) => void) {
   preparePromiseObservation();
-  return createFetchHook(max, emit, { active: () => context.active(), skip: parent => shouldSkip(parent, false),
+  // The application's context manager when it has one, otherwise the agent's private context.
+  return createFetchHook(max, emit, { active: () => activeContext(), skip: parent => shouldSkip(parent, false),
     // Same context decision, now after supported URL matching. Only the emit
     // completion boundary can commit wire; credential observation stays separate.
-    capture: parent => wireAllowed(parent, "request"), observe: observePromise, observeRequest: observeOutgoing,
-    run: (parent, fn) => context.with(parent.setValue(IN_FLIGHT, true), fn) }, secrets, decodeNodeBody);
+    capture: parent => {
+      const allowed = wireAllowed(parent, "request");
+      if (allowed) { try { onCapture?.(parent); } catch { /* Bookkeeping never changes capture. */ } }
+      return allowed;
+    }, observe: observePromise, observeRequest: observeOutgoing,
+    run: (parent, fn) => withContext(parent.setValue(IN_FLIGHT, true), fn) }, secrets, decodeNodeBody);
 }

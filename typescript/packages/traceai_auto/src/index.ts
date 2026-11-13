@@ -1,17 +1,19 @@
-import { context, propagation, trace, SpanKind, SpanStatusCode, Context, TracerProvider } from "@opentelemetry/api";
-import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { ExportResultCode, W3CTraceContextPropagator, W3CBaggagePropagator, CompositePropagator } from "@opentelemetry/core";
+import { trace, SpanKind, SpanStatusCode, Context, TracerProvider } from "@opentelemetry/api";
+import { ExportResultCode } from "@opentelemetry/core";
 import { ParentBasedSampler, TraceIdRatioBasedSampler, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
-import { Config, credentialsForConfig, enabled, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
+import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
 import { createOutgoingPrivacy, noteOutgoingSpanStart } from "./outgoing-privacy";
 import { installOutgoingPropagation } from "./outgoing-node";
 import { enableLibraries, IntegrationStatus, inventory } from "./libraries";
 import { FetchHook, patchFetch, trackCoverage } from "./wire/fetch";
+import { removePromiseObservation } from "./wire/promise-node";
 import { captureSecrets, SpanResult } from "./wire/core";
 import { withDeadline } from "./deadline";
 import { privacyFilter } from "./export-privacy";
+import { contextBoundProvider, isAgentSpan, markAgentSpan } from "./agent-context";
+import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
 
 const VERSION = "0.1.4"; // x-release-please-version
 import { chainSigterm } from "./signals";
@@ -28,7 +30,11 @@ interface AgentState {
   processor?: SpanProcessor; processorIsObserver?: boolean; convertedSpanDestination?: ConvertedSpanDestination;
   detach?: () => void; removeLibraries?: () => void; fetch?: FetchHook;
   collector: string; shutdown?: Promise<void>; beforeExit?: () => void; removeSignals?: () => void;
-  removeOutgoing?: () => void; removeObservation?: () => void; ownsGlobalProvider?: boolean; contextManager?: AsyncLocalStorageContextManager; propagator?: CompositePropagator;
+  removeOutgoing?: () => void; removeObservation?: () => void;
+  /** Spans handed to the FI route and not yet exported. */
+  unsent: number; collectorFailed?: boolean;
+  /** Forwarding switch only: attach to an application provider registered after init. */
+  tryForward?: () => void; cancelForward?: () => void;
 }
 const STATE_KEY = Symbol.for("traceai.auto.agent.v1");
 let state: AgentState | undefined;
@@ -44,19 +50,24 @@ function guardedExporter(exporter: SpanExporter, agent: AgentState, options: Opt
   // use the same boundary here. Explicit init hiding remains authoritative even
   // if a supplied FI exporter has its own, less restrictive constructor policy.
   const privacy = options.exporter || !hasExportPrivacyBoundary(exporter) ? privacyFilter(options.traceConfig, [agent.config.apiKey, agent.config.secretKey].filter((v): v is string => !!v)) : undefined;
+  // Only with the forwarding switch do application spans reach this exporter.
+  // FI_HIDE_* then also hides other AI tracers' prompt and response keys on them.
+  const hiding = agent.config.forwardApplicationSpans ? forwardedHiding(options.traceConfig) : undefined;
   return idempotentExporter({
     export(spans, callback) {
       let called = false;
       const done = (result: { code: ExportResultCode; error?: Error }) => {
         if (called) return; called = true;
+        agent.unsent = Math.max(0, agent.unsent - spans.length);
         agent.collector = result.code === ExportResultCode.SUCCESS ? "accepted" : "failed";
-        if (result.code !== ExportResultCode.SUCCESS) warn("collector", "Collector export failed; the application will continue.");
+        if (result.code !== ExportResultCode.SUCCESS) { agent.collectorFailed = true; warn("collector", "Collector export failed; the application will continue."); }
         callback(result);
       };
       try {
         // Enrich only the copy sent to FI: leave the app's spans, resources and other
         // exporters untouched, including when attaching to an existing global SDK.
-        const copies: ReadableSpan[] = privacy ? spans.map(span => privacy.span(span, failedCaptures.has(span) ? null : [], resource)) : spans;
+        const views = hiding ? spans.map(span => isAgentSpan(span) ? span : hideForwardedContent(span, hiding)) : spans;
+        const copies: ReadableSpan[] = privacy ? views.map((view, i) => privacy.span(view, failedCaptures.has(spans[i]) ? null : [], resource)) : views;
         if (!privacy && spans.some(span => failedCaptures.has(span))) markSecretDiscoveryFailed();
         exporter.export(copies, done);
       } catch { done({ code: ExportResultCode.FAILED }); }
@@ -83,11 +94,49 @@ function attach(provider: any, processor: SpanProcessor): (() => void) | undefin
   if (typeof target.addSpanProcessor === "function") { target.addSpanProcessor(processor); return () => {}; }
   return undefined;
 }
+/** Forwarding switch only: the preload runs before the application starts its SDK. */
+function forwardLater(agent: AgentState, processor: SpanProcessor): void {
+  const attempt = () => {
+    if (!agent.active || agent.detach) { agent.tryForward = undefined; return; }
+    const app = existingProvider();
+    if (!app || app === agent.provider) return;
+    agent.tryForward = undefined;
+    agent.detach = attach(app, processor);
+    if (!agent.detach) warn("provider", "The application's provider cannot accept processors; its spans are not forwarded.");
+  };
+  agent.tryForward = attempt;
+  const immediate = setImmediate(attempt); immediate.unref?.();
+  agent.cancelForward = () => { agent.tryForward = undefined; clearImmediate(immediate); };
+}
+// Incoming HTTP SERVER spans reach Future AGI only for traces with AI work.
+const HTTP_SCOPE = "@opentelemetry/instrumentation-http";
+interface ServerGate { note(traceId: unknown): void; start(span: any): void; admit(span: any): boolean }
+function serverGate(): ServerGate {
+  const traces = new Set<string>();
+  const traceId = (span: any): unknown => { try { return span.spanContext().traceId; } catch { return undefined; } };
+  const scope = (span: any): unknown => span?.instrumentationScope?.name ?? span?.instrumentationLibrary?.name;
+  const note = (id: unknown) => {
+    if (typeof id !== "string" || traces.has(id)) return;
+    traces.add(id);
+    if (traces.size > 1024) traces.delete(traces.values().next().value as string);
+  };
+  return {
+    note,
+    start(span) { if (scope(span) !== HTTP_SCOPE) note(traceId(span)); },
+    admit(span) { if (scope(span) !== HTTP_SCOPE) return true; const id = traceId(span); return typeof id === "string" && traces.has(id); },
+  };
+}
+function credentialsWarning(config: Config): string {
+  const incomplete = incompleteCredentialSources(config);
+  return incomplete.length
+    ? `Ignoring incomplete credentials from ${incomplete.join("; ")}. FI_API_KEY and FI_SECRET_KEY are required in the same source; auto-instrumentation is disabled and nothing is sent to Future AGI.`
+    : "FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is disabled and nothing is sent to Future AGI.";
+}
 function removeHooks(agent: AgentState): void {
   for (const remove of [
     () => { if (agent.beforeExit) process.removeListener("beforeExit", agent.beforeExit); },
-    () => agent.removeSignals?.(),
-    () => agent.removeOutgoing?.(), () => agent.fetch?.remove(), () => agent.removeObservation?.(), () => agent.removeLibraries?.(),
+    () => agent.removeSignals?.(), () => agent.cancelForward?.(),
+    () => agent.removeOutgoing?.(), () => agent.fetch?.remove(), () => removePromiseObservation(), () => agent.removeObservation?.(), () => agent.removeLibraries?.(),
   ]) { try { remove(); } catch { /* A broken cleanup must not skip the others. */ } }
 }
 export interface Report { active: boolean; config: Record<string, unknown>; integrations: IntegrationStatus[]; collector: string }
@@ -96,19 +145,23 @@ export function init(options: Options = {}): TracerProvider | undefined {
   const existing = sharedState();
   if (existing) { warn("initialized", "Already initialized; keeping the existing provider and configuration."); return existing.active ? existing.provider : undefined; }
   try {
-    const config = resolveConfig(options), agent: AgentState = { config, statuses: inventory(config), active: false, collector: "not_tested (no startup network I/O)" };
+    const config = resolveConfig(options), agent: AgentState = { config, statuses: inventory(config), active: false, collector: "not_tested (no startup network I/O)", unsent: 0 };
     options = { ...options, traceConfig: config.traceConfig };
     state = agent; (globalThis as any)[STATE_KEY] = agent;
-    const hostProvider = options.provider ?? existingProvider();
     seedSecrets(process.env, credentialsForConfig(config));
     const fiCredentials = !!config.apiKey && !!config.secretKey;
-    if (config.sdkDisabled || !fiCredentials && !options.exporter && !options.spanProcessor && !hostProvider) {
+    // The FI route: the Future AGI collector, or an exporter/processor given to init().
+    const route = fiCredentials || !!options.exporter || !!options.spanProcessor;
+    // Without a route or a provider given to init(), install nothing: no provider,
+    // hooks or globals. An application provider found on the API is not a destination.
+    if (config.sdkDisabled || !route && !options.provider) {
       for (const status of agent.statuses) { status.status = "disabled"; status.reason = config.sdkDisabled ? "OTEL_SDK_DISABLED" : "Missing credentials"; }
       agent.statuses.push({ name: "wire", status: "disabled" }, { name: "http", status: "disabled" }, { name: "outgoing-http", status: "disabled" });
-      if (!config.sdkDisabled) warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is disabled.");
+      if (!config.sdkDisabled) warn("credentials", credentialsWarning(config));
       if (config.debug) console.info(JSON.stringify(report(), null, 2));
       return undefined;
     }
+    const forwarding = config.forwardApplicationSpans;
     const failedCaptures = new WeakSet<object>();
     let processor: SpanProcessor;
     if (options.spanProcessor) {
@@ -131,12 +184,18 @@ export function init(options: Options = {}): TracerProvider | undefined {
       agent.collector = "not_tested (application-owned destination)";
     }
     agent.processor = processor;
+    // AI-only route: an incoming SERVER span passes only when its trace has AI work.
+    const gate = !forwarding && !agent.processorIsObserver && explicitlyEnabled("http", config) ? serverGate() : undefined;
     const onStart = processor.onStart.bind(processor);
-    processor.onStart = (span, parent) => { noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
-    const existing = hostProvider;
-    if (existing) {
-      agent.detach = attach(existing, processor);
-      if (agent.detach || options.provider && !options.exporter && !options.spanProcessor && !fiCredentials) agent.provider = existing;
+    processor.onStart = (span, parent) => { agent.tryForward?.(); gate?.start(span); noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
+    // Where AI spans are created. By default this is the agent's own provider,
+    // never registered globally, whose only processor is the FI route. The
+    // application's provider is used only when init() is given one without an FI
+    // route, or, with the forwarding switch, to send its spans as before.
+    const host = !route ? options.provider : forwarding ? options.provider ?? existingProvider() : undefined;
+    if (host) {
+      agent.detach = attach(host, processor);
+      if (agent.detach || !route) agent.provider = host;
       else warn("provider", "Existing provider cannot accept processors; using an isolated AI provider without replacing it.");
     }
     if (!agent.provider) {
@@ -144,7 +203,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
         setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor],
         sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }) });
       agent.ownsProvider = true;
-      if (!existing) agent.ownsGlobalProvider = trace.setGlobalTracerProvider(agent.provider);
+      if (forwarding && !host) forwardLater(agent, processor);
     }
     if (agent.processorIsObserver) {
       agent.convertedSpanDestination = borrowConvertedSpanDestination(agent.provider, processor);
@@ -160,23 +219,15 @@ export function init(options: Options = {}): TracerProvider | undefined {
     agent.spanDelivery = agent.convertedSpanDestination?.delivery ?? createAutoSpanDelivery(() =>
       !agent.processorIsObserver && hasAutoSpanSink(processor) && (deliveryPipeline === processor ||
         Array.isArray(deliveryPipeline?._spanProcessors) && deliveryPipeline._spanProcessors.includes(processor)));
-    // Avoid duplicate-global diagnostics when the application owns context already.
-    const currentManager = (context as any)._getContextManager?.();
-    if (!currentManager || currentManager.constructor?.name === "NoopContextManager") {
-      const manager = new AsyncLocalStorageContextManager().enable();
-      if (context.setGlobalContextManager(manager)) agent.contextManager = manager;
-      else manager.disable();
-    }
-    const currentPropagator = (propagation as any)._getGlobalPropagator?.();
-    if (!currentPropagator || currentPropagator.constructor?.name === "NoopTextMapPropagator") {
-      const propagator = new CompositePropagator({ propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()] });
-      if (propagation.setGlobalPropagator(propagator)) agent.propagator = propagator;
-    }
-    // Only instrumentors get this facade; the returned/global provider remains
-    // native. Explicit standalone FITracer users on it are unaffected.
-    const instrumentationProvider = FITracer.autoProvider(agent.provider);
+    // No global tracer provider, context manager or propagator is registered.
+    // Only instrumentors get this facade; the returned provider remains native.
+    // Explicit standalone FITracer users on it are unaffected. Its tracers parent
+    // spans under the application's active span, or keep the agent's own parent
+    // links when the application has no context manager.
+    const instrumentationProvider = FITracer.autoProvider(contextBoundProvider(agent.provider));
     const tracer = agent.provider.getTracer("@traceai/auto", VERSION);
-    const wireTracer = new FITracer({ tracer: instrumentationProvider.getTracer("@traceai/auto", VERSION), traceConfig: options.traceConfig });
+    // Wire spans always pass their request's parent context explicitly.
+    const wireTracer = new FITracer({ tracer: FITracer.autoProvider(agent.provider).getTracer("@traceai/auto", VERSION), traceConfig: options.traceConfig });
     const admissionPrivacy = privacyFilter(options.traceConfig, [config.apiKey, config.secretKey].filter((v): v is string => !!v));
     const wirePipeline = (tracer as any)._spanProcessor;
     const wireDestinationReady = () => hasAutoSpanSink(wirePipeline, agent.processorIsObserver ? [processor] : []);
@@ -207,6 +258,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
         // Host SDK limits admit this already-protected FI-authored data. Auto
         // does not rewrite native storage to prioritize FI projection fields.
         const span = wireTracer.startSpan(result.name, { kind: SpanKind.CLIENT, startTime: start, attributes: admitted }, parent);
+        markAgentSpan(span.getContextSpan());
         if (secrets === null) failedCaptures.add(span.getContextSpan());
         span.setStatus({ code: result.ok ? SpanStatusCode.OK : SpanStatusCode.ERROR, message: result.description });
         const recording = span.isRecording();
@@ -224,14 +276,24 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // truncated value when it scrubs a local path or identity. Inspect the native
     // span first so that its detached export copy cannot erase that loss signal.
     const mappedEnd = processor.onEnd.bind(processor);
-    processor.onEnd = span => { rememberSpanValueLimit(span); mappedEnd(span); };
+    processor.onEnd = span => {
+      if (gate && !gate.admit(span)) return;
+      rememberSpanValueLimit(span);
+      if (!agent.processorIsObserver) agent.unsent++;
+      mappedEnd(span);
+    };
     if (config.wireCapture && enabled("wire", config) && typeof globalThis.fetch === "function") {
-      agent.fetch = patchFetch(config.wireMaxBodyBytes, emit, [config.apiKey, config.secretKey].filter((v): v is string => !!v)); agent.statuses.push({ name: "wire", status: "instrumented" });
+      // A captured AI request marks its trace, so its SERVER span may pass the gate.
+      agent.fetch = patchFetch(config.wireMaxBodyBytes, emit, [config.apiKey, config.secretKey].filter((v): v is string => !!v),
+        gate ? parent => gate.note(trace.getSpanContext(parent)?.traceId) : undefined);
+      agent.statuses.push({ name: "wire", status: "instrumented" });
     } else agent.statuses.push({ name: "wire", status: "disabled" });
     agent.active = true;
     agent.beforeExit = () => { void forceFlush(); };
     process.once("beforeExit", agent.beforeExit);
-    agent.removeSignals = chainSigterm(forceFlush);
+    // Hold SIGTERM for a flush only while the FI route has spans to send and the
+    // collector has not failed.
+    agent.removeSignals = chainSigterm(forceFlush, () => !agent.collectorFailed && (agent.unsent > 0 || (agent.fetch?.pending.size ?? 0) > 0));
     if (config.debug) console.info(JSON.stringify(report(), null, 2));
   } catch {
     warn("init", "Auto-instrumentation could not initialize; the application will continue.");
@@ -241,9 +303,6 @@ export function init(options: Options = {}): TracerProvider | undefined {
       failed.spanDelivery?.revoke();
       failed.convertedSpanDestination?.revoke();
       try { failed.detach?.(); } catch { /* Roll back only our processor. */ }
-      try { if (failed.propagator && (propagation as any)._getGlobalPropagator?.() === failed.propagator) propagation.disable(); } catch { /* Leave application globals alone. */ }
-      try { if (failed.ownsGlobalProvider && existingProvider() === failed.provider) trace.disable(); } catch { /* Leave app globals alone. */ }
-      try { if (failed.contextManager && (context as any)._getContextManager?.() === failed.contextManager) context.disable(); } catch { /* Fail open. */ }
       void withDeadline(async () => { await failed.processor?.shutdown(); }).catch(() => {});
       // Configuration is terminal for this process, even after failed startup.
       // Hooks are rolled back, but init never installs a second provider or loader.
@@ -265,6 +324,8 @@ export async function forceFlush(): Promise<void> {
     await withDeadline(async () => {
       await Promise.all([...(state?.fetch?.pending ?? []), state?.spanDelivery?.drain()]);
       await state?.processor?.forceFlush();
+      // A completed flush leaves nothing pending, including spans a full queue dropped.
+      if (state) state.unsent = 0;
     });
   } catch { if (state?.collector !== "failed") warn("flush", "Trace flush failed; the application will continue."); }
 }
