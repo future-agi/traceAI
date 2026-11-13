@@ -30,8 +30,8 @@ func providerAttributeLimit(provider *sdktrace.TracerProvider) int {
 }
 
 // protectedAttributePriority is the spec's closed A7 protected set: exact
-// identity, outcome, provider/model/operation, provenance and degradation keys,
-// plus numeric gen_ai.usage.* counters. It is deliberately not prefix-based: an
+// identity, outcome, provider/model/operation, timing, provenance and
+// degradation keys, plus numeric gen_ai.usage.* counters. It is deliberately not prefix-based: an
 // application attribute such as project_metadata.media.data, a string under
 // gen_ai.usage.* or server.media.* is ordinary metadata, so it keeps the joint
 // capture-time media scrub and the projection's MIME-companion pin (R6A B2).
@@ -48,8 +48,11 @@ func protectedAttributePriority(kv attribute.KeyValue) int {
 		return 2
 	case "gen_ai.provider.name", "gen_ai.operation.name", "gen_ai.request.model", "gen_ai.response.model":
 		return 3
-	case "traceai.wire.endpoint", "server.address", "server.port", "http.request.method":
+	case "gen_ai.response.latency", "gen_ai.response.time_to_first_chunk", "gen_ai.response.time_to_first_text", "gen_ai.response.time_to_first_token", "gen_ai.server.time_to_first_token", "gen_ai.server.time_per_output_token", "gen_ai.server.request.duration":
+		// The TIMING family: exact keys, after usage (4) and before provenance.
 		return 5
+	case "traceai.wire.endpoint", "server.address", "server.port", "http.request.method":
+		return 6
 	}
 	if strings.HasPrefix(key, "gen_ai.usage.") {
 		// "Every known usage counter": a counter is a number. Unknown usage is
