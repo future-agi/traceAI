@@ -1,0 +1,108 @@
+PATH
+  remote: .
+  specs:
+    traceai-auto (0.1.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    anthropic (2.3.0)
+      base64 (~> 0.1)
+      connection_pool (>= 2, < 4)
+      opentelemetry-api (>= 1.2.4, < 2)
+      standardwebhooks (~> 1.0)
+    base64 (0.3.0)
+    bigdecimal (4.1.3)
+    cgi (0.5.2)
+    connection_pool (3.0.2)
+    event_stream_parser (1.0.0)
+    faraday (2.15.1)
+      faraday-net_http (>= 2.0, < 3.6)
+      json
+      logger
+    faraday-multipart (1.2.0)
+      multipart-post (~> 2.0)
+    faraday-net_http (3.5.0)
+      net-http (~> 0.5)
+    faraday-retry (2.4.0)
+      faraday (~> 2.0)
+    google-protobuf (4.36.2-arm64-darwin)
+      bigdecimal
+      rake (~> 13.3)
+    googleapis-common-protos-types (1.24.0)
+      google-protobuf (~> 4.26)
+    http-2 (1.3.0)
+    httpx (1.9.0)
+      http-2 (>= 1.2.0)
+    json (3.1.0)
+    logger (1.7.0)
+    marcel (1.2.1)
+    minitest (5.27.0)
+    multipart-post (2.4.1)
+    net-http (0.10.0)
+      net-protocol (>= 0.3.0)
+      uri (>= 0.11.1)
+    net-protocol (0.4.0)
+      timeout
+    openai (0.75.0)
+      base64
+      cgi
+      connection_pool
+    opentelemetry-api (1.8.0)
+      logger
+    opentelemetry-common (0.23.0)
+      opentelemetry-api (~> 1.0)
+    opentelemetry-exporter-otlp (0.32.0)
+      google-protobuf (>= 3.18)
+      googleapis-common-protos-types (~> 1.3)
+      opentelemetry-api (~> 1.1)
+      opentelemetry-common (~> 0.20)
+      opentelemetry-sdk (~> 1.10)
+      opentelemetry-semantic_conventions
+    opentelemetry-registry (0.4.0)
+      opentelemetry-api (~> 1.1)
+    opentelemetry-sdk (1.10.0)
+      opentelemetry-api (~> 1.1)
+      opentelemetry-common (~> 0.20)
+      opentelemetry-registry (~> 0.2)
+      opentelemetry-semantic_conventions
+    opentelemetry-semantic_conventions (1.36.0)
+      opentelemetry-api (~> 1.0)
+    rake (13.4.2)
+    ruby-openai (8.3.0)
+      event_stream_parser (>= 0.3.0, < 2.0.0)
+      faraday (>= 1)
+      faraday-multipart (>= 1)
+    ruby_llm (2.1.1)
+      base64
+      faraday (>= 1.10.0, != 2.0.0)
+      faraday-multipart (>= 1)
+      faraday-net_http (>= 1)
+      faraday-retry (>= 1)
+      json (< 4)
+      marcel (>= 1.0, < 3)
+      schematist (~> 1.1)
+      zeitwerk (~> 2)
+    schematist (1.1.0)
+    standardwebhooks (1.0.1)
+    timeout (0.6.1)
+    uri (1.1.2)
+    zeitwerk (2.8.3)
+
+PLATFORMS
+  arm64-darwin-23
+
+DEPENDENCIES
+  anthropic
+  httpx
+  minitest (~> 5.0)
+  openai
+  opentelemetry-exporter-otlp (~> 0.30)
+  opentelemetry-sdk (~> 1.0)
+  rake (~> 13.0)
+  ruby-openai
+  ruby_llm
+  traceai-auto!
+
+BUNDLED WITH
+   2.4.10

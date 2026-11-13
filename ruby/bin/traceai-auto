@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+require 'traceai/auto'
+require 'traceai/auto/codec'
+case ARGV.shift
+when 'doctor'
+  puts TraceAI::Auto::Codec.generate(TraceAI::Auto.report(test_export: !ARGV.include?('--no-export')))
+when 'bootstrap'
+  puts TraceAI::Auto::Codec.generate(TraceAI::Auto.report[:integrations])
+  warn 'Wire transports require no dedicated instrumentors. Optional Rack server spans: gem install opentelemetry-instrumentation-rack'
+else
+  warn 'Usage: traceai-auto doctor [--no-export] | bootstrap'
+  exit 2
+end
