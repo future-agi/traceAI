@@ -48,9 +48,10 @@ import and a rebuild. Dedicated library middleware remains opt-in.
 
 Each AI call becomes one CLIENT span with the model, messages, usage and timing,
 after the privacy rules below. Only AI spans leave the process for Future AGI:
-these wire spans and spans from traceAI modules (marked `gen_ai.span.kind` or
-`fi.span.kind`). Your other spans, such as HTTP server, database or application
-spans, are never sent to Future AGI. [`example/main.go`](example/main.go) is a
+these wire spans, and spans from traceAI modules (marked `gen_ai.span.kind` or
+`fi.span.kind`) on an SDK tracer provider the agent attaches to (see below).
+Your other spans, such as HTTP server, database or application spans, are never
+sent to Future AGI. [`example/main.go`](example/main.go) is a
 complete program; `go run github.com/future-agi/traceAI/go/auto/cmd/traceai-doctor`
 prints the resolved configuration with keys masked.
 
@@ -58,9 +59,25 @@ prints the resolved configuration with keys masked.
 tracer provider. It starts on the first AI call (or an explicit `auto.Init`,
 whichever comes first) and then attaches to your global SDK provider if you
 have installed one, so its wire spans join your traces; otherwise it keeps a
-private provider for them. A tracer you cache at package level keeps working.
-To use options such as `auto.WithTracerProvider(tp)`, call
+private provider that only its wire spans use. A tracer you cache at package
+level keeps working. To use options such as `auto.WithTracerProvider(tp)`, call
 `auto.Init(ctx, options...)` before the first AI call.
+
+**traceAI module spans need an SDK tracer provider.** The modules (for example
+`traceaieino` or `traceailangchaingo`) use the global tracer provider unless you
+pass them one, and their spans reach Future AGI only through an SDK tracer
+provider the agent attaches to. With only the import and no provider of your
+own, module spans go nowhere. Install one as the global provider before the
+first AI call, or pass it to `auto.Init` with `auto.WithTracerProvider(tp)` (and
+to each module's own `WithTracerProvider` option):
+
+```go
+tp := sdktrace.NewTracerProvider() // sdktrace "go.opentelemetry.io/otel/sdk/trace"
+otel.SetTracerProvider(tp)         // before the first AI call
+```
+
+Module spans that end before the agent activates are not forwarded, so call
+`auto.Init` at startup if a step can finish before the first AI call.
 
 **`http.DefaultTransport` changes type.** With FI keys set and wire capture on,
 package initialization replaces `http.DefaultTransport` with the agent's wrapper,
@@ -364,8 +381,9 @@ the root and all flattened/indexed descendants (for example,
 without matching similarly named neighboring families.
 Content is captured by default: use hide switches when sending sensitive data.
 One export-time sanitizer applies these switches and credential/media scrubbing
-to **every span the agent forwards**: wire spans and traceAI module spans to the
-Future AGI exporter, and every span handed to a custom span processor. It
+to **every span the agent forwards**: wire spans and traceAI module spans (on an
+SDK tracer provider the agent attaches to) to the Future AGI exporter, and every
+span handed to a custom span processor. It
 covers all attribute types, status descriptions, events, links, resources,
 scope metadata and tracestate. It sanitizes immutable snapshots;
 independent third-party exporters still receive their original data. Nonfinite
@@ -431,7 +449,12 @@ through intermediate native SDK spans tracked by the agent's processor.
 
 Go cannot monkey-patch libraries. `Report()` labels dedicated instrumentations
 **manual**, with these exact one-line integrations (install/import each
-corresponding `github.com/future-agi/traceAI/go/<module>` separately):
+corresponding `github.com/future-agi/traceAI/go/<module>` separately). Their
+spans reach Future AGI only through an SDK tracer provider the agent attaches
+to: install one as the global provider before the first AI call, or pass it to
+`auto.Init` with `auto.WithTracerProvider(tp)` and to the module's own
+`WithTracerProvider` option (see the quick start). Without one, module spans
+go nowhere.
 
 | Module | One-line integration |
 | --- | --- |
@@ -535,9 +558,10 @@ nothing here claims runtime parity outside them.
   passed to a later `Init` are ignored, a global provider installed after that
   request does not receive the agent's processor, and credentials seen in
   earlier non-AI requests are not in the known-secret registry (credential
-  names and shapes are still redacted). traceAI module spans started before
-  activation are still forwarded when they end, but cannot suppress a wire span
-  through intermediate native spans.
+  names and shapes are still redacted). traceAI module spans on an SDK provider
+  the agent attaches to that started before activation are still forwarded when
+  they end, but cannot suppress a wire span through intermediate native spans;
+  those that end before activation are not forwarded.
 - **Compressed streams and first-text:** when the agent sees encoded
   bytes (the application set `Accept-Encoding` itself, so `net/http` did not
   decompress), chunk arrival offsets are in compressed space. Output and usage
