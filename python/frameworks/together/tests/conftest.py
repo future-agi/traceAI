@@ -8,12 +8,19 @@ def no_network(monkeypatch):
     """These unit/serialization contracts must never contact a provider."""
     import socket
 
-    def blocked(*args, **kwargs):
-        raise AssertionError("Network calls are forbidden in provider unit tests")
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
 
-    monkeypatch.setattr(socket.socket, "connect", blocked)
-    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
-    monkeypatch.setattr(socket, "create_connection", blocked)
+    def loopback_only(original):
+        def connect(sock, address):
+            if not isinstance(address, tuple) or address[0] not in {"127.0.0.1", "::1"}:
+                raise AssertionError("External network calls are forbidden in provider tests")
+            return original(sock, address)
+        return connect
+
+    monkeypatch.setattr(socket.socket, "connect", loopback_only(original_connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", loopback_only(original_connect_ex))
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost,::1")
 
 
 @pytest.fixture

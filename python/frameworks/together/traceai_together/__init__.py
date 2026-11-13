@@ -1,14 +1,7 @@
 import logging
 from importlib import import_module
+from importlib import metadata
 from typing import Any, Collection
-
-logger = logging.getLogger(__name__)
-
-try:
-    from fi.evals import Protect
-except ImportError:
-    logger.debug("ai-evaluation is not installed")
-    Protect = None
 
 from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
@@ -29,196 +22,93 @@ from traceai_together.version import __version__
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+try:
+    from fi.evals import Protect
+except ImportError:
+    Protect = None
+
 _instruments = ("together >= 1.0.0",)
+
+# Together 2+ uses Stainless resource names; 1.x uses the legacy names.
+# Resolve the resource classes, not instance attributes on Together/AsyncTogether.
+_RESOURCES = (
+    ("together.resources.chat.completions", "CompletionsResource", "ChatCompletions", _ChatCompletionsWrapper),
+    ("together.resources.chat.completions", "AsyncCompletionsResource", "AsyncChatCompletions", _AsyncChatCompletionsWrapper),
+    ("together.resources.completions", "CompletionsResource", "Completions", _CompletionsWrapper),
+    ("together.resources.completions", "AsyncCompletionsResource", "AsyncCompletions", _AsyncCompletionsWrapper),
+    ("together.resources.embeddings", "EmbeddingsResource", "Embeddings", _EmbeddingsWrapper),
+    ("together.resources.embeddings", "AsyncEmbeddingsResource", "AsyncEmbeddings", _AsyncEmbeddingsWrapper),
+)
+
+
+def _together_version() -> str:
+    try:
+        return metadata.version("together")
+    except metadata.PackageNotFoundError:
+        return "unknown"
 
 
 class TogetherInstrumentor(BaseInstrumentor):
-    """OpenTelemetry instrumentor for Together AI."""
-
-    __slots__ = (
-        "_original_chat_completions_create",
-        "_original_async_chat_completions_create",
-        "_original_completions_create",
-        "_original_async_completions_create",
-        "_original_embeddings_create",
-        "_original_async_embeddings_create",
-        "_original_protect",
-        "_tracer",
-    )
+    """OpenTelemetry instrumentor for Together AI 1.x, 2.x and 3.x clients."""
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
+    def instrument(self, **kwargs: Any) -> Any:
+        result = super().instrument(**kwargs)
+        # BaseInstrumentor marks success whenever _instrument returns.
+        if self._is_instrumented_by_opentelemetry and not self._originals:
+            self._is_instrumented_by_opentelemetry = False
+        return result
+
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-        if not (config := kwargs.get("config")):
-            config = TraceConfig()
-        else:
-            assert isinstance(config, TraceConfig)
-
+        tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
+        config = kwargs.get("config") or TraceConfig()
+        if not isinstance(config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
         self._tracer = FITracer(
-            trace_api.get_tracer(__name__, __version__, tracer_provider),
-            config=config,
+            trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
         )
+        self._originals = []
 
-        # Import together client
-        together_module = import_module("together")
-
-        # Wrap Together client methods
-        # Together uses a structure like:
-        # - together.Together (sync client)
-        # - together.AsyncTogether (async client)
-        # Each has: chat.completions.create, completions.create, embeddings.create
-
-        # Sync client - chat.completions.create
-        try:
-            if hasattr(together_module, "Together"):
-                together_client = together_module.Together
-
-                # The Together client uses nested resources
-                # We need to wrap the create methods on the resource classes
-
-                # Wrap chat.completions.create
-                if hasattr(together_client, "chat"):
-                    # Together SDK uses resources.chat.ChatCompletions
-                    try:
-                        from together.resources.chat import ChatCompletions
-                        self._original_chat_completions_create = ChatCompletions.create
-                        wrap_function_wrapper(
-                            module="together.resources.chat",
-                            name="ChatCompletions.create",
-                            wrapper=_ChatCompletionsWrapper(tracer=self._tracer),
-                        )
-                    except (ImportError, AttributeError) as e:
-                        logger.debug(f"Could not wrap chat.completions.create: {e}")
-
-                # Wrap completions.create
-                try:
-                    from together.resources.completions import Completions
-                    self._original_completions_create = Completions.create
-                    wrap_function_wrapper(
-                        module="together.resources.completions",
-                        name="Completions.create",
-                        wrapper=_CompletionsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap completions.create: {e}")
-
-                # Wrap embeddings.create
-                try:
-                    from together.resources.embeddings import Embeddings
-                    self._original_embeddings_create = Embeddings.create
-                    wrap_function_wrapper(
-                        module="together.resources.embeddings",
-                        name="Embeddings.create",
-                        wrapper=_EmbeddingsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap embeddings.create: {e}")
-
-        except Exception as e:
-            logger.exception(f"Error wrapping sync Together client: {e}")
-
-        # Async client
-        try:
-            if hasattr(together_module, "AsyncTogether"):
-                # Wrap async chat.completions.create
-                try:
-                    from together.resources.chat import AsyncChatCompletions
-                    self._original_async_chat_completions_create = AsyncChatCompletions.create
-                    wrap_function_wrapper(
-                        module="together.resources.chat",
-                        name="AsyncChatCompletions.create",
-                        wrapper=_AsyncChatCompletionsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap async chat.completions.create: {e}")
-
-                # Wrap async completions.create
-                try:
-                    from together.resources.completions import AsyncCompletions
-                    self._original_async_completions_create = AsyncCompletions.create
-                    wrap_function_wrapper(
-                        module="together.resources.completions",
-                        name="AsyncCompletions.create",
-                        wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap async completions.create: {e}")
-
-                # Wrap async embeddings.create
-                try:
-                    from together.resources.embeddings import AsyncEmbeddings
-                    self._original_async_embeddings_create = AsyncEmbeddings.create
-                    wrap_function_wrapper(
-                        module="together.resources.embeddings",
-                        name="AsyncEmbeddings.create",
-                        wrapper=_AsyncEmbeddingsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap async embeddings.create: {e}")
-
-        except Exception as e:
-            logger.exception(f"Error wrapping async Together client: {e}")
-
-        # Wrap Protect if available
-        if Protect is not None:
-            self._original_protect = Protect.protect
-            wrap_function_wrapper(
-                module="fi.evals",
-                name="Protect.protect",
-                wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+        # Resolve every surface before patching. Missing surfaces are warnings,
+        # and zero surfaces leave the instrumentor inactive (see instrument()).
+        targets = []
+        missing = []
+        for module_name, current_name, legacy_name, wrapper in _RESOURCES:
+            try:
+                module = import_module(module_name)
+            except ImportError:
+                module = None
+            owner = getattr(module, current_name, None) or getattr(module, legacy_name, None)
+            if owner is None or not callable(vars(owner).get("create")):
+                missing.append(f"{module_name}.{current_name}/{legacy_name}.create")
+                continue
+            targets.append((module_name, owner, "create", wrapper(tracer=self._tracer)))
+        if missing:
+            logger.warning(
+                "Together SDK %s is not fully supported; these calls will not be traced: %s",
+                _together_version(),
+                ", ".join(missing),
             )
-        else:
-            self._original_protect = None
+        if not targets:
+            logger.error("Together instrumentation is not enabled because no supported SDK resources were found")
+            return
+        if Protect is not None:
+            targets.append(("fi.evals", Protect, "protect", GuardrailProtectWrapper(tracer=self._tracer)))
+
+        try:
+            for module_name, owner, name, wrapper in targets:
+                original = getattr(owner, name)
+                wrap_function_wrapper(module_name, f"{owner.__name__}.{name}", wrapper)
+                self._originals.append((owner, name, original, vars(owner)[name]))
+        except Exception:
+            self._uninstrument()
+            raise
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        """Remove instrumentation from Together AI client."""
-        try:
-            # Restore sync methods
-            try:
-                from together.resources.chat import ChatCompletions
-                if hasattr(self, "_original_chat_completions_create"):
-                    ChatCompletions.create = self._original_chat_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.completions import Completions
-                if hasattr(self, "_original_completions_create"):
-                    Completions.create = self._original_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.embeddings import Embeddings
-                if hasattr(self, "_original_embeddings_create"):
-                    Embeddings.create = self._original_embeddings_create
-            except (ImportError, AttributeError):
-                pass
-
-            # Restore async methods
-            try:
-                from together.resources.chat import AsyncChatCompletions
-                if hasattr(self, "_original_async_chat_completions_create"):
-                    AsyncChatCompletions.create = self._original_async_chat_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.completions import AsyncCompletions
-                if hasattr(self, "_original_async_completions_create"):
-                    AsyncCompletions.create = self._original_async_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.embeddings import AsyncEmbeddings
-                if hasattr(self, "_original_async_embeddings_create"):
-                    AsyncEmbeddings.create = self._original_async_embeddings_create
-            except (ImportError, AttributeError):
-                pass
-
-        except Exception as e:
-            logger.exception(f"Error uninstrumenting Together client: {e}")
+        """Restore only methods still owned by this instrumentor, including Protect."""
+        for owner, name, original, installed in reversed(self._originals):
+            if vars(owner).get(name) is installed:
+                setattr(owner, name, original)
+        self._originals.clear()
