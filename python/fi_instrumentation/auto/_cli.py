@@ -42,12 +42,33 @@ def _run(argv: Sequence[str]) -> int:
     program = shutil.which(argv[0]) or argv[0]
     try:
         if _WINDOWS:
-            return subprocess.call([program, *argv[1:]], env=env)
+            return _wait_for([program, *argv[1:]], env)
         os.execve(program, list(argv), env)
     except OSError as error:
         print(f"fi-instrument: cannot run {argv[0]}: {error}", file=sys.stderr)
         return 127
     return 0  # pragma: no cover - execve does not return
+
+
+def _wait_for(command: List[str], env: dict) -> int:
+    """Run the program as a child and return its exit code (Windows).
+
+    Ctrl+C in the console reaches the program as well. fi-instrument ignores it while it waits,
+    so it neither stops nor kills the program: the program runs its own shutdown and the agent's
+    exit flush, and its exit code is returned.
+    """
+    import signal
+
+    child = subprocess.Popen(command, env=env)
+    try:
+        previous, ignoring = signal.signal(signal.SIGINT, signal.SIG_IGN), True
+    except ValueError:  # not the main thread: leave signal handling as it is
+        previous, ignoring = None, False
+    try:
+        return child.wait()
+    finally:
+        if ignoring:
+            signal.signal(signal.SIGINT, signal.SIG_DFL if previous is None else previous)
 
 
 def check_collector(settings: AutoConfig, timeout: float = 5.0) -> Tuple[bool, str]:
