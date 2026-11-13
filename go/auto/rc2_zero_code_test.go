@@ -13,11 +13,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// rc2 (2026-10-31) zero-code path: the agent activates from package
-// initialization with its own provider, whose attribute count, value-length,
-// per-event and per-link limits come from the standard OTEL_* variables. An
-// evicted or truncated MIME/type hint never lets its payload reach OTLP, on
-// span attributes, events and links; application bytes are unchanged.
+// Zero-code path with the application's own SDK provider, whose attribute
+// count, value-length, per-event and per-link limits come from the standard
+// OTEL_* variables. The agent activates on the first AI call and attaches to
+// that provider. An evicted or truncated MIME/type hint never lets its payload
+// reach OTLP, on span attributes, events and links; application bytes are
+// unchanged.
 func TestRC2ZeroCodeLimitsE2E(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "rc2limits")
 	build := hostCommand("go", "build", "-o", bin, "./testdata/rc2limits")

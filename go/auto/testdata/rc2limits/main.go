@@ -1,7 +1,9 @@
-// A zero-code application: the agent activates from package initialization
-// (environment configuration only) and owns the global provider. The program
-// uses only net/http and the OpenTelemetry API, plus the documented
-// auto.Shutdown flush. Its span limits come from the standard OTEL_* variables.
+// A zero-code application with its own SDK provider, whose span limits come
+// from the standard OTEL_* variables. The agent is configured by the
+// environment only and activates on the first AI call, on that provider. The
+// application's spans carry gen_ai.span.kind, as traceAI module spans do, so
+// they reach Future AGI too. The program uses net/http, the OpenTelemetry API
+// and SDK, and the documented auto.Shutdown flush.
 package main
 
 import (
@@ -16,8 +18,12 @@ import (
 	"github.com/future-agi/traceAI/go/auto"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// module marks a span the way traceAI modules do.
+var module = trace.WithAttributes(attribute.String("gen_ai.span.kind", "CHAIN"))
 
 const pcm = "AQIDBAUGBwgJCgsMDQ4PEBESExQ=" // Headerless PCM: identified only by MIME.
 const short = "AQI"                        // Short encoded audio: no length or magic to go on.
@@ -36,6 +42,7 @@ func arbitrary(limit int) []attribute.KeyValue {
 }
 
 func main() {
+	otel.SetTracerProvider(sdktrace.NewTracerProvider())
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -57,8 +64,10 @@ func main() {
 	var attrs, event []attribute.KeyValue
 	switch os.Args[2] {
 	case "count": // OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT=32: the hint is evicted.
+		// gen_ai.span.kind takes the first of the 32 slots, so 29 messages keep
+		// app.transcript.parts.83.data as the last admitted attribute.
 		attrs = append(attrs, attribute.String("app.note", "message 3")) // Not media-capable: survives.
-		for i := 0; i < 30; i++ {
+		for i := 0; i < 29; i++ {
 			attrs = append(attrs, attribute.String(fmt.Sprintf("gen_ai.input.messages.%d.content", i), fmt.Sprintf("message %d", i)))
 		}
 		attrs = append(attrs, attribute.String("app.transcript.parts.83.data", short), attribute.String("app.transcript.parts.83.mime_type", "audio/L16"), attribute.String("gen_ai.input.messages.40.parts.0.data", pcm), attribute.String("gen_ai.input.messages.40.parts.0.mime_type", "audio/L16"), attribute.String("input.transcript.parts.0.data", pcm), attribute.String("input.transcript.parts.0.mime_type", "audio/L16"))
@@ -82,9 +91,9 @@ func main() {
 		attrs = append(attrs, arbitrary(8)...)
 		event = attrs
 	}
-	_, target := tracer.Start(context.Background(), "rc2-link-target")
+	_, target := tracer.Start(context.Background(), "rc2-link-target", module)
 	target.End()
-	_, span := tracer.Start(context.Background(), "rc2-zero-code", trace.WithLinks(trace.Link{SpanContext: target.SpanContext(), Attributes: event}))
+	_, span := tracer.Start(context.Background(), "rc2-zero-code", module, trace.WithLinks(trace.Link{SpanContext: target.SpanContext(), Attributes: event}))
 	span.SetAttributes(attrs...)
 	span.AddEvent("rc2-event", trace.WithAttributes(event...))
 	span.End()

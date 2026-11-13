@@ -12,30 +12,37 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
-// This runs after auto's init but before main: the startup pattern that used to
-// leave the application's cached tracer attached to a retired SDK provider.
+// These run after the agent's package initialization but before main: the
+// usual place for an application to cache its tracer.
 var cached = otel.Tracer("cached-during-package-init")
 var initialProvider = otel.GetTracerProvider()
 
+func names(recorder *tracetest.SpanRecorder) []string {
+	out := []string{}
+	for _, span := range recorder.Ended() {
+		out = append(out, span.Name())
+	}
+	return out
+}
+
 func main() {
-	recorder := tracetest.NewSpanRecorder()
-	// Observe cached tracers through the initial provider. Init options no
-	// longer replace the blank-import processor or its configuration.
-	initialProvider.(*sdktrace.TracerProvider).RegisterSpanProcessor(recorder)
-	stop, err := auto.Init(context.Background(), auto.WithProject("explicit-project", "observe"), auto.WithSpanProcessor(recorder))
+	// The application installs its own provider in main, then initializes the
+	// agent explicitly before its first AI call, so the options apply.
+	application := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(application))
+	otel.SetTracerProvider(provider)
+	agent := tracetest.NewSpanRecorder()
+	stop, err := auto.Init(context.Background(), auto.WithProject("explicit-project", "observe"), auto.WithSpanProcessor(agent))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	project := auto.Report().Config.ProjectName
 	_, s := cached.Start(context.Background(), "cached-application-span")
-	recording := s.IsRecording()
 	s.End()
 	_, s = otel.Tracer("fresh").Start(context.Background(), "fresh-application-span")
 	s.End()
-	var names []string
-	for _, span := range recorder.Ended() {
-		names = append(names, span.Name())
-	}
 	_ = stop(context.Background())
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"provider_replaced": initialProvider != otel.GetTracerProvider(), "cached_recording": recording, "names": names})
+	_, installed := initialProvider.(*sdktrace.TracerProvider)
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"agent_installed_global": installed, "application": names(application), "agent": names(agent), "project": project})
 }
