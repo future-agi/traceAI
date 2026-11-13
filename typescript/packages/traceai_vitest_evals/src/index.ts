@@ -108,10 +108,12 @@ function mappedTrace(trace: SourceTrace, resource: ReadableSpan['resource'], roo
     const context: SpanContext = { traceId, spanId, traceFlags: 1 };
     const parentId = parents[index];
     const sourceName = span.name.slice(0, 256);
-    const renamed = index === rootIndex && sourceName !== rootName;
+    // A test with no name keeps the harness's own root name.
+    const named = index === rootIndex && rootName !== '';
+    const renamed = named && sourceName !== rootName;
     const { start, end, duration } = times(span);
     return {
-      name: index === rootIndex ? rootName : sourceName, kind: SpanKind.INTERNAL,
+      name: named ? rootName : sourceName, kind: SpanKind.INTERNAL,
       spanContext: () => context,
       ...(parentId ? { parentSpanContext: { traceId, spanId: parentId, traceFlags: 1 } } : {}),
       startTime: start, endTime: end, duration, ended: true,
@@ -150,7 +152,7 @@ export class VitestEvalsReporter {
       for (const [index, trace] of traces.entries()) {
         // Several traces from one test are numbered so their roots stay distinguishable.
         const suffix = traces.length > 1 ? ` (${index + 1}/${traces.length})` : '';
-        const rootName = testName.slice(0, 256 - suffix.length) + suffix;
+        const rootName = testName ? testName.slice(0, 256 - suffix.length) + suffix : '';
         spans.push(...mappedTrace(trace, this.resource, rootName, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined));
       }
     }
