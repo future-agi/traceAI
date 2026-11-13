@@ -89,7 +89,12 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("instructor", ("instructor",), "traceAI-instructor", "traceai_instructor", "InstructorInstrumentor", category="framework"),
     Integration("semantic_kernel", ("semantic_kernel",), "traceAI-semantic-kernel", "traceai_semantic_kernel", "semantic_kernel", kind=SETUP, category="framework",
                 scopes=("semantic_kernel",)),
-    Integration("strands", ("strands",), "traceai-strands", "traceai_strands", "strands", kind=SETUP, category="framework"),
+    # Its privacy and attribute conversion happen in an exporter wrapper the agent does not install.
+    Integration("strands", ("strands",), "traceai-strands", "traceai_strands", kind=MANUAL, category="framework",
+                note="Install traceai-strands and, before creating an Agent, call register(set_global_tracer_provider=True, "
+                     "span_exporter=StrandsSpanExporter(HTTPSpanExporter(), capture_content=True)) as its README shows. "
+                     "To trace other libraries too, call fi_instrumentation.init() after it instead of starting with "
+                     "fi-instrument."),
     Integration("agno", ("agno",), "traceai-agno", "traceai_agno", "agno", kind=SETUP, category="framework"),
     Integration("beeai", ("beeai_framework",), "traceai-beeai", "traceai_beeai", "beeai", kind=SETUP, category="framework"),
     Integration("agent_framework", ("agent_framework",), "traceAI-agent-framework", "traceai_agent_framework", "agent_framework", kind=SETUP, category="framework",
@@ -186,17 +191,6 @@ def _semantic_kernel(module: Any, provider: Any, config: Any) -> str:
     return _SetupResult("diagnostics on, mapping processor installed", instrumentor.uninstrument)
 
 
-def _strands(module: Any, provider: Any, config: Any) -> str:
-    # Strands' singleton __init__ resets its provider/method handles. Do not
-    # reconstruct an application's live singleton merely to inspect its state.
-    instrumentor = getattr(module.StrandsInstrumentor, "_instance", None) or module.StrandsInstrumentor()
-    if (getattr(instrumentor, "is_instrumented", False)
-            or getattr(instrumentor, "is_instrumented_by_opentelemetry", False)):
-        return "already instrumented"
-    instrumentor.instrument(tracer_provider=provider)
-    return _SetupResult("Strands telemetry routed to traceAI", instrumentor.uninstrument)
-
-
 def _agno(module: Any, provider: Any, config: Any) -> str:
     handle = getattr(getattr(module, "AgnoInstrumentorWrapper", None), "_instance", None)
     if handle is not None and handle.is_instrumented:
@@ -261,7 +255,6 @@ def _exporter_mapping(module: Any, provider: Any, config: Any) -> str:
 
 SETUPS: Dict[str, Callable[[Any, Any, Any], str]] = {
     "semantic_kernel": _semantic_kernel,
-    "strands": _strands,
     "agno": _agno,
     "beeai": _beeai,
     "agent_framework": _agent_framework,

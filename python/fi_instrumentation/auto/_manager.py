@@ -508,6 +508,27 @@ class _ResourceOverlayProcessor(SpanProcessor):
         self._closed = False
         self._merged: Tuple[Any, Any] = (None, None)
 
+    @property
+    def span_exporter(self) -> Any:
+        """The Future AGI exporter behind this route.
+
+        Integrations look for the exporters already on a provider (``span_exporter``, or a batch
+        processor's ``_batch_processor._exporter``) to avoid adding a second one for the same
+        destination, and some replace one with a mapping exporter.
+        """
+        exporter = getattr(self._delegate, "span_exporter", None)
+        if exporter is None:
+            exporter = getattr(getattr(self._delegate, "_batch_processor", None), "_exporter", None)
+        return exporter
+
+    @span_exporter.setter
+    def span_exporter(self, exporter: Any) -> None:
+        batch = getattr(self._delegate, "_batch_processor", None)
+        if batch is not None and hasattr(batch, "_exporter"):
+            batch._exporter = exporter
+        else:
+            self._delegate.span_exporter = exporter
+
     def admit(self, integration: Integration) -> None:
         """Carry the spans of an integration the agent enabled: its scopes, or its request roots."""
         scopes = tuple(scope.lower() for scope in integration.scopes)
