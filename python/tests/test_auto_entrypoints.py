@@ -127,6 +127,55 @@ def test_pth_starts_the_agent_only_when_asked(monkeypatch, value, starts):
     assert calls == (["start"] if starts else [])
 
 
+_WARNED = "FI_AUTO_INSTRUMENT_WARNED"
+
+
+def test_pth_prints_one_line_when_the_package_cannot_be_imported(monkeypatch, capsys):
+    monkeypatch.setenv("FI_AUTO_INSTRUMENT", "true")
+    # The marker that keeps child processes quiet starts unset and is removed after the test.
+    monkeypatch.setenv(_WARNED, "")
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.auto._bootstrap", None)
+    exec(_pth_line(), {})
+    exec(_pth_line(), {})
+    err = capsys.readouterr().err
+    assert err.count("traceAI: ") == 1
+    assert "cannot import fi_instrumentation" in err
+
+
+def test_pth_leaves_the_start_to_opentelemetry_instrument(monkeypatch):
+    # opentelemetry-instrument puts its sitecustomize directory on PYTHONPATH. That sitecustomize
+    # configures the application's provider and then loads the futureagi entry point, which starts
+    # the agent on that provider; starting earlier from the .pth would take the global provider first.
+    calls = []
+    monkeypatch.setattr(_bootstrap, "start", lambda: calls.append("start"))
+    monkeypatch.setenv("FI_AUTO_INSTRUMENT", "true")
+    otel_start = os.path.join("site-packages", "opentelemetry", "instrumentation", "auto_instrumentation")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([otel_start, "app"]))
+    exec(_pth_line(), {})
+    assert calls == []
+
+
+def test_fi_instrument_says_once_when_the_program_cannot_load_the_agent(tmp_path):
+    # fi-instrument from one environment launching a Python from another, without the package.
+    elsewhere = tmp_path / "elsewhere" / "fi_instrumentation"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "__init__.py").write_text('raise ImportError("not installed for this Python")\n')
+    env = _child_env()
+    env.update({"FI_AUTO_INSTRUMENT": "true",
+                "PYTHONPATH": os.pathsep.join([str(_cli_sitecustomize_dir()), str(elsewhere.parent)])})
+    # The program starts a child Python, which inherits the environment.
+    result = _run_child(tmp_path, '''
+        import subprocess, sys
+        sys.exit(subprocess.run([sys.executable, "-c", "pass"]).returncode)
+    ''', env)
+    assert result.stderr.count("traceAI: ") == 1, result.stderr
+    assert "cannot import fi_instrumentation" in result.stderr
+
+
+def _cli_sitecustomize_dir():
+    return PYTHON_ROOT / "fi_instrumentation" / "auto" / "_sitecustomize"
+
+
 def test_core_import_stays_light_and_the_pth_is_inert_by_default(tmp_path):
     script = tmp_path / "check.py"
     script.write_text(textwrap.dedent('''
@@ -159,9 +208,21 @@ def test_lazy_package_exports():
 
     assert fi_instrumentation.init is _manager.init
     assert fi_instrumentation.auto_instrument is _manager.auto_instrument
-    assert "init" in fi_instrumentation.__all__
+    # Not star-exported, so `from fi_instrumentation import *` neither loads the agent nor binds init.
+    assert "init" not in fi_instrumentation.__all__
+    assert "auto_instrument" not in fi_instrumentation.__all__
     with pytest.raises(AttributeError):
         fi_instrumentation.not_a_thing  # noqa: B018
+
+
+def test_star_import_does_not_load_the_agent(tmp_path):
+    result = _run_child(tmp_path, '''
+        import sys
+        from fi_instrumentation import *  # noqa: F403
+
+        print("fi_instrumentation.auto" in sys.modules, "init" in dir())
+    ''')
+    assert result.stdout.split() == ["False", "False"]
 
 
 class _Recorder:

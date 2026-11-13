@@ -303,6 +303,15 @@ def test_init_without_credentials_is_a_quiet_no_op(fresh_state, caplog):
     assert "traceai_fakeailib" not in sys.modules
 
 
+def test_an_incomplete_key_pair_warns_once(fresh_state, monkeypatch, caplog):
+    monkeypatch.setenv("FI_API_KEY", "fi-api-PLACEHOLDER")
+    with caplog.at_level(logging.WARNING):
+        assert _manager.init() is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1, warnings
+    assert "missing FI_SECRET_KEY" in warnings[0]
+
+
 def test_init_respects_otel_sdk_disabled(fresh_state, monkeypatch):
     monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
     assert _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER") is None

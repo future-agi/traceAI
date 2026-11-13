@@ -279,6 +279,53 @@ def test_cli_run_needs_a_program(capsys):
     assert "give the program to run" in capsys.readouterr().err
 
 
+def test_doctor_never_shows_any_part_of_the_secret_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    settings = resolve(environ={"FI_API_KEY": "fi-api-PLACEHOLDER", "FI_SECRET_KEY": "fi-secret-PLACEHOLDER"})
+    masked = settings.masked()
+    assert masked["secret_key"] == {"value": "set", "source": "env FI_SECRET_KEY"}
+    assert masked["api_key"]["value"] == "fi-a…"
+    assert "fi-s" not in json.dumps(masked, default=str)
+
+
+def test_fi_instrument_waits_for_the_program_on_windows(monkeypatch):
+    # Windows has no exec: os.execve starts a new process and ends this one, losing the exit code.
+    calls = []
+
+    def execve(program, argv, env):
+        calls.append("execve")
+        raise OSError("exec is not used here")
+
+    def call(argv, env=None):
+        calls.append((list(argv[1:]), env.get("FI_AUTO_INSTRUMENT")))
+        return 3
+
+    monkeypatch.setattr(_cli, "_WINDOWS", True, raising=False)
+    monkeypatch.setattr(_cli.os, "execve", execve)
+    monkeypatch.setattr(_cli.subprocess, "call", call)
+    assert _cli.main(["python", "app.py"]) == 3
+    assert calls == [(["app.py"], "true")]
+
+
+def test_bootstrap_pins_web_server_packages_to_the_installed_instrumentation(tmp_path, monkeypatch):
+    from importlib.metadata import version
+
+    from fi_instrumentation.auto import _registry
+    from fi_instrumentation.auto._registry import Integration
+
+    (tmp_path / "fakeweblib").mkdir()
+    (tmp_path / "fakeweblib" / "__init__.py").write_text("")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    web = Integration("fakeweb", ("fakeweblib",), "opentelemetry-instrumentation-fakeweb",
+                      "opentelemetry.instrumentation.fakeweb", "FakeWebInstrumentor", category="web")
+    monkeypatch.setattr(_registry, "ALL", (web,))
+    # As opentelemetry-bootstrap does: the same release as opentelemetry-instrumentation, so
+    # installing it cannot move the instrumentation or SDK packages the app already pins.
+    expected = f"opentelemetry-instrumentation-fakeweb=={version('opentelemetry-instrumentation')}"
+    assert _cli._missing_packages(resolve(environ={}), include_all=True) == [expected]
+
+
 def _child_env(stand_ins: Path, server: MockServer, keys: bool = True, **extra: str) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("FI_", "OTEL_"))}
     env.update({"FI_BASE_URL": server.url, "FI_PROJECT_NAME": "zero-code-app",
