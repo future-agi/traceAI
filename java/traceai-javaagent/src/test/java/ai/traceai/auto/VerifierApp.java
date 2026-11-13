@@ -19,7 +19,9 @@ public final class VerifierApp {
         var memory = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(memory)).build()) {
             io.opentelemetry.sdk.OpenTelemetrySdk.builder().setTracerProvider(provider).buildAndRegisterGlobal();
-            var tracer = new ai.traceai.FITracer(provider.get("existing-wrapper"));
+            // The application's own wrapper reads FI_HIDE_* too, so keep its inputs and outputs explicitly:
+            // the check is that the agent hides them in its export while the application's span keeps them.
+            var tracer = new ai.traceai.FITracer(provider.get("existing-wrapper"), ai.traceai.TraceConfig.builder().hideInputs(false).hideOutputs(false).build());
             var span = tracer.startSpan("existing-wrapper", ai.traceai.FISpanKind.LLM);
             var input = new LinkedHashMap<String, Object>(); input.put("password", "WRAPPER_PRIVATE_PASSWORD"); input.put("prompt", "x".repeat(40000));
             tracer.setRawInput(span, input); tracer.setRawOutput(span, input);
