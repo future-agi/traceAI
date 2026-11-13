@@ -8,7 +8,9 @@ import io.opentelemetry.sdk.trace.ReadableSpan;
 import java.lang.reflect.Method;
 import java.util.*;
 
-/** Reads application OTel context across the shaded agent boundary, without replacing its SDK. */
+/** Reads the application's active OTel context across the shaded agent boundary, read-only.
+ * A call is not traced again when the active span is a library span (LLM, EMBEDDING, RERANKER or
+ * GUARDRAIL); only the active span is read, never its ancestors. */
 final class OtelBridge {
     record Snapshot(Context parent, Map<String, String> attributes, boolean suppressed, long startEpochNanos, long startNanos, Integer attributeLimit, io.opentelemetry.sdk.resources.Resource resource) {
         Snapshot(Context parent, Map<String, String> attributes, boolean suppressed, long startEpochNanos, long startNanos) {
@@ -56,11 +58,7 @@ final class OtelBridge {
             }
             Object sc = spanApi.getMethod("getSpanContext").invoke(external);
             Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
-            if ((boolean)scApi.getMethod("isValid").invoke(sc)) {
-                SpanContext externalSpan = ApplicationOtel.context(sc, loader);
-                suppressed |= CoveredSpans.covered(externalSpan.getSpanId());
-                parent = Context.root().with(Span.wrap(externalSpan));
-            }
+            if ((boolean)scApi.getMethod("isValid").invoke(sc)) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
             try {
                 Class<?> contextAttrs = Class.forName(String.join(".", "ai", "traceai", "ContextAttributes"), false, loader);
                 Object data = contextAttrs.getMethod("getAttributesFromContext").invoke(null);

@@ -91,7 +91,7 @@ public final class TraceAIAuto {
                 .addSpanProcessor(new WireResourceProcessor(processor)).build();
             OpenTelemetrySdk sdk = OpenTelemetrySdk.builder().setTracerProvider(provider).build();
             try { GlobalOpenTelemetry.set(sdk); } catch (IllegalStateException ignored) { }
-            // Application SDK processors are bridged by advice, without taking ownership of their provider.
+            // Only this agent's own spans are exported. Application providers, processors and spans are left alone.
             RUNTIME.set(new RuntimeState(config, provider, sdk.getTracer("traceai-java-auto", "1.0.0"), exporter, processor, resource));
             if (instrumentation == null) instrumentation = ByteBuddyAgent.install();
             STATUS.put("java.net.http", transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");
@@ -113,7 +113,7 @@ public final class TraceAIAuto {
             if (config == null) { config = resolved; reportLibraries(); }
             RuntimeState state = RUNTIME.get();
             return WireCore.dump(Map.of("active", active, "config", resolved.masked(), "integrations", new TreeMap<>(STATUS), "collector", state == null ? "not_tested (agent inactive)" : state.exporter().lastExport,
-                "otel", "isolated shaded SDK; application context and span processors bridged; existing provider unchanged",
+                "otel", "isolated shaded SDK exports only the agent's own spans; application context read only; application providers, processors and spans untouched",
                 "attribute_projection", Map.of("zero_capacity_spans", AttributeProjection.ZERO_CAPACITY.get(), "protected_overflow_spans", AttributeProjection.PROTECTED_OVERFLOW.get())));
         } catch (Throwable ignored) { return "{\"status\":\"unavailable\"}"; }
     }
@@ -198,7 +198,6 @@ public final class TraceAIAuto {
     static void integrationFailed(String name) { STATUS.put(name, "failed"); warn("An integration could not be enabled; application requests are unaffected"); }
     static AutoConfig config() { return config; }
     static RuntimeState currentRuntime() { return active ? RUNTIME.get() : null; }
-    public static Object applicationProcessor(Object original) { return ApplicationOtel.processor(original); }
     static WireCapture begin(String method, String url, Map<String, String> headers) { return begin(method, url, headers, null); }
     static WireCapture begin(String method, String url, Map<String, String> headers, OtelBridge.Snapshot requestContext) {
         try {

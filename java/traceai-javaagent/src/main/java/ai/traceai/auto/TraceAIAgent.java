@@ -33,9 +33,8 @@ public final class TraceAIAgent {
                     TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                 }
             })
-            // Construct the application name dynamically so Shade does not relocate the matcher.
-            .type(named(String.join(".", "io", "opentelemetry", "sdk", "trace", "TracerSharedState")))
-            .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(ApplicationProcessorAdvice.class).on(named("getActiveSpanProcessor"))))
+            // Only HTTP client classes are transformed. The application's OpenTelemetry SDK classes,
+            // providers and processors are never rewritten, wrapped or observed.
             .type(named("jdk.internal.net.http.HttpRequestImpl"))
             .transform((builder, type, loader, module, domain) -> builder
                 .visit(Advice.to(JdkHeaderAdvice.class).on(namedOneOf("setSystemHeader", "addSystemHeader").and(takesArguments(String.class, String.class)))))
@@ -58,12 +57,6 @@ public final class TraceAIAgent {
             .type(named("okhttp3.OkHttpClient"))
             .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))))
             .installOn(instrumentation);
-    }
-    public static class ApplicationProcessorAdvice {
-        @Advice.OnMethodExit(suppress = Throwable.class)
-        public static void exit(@Advice.Return(readOnly = false, typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object processor) throws Exception {
-            processor = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("applicationProcessor", Object.class).invoke(null, processor);
-        }
     }
     public static class JdkHeaderAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)

@@ -10,7 +10,7 @@
 
     <artifactId>traceai-javaagent</artifactId>
     <name>TraceAI Java Agent</name>
-    <description>Zero-code -javaagent that traces AI provider HTTP calls and forwards application OpenTelemetry spans to Future AGI</description>
+    <description>Zero-code -javaagent that traces AI provider HTTP calls and sends only those spans to Future AGI, leaving the application's OpenTelemetry setup untouched</description>
 
     <properties>
         <byte-buddy.version>1.15.11</byte-buddy.version>
