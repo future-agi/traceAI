@@ -893,7 +893,9 @@ def init(
     if tracer_provider is None and not settings.has_credentials and "span_exporter" not in register_kwargs:
         if not _warned_credentials:
             _warned_credentials = True
-            logger.warning("traceAI: FI_API_KEY and FI_SECRET_KEY are not set; tracing is off")
+            # An incomplete pair was already reported, naming the missing key: warn once in all.
+            if not settings.incomplete_key_pair:
+                logger.warning("traceAI: FI_API_KEY and FI_SECRET_KEY are not set; tracing is off")
         _state.initialized = True
         return None
     provider, owned = _build_provider(settings, register_kwargs, tracer_provider)

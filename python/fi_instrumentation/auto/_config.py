@@ -57,6 +57,8 @@ class AutoConfig:
     config_file: Optional[str] = None
     sources: Dict[str, str] = field(default_factory=dict)
     trace_config: Any = None
+    # A source set only one of the two keys; that was already reported with one warning.
+    incomplete_key_pair: bool = False
 
     @property
     def has_credentials(self) -> bool:
@@ -71,11 +73,16 @@ class AutoConfig:
         return default
 
     def masked(self) -> Dict[str, Any]:
-        """Every setting with its source; keys are shortened so they can be shown or logged."""
+        """Every setting with its source, safe to show or log.
+
+        The API key is shortened to its first characters; of the secret key only whether it is set.
+        """
         out: Dict[str, Any] = {}
         for key in _SETTINGS:
             value = getattr(self, key)
-            if key in _SECRET_KEYS and value:
+            if key == "secret_key" and value:
+                value = "set"
+            elif key in _SECRET_KEYS and value:
                 value = value[:4] + "…" if len(value) > 8 else "…"
             out[key] = {"value": value, "source": self.sources.get(key, "default")}
         for key in _privacy_keys(self.trace_config):
@@ -129,9 +136,16 @@ def resolve(overrides: Optional[Mapping[str, Any]] = None, environ: Optional[Map
         shadowed.update(_privacy_keys(trace_config))
     # A partial higher-precedence pair shadows neither file key; a complete one shadows both.
     shadowed.difference_update(_SECRET_KEYS)
-    pair, pair_source = credential_pair(overrides, "arguments"), "argument"
+    incomplete = []
+
+    def pair_from(values: Mapping[str, Any], source: str) -> Optional[Tuple[str, str]]:
+        if bool(values.get("api_key")) != bool(values.get("secret_key")):
+            incomplete.append(source)
+        return credential_pair(values, source)
+
+    pair, pair_source = pair_from(overrides, "arguments"), "argument"
     if pair is None:
-        pair = credential_pair({key: environ.get(env_name(key)) for key in _SECRET_KEYS}, "the environment")
+        pair = pair_from({key: environ.get(env_name(key)) for key in _SECRET_KEYS}, "the environment")
         pair_source = "env"
     if pair is not None:
         shadowed.update(_SECRET_KEYS)
@@ -140,8 +154,9 @@ def resolve(overrides: Optional[Mapping[str, Any]] = None, environ: Optional[Map
     path, file_values = load_config_file(config_file, environ, shadowed)
     config = AutoConfig(config_file=str(path) if path else None)
     if pair is None:
-        pair = credential_pair(file_values, f"file {path}")
+        pair = pair_from(file_values, f"file {path}")
         pair_source = f"file {path}"
+    config.incomplete_key_pair = bool(incomplete)
     if pair is not None:
         config.api_key, config.secret_key = pair
         for key in _SECRET_KEYS:
