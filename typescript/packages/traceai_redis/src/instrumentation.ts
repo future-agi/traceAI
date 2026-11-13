@@ -142,7 +142,7 @@ export class RedisInstrumentation extends InstrumentationBase<RedisInstrumentati
 
   /** True when only vector operations are traced. */
   public get vectorOnly(): boolean {
-    return this.getConfig().vectorOnly === true;
+    return (this.getConfig() as RedisInstrumentationConfig).vectorOnly === true;
   }
 
   /** Whether this command gets a span. */
