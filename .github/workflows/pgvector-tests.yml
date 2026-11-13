@@ -1,0 +1,72 @@
+name: Pgvector compatibility
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/pgvector/**'
+      - '.github/workflows/pgvector-tests.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/pgvector/**'
+      - '.github/workflows/pgvector-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compatibility:
+    name: Pgvector ${{ matrix.pgvector }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.10'
+            pgvector: '0.2.0'
+            psycopg2: '2.9.0'
+            psycopg: '3.1.0'
+            otel: '0.59b0'
+            sdk: '1.38.0'
+          - python: '3.13'
+            pgvector: '0.5.1'
+            psycopg2: '2.9.13'
+            psycopg: '3.3.6'
+            otel: '0.66b2'
+            sdk: '1.45.2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install libpq build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+      - name: Install package and compatibility pins
+        run: |
+          python -m pip install './python/frameworks/pgvector[psycopg]' \
+            'pgvector==${{ matrix.pgvector }}' 'psycopg2-binary==${{ matrix.psycopg2 }}' \
+            'psycopg[binary]==${{ matrix.psycopg }}' \
+            'opentelemetry-instrumentation-psycopg==${{ matrix.otel }}' \
+            'opentelemetry-instrumentation-psycopg2==${{ matrix.otel }}' \
+            'opentelemetry-exporter-otlp-proto-http==${{ matrix.sdk }}' \
+            'pytest==8.4.2' build
+      - name: Test with outbound network disabled
+        # Loopback is available for the synthetic OTLP HTTP receiver only.
+        run: |
+          sudo unshare --net bash -c '
+            ip link set lo up
+            exec "$1" -I -m pytest "$2" -q
+          ' _ "$(command -v python)" "$GITHUB_WORKSPACE/python/frameworks/pgvector/tests"
+      - name: Build wheel and sdist
+        run: python -m build python/frameworks/pgvector
