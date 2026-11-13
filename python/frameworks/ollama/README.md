@@ -81,9 +81,22 @@ stream = ollama.chat(
     stream=True
 )
 
-for chunk in stream:
-    print(chunk["message"]["content"], end="", flush=True)
+try:
+    for chunk in stream:
+        print(chunk["message"]["content"], end="", flush=True)
+finally:
+    stream.close()
 ```
+
+Streams keep their span open until exhaustion, an error, or explicit `close()`
+(`await stream.aclose()` for async streams). Close streams when stopping early;
+final usage is available only when Ollama returns its final usage chunk.
+
+Streaming telemetry combines content, thinking, and tool calls without retaining
+raw chunks. It keeps up to 65,536 characters across those fields and at most 32
+tool calls; `ollama.output_truncated=true` marks a bounded preview. These limits
+never truncate the response delivered to your application. `TraceConfig` output
+privacy settings apply to both normalized attributes and serialized output.
 
 ### Text Generation
 
@@ -115,12 +128,12 @@ response = ollama.embed(
     model="nomic-embed-text",
     input="Hello, world!"
 )
-print(f"Embedding dimensions: {len(response['embedding'])}")
+print(f"Embedding dimensions: {len(response['embeddings'][0])}")
 
 # Multiple embeddings (batch)
-response = ollama.embeddings(
+response = ollama.embed(
     model="nomic-embed-text",
-    prompt=["Hello", "World"]
+    input=["Hello", "World"]
 )
 ```
 
@@ -204,6 +217,22 @@ OllamaInstrumentor().instrument(
 )
 ```
 
+### Aggregate privacy values
+
+With the current core privacy policy, `input.value` and `output.value` are
+opaque aggregates. Input hiding (`FI_HIDE_INPUTS`, `FI_HIDE_INPUT_MESSAGES`,
+`FI_HIDE_INPUT_TEXT`, or `FI_HIDE_INPUT_IMAGES`) replaces `input.value` with
+the literal `__REDACTED__`; output hiding (`FI_HIDE_OUTPUTS`,
+`FI_HIDE_OUTPUT_MESSAGES`, or `FI_HIDE_OUTPUT_TEXT`) does the same for
+`output.value`. Check for this placeholder before attempting to parse JSON.
+The corresponding `TraceConfig` options have the same semantics.
+
+Structured attributes are masked separately. For example, text-only hiding
+retains the message role while redacting message content. Adapter-side
+sanitization of detached messages and tool arguments does not exempt the
+aggregate from the core policy. Neither layer changes the request sent to
+Ollama or the response returned to the application.
+
 ## Captured Attributes
 
 ### Request Attributes
@@ -257,8 +286,9 @@ query_embedding = ollama.embed(
     input=query
 )
 
-# Search vector database (not shown)
-# context = search_vector_db(query_embedding["embedding"])
+# Replace this illustrative context with your vector database's search results.
+# ollama.embed returns a batch: search_vector_db(query_embedding["embeddings"][0])
+context = "Machine learning uses data to learn patterns for predictions."
 
 # Generate response with context
 response = ollama.chat(

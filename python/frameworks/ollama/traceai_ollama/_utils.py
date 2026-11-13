@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 from fi_instrumentation import safe_json_dumps
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
@@ -25,6 +26,25 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     if hasattr(obj, "__dict__"):
         return obj.__dict__
     return {"value": str(obj)}
+
+
+def _redact_tool_calls(tool_calls: Any) -> Any:
+    """Mask argument payloads in a detached telemetry copy, preserving tool names."""
+    if not isinstance(tool_calls, (list, tuple)):
+        return tool_calls
+    redacted = []
+    for tool in tool_calls:
+        # SDK models are iterable but are not Mappings. Normalize both levels
+        # before redaction, including a mapping containing a typed function.
+        item = dict(tool) if isinstance(tool, Mapping) else dict(_to_dict(tool))
+        if item.get("function") is not None:
+            value = item["function"]
+            function = dict(value) if isinstance(value, Mapping) else dict(_to_dict(value))
+            if "arguments" in function:
+                function["arguments"] = REDACTED_VALUE
+            item["function"] = function
+        redacted.append(item)
+    return redacted
 
 
 def _flatten(
