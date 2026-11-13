@@ -82,7 +82,10 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
     {
         // Capture the transport boundary before any matching, copying or context work.
         var started=DateTimeOffset.UtcNow; long clock=Stopwatch.GetTimestamp();
-        bool discoveryIncomplete=ObserveCredentials(request);
+        var url=request.RequestUri?.AbsoluteUri;
+        WireMatch? match=null;
+        try { if(url!=null) match=WireCore.Match(request.Method.Method,url); } catch { }
+        bool discoveryIncomplete=ObserveCredentials(request,match!=null);
         if(InstrumentationSuppression.Active) return;
         var current=Activity.Current;
         var parent=current?.OperationName=="System.Net.Http.HttpRequestOut" ? current.Parent : current;
@@ -98,8 +101,7 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
                 (activity.GetTagItem("gen_ai.operation.name") as string??activity.OperationName.Split(' ')[0]) is "chat" or "embedding" or "embeddings" or "generate_content" or "text_completion" or "transcription" or "text_to_speech" or "rerank")
                 return;
         }
-        var url=request.RequestUri?.AbsoluteUri; if(url==null) return;
-        var match=WireCore.Match(request.Method.Method,url); if(match==null) return;
+        if(url==null || match==null) return;
         if(!_config.Enabled("wire")) return;
         var req=new RequestData { Method=request.Method.Method, Url=url, CredentialDiscoveryIncomplete=discoveryIncomplete };
         ReadRequest(request.Content,req,_config.MaxBody);
@@ -115,13 +117,17 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
             }
         }
     }
-    private bool ObserveCredentials(HttpRequestMessage request)
+    /// <summary>Requests that are not AI calls learn credentials from headers, the query and
+    /// buffered bodies up to this size only: parsing a large body on the application's thread
+    /// would delay every request it sends.</summary>
+    internal const int UnmatchedBodyLimit=16*1024;
+    private bool ObserveCredentials(HttpRequestMessage request,bool matched)
     {
         var observation=new RequestData();
         try
         {
-            // Observation is independent of matching, sampling, ancestry and the wire
-            // switch. Learn separate header values, including non-AI HTTP requests.
+            // Observation is independent of sampling, ancestry and the wire switch. Learn
+            // separate header values, including non-AI HTTP requests.
             foreach(var secret in WirePrivacy.HeaderSecrets(request.Headers.Concat(request.Content?.Headers.AsEnumerable()??[])
                 .SelectMany(h=>h.Value.Select(value=>new KeyValuePair<string,string>(h.Key,value)))))
             {
@@ -129,12 +135,12 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
                 else KnownSecrets.Register(secret);
             }
             KnownSecrets.Register(WirePrivacy.QuerySecrets(request.RequestUri?.AbsoluteUri,observation));
-            if(request.Content is {} content) ObserveBuffered(content,observation);
+            if(request.Content is {} content) ObserveBuffered(content,observation,matched);
         }
         catch { observation.CredentialDiscoveryIncomplete=true; }
         return observation.CredentialDiscoveryIncomplete;
     }
-    private void ObserveBuffered(HttpContent content,RequestData observation)
+    private void ObserveBuffered(HttpContent content,RequestData observation,bool matched)
     {
         if(content.GetType()==typeof(MultipartFormDataContent) && content is MultipartFormDataContent multipart)
         {
@@ -145,17 +151,20 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
                 var disposition=part.Headers.ContentDisposition;
                 if(disposition?.FileName!=null || disposition?.FileNameStar!=null) continue;
                 var name=disposition?.Name?.Trim('"')??"";
-                ObserveBufferedPart(part,name,observation);
+                ObserveBufferedPart(part,name,observation,matched);
             }
         }
-        else ObserveBufferedPart(content,null,observation);
+        else ObserveBufferedPart(content,null,observation,matched);
     }
-    private void ObserveBufferedPart(HttpContent content,string? field,RequestData observation)
+    private void ObserveBufferedPart(HttpContent content,string? field,RequestData observation,bool matched)
     {
         if(!Buffered(content)) return; // Never serialize custom content or consume streams.
         var headers=Headers(content.Headers);
         if(WireCore.IsBinary(content.Headers.ContentType?.MediaType??"")) return;
-        var decoded=BodyDecoder.DecodeComplete(BufferedMemory(content),headers,_config.MaxBody);
+        var buffered=BufferedMemory(content);
+        int limit=matched?_config.MaxBody:Math.Min(_config.MaxBody,UnmatchedBodyLimit);
+        if(!matched && buffered.Length>limit) return;
+        var decoded=BodyDecoder.DecodeComplete(buffered,headers,limit);
         if(field!=null && WirePrivacy.CredentialKey(field))
             observation.CredentialDiscoveryIncomplete|=WirePrivacy.ObserveField(field,System.Text.Encoding.UTF8.GetString(decoded.Span));
         else if(content.Headers.ContentType?.MediaType=="application/x-www-form-urlencoded")

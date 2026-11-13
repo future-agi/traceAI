@@ -10,7 +10,7 @@ namespace TraceAI.AutoInstrumentation;
 /// <summary>
 /// OTel 1.15.3's protobuf serializer directly calls DiagnosticSource 10 APIs
 /// (ActivitySource.Tags/TelemetrySchemaUrl, Activity.HasRemoteParent). A hook
-/// cannot upgrade the application's TPA binding. Keep the patched SDK and shared
+/// cannot upgrade the application's TPA binding. Keep the pinned SDK and shared
 /// Activity identity, but encode the stable OTLP trace schema on DS 8/9 instead.
 /// Only already-sanitized activities enter this transport. No retries/read-ahead.
 /// </summary>

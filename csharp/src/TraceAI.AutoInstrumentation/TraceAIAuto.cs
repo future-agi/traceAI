@@ -162,9 +162,6 @@ internal sealed class Agent : IDisposable
     {
         _config=config; _installed=InstalledAssemblies();
         RuntimeLayout.Check();
-        if(config.Enabled("openai")) AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry",true);
-        if(config.Enabled("semantic_kernel")) AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics",true);
-        if(config.Enabled("azure_inference")||config.Enabled("azure_openai")) AppContext.SetSwitch("Azure.Experimental.EnableActivitySource",true);
         var sampler=new ExportSampler(config.SampleRate);
         var privacy=new AutoProcessor(config,()=>Volatile.Read(ref _disposed)==0);
         _ownsProvider=config.Options.Provider==null;
@@ -222,6 +219,11 @@ internal sealed class Agent : IDisposable
             _wire=new HttpCapture(config,_coverage,privacy);
         }
         catch { _discovery.Dispose(); if(_ownsProvider) _provider.Dispose(); else _batch?.Dispose(); throw; }
+        // Process-wide library switches, set only once the agent is fully constructed, so a
+        // failed start changes nothing. The Azure switch affects every Azure SDK client.
+        if(config.Enabled("openai")) AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry",true);
+        if(config.Enabled("semantic_kernel")) AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics",true);
+        if(config.Enabled("azure_inference")||config.Enabled("azure_openai")) AppContext.SetSwitch("Azure.Experimental.EnableActivitySource",true);
     }
     internal static Integration? IntegrationForSource(string source) => Integrations.FirstOrDefault(i=>i.Sources.Any(p=>i.Exact?source==p:source.StartsWith(p,StringComparison.Ordinal)));
     /// <summary>The agent's own wire source and every AI integration source.</summary>

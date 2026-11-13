@@ -31,7 +31,13 @@ internal static class KnownSecrets
                     State[5]=true;
                     foreach(DictionaryEntry pair in Environment.GetEnvironmentVariables())
                         if(pair.Key is string name && pair.Value is string value &&
-                            new[] { "KEY","TOKEN","SECRET","PASSWORD","PASSWD","CREDENTIAL","AUTH" }.Any(part=>name.Contains(part,StringComparison.OrdinalIgnoreCase))) Add(value);
+                            new[] { "KEY","TOKEN","SECRET","PASSWORD","PASSWD","CREDENTIAL","AUTH" }.Any(part=>name.Contains(part,StringComparison.OrdinalIgnoreCase)))
+                        {
+                            // A value this long is not matched within budget. Skip it with a warning
+                            // that names the variable, never its value, rather than hiding all content.
+                            if(value.Length>MaxLength) TraceAIAuto.Warn("secret-length-"+name,"Environment variable "+name+" is longer than 4,096 characters and is not used for redaction.");
+                            else Add(value);
+                        }
                 }
                 foreach(var value in config.CredentialValues) Add(value);
             }
@@ -47,7 +53,7 @@ internal static class KnownSecrets
     private static void Add(string value)
     {
         if(value.Length<8) return;
-        if(value.Length>MaxLength) { State[4]=true; return; }
+        if(value.Length>MaxLength) { MarkFailed(); return; }
         var index=(Dictionary<string,LinkedListNode<string>>)State[1];
         var lru=(LinkedList<string>)State[2];
         if(index.TryGetValue(value,out var found)) { lru.Remove(found); lru.AddLast(found); return; }
@@ -60,7 +66,14 @@ internal static class KnownSecrets
         catch { FailClosed(); }
     }
     internal static void FailClosed()
-    { lock(State[0]) State[4]=true; }
+    { lock(State[0]) MarkFailed(); }
+    // Failing closed is process-wide, so say so once; never print the value.
+    private static void MarkFailed()
+    {
+        if(State[4] is true) return;
+        State[4]=true;
+        TraceAIAuto.Warn("secrets-failed","Credential redaction is unavailable; exported spans keep identity and timing but no content for the rest of this process.");
+    }
     // One lookup per export batch, never per span start or attribute. Returned arrays
     // are immutable; mutation/eviction publishes a new snapshot on the next export.
     internal static string[] Snapshot()
