@@ -4,8 +4,6 @@ on:
   pull_request:
     paths:
       - 'java/**'
-      # The Java agent ships byte copies of these catalogs and replays their fixtures.
-      - 'spec/auto-instrumentation/**'
       - 'jitpack.yml'
       - 'release-please-config.json'
       - '.github/workflows/java-ci.yml'
@@ -14,7 +12,6 @@ on:
     branches: [dev, main]
     paths:
       - 'java/**'
-      - 'spec/auto-instrumentation/**'
       - 'jitpack.yml'
       - 'release-please-config.json'
       - '.github/workflows/java-ci.yml'
@@ -109,34 +106,6 @@ jobs:
           path: java/traceai-java-core/target/surefire-reports/
           if-no-files-found: warn
 
-  javaagent:
-    name: Zero-code agent (Java ${{ matrix.java }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        java: ['17', '21']
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java }}
-          cache: maven
-          cache-dependency-path: 'java/**/pom.xml'
-      - name: Test shared wire and privacy fixtures and the packaged agent in child JVMs
-        run: mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify
-      - name: Upload agent test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: javaagent-java-${{ matrix.java }}
-          path: |
-            java/traceai-javaagent/target/surefire-reports/
-            java/traceai-javaagent/target/failsafe-reports/
-          if-no-files-found: warn
-
   azure-search-compatibility:
     name: Azure Search SDK ${{ matrix.azure-search-version }}
     runs-on: ubuntu-latest
@@ -214,8 +183,9 @@ jobs:
           python-version: '3.x'
       - name: Check release-managed README coordinates
         run: python3 -I scripts/test_readme_contract.py
+      # The zero-code agent's child-JVM suite runs in auto-java-tests.yml, not here.
       - name: Test the complete reactor
-        run: mvn -B -ntp verify
+        run: mvn -B -ntp verify -Dtraceai.javaagent.skipITs=true
       - name: Build sources and Javadocs without signing or publishing
         run: mvn -B -ntp -P release -Dgpg.skip package
       - name: Generate effective POMs

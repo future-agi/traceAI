@@ -17,6 +17,11 @@
         <agent.okhttp.version>3.14.9</agent.okhttp.version>
         <!-- Test only: a child JVM runs the OpenTelemetry Java agent beside this one. -->
         <otel-javaagent.version>2.10.0</otel-javaagent.version>
+        <!-- The child-JVM suite gates its own workflow. Full-reactor runs (shared Java CI and the
+             Java release) pass -Dtraceai.javaagent.skipITs=true to skip it for this module only;
+             -DskipITs still works as usual. -->
+        <traceai.javaagent.skipITs>false</traceai.javaagent.skipITs>
+        <skipITs>${traceai.javaagent.skipITs}</skipITs>
     </properties>
 
     <dependencies>
