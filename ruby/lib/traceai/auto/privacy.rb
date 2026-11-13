@@ -8,6 +8,7 @@ module TraceAI
     module Privacy
       INVOCATION_FAMILIES = %w[gen_ai.request anthropic.request anthropic.thinking].freeze
       REQUEST_IDENTITY_KEYS = %w[gen_ai.request.model gen_ai.request.stream anthropic.request.id].freeze
+      SESSION_ID = 'session.id'
       # Unlike other protected families, usage permits application-defined suffixes.
       # Only these literal schema keys are recoverable without a working registry.
       FALLBACK_USAGE_KEYS = %w[input_tokens output_tokens total_tokens provider_total_tokens
@@ -91,7 +92,12 @@ module TraceAI
         raise Limit if depth > CATALOG['limits']['max_depth']
         path = key || ''
         budget.spend(path.bytesize + path_parts(path).length)
-        return REDACTED if credential?(path)
+        # The session id set through the agent's API (attribute key exactly
+        # session.id) is correlation data, not a credential: it is exempt from
+        # the name rule only, as in the Node SDK. Registered secrets and
+        # credential value shapes inside it are still scrubbed below, and every
+        # other session-named key keeps the rule.
+        return REDACTED if credential?(path) && !(depth == 1 && path == SESSION_ID)
         klass = Codec.type(value)
         if klass == Hash
           hints = index_hints(value, path, hints, budget)
