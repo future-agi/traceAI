@@ -350,6 +350,26 @@ class EndToEndTest < Minitest::Test
     assert_equal 'pending', report.dig('integrations', 'httpx', 'status')
     assert_equal 'traceai-auto doctor', export_spans.first.first.name
   end
+  # The documented command, run without bundle exec: in a plain directory the
+  # dependency-free exporter performs the test export; in an application
+  # directory the command loads the application's bundle first.
+  def test_doctor_command_tests_the_collector_with_and_without_a_gemfile
+    standalone = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }.merge('RUBYOPT' => nil)
+    code = "ARGV.replace(%w[doctor]); load #{File.join(ROOT, 'bin/traceai-auto').inspect}"
+    Dir.mktmpdir('doctor-app', File.join(ROOT, '.bundle/tmp')) do |directory|
+      plain = File.join(directory, 'plain'); bundled = File.join(directory, 'bundled')
+      [plain, bundled].each { |path| Dir.mkdir(path) }
+      File.write(File.join(bundled, 'Gemfile'), "source 'https://rubygems.org'\n")
+      [plain, bundled].each do |chdir|
+        stdout, stderr, status = app(code, standalone, chdir: chdir)
+        assert status.success?, stderr
+        report = JSON.parse(stdout)
+        assert_equal true, report['active'], chdir
+        assert_equal 'accepted', report['collector'], chdir
+        assert_equal ['traceai-auto doctor'], export_spans.map { |span, _| span.name }, chdir
+      end
+    end
+  end
   def test_missing_credentials_no_patch_one_warning
     stdout, stderr, status = app(plain_code + "\nputs Net::HTTP.ancestors.any? { |m| m.name == 'TraceAI::Auto::NetHTTP' }", {'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil})
     assert status.success?, stderr; assert_equal CHAT + "false\n", stdout
