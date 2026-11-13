@@ -117,6 +117,8 @@ Error messages and stack traces are hidden by default because database errors ca
 
 `captureQueryVectors` and `captureResultVectors` are deprecated compatibility options. They do not enable payload capture. Database, collection and index names are metadata and remain visible.
 
+Set `instrumentationConfig: { vectorOnly: true }` to trace only `aggregate` commands with a `$vectorSearch` or `$search.knnBeta` stage; other commands then create no span. `@traceai/auto` turns this on when it enables MongoDB.
+
 ## License
 
 Apache-2.0

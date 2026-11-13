@@ -37,6 +37,15 @@ export interface MongoDBInstrumentationConfig extends InstrumentationConfig {
   captureQueryVectors?: boolean;
   /** @deprecated Result documents/vectors are never captured. */
   captureResultVectors?: boolean;
+  /** Trace only aggregate commands with a vector search stage; other commands get no span. */
+  vectorOnly?: boolean;
+}
+
+function vectorStage(pipeline: unknown): boolean {
+  return Array.isArray(pipeline) && pipeline.some((stage) => {
+    const vector = stage?.$vectorSearch ?? stage?.$search?.knnBeta;
+    return !!vector && typeof vector === "object";
+  });
 }
 
 interface ClientState {
@@ -87,6 +96,11 @@ export class MongoDBInstrumentation extends InstrumentationBase {
     this.traceConfig = traceConfig;
     this.setConfig({ enabled: true, ...instrumentationConfig });
     if (this.getConfig().enabled) this.enable();
+  }
+
+  /** True when only vector search commands are traced. */
+  public get vectorOnly(): boolean {
+    return (this.getConfig() as MongoDBInstrumentationConfig).vectorOnly === true;
   }
 
   protected init() {
@@ -248,6 +262,7 @@ export class MongoDBInstrumentation extends InstrumentationBase {
   private startCommand(state: ClientState, event: CommandStartedEvent): void {
     if (!this.isEnabled() || !COMMANDS.has(event.commandName) || isTracingSuppressed(context.active())) return;
     const command = event.command;
+    if (this.vectorOnly && !(event.commandName === "aggregate" && vectorStage(command.pipeline))) return;
     const collection = command[event.commandName] ?? command.collection;
     const attributes: Attributes = {
       "db.system": "mongodb",
