@@ -37,34 +37,69 @@ module TraceAI
         end
         @pending = true
         observe_targets
-        # Observe completed class definitions, never resolve application constants
-        # (including intermediate autoload namespaces) and never wrap require.
-        @load_hook ||= TracePoint.new(:end, :call, :return, :c_call, :c_return) do |event|
-          if event.event == :end
-            observe_target(event.self)
-            next
-          end
-          if event.event == :return && event.method_id == :setup && event.return_value && Module.instance_method(:name).bind_call(event.self) == 'Bundler'
-            @bundle_ready = true
-            after_require if Thread.current[:traceai_require_depth].to_i.zero?
-          end
-          next unless event.method_id == :require || event.method_id == :require_relative
-          depth = Thread.current[:traceai_require_depth].to_i
-          if event.event == :call || event.event == :c_call
-            Thread.current[:traceai_require_depth] = depth + 1
-          else
-            Thread.current[:traceai_require_depth] = [depth - 1, 0].max
-            after_require if depth <= 1
-          end
-        rescue StandardError => e
-          debug(e)
-        end
-        @load_hook.enable
+        load_hook.enable unless load_hook.enabled?
         after_require
         self
       rescue StandardError => e
         debug(e)
         self
+      end
+      # Observe completed class and module definitions (:end events) only. Never
+      # hook method calls, resolve application constants (including autoload
+      # namespaces) or wrap require. sync_hooks turns this off once nothing is
+      # left to find.
+      def load_hook
+        @load_hook ||= TracePoint.new(:end) do |event|
+          observe_target(event.self)
+        rescue StandardError => e
+          debug(e)
+        end
+      end
+      # One targeted hook on Bundler.setup itself, enabled once Bundler defines
+      # it and turned off after its first return.
+      def watch_bundler(bundler)
+        return if @bundler_hook || @bundle_ready || @initialized || bundle_ready?
+        setup = bundler.method(:setup)
+        @bundler_hook = TracePoint.new(:return) do |_event|
+          @bundle_ready = true
+          after_require
+        rescue StandardError => e
+          debug(e)
+        end
+        @bundler_hook.enable(target: setup)
+      rescue NameError, ArgumentError, TypeError => e
+        @bundler_hook = nil
+        debug(e)
+      end
+      def load_hook_needed?
+        return false if @config.nil? || @config.truthy?('sdk_disabled')
+        return true if @pending
+        return false unless @active
+        seen = @targets || {}
+        needed_targets.any? { |name| !seen.key?(name) }
+      end
+      # Classes the active agent wraps, limited to gems this process can load.
+      def needed_targets
+        names = []
+        names.concat(%w[Net::HTTP Net::BufferedIO]) if @sdk || transport_enabled?('net_http')
+        names.concat(%w[Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest]) if transport_enabled?('net_http')
+        names << 'OpenAI::Internal::Transport::PooledNetRequester' if @sdk && gem_possible?('openai')
+        names.concat(%w[HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1]) if (@sdk || transport_enabled?('httpx')) && gem_possible?('httpx')
+        names
+      end
+      def gem_possible?(name)
+        return Gem.loaded_specs.key?(name) if bundle_ready?
+        (@possible ||= {}).fetch(name) { @possible[name] = installed?(name) }
+      end
+      def sync_hooks
+        if load_hook_needed?
+          load_hook.enable unless load_hook.enabled?
+        elsif @load_hook&.enabled?
+          @load_hook.disable
+        end
+        @bundler_hook.disable if @bundler_hook&.enabled? && (@bundle_ready || @initialized || !@pending)
+      rescue StandardError => e
+        debug(e)
       end
       def waiting_for_bundle?
         return false if bundle_ready?
@@ -89,13 +124,20 @@ module TraceAI
       def observe_targets
         @scanning_targets = true
         ObjectSpace.each_object(Class) { |klass| observe_target(klass) }
+        # Bundler is a module, not a class. Never trigger an autoload.
+        observe_target(Object.const_get(:Bundler, false)) if Object.const_defined?(:Bundler, false) && !Object.autoload?(:Bundler)
       ensure
         @scanning_targets = false
       end
       def observe_target(klass)
         name = Module.instance_method(:name).bind_call(klass)
-        return unless TARGETS.include?(name)
-        (@targets ||= {})[name] = klass
+        if name == 'Bundler'
+          watch_bundler(klass)
+        elsif TARGETS.include?(name)
+          (@targets ||= {})[name] = klass
+        else
+          return
+        end
         after_require unless @initializing || @scanning_targets
       rescue TypeError
         nil
@@ -104,12 +146,17 @@ module TraceAI
         klass.prepend(wrapper) if klass && !klass.ancestors.include?(wrapper)
       end
       def after_require
-        return if @initializing || waiting_for_bundle?
+        return if @initializing
         if @active
           install_transports
-        elsif @pending
+        elsif @pending && !waiting_for_bundle?
           if bundle_ready? && (@config.credentials? || sdk_host_provider)
             init
+          elsif bundle_ready? && !Gem.loaded_specs.key?('opentelemetry-sdk')
+            # Nothing can become a destination: there is no FI key pair, and an
+            # application destination needs the OpenTelemetry SDK, which this
+            # bundle does not include. Stop watching; the exit warning remains.
+            @pending = false
           else
             prepend_once(target('Net::HTTP'), LazyNetHTTP)
             prepend_once(target('HTTPX::Session'), LazyHTTPX)
@@ -117,6 +164,7 @@ module TraceAI
             prepend_once(target('OpenAI::Internal::Transport::PooledNetRequester'), LazySDKRequest)
           end
         end
+        sync_hooks
       rescue LoadError, SyntaxError, StandardError => e
         debug(e)
       end
@@ -142,6 +190,7 @@ module TraceAI
           initialize_once(arguments)
         ensure
           @initializing = false; @initializing_thread = nil
+          sync_hooks
         end
       end
       def sdk_host_provider
@@ -150,8 +199,6 @@ module TraceAI
         candidate if candidate.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
       end
       def initialize_once(arguments)
-        @load_hook&.disable
-        Thread.current[:traceai_require_depth] = nil
         # Destinations are opaque application objects, not serializable config.
         destinations = arguments.select { |key, _| %i[provider exporter processor].include?(key) }
         @config = Config.new(arguments.reject { |key, _| destinations.key?(key) })
@@ -254,6 +301,7 @@ module TraceAI
         observe_targets
         install_transports
         install_server_instrumentation(force: true) if @sdk && names.include?('rack')
+        sync_hooks
         @provider
       rescue StandardError => e
         debug(e); @provider || self
@@ -447,9 +495,6 @@ module TraceAI
           prepend_once(target('HTTPX::Connection::HTTP1'), HTTPXProtocolHeaders)
           @httpx_installed = !!target('HTTPX::Session') if transport_enabled?('httpx')
         end
-        # Explicit init also needs lazy class observation. No namespace resolution.
-        @target_hook ||= TracePoint.new(:end) { |event| observe_target(event.self) }
-        @target_hook.enable unless @target_hook.enabled?
       end
       def install_server_instrumentation(force: false)
         return if @rack_status == 'instrumented'
