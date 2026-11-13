@@ -244,9 +244,10 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 	agent.armed = nil
 	var state *agentState
 	if armed != nil {
-		armed.armed.Store(false)
+		// The wrapper stays armed while this runs, so a concurrent AI request
+		// waits for the agent lock and is then captured, not passed through.
 		defer func() {
-			if state != armed {
+			if state != armed || !armed.active.Load() {
 				armed.retire(explicit)
 			}
 		}()
@@ -354,6 +355,7 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 	}
 	state.registration.active.Store(true)
 	state.active.Store(true)
+	state.armed.Store(false)
 	agent.current, agent.first = state, state
 	agent.last = makeReport(c, state.transport != nil, "")
 	if c.Debug {
