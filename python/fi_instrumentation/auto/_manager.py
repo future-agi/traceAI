@@ -8,7 +8,6 @@ import os
 import sys
 import threading
 from collections import OrderedDict
-from copy import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -16,9 +15,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 import wrapt
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from opentelemetry.trace import Link, Status
 
 from fi_instrumentation.auto import _registry
 from fi_instrumentation.auto._config import AutoConfig, resolve
@@ -498,16 +498,43 @@ def _masked(attributes: Mapping[str, Any], config: Any) -> Dict[str, Any]:
     return masked
 
 
+# The OpenTelemetry event a recorded exception becomes; its message and stack trace are error details.
+_EXCEPTION_EVENT = "exception"
+# Request details a web server span records that can carry credentials or personal data: the query
+# string and fragment of its URL, and captured request and response headers.
+_REQUEST_URL_KEYS = ("http.target", "http.url", "url.full")
+_REQUEST_DETAIL_KEYS = ("url.query", "url.fragment")
+_HEADER_PREFIXES = ("http.request.header.", "http.response.header.")
+
+
+def _without_request_details(attributes: Mapping[str, Any]) -> Dict[str, Any]:
+    """A web server span's attributes without URL query strings and fragments or captured headers."""
+    kept = {}
+    for key, value in attributes.items():
+        if key in _REQUEST_DETAIL_KEYS or key.startswith(_HEADER_PREFIXES):
+            continue
+        if key in _REQUEST_URL_KEYS and isinstance(value, str):
+            value = value.split("#", 1)[0].split("?", 1)[0]
+        kept[key] = value
+    return kept
+
+
+def _scope_name(span: ReadableSpan) -> str:
+    return (getattr(getattr(span, "instrumentation_scope", None), "name", None) or "").lower()
+
+
 class _ResourceOverlayProcessor(SpanProcessor):
     """The agent's Future AGI export route on a tracer provider.
 
     Future AGI receives AI spans only: spans from traceAI instrumentation scopes, spans from any
     scope that carry an AI span kind, and the library spans of integrations the agent enabled,
     plus the request root span of a web server the agent enabled when that request led to an AI
-    span. Every other span the provider ends goes to the
-    application's own processors and exporters only. The copy sent to Future AGI is masked with
-    the agent's TraceConfig, mapped by the integrations' mappers and, on a provider the application
-    configured, tagged with the project resource Future AGI needs for routing. The application's
+    span. Every other span the provider ends goes to the application's own processors and
+    exporters only. The copy sent to Future AGI is mapped by the integrations' mappers, loses the
+    query strings and captured headers of a web server span, has the agent's TraceConfig applied to
+    its attributes, events and links (with hidden error details, it also loses its exception events
+    and error description) and, on a provider the application configured, is tagged with the
+    project resource Future AGI needs for routing. The application's
     processors see the original spans. On the provider the agent created, the route wraps that
     provider's exporter, and the agent closes it at shutdown. On a Future AGI provider the
     application registered, it wraps that provider's Future AGI export processor in place
@@ -577,7 +604,7 @@ class _ResourceOverlayProcessor(SpanProcessor):
 
     def _forwards(self, span: ReadableSpan) -> bool:
         """Whether a span is an AI span, or the request root of a trace that had one."""
-        name = (getattr(getattr(span, "instrumentation_scope", None), "name", None) or "").lower()
+        name = _scope_name(span)
         trace_id = span.context.trace_id
         attributes = span.attributes or {}
         if name.startswith(self.scopes) or any(key in attributes for key in AI_SPAN_KINDS):
@@ -611,17 +638,34 @@ class _ResourceOverlayProcessor(SpanProcessor):
             span = span_mapper(span)
             if span is None:
                 return None
-        # The application's processors keep their own view of the span.
-        span = copy(span)
         attributes = dict(span.attributes or {})
         for mapper in self.mappers:
             attributes = mapper(attributes)
-        if self._config is not None:
-            attributes = _masked(attributes, self._config)
-        span._attributes = attributes
-        if self._resource is not None:
-            span._resource = self._routed_resource(span.resource)
-        return span
+        if self.server_scopes and _scope_name(span).startswith(self.server_scopes):
+            attributes = _without_request_details(attributes)
+        events, links, status = list(span.events), list(span.links), span.status
+        config = self._config
+        if config is not None:
+            attributes = _masked(attributes, config)
+            if config.hide_error_details:
+                # The status keeps its ERROR code; the exception events and the description go.
+                events = [event for event in events if event.name != _EXCEPTION_EVENT]
+                if status.description is not None:
+                    status = Status(status.status_code)
+            elif status.description is not None:
+                # The same value-level redaction as attributes (image cap, PII), as FiSpan applies.
+                status = Status(status.status_code, config.redact_value(status.description))
+            events = [Event(event.name, _masked(event.attributes or {}, config), timestamp=event.timestamp)
+                      for event in events]
+            links = [Link(link.context, _masked(link.attributes or {}, config)) for link in links]
+        # A new span: the application's processors keep their own view of the original.
+        resource = self._routed_resource(span.resource) if self._resource is not None else span.resource
+        return ReadableSpan(
+            name=span.name, context=span.context, parent=span.parent, resource=resource,
+            attributes=attributes, events=events, links=links, kind=span.kind, status=status,
+            start_time=span.start_time, end_time=span.end_time,
+            instrumentation_scope=span.instrumentation_scope,
+        )
 
     def on_end(self, span: ReadableSpan) -> None:
         if not self.enabled or not self._keeps(span):
