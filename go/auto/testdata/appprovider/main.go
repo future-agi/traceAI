@@ -5,7 +5,8 @@
 //
 // Mode "global" makes that provider the global one and lets the agent
 // activate on the first AI call. Mode "explicit" passes the provider to
-// auto.Init before the first AI call instead.
+// auto.Init before the first AI call instead. Mode "transport" only prints
+// whether http.DefaultTransport is still an *http.Transport before any request.
 package main
 
 import (
@@ -29,6 +30,11 @@ import (
 var tracer = otel.Tracer("svc")
 
 func main() {
+	if os.Args[3] == "transport" {
+		_, native := http.DefaultTransport.(*http.Transport)
+		fmt.Print(native)
+		return
+	}
 	ctx := context.Background()
 	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(os.Args[2]+"/v1/traces"))
 	if err != nil {
