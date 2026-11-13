@@ -234,6 +234,21 @@ class MediaAdmissionTest < Minitest::Test
     assert_equal '<omitted: media>', result['input.content.arbitrary']
   end
 
+  # Admission bookkeeping runs inside the application's own span calls. If it
+  # fails, the application's call still completes and the export fails closed.
+  def test_admission_failure_never_reaches_application_span_calls
+    span = provider.tracer('app').start_span('bookkeeping-failure')
+    P.stub(:media_admission, ->(*_args, **_kwargs) { raise NoMethodError, 'bookkeeping' }) do
+      assert_same span, span.set_attribute('blob.data', PAYLOAD)
+      assert_same span, span.add_event('media', attributes: {'blob.data' => PAYLOAD})
+    end
+    span.finish
+    record = span.to_span_data
+    assert_equal 1, record.events.length
+    assert record.instance_variable_get(:@traceai_media)[:failed]
+    assert_no_media(snapshot(record).attributes)
+  end
+
   def test_complete_metadata_boundaries_and_text_mime_are_preserved
     values = {'audio.transcript.content' => PAYLOAD, 'audio.id.value' => 'public id',
               'blob.mime_type' => 'text/plain', 'blob.content' => 'ordinary words'}

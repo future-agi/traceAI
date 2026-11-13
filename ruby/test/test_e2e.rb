@@ -384,6 +384,61 @@ class EndToEndTest < Minitest::Test
     assert status.success?, stderr
     assert_equal({'status' => 'pending'}, JSON.parse(stdout))
   end
+  # net_http and httpx in the allowlist enable the wire layer for that
+  # transport only; they no longer switch all wire capture off.
+  def test_transport_names_in_the_allowlist_enable_that_wire_transport
+    stdout, stderr, status = app(plain_code, {'FI_INSTRUMENTATIONS' => 'net_http'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_chat_span(export_spans)
+    stdout, stderr, status = app(plain_code, {'FI_INSTRUMENTATIONS' => 'httpx,rack'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_empty export_spans
+  end
+  def test_incomplete_key_pair_warns_once
+    _, stderr, status = app(plain_code, {'FI_SECRET_KEY' => nil})
+    assert status.success?, stderr
+    assert_equal 1, stderr.scan('environment credential pair ignored').length, stderr
+  end
+  # Ruby's default SIGTERM handling already runs at_exit hooks, where the agent
+  # flushes. The agent must not replace the application's signal handler.
+  def test_agent_installs_no_sigterm_handler
+    stdout, stderr, status = app(plain_code + "\nputs Signal.trap('TERM', 'DEFAULT').is_a?(Proc)\n")
+    assert status.success?, stderr; assert_equal CHAT + "false\n", stdout
+    assert_chat_span(export_spans)
+  end
+  # A live application SDK provider is enough for the SDK path, even when the
+  # bundle did not select every default gem the SDK uses.
+  def test_live_application_sdk_is_enough_without_every_default_gem_selected
+    code = <<~RUBY
+      require 'opentelemetry/sdk'; require 'net/http'; require 'json'
+      %w[uri timeout logger].each { |name| Gem.loaded_specs.delete(name) }
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      host = OpenTelemetry::SDK::Trace::TracerProvider.new
+      host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
+      OpenTelemetry.tracer_provider = host
+      require 'traceai/auto/agent'
+      TraceAI::Auto.init
+      abort 'agent inactive' unless TraceAI::Auto.active? && TraceAI::Auto.provider.equal?(host)
+      response = Net::HTTP.post(URI('#{@provider.url}/v1/chat/completions'), '{"model":"gpt-4o-mini","messages":[]}', {'content-type' => 'application/json'})
+      abort 'missing wire span' unless memory.finished_spans.size == 1
+      print response.body
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    refute_includes stderr, 'application destinations require'
+  end
+  def test_hide_settings_in_the_config_file_reach_exported_spans
+    file = File.join(ROOT, '.bundle/tmp', "hide-flags-#{Process.pid}.toml")
+    File.write(file, "hide_inputs = true\nhide_outputs = true\n")
+    stdout, stderr, status = app(plain_code, {'FI_CONFIG_FILE' => file})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    a = attrs(export_spans.first.first.attributes)
+    assert_equal '__REDACTED__', a['input.value']
+    assert_equal '__REDACTED__', a['output.value']
+    refute_includes JSON.generate(a), 'Hello from Ruby'
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
   def test_missing_credentials_no_patch_one_warning
     stdout, stderr, status = app(plain_code + "\nputs Net::HTTP.ancestors.any? { |m| m.name == 'TraceAI::Auto::NetHTTP' }", {'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil})
     assert status.success?, stderr; assert_equal CHAT + "false\n", stdout

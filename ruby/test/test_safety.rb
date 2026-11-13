@@ -151,6 +151,24 @@ class SafetyTest < Minitest::Test
     assert_equal '<redacted>', P.scrub({'session.id' => secret}, [secret])['session.id']
     assert_equal 'id <redacted>', P.scrub({'session.id' => 'id ' + secret}, [secret])['session.id']
   end
+  # A checked-in config file must not redirect the user's Future AGI keys: its
+  # base_url counts only when the key pair comes from the same file.
+  def test_config_file_base_url_needs_the_key_pair_from_the_same_file
+    file = Tempfile.new(['base-url', '.toml'], File.join(ROOT, '.bundle/tmp'))
+    file.write("base_url = \"http://collector.invalid\"\n"); file.close
+    keys = {'FI_API_KEY' => 'env-api-12345678', 'FI_SECRET_KEY' => 'env-secret-12345678', 'FI_CONFIG_FILE' => file.path}
+    config = nil
+    _, stderr = capture_io { config = TraceAI::Auto::Config.new({}, env: keys) }
+    assert_equal 'https://api.futureagi.com', config['base_url']
+    assert_includes stderr, 'base_url'
+    refute_includes stderr, '12345678'
+    file.open; file.truncate(0)
+    file.write("base_url = \"http://collector.invalid\"\napi_key = \"file-api-12345678\"\nsecret_key = \"file-secret-12345678\"\n"); file.close
+    assert_equal 'http://collector.invalid', TraceAI::Auto::Config.new({}, env: {'FI_CONFIG_FILE' => file.path})['base_url']
+    assert_equal 'http://env.invalid', TraceAI::Auto::Config.new({}, env: keys.merge('FI_BASE_URL' => 'http://env.invalid'))['base_url']
+  ensure
+    file&.unlink
+  end
   def test_project_name_fallback
     c = TraceAI::Auto::Config.new({}, env: {'OTEL_SERVICE_NAME' => 'otel-service'}, cwd: ROOT); assert_equal 'otel-service', c['project_name']
     c = TraceAI::Auto::Config.new({}, env: {}, cwd: ROOT); assert_equal 'ruby', c['project_name']; assert_equal 'observe', c['project_type']
