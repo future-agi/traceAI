@@ -13,6 +13,7 @@ from fi_instrumentation._configuration import (  # noqa: F401  (re-exported)
     _FALSE,
     _TRUE,
     _as_bool,
+    config_path,
     credential_pair,
     env_name,
     load_config_file,
@@ -59,10 +60,13 @@ class AutoConfig:
     trace_config: Any = None
     # A source set only one of the two keys; that was already reported with one warning.
     incomplete_key_pair: bool = False
+    # Why export to Future AGI is off although both keys are set; already reported with one warning.
+    export_off: Optional[str] = None
 
     @property
     def has_credentials(self) -> bool:
-        return bool(self.api_key and self.secret_key)
+        """Both keys are set, and nothing turned export to Future AGI off."""
+        return bool(self.api_key and self.secret_key) and not self.export_off
 
     def is_selected(self, name: str, default: bool = True) -> bool:
         name = name.lower()
@@ -172,13 +176,20 @@ def resolve(overrides: Optional[Mapping[str, Any]] = None, environ: Optional[Map
             return file_values[key], f"file {path}"
         return None, "default"
 
+    _, named = config_path(config_file, environ)
     for key in ("base_url", "project_name", "project_version_name"):
         value, source = pick(key)
-        if key == "base_url" and source == f"file {path}" and (pair is None or pair_source != source):
-            # The file may come with a checkout: it must not send keys from elsewhere, or the
-            # traces, to a collector it names.
-            logger.warning("traceAI: ignoring base_url from %s because the Future AGI keys do not come from "
-                           "that file; set FI_BASE_URL to send to another collector", path)
+        if (key == "base_url" and source == f"file {path}" and not named
+                and (pair is None or pair_source != source)):
+            # A file found in the working directory may come with a checkout: it must not send keys
+            # from elsewhere, or the traces, to a collector it names, and they must not go to the
+            # default collector instead. A file named explicitly is the user's own choice.
+            if pair is not None:
+                config.export_off = (
+                    f"{path} sets base_url, but the Future AGI keys do not come from that file, so the keys "
+                    "and traces are sent nowhere, neither to that collector nor to the default one. Put the "
+                    "keys in the same file, set FI_BASE_URL, or name the file with FI_CONFIG_FILE.")
+                logger.warning("traceAI: export to Future AGI is off: %s", config.export_off)
             continue
         if value is not None:
             setattr(config, key, str(value))

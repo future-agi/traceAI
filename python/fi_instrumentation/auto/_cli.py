@@ -58,7 +58,7 @@ def check_collector(settings: AutoConfig, timeout: float = 5.0) -> Tuple[bool, s
     from fi_instrumentation.otel import _normalized_endpoint
 
     if not settings.has_credentials:
-        return False, "FI_API_KEY and FI_SECRET_KEY are not set"
+        return False, settings.export_off or "FI_API_KEY and FI_SECRET_KEY are not set"
     _, endpoint = _normalized_endpoint(settings.base_url)
     token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
     try:
@@ -112,7 +112,7 @@ def _doctor(args: argparse.Namespace) -> int:
         print(("Collector: OK, " if collector[0] else "Collector: PROBLEM, ") + collector[1])
     if not settings.has_credentials:
         print()
-        print("Set FI_API_KEY and FI_SECRET_KEY to start exporting traces.")
+        print(settings.export_off or "Set FI_API_KEY and FI_SECRET_KEY to start exporting traces.")
     return 0 if collector is None or collector[0] else 1
 
 
@@ -196,6 +196,9 @@ def _validate(args: argparse.Namespace) -> int:
         print(f"Invalid: {error}")
         return 1
     if args.offline:
+        if settings.export_off:
+            print(f"Invalid: {settings.export_off}")
+            return 1
         print("Configuration is valid." if settings.has_credentials else "Configuration is valid; keys are not set.")
         return 0 if settings.has_credentials else 1
     ok, detail = check_collector(settings)
