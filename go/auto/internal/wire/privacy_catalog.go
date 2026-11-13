@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -64,6 +65,24 @@ type privacyCatalog struct {
 		Nodes int `json:"max_nodes"`
 		Text  int `json:"max_text_chars"`
 	}
+	ScalarMetrics scalarMetricCatalog `json:"scalar_metrics"`
+}
+
+// scalarMetricCatalog is the closed set of exact usage and metric keys whose
+// scalar values are metadata, even when the key spells audio or bytes.
+type scalarMetricCatalog struct {
+	Decimal    decimalCountRule `json:"canonical_decimal"`
+	Containers []metricContainer
+}
+type decimalCountRule struct {
+	Regex    string
+	MaxChars int `json:"max_chars"`
+	MinChars int `json:"base64_min_chars"`
+	Keys     []string
+}
+type metricContainer struct {
+	Keys      []string
+	ValueType string `json:"value_type"`
 }
 
 type nameExclusion struct {
@@ -83,6 +102,10 @@ type compiledPrivacy struct {
 	magic      [][]magicTest
 	signed     map[string]bool
 	alphabet   [256]bool
+	metrics    map[string]bool
+	counts     map[string]bool
+	decimals   map[string]bool
+	decimal    *regexp.Regexp
 }
 
 var privacyRules = loadPrivacyCatalog()
@@ -150,7 +173,71 @@ func loadPrivacyCatalog() *compiledPrivacy {
 		}
 		p.magic = append(p.magic, tests)
 	}
+	p.metrics, p.counts, p.decimals = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, container := range p.ScalarMetrics.Containers {
+		if container.ValueType != "" && container.ValueType != "nonnegative_safe_integer" {
+			panic("invalid embedded scalar metric type")
+		}
+		for _, key := range container.Keys {
+			p.metrics[key] = true
+			if container.ValueType != "" {
+				p.counts[key] = true
+			}
+		}
+	}
+	for _, key := range p.ScalarMetrics.Decimal.Keys {
+		p.decimals[key] = true
+	}
+	p.decimal = regexp.MustCompile(p.ScalarMetrics.Decimal.Regex)
 	return p
+}
+
+const maxSafeInteger = 1<<53 - 1
+
+// scalarMetric reports the catalog's scalar metric role: the exact complete
+// key of a declared counter, a valid scalar for that counter, and no explicit
+// or inherited media/audio context on the key or any ancestor. The role only
+// removes the media classification that the key's own spelling (audio, bytes)
+// would cause; magic bytes, data URIs and credential rules still apply.
+func scalarMetric(value any, path string, inherited mediaHint, hints privacyHints) bool {
+	p := privacyRules
+	if !p.metrics[path] || inherited.media || inherited.audio {
+		return false
+	}
+	parts := pathParts(path)
+	for i := 0; i <= len(parts); i++ {
+		if h := hints[strings.Join(parts[:i], ".")]; h.media || h.audio {
+			return false
+		}
+	}
+	if !p.counts[path] {
+		switch value.(type) {
+		case bool, float64, int, int64, json.Number, string:
+			return true
+		}
+		return false
+	}
+	switch x := value.(type) {
+	case float64:
+		return x >= 0 && x <= maxSafeInteger && x == math.Trunc(x)
+	case int:
+		return x >= 0 && int64(x) <= maxSafeInteger
+	case int64:
+		return x >= 0 && x <= maxSafeInteger
+	case json.Number:
+		n, err := x.Int64()
+		return err == nil && n >= 0 && n <= maxSafeInteger
+	case string:
+		// Only the declared byte counter keeps a canonical decimal string, and
+		// never one with base64 shape at or above the catalog's length.
+		rule := p.ScalarMetrics.Decimal
+		if !p.decimals[path] || x == "" || len(x) > rule.MaxChars || p.decimal.FindString(x) != x || len(x) >= rule.MinChars && base64Alphabet(x) {
+			return false
+		}
+		n, err := strconv.ParseInt(x, 10, 64)
+		return err == nil && n <= maxSafeInteger
+	}
+	return false
 }
 
 func asciiLower(s string) string {
@@ -499,6 +586,7 @@ func mediaString(value, path string, inherited mediaHint, hints privacyHints, fr
 	}
 	encoded := base64Alphabet(value)
 	_, payload := mediaContext(path, inherited, hints)
+	payload = payload && !scalarMetric(value, path, inherited, hints)
 	if magicMedia(value) || payload {
 		if encoded {
 			return omitted(value), true
@@ -857,7 +945,7 @@ func privacyWalk(value any, path string, secrets []string, budget *privacyBudget
 		return nil
 	case bool, float64, int, int64, json.Number:
 		_, payload := mediaContext(path, inherited, hints)
-		if payload || budget.atRisk(path) && failClosedMediaPath(path) {
+		if (payload || budget.atRisk(path) && failClosedMediaPath(path)) && !scalarMetric(x, path, inherited, hints) {
 			return privacyRules.Media.Other
 		}
 		return x
