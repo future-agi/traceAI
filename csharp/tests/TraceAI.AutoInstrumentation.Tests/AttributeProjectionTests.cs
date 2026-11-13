@@ -142,6 +142,36 @@ public class AttributeProjectionTests : InitIsolation
         }
         finally { Environment.SetEnvironmentVariable("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT",previous); }
     }
+    private static readonly string[] Timing={ "gen_ai.response.latency","gen_ai.response.time_to_first_chunk","gen_ai.response.time_to_first_text",
+        "gen_ai.response.time_to_first_token","gen_ai.server.time_to_first_token","gen_ai.server.time_per_output_token","gen_ai.server.request.duration" };
+    [Fact]
+    public void TimingFamilyIsProtectedBetweenUsageAndProvenance()
+    {
+        foreach(string key in Timing) Assert.True(AttributeProjection.Protected(key),key);
+        // Exact present keys only, not a prefix family.
+        Assert.False(AttributeProjection.Protected("gen_ai.server.time_to_first_token_ms"));
+        Assert.False(AttributeProjection.Protected("gen_ai.response.latency.extra"));
+        var tags=new[] { "traceai.capture.layer","gen_ai.server.request.duration","gen_ai.usage.total_tokens","gen_ai.response.time_to_first_chunk","gen_ai.request.model" }
+            .Select(key=>new KeyValuePair<string,object?>(key,1L)).ToArray();
+        Assert.Equal(new[] { "gen_ai.request.model","gen_ai.usage.total_tokens","gen_ai.response.time_to_first_chunk","gen_ai.server.request.duration","traceai.capture.layer" },
+            AttributeProjection.Order(tags).Select(pair=>pair.Key));
+    }
+    [Fact]
+    public void PresentTimingIsReservedBeforeContentAndKeptAheadOfProvenanceOnOverflow()
+    {
+        var tags=new Dictionary<string,object?> { ["gen_ai.span.kind"]="LLM",["traceai.capture.layer"]="wire",
+            ["gen_ai.response.time_to_first_chunk"]=0.01,["gen_ai.response.time_to_first_text"]=0.03,
+            ["gen_ai.output.messages.0.message.role"]="assistant",["gen_ai.output.messages.0.message.content"]="answer",
+            ["output.value"]="answer",["output.mime_type"]="text/plain" };
+        var reserved=AttributeProjection.Project(tags,5);
+        Assert.Equal(new[] { "traceai.capture.dropped_content_count","gen_ai.span.kind","gen_ai.response.time_to_first_chunk","gen_ai.response.time_to_first_text","traceai.capture.layer" },
+            reserved.Select(pair=>pair.Key));
+        Assert.Equal(4L,reserved[0].Value);
+        tags["gen_ai.usage.total_tokens"]=5L;
+        var overflow=AttributeProjection.Project(tags,4);
+        Assert.Equal(new[] { "traceai.capture.dropped_content_count","gen_ai.span.kind","gen_ai.usage.total_tokens","gen_ai.response.time_to_first_chunk" },
+            overflow.Select(pair=>pair.Key));
+    }
     [Theory]
     [InlineData(0)] [InlineData(128)]
     public void ProjectionRespectsZeroAndDefaultLimits(int limit)

@@ -38,8 +38,14 @@ public class PrivacyCatalogTests : InitIsolation
     [Fact]
     public void EverySpecPrivacyFixturePassesProductionBoundaryAndIsIdempotent()
     {
-        var cases=JsonNode.Parse(File.ReadAllText(Shipping("privacy-fixtures.json")))!["cases"]!.AsArray();
-        Assert.True(cases.Count>=4985);
+        var bundle=JsonNode.Parse(File.ReadAllText(Shipping("privacy-fixtures.json")))!;
+        var catalog=JsonNode.Parse(File.ReadAllText(Shipping("privacy.json")))!;
+        // Catalog version 3: token-timing exclusions, credential value shapes and
+        // no contextual logprob exemption at generic sites.
+        Assert.Equal(3,catalog["version"]!.GetValue<int>());
+        Assert.Equal(3,bundle["catalog_version"]!.GetValue<int>());
+        var cases=bundle["cases"]!.AsArray();
+        Assert.True(cases.Count>=6238,$"{cases.Count} cases");
         var failures=new List<string>();
         foreach(var fixture in cases)
         {
@@ -93,7 +99,11 @@ public class PrivacyCatalogTests : InitIsolation
             Assert.Empty(WirePrivacy.QuerySecrets("https://example.invalid/?"+Uri.EscapeDataString(name)+"="+secret));
             Assert.Empty(WirePrivacy.RequestSecrets(new RequestData { Body=Encoding.UTF8.GetBytes(new JsonObject { [name]=secret }.ToJsonString()) }));
         }
-        Assert.Empty(WirePrivacy.RequestSecrets(new RequestData { Body="{\"choices\":[{\"logprobs\":{\"content\":[{\"token\":\"ordinary logprob text\"}]}}]}"u8.ToArray() }));
+        // Catalog v3 removed the contextual logprob exemption. Generic request data
+        // treats a logprob `token` like any other token field; only an explicit,
+        // parsed provider response root may check logprob tokens by value instead.
+        Assert.True(WirePrivacy.CredentialKey("choices.0.logprobs.content.0.token"));
+        Assert.Contains("ordinary logprob text",WirePrivacy.RequestSecrets(new RequestData { Body="{\"choices\":[{\"logprobs\":{\"content\":[{\"token\":\"ordinary logprob text\"}]}}]}"u8.ToArray() }));
     }
     [Theory]
     [InlineData(false)] [InlineData(true)]
