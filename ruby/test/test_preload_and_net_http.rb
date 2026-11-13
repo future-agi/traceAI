@@ -211,6 +211,23 @@ class EndToEndTest
     end
   end
 
+  # Bundler.require (as Rails runs it) requires traceai/auto for a plain
+  # Gemfile entry, which would start the agent in every process. With
+  # require: false, as the README shows, RUBYOPT stays the only switch.
+  def test_gemfile_entry_with_require_false_leaves_rubyopt_as_the_switch
+    { "require: false" => 'NOT_LOADED', nil => 'LOADED' }.each do |option, expected|
+      gemfile = Tempfile.new(['bundler-require', '.Gemfile'], File.join(ROOT, '.bundle/tmp'))
+      gemfile.write("source 'https://rubygems.org'\ngem 'traceai-auto', path: #{ROOT.inspect}#{option ? ', ' + option : ''}\n"); gemfile.close
+      overrides = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }.merge('BUNDLE_GEMFILE' => gemfile.path, 'RUBYOPT' => nil, 'RUBYLIB' => nil)
+      stdout, stderr, status = app("require 'bundler/setup'\nBundler.require\nputs defined?(TraceAI::Auto) ? 'LOADED' : 'NOT_LOADED'\n", overrides)
+      assert status.success?, stderr
+      assert_equal "#{expected}\n", stdout, option.inspect
+    ensure
+      File.unlink(gemfile.path + '.lock') if gemfile && File.exist?(gemfile.path + '.lock')
+      gemfile&.unlink
+    end
+  end
+
   def test_default_gemfile_and_manual_bundler_setup_do_not_preactivate_agent_dependencies
     Dir.mktmpdir('default-json-bundle', File.join(ROOT, '.bundle/tmp')) do |directory|
       File.write(File.join(directory, 'Gemfile'), "source 'https://rubygems.org'\ngem 'json', '2.6.3'\n")
