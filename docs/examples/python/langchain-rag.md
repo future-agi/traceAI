@@ -5,7 +5,7 @@ Build a traced Retrieval-Augmented Generation pipeline with LangChain.
 ## Prerequisites
 
 ```bash
-pip install fi-instrumentation traceai-langchain traceai-openai traceai-chromadb
+pip install fi-instrumentation-otel traceai-langchain traceai-openai traceai-chromadb
 pip install langchain langchain-openai langchain-community chromadb
 ```
 

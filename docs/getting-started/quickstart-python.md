@@ -7,7 +7,7 @@ Get started with traceAI in your Python AI application in under 5 minutes.
 ### 1. Install Dependencies
 
 ```bash
-pip install fi-instrumentation traceai-openai openai
+pip install fi-instrumentation-otel traceai-openai openai
 ```
 
 ### 2. Set Environment Variables

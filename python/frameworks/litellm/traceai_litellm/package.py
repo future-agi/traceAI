@@ -1,2 +1,2 @@
-_instruments = ("litellm >= 1.43.0",)
+_instruments = ("litellm >= 1.43.0, != 1.107.0",)
 _supports_metrics = False

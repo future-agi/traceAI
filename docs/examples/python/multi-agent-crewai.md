@@ -5,7 +5,7 @@ Build a traced multi-agent workflow with CrewAI.
 ## Prerequisites
 
 ```bash
-pip install fi-instrumentation traceai-crewai traceai-openai
+pip install fi-instrumentation-otel traceai-crewai traceai-openai
 pip install crewai crewai-tools
 ```
 

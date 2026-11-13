@@ -15,7 +15,8 @@ psycopg2-binary>=2.9.9
 # ── LLM SDKs ──
 openai>=1.0.0
 anthropic>=0.28.0
-litellm>=1.30.0
+# Pinned to one known-good LiteLLM release so every E2E install uses the same version; 1.107.0 is excluded
+litellm==1.84.10
 groq>=0.5.0
 google-genai>=1.0.0
 cohere>=5.0.0
