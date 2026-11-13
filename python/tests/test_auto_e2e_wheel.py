@@ -71,6 +71,42 @@ APP_WITH_OWN_SPAN = textwrap.dedent('''
 ''')
 
 
+# The app registers its own Future AGI provider, then starts the agent with one call. Its own HTTP
+# client span carries a credential and is not an AI span.
+APP_REGISTERED = textwrap.dedent('''
+    import json, sys
+    import fi_instrumentation
+    from fi_instrumentation import register
+
+    provider = register(project_name="registered-e2e", set_global_tracer_provider=True, batch=False, verbose=False)
+    fi_instrumentation.init()
+    import openai
+
+    client = openai.OpenAI(base_url=sys.argv[1] + "/v1", api_key="sk-test-PLACEHOLDER", max_retries=0)
+    attributes = {"url.full": sys.argv[1] + "/orders?api_key=sk-test-PLACEHOLDER"}
+    with provider.get_tracer("checkout.http").start_as_current_span("application-only", attributes=attributes):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "ping"}])
+    print("RESULT " + json.dumps({"reply": response.choices[0].message.content}))
+''')
+
+# The app wraps its model call in an agent span of its own, as the core docs show.
+APP_WITH_AGENT_SPAN = textwrap.dedent('''
+    import json, sys
+    import openai
+    from opentelemetry import trace
+    from fi_instrumentation import FITracer
+    from fi_instrumentation.fi_types import FiSpanKindValues
+
+    tracer = FITracer(trace.get_tracer(__name__))
+    client = openai.OpenAI(base_url=sys.argv[1] + "/v1", api_key="sk-test-PLACEHOLDER", max_retries=0)
+    with tracer.start_as_current_span("support agent", fi_span_kind=FiSpanKindValues.AGENT):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "ping"}])
+    print("RESULT " + json.dumps({"reply": response.choices[0].message.content}))
+''')
+
+
 def _site_dirs():
     dirs = list(site.getsitepackages())
     if site.ENABLE_USER_SITE:
@@ -203,6 +239,42 @@ def test_opentelemetry_instrument_on_a_configured_provider_sends_only_ai_spans(t
     # The Future AGI route ran on the provider OpenTelemetry configured, so it keeps the app's service name.
     assert {s["resource"].get("service.name") for s in spans} == {"checkout"}
     assert {s["resource"]["project_name"] for s in spans} == {"zero-code-e2e"}
+    _assert_no_keys(bodies)
+
+
+def _run_app(source, tmp_path, **extra):
+    script = tmp_path / "app.py"
+    script.write_text(source)
+    with MockServer() as server:
+        result = subprocess.run([sys.executable, str(script), server.url], env=_env(server, **extra),
+                                capture_output=True, text=True, timeout=180, cwd=tmp_path)
+        spans = decode_spans(server.collected)
+        bodies = list(server.collected)
+    assert result.returncode == 0, result.stderr
+    assert 'RESULT {"reply": "pong"}' in result.stdout
+    return spans, bodies
+
+
+def test_register_then_init_sends_only_ai_spans(tmp_path):
+    spans, bodies = _run_app(APP_REGISTERED, tmp_path)
+    names = [s["name"] for s in spans]
+    llm = [s for s in spans if s["attributes"].get("gen_ai.span.kind") == "LLM"]
+    assert len(llm) == 1, names
+    # The application's own span stays out of Future AGI, though its provider exports there.
+    assert "application-only" not in names
+    assert {s["resource"]["project_name"] for s in spans} == {"registered-e2e"}
+    _assert_no_keys(bodies)
+
+
+def test_a_manual_agent_span_reaches_future_agi_with_its_model_call(tmp_path):
+    spans, bodies = _run_app(APP_WITH_AGENT_SPAN, tmp_path, FI_AUTO_INSTRUMENT="true")
+    names = [s["name"] for s in spans]
+    agent = [s for s in spans if s["name"] == "support agent"]
+    llm = [s for s in spans if s["attributes"].get("gen_ai.span.kind") == "LLM"]
+    assert len(agent) == 1 and len(llm) == 1, names
+    assert agent[0]["attributes"]["gen_ai.span.kind"] == "AGENT"
+    # The model call arrives under the agent span, not as an orphan.
+    assert llm[0]["parent_span_id"] == agent[0]["span_id"]
     _assert_no_keys(bodies)
 
 
