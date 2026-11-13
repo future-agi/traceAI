@@ -65,11 +65,32 @@ class CatalogV3Test {
         assertEquals("<omitted: media>", clean(privacy, "gen_ai.audio.bytes", 1.5));
         assertEquals("<omitted: media>", clean(privacy, "gen_ai.usage.input_tokens.audio.data", 5L));
         assertEquals("<omitted: media>", privacy.clean("gen_ai.usage.input_tokens.audio", List.of(5L), WirePrivacy.Scope.EMPTY, true));
-        // Forwarded application spans keep the typed counters and timing values.
-        var forwarded = ExportPrivacy.attributes(Attributes.of(AttributeKey.longKey("gen_ai.usage.input_tokens.audio"), 5L,
+        // Export-time span attributes keep the typed counters and timing values.
+        var exported = ExportPrivacy.attributes(Attributes.of(AttributeKey.longKey("gen_ai.usage.input_tokens.audio"), 5L,
             AttributeKey.doubleKey("gen_ai.server.time_to_first_token"), .125), privacy, AutoConfig.resolve(Map.of(), Map.of()), false, "chat");
-        assertEquals(5L, forwarded.get(AttributeKey.longKey("gen_ai.usage.input_tokens.audio")));
-        assertEquals(.125, forwarded.get(AttributeKey.doubleKey("gen_ai.server.time_to_first_token")));
+        assertEquals(5L, exported.get(AttributeKey.longKey("gen_ai.usage.input_tokens.audio")));
+        assertEquals(.125, exported.get(AttributeKey.doubleKey("gen_ai.server.time_to_first_token")));
+    }
+
+    @Test void imageAndVideoDeclarationsOmitTheirPayloadsAtAnyLength() {
+        var privacy = privacy();
+        // Short, with no media signature: only the declaration makes it media.
+        String encoded = "QUJDREVGR0g=", omitted = "<omitted: 12 base64 chars>";
+        for (String type : List.of("image", "input_image", "image_url", "video", "input_video"))
+            assertEquals(omitted, WireCore.map(clean(privacy, "", Map.of("type", type, "data", encoded))).get("data"), type);
+        assertEquals(omitted, WireCore.map(clean(privacy, "", Map.of("modality", "IMAGE", "data", encoded))).get("data"));
+        assertEquals(omitted, WireCore.map(clean(privacy, "", Map.of("modality", "video", "content", encoded))).get("content"));
+        // Image declarations also cover encoded image, image_url and url fields; an ordinary image URL stays text.
+        var image = WireCore.map(clean(privacy, "", Map.of("type", "image", "image", encoded, "url", "https://example.invalid/cat.png")));
+        assertEquals(omitted, image.get("image")); assertEquals("https://example.invalid/cat.png", image.get("url"));
+        assertEquals(Map.of("url", omitted), WireCore.map(clean(privacy, "", Map.of("type", "image_url", "image_url", Map.of("url", encoded)))).get("image_url"));
+        // Video does not extend the image-only url field, and other types change nothing.
+        assertEquals(encoded, WireCore.map(clean(privacy, "", Map.of("type", "video", "url", encoded))).get("url"));
+        assertEquals(encoded, WireCore.map(clean(privacy, "", Map.of("type", "text", "data", encoded))).get("data"));
+        // A flattened declaration applies at its exact indexed parent only.
+        var flat = privacy.scope(Map.<String, Object>of("gen_ai.input.messages.0.content.1.type", "input_image"), "", WirePrivacy.Scope.EMPTY);
+        assertEquals(omitted, privacy.clean("gen_ai.input.messages.0.content.1.data", encoded, flat, true));
+        assertEquals(encoded, privacy.clean("gen_ai.input.messages.0.content.2.data", encoded, flat, true));
     }
 
     @Test void wireChatSpansCarryNoLogprobTokens() {
