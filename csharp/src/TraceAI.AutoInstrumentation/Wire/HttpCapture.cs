@@ -16,8 +16,13 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
     private readonly int _attributeLimit;
     private readonly IDisposable _all;
     private readonly ConcurrentBag<IDisposable> _subscriptions = [];
-    private readonly ConcurrentDictionary<HttpRequestMessage, Capture> _pending = new();
+    // Keyed by the handler's logging id: the response event carries no request.
+    private readonly ConcurrentDictionary<Guid,(HttpRequestMessage Request,Capture Capture)> _pending = new();
     private int _disposed;
+    // These events carry no Activity. Subscribing to HttpRequestOut instead makes HttpClient
+    // create an Activity, and send trace headers, for every request, including requests made
+    // with no ambient Activity in console applications, workers and background jobs.
+    internal const string RequestEvent="System.Net.Http.Request",ResponseEvent="System.Net.Http.Response",ExceptionEvent="System.Net.Http.Exception";
     internal HttpCapture(AutoConfig config,ModelCoverage? coverage=null,AutoProcessor? privacy=null)
     {
         _config=config; _attributeLimit=AttributeProjection.Limit(config.Options.Exporter);
@@ -29,8 +34,8 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
         try
         {
             if(listener.Name=="HttpHandlerDiagnosticListener" && Volatile.Read(ref _disposed)==0)
-                // HttpClient first checks the operation name (without .Start/.Stop) before emitting either event.
-                _subscriptions.Add(listener.Subscribe(this, name=>name.StartsWith("System.Net.Http.HttpRequestOut",StringComparison.Ordinal)||name=="System.Net.Http.Exception"));
+                // HttpClient creates an Activity when HttpRequestOut is enabled; never enable it.
+                _subscriptions.Add(listener.Subscribe(this, name=>name is RequestEvent or ResponseEvent or ExceptionEvent));
         } catch { }
     }
     private static object? Property(object? payload,string name) => payload?.GetType().GetProperty(name)?.GetValue(payload);
@@ -38,35 +43,44 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
     {
         try
         {
-            if(Volatile.Read(ref _disposed)!=0 || Property(e.Value,"Request") is not HttpRequestMessage request) return;
-            if(e.Key.EndsWith(".Start",StringComparison.Ordinal)) Start(request);
-            else if(e.Key.EndsWith(".Exception",StringComparison.Ordinal))
+            if(Volatile.Read(ref _disposed)!=0) return;
+            if(e.Key==RequestEvent)
             {
-                if(_pending.TryRemove(request,out var capture)) capture.Complete(Property(e.Value,"Exception") as Exception ?? new HttpRequestException());
+                if(Property(e.Value,"Request") is HttpRequestMessage request && Property(e.Value,"LoggingRequestId") is Guid id) Start(request,id);
             }
-            else if(e.Key.EndsWith(".Stop",StringComparison.Ordinal) && _pending.TryRemove(request,out var capture))
+            else if(e.Key==ExceptionEvent)
             {
-                if(Property(e.Value,"Response") is HttpResponseMessage response)
-                {
-                    capture.HeadersObserved();
-                    capture.Response.Status=(int)response.StatusCode;
-                    capture.Response.Headers=Headers(response.Content.Headers);
-                    // Keep the original response AND content object. SocketsHttpHandler's
-                    // framework content has one owned stream; tap only that stream, never
-                    // call application content/stream factories or read an unread body.
-                    var content=response.Content;
-                    var type=content.GetType();
-                    var field=type.Assembly==typeof(HttpClient).Assembly && type.FullName=="System.Net.Http.HttpConnectionResponseContent"?
-                        type.GetField("_stream",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic):null;
-                    if(field?.GetValue(content) is Stream stream) field.SetValue(content,new ReadTapStream(stream,capture));
-                    // Unknown custom content is deliberately untouched, not silently replaced.
-                }
-                else capture.Complete(new HttpRequestException());
+                if(Property(e.Value,"Request") is not HttpRequestMessage failed) return;
+                foreach(var pending in _pending)
+                    if(ReferenceEquals(pending.Value.Request,failed) && _pending.TryRemove(pending.Key,out var entry))
+                        entry.Capture.Complete(Property(e.Value,"Exception") as Exception ?? new HttpRequestException());
+            }
+            else if(e.Key==ResponseEvent)
+            {
+                if(Property(e.Value,"LoggingRequestId") is not Guid id || !_pending.TryRemove(id,out var entry)) return;
+                if(Property(e.Value,"Response") is HttpResponseMessage response) Tap(response,entry.Capture);
+                // A canceled request raises no exception event and has no response.
+                else entry.Capture.Complete(new HttpRequestException());
             }
         }
         catch { /* Diagnostic callbacks execute on application threads and must be fail-open. */ }
     }
-    private void Start(HttpRequestMessage request)
+    private static void Tap(HttpResponseMessage response,Capture capture)
+    {
+        capture.HeadersObserved();
+        capture.Response.Status=(int)response.StatusCode;
+        capture.Response.Headers=Headers(response.Content.Headers);
+        // Keep the original response AND content object. SocketsHttpHandler's
+        // framework content has one owned stream; tap only that stream, never
+        // call application content/stream factories or read an unread body.
+        var content=response.Content;
+        var type=content.GetType();
+        var field=type.Assembly==typeof(HttpClient).Assembly && type.FullName=="System.Net.Http.HttpConnectionResponseContent"?
+            type.GetField("_stream",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic):null;
+        if(field?.GetValue(content) is Stream stream) field.SetValue(content,new ReadTapStream(stream,capture));
+        // Unknown custom content is deliberately untouched, not silently replaced.
+    }
+    private void Start(HttpRequestMessage request,Guid id)
     {
         // Capture the transport boundary before any matching, copying or context work.
         var started=DateTimeOffset.UtcNow; long clock=Stopwatch.GetTimestamp();
@@ -94,7 +108,7 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
         foreach(var header in request.Headers) req.Headers[header.Key]=string.Join(",",header.Value);
         var capture=new Capture(match,req,_config.MaxBody,parent?.Context??default,started,
             HostContext.Attributes(),()=>Volatile.Read(ref _disposed)==0,clock,_attributeLimit,_privacy);
-        if(_pending.TryAdd(request,capture))
+        if(_pending.TryAdd(id,(request,capture)))
         {
             current?.SetCustomProperty("traceai.wire.capture",true);
             if(request.Content is {} content && MultipartObserver.Create(content,req) is {} multipart)
