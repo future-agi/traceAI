@@ -60,6 +60,19 @@ finally:
 
 Open the `traceai-quickstart` project in **Observe** in [Future AGI](https://app.futureagi.com). `provider.shutdown()` flushes pending spans before exit.
 
+## Zero-code tracing
+
+To trace an existing app without changing its code, install the traceAI package for each library it uses, set the keys, and start the app through `fi-instrument`:
+
+```bash
+pip install fi-instrumentation-otel traceai-openai
+export FI_API_KEY="your-future-agi-api-key"
+export FI_SECRET_KEY="your-future-agi-secret-key"
+fi-instrument python app.py
+```
+
+Every installed traceAI integration turns on when the app first imports its library. To keep your start command, use `FI_AUTO_INSTRUMENT=true python app.py` or `opentelemetry-instrument python app.py`; in code, the same is one call to `fi_instrumentation.init()`. A library without its traceAI package is not traced: `fi-instrument doctor` shows what is covered, and `fi-instrument bootstrap --install` adds the missing packages. See the [zero-code guide](../docs/python/auto-instrumentation.md).
+
 ## Shutdown on termination
 
 From `fi-instrumentation-otel` 1.2.2, `register()` leaves your SIGINT and SIGTERM handlers unchanged. Default SIGTERM does not run Python exit hooks, so call `provider.shutdown()` from your application's shutdown path to export pending spans on container stop, and allow enough termination grace time. SIGKILL cannot flush spans.
