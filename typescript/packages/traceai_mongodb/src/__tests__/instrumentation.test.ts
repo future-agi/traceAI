@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { MongoDBInstrumentation, isPatched } from "../instrumentation";
 
 // Lifecycle-only stand-in. Cursor, command, error and vector behavior is tested
@@ -48,5 +49,54 @@ describe("MongoDB instrumentation lifecycle", () => {
     instrumentation.manuallyInstrument({ MongoClient: Client });
     expect(new Client().connect()).toBe(result);
     await expect(result).resolves.toBe("connected");
+  });
+});
+
+describe("MongoDB vector-only mode", () => {
+  // Command events as the driver emits them on a client created with monitorCommands.
+  class Client extends EventEmitter { monitorCommands = true; }
+  function run(client: Client, requestId: number, commandName: string, command: Record<string, unknown>) {
+    client.emit("commandStarted", { requestId, commandName, databaseName: "app", command });
+    client.emit("commandSucceeded", { requestId, commandName, reply: { ok: 1 } });
+  }
+
+  test("traces only aggregate commands with a vector search stage", async () => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    // The option is new in this release; older type declarations do not list it.
+    const instrumentation = new MongoDBInstrumentation({ instrumentationConfig: { vectorOnly: true } as any });
+    instrumentation.setTracerProvider(provider);
+    try {
+      expect((instrumentation as any).vectorOnly).toBe(true);
+      const client = new Client();
+      instrumentation.instrumentClient(client as any);
+      run(client, 1, "find", { find: "users", filter: { email: "person@example.com" } });
+      run(client, 2, "insert", { insert: "orders", documents: [{ total: 1 }] });
+      run(client, 3, "aggregate", { aggregate: "users", pipeline: [{ $match: { active: true } }] });
+      run(client, 4, "aggregate", { aggregate: "docs", pipeline: [{ $vectorSearch: { index: "vectors", path: "embedding", queryVector: [0.1, 0.2], numCandidates: 10, limit: 2 } }] });
+      const spans = exporter.getFinishedSpans();
+      expect(spans.map((span) => span.name)).toEqual(["mongodb aggregate"]);
+      expect(spans[0].attributes["db.operation.type"]).toBe("vector_search");
+    } finally {
+      instrumentation.disable();
+      await provider.shutdown();
+    }
+  });
+
+  test("traces every application command when the option is off", async () => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    const instrumentation = new MongoDBInstrumentation();
+    instrumentation.setTracerProvider(provider);
+    try {
+      const client = new Client();
+      instrumentation.instrumentClient(client as any);
+      run(client, 1, "find", { find: "users", filter: {} });
+      run(client, 2, "aggregate", { aggregate: "users", pipeline: [{ $match: { active: true } }] });
+      expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual(["mongodb find", "mongodb aggregate"]);
+    } finally {
+      instrumentation.disable();
+      await provider.shutdown();
+    }
   });
 });
