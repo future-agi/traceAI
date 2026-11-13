@@ -1,6 +1,7 @@
 """Zero-code entry points (fi-instrument, FI_AUTO_INSTRUMENT, opentelemetry-instrument, init())
 and the integration registry."""
 
+import dataclasses
 import logging
 import os
 import subprocess
@@ -9,6 +10,7 @@ import textwrap
 import types
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -25,6 +27,15 @@ def _child_env():
     return env
 
 
+def _run_child(tmp_path, source, env=None):
+    script = tmp_path / "check.py"
+    script.write_text(textwrap.dedent(source))
+    result = subprocess.run([sys.executable, str(script)], env=env or _child_env(),
+                            capture_output=True, text=True, timeout=120, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    return result
+
+
 def test_bootstrap_fails_open(monkeypatch, caplog):
     def explode(**_):
         raise RuntimeError("collector config broken")
@@ -37,16 +48,31 @@ def test_bootstrap_fails_open(monkeypatch, caplog):
     assert caplog.text.count("auto-instrumentation is off: collector config broken") == 1
 
 
-def test_opentelemetry_instrument_entry_point_starts_the_agent(monkeypatch):
+@pytest.mark.parametrize("opt_in, starts", [
+    (None, False), ("", False), ("false", False), ("0", False),
+    ("true", True), ("1", True), (" YES ", True), ("on", True),
+])
+def test_opentelemetry_instrument_entry_point_needs_the_explicit_opt_in(monkeypatch, tmp_path, opt_in, starts):
     calls = []
     monkeypatch.setattr(_manager, "_state", _manager._State())
     monkeypatch.setattr(_bootstrap, "start", lambda: calls.append("start"))
+    monkeypatch.setattr(_bootstrap, "_started", False)
+    monkeypatch.setattr(_manager, "shutdown", lambda *args, **kwargs: calls.append("shutdown"))
+    # Keys and a futureagi.toml are configuration for a manual setup, not a request to start the agent.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "futureagi.toml").write_text('project_name = "manual-setup"\n')
     monkeypatch.setenv("FI_API_KEY", "fi-api-PLACEHOLDER")
+    monkeypatch.setenv("FI_SECRET_KEY", "fi-secret-PLACEHOLDER")
+    if opt_in is None:
+        monkeypatch.delenv("FI_AUTO_INSTRUMENT", raising=False)
+    else:
+        monkeypatch.setenv("FI_AUTO_INSTRUMENT", opt_in)
     instrumentor = FutureAGIInstrumentor()
     assert tuple(instrumentor.instrumentation_dependencies()) == ()
     instrumentor.instrument()
     instrumentor.uninstrument()
-    assert calls == ["start"]
+    # uninstrument() stops only an agent that started.
+    assert calls == (["start"] if starts else [])
 
 
 def test_opentelemetry_entry_point_is_quiet_without_future_agi_settings(monkeypatch, tmp_path):
@@ -54,12 +80,28 @@ def test_opentelemetry_entry_point_is_quiet_without_future_agi_settings(monkeypa
     monkeypatch.setattr(_manager, "_state", _manager._State())
     monkeypatch.setattr(_bootstrap, "start", lambda: calls.append("start"))
     monkeypatch.chdir(tmp_path)
-    for key in ("FI_API_KEY", "FI_SECRET_KEY", "FI_CONFIG_FILE"):
+    for key in ("FI_API_KEY", "FI_SECRET_KEY", "FI_CONFIG_FILE", "FI_AUTO_INSTRUMENT"):
         monkeypatch.delenv(key, raising=False)
     instrumentor = FutureAGIInstrumentor()
     instrumentor.instrument()
     instrumentor.uninstrument()
     assert calls == []
+
+
+def test_loading_the_entry_point_does_not_load_the_agent(tmp_path):
+    # opentelemetry-instrument loads every installed entry point at each start.
+    env = _child_env()
+    env.update({"FI_API_KEY": "fi-api-PLACEHOLDER", "FI_SECRET_KEY": "fi-secret-PLACEHOLDER"})
+    result = _run_child(tmp_path, '''
+        import sys
+        from fi_instrumentation.auto._otel_entry import FutureAGIInstrumentor
+
+        instrumentor = FutureAGIInstrumentor()
+        instrumentor.instrument()
+        instrumentor.uninstrument()
+        print("fi_instrumentation.auto._manager" in sys.modules)
+    ''', env)
+    assert result.stdout.split() == ["False"]
 
 
 def _pth_line():
@@ -136,11 +178,26 @@ def _module(**attrs):
     return types.SimpleNamespace(**attrs)
 
 
-@pytest.mark.parametrize("name", sorted(_registry.SETUPS))
-def test_setup_adapters_call_the_package_entry_point(name):
-    provider, config = object(), object()
-    recorder = _Recorder()
+def _stand_in_openinference(monkeypatch):
+    """The OpenInference TraceConfig one setup function takes instead of fi_instrumentation's."""
 
+    @dataclasses.dataclass(frozen=True)
+    class TraceConfig:
+        hide_inputs: Optional[bool] = None
+        hide_outputs: Optional[bool] = None
+        hide_input_images: Optional[bool] = None
+        base64_image_max_length: Optional[int] = None
+
+    package = types.ModuleType("openinference")
+    instrumentation = types.ModuleType("openinference.instrumentation")
+    instrumentation.TraceConfig = TraceConfig
+    package.instrumentation = instrumentation
+    monkeypatch.setitem(sys.modules, "openinference", package)
+    monkeypatch.setitem(sys.modules, "openinference.instrumentation", instrumentation)
+    return TraceConfig
+
+
+def _setup_module(recorder):
     class Instrumentor:
         def instrument(self, *args, **kwargs):
             return recorder(*args, **kwargs)
@@ -149,7 +206,7 @@ def test_setup_adapters_call_the_package_entry_point(name):
             pass
 
     recorder.result = Instrumentor()
-    module = _module(
+    return _module(
         SemanticKernelInstrumentor=Instrumentor,
         StrandsInstrumentor=Instrumentor,
         configure_agno_tracing=recorder,
@@ -157,9 +214,48 @@ def test_setup_adapters_call_the_package_entry_point(name):
         enable_fi_attribute_mapping=recorder,
         setup=recorder,
     )
-    detail = _registry.SETUPS[name](module, provider, config)
+
+
+@pytest.mark.parametrize("name", sorted(_registry.SETUPS))
+def test_setup_adapters_call_the_package_entry_point(name, monkeypatch):
+    from fi_instrumentation import TraceConfig
+
+    _stand_in_openinference(monkeypatch)
+    recorder = _Recorder()
+    detail = _registry.SETUPS[name](_setup_module(recorder), object(), TraceConfig())
     assert detail
     assert recorder.calls
+
+
+# Setup adapters whose package takes a TraceConfig. The voice integration takes it on the Future AGI
+# route instead (test_voice_route_rechecks_recordings_with_the_agent_config); the others take none.
+_CONFIG_ADAPTERS = ("ag2_classic", "agent_framework", "agno", "semantic_kernel")
+_NO_CONFIG_ADAPTERS = ("beeai", "livekit", "pipecat")
+
+
+def test_every_setup_adapter_is_checked_for_its_trace_config():
+    assert sorted(_registry.SETUPS) == sorted(_CONFIG_ADAPTERS + _NO_CONFIG_ADAPTERS)
+
+
+@pytest.mark.parametrize("name", _CONFIG_ADAPTERS)
+def test_setup_adapters_pass_the_trace_config(name, monkeypatch):
+    from fi_instrumentation import TraceConfig
+
+    openinference_config = _stand_in_openinference(monkeypatch)
+    config = TraceConfig(hide_inputs=True, base64_image_max_length=64)
+    recorder = _Recorder()
+    _registry.SETUPS[name](_setup_module(recorder), object(), config)
+    ((_, kwargs),) = recorder.calls
+    passed = kwargs.get("config")
+    if name == "agno":
+        # That package takes OpenInference's TraceConfig: the agent's hide settings, converted.
+        assert isinstance(passed, openinference_config)
+        assert passed.hide_inputs is True
+        assert passed.base64_image_max_length == 64
+        # A setting that hides nothing is left unset, so the package's own variables still apply.
+        assert passed.hide_outputs is None
+    else:
+        assert passed is config
 
 
 @pytest.mark.parametrize("name", ["livekit", "pipecat", "agent_framework"])
@@ -205,6 +301,7 @@ def test_registry_enables_transformers_and_openrouter(name, target, package, mod
     ("temporal", "temporalio", "traceAI-temporal"),
     ("cognee", "cognee", "traceai-cognee"),
     ("openwebui", "open_webui", "traceAI-openwebui"),
+    ("strands", "strands", "traceai-strands"),
 ])
 def test_packages_without_automatic_setup_are_reported_as_manual(name, target, package):
     integration = _registry.find(name)
@@ -214,3 +311,11 @@ def test_packages_without_automatic_setup_are_reported_as_manual(name, target, p
     assert integration.package == package
     # The report tells the user what to add.
     assert package in integration.note
+
+
+def test_an_integration_without_an_export_adapter_gives_its_setup_line():
+    # Its package converts spans and applies privacy settings in an exporter wrapper that the
+    # agent does not install, so it is reported as manual with the line from its README.
+    integration = _registry.find("strands")
+    assert "StrandsSpanExporter" in integration.note
+    assert "strands" not in _registry.SETUPS

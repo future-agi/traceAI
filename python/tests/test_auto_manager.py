@@ -1,5 +1,6 @@
 """auto_instrument() and init(): lazy enabling, statuses, provider setup and fail-open behaviour."""
 
+import importlib
 import logging
 import signal
 import sys
@@ -67,15 +68,122 @@ def enable_fi_attribute_mapping(*args, **kwargs):
     return False
 '''
 
+# A stand-in web server library and its OpenTelemetry instrumentor: each request is a root SERVER
+# span with an internal child, under the instrumentor's own scope. Only /chat calls the AI library.
+FAKE_WEB_LIBRARY = '''
+def handle(path):
+    if path == "/chat":
+        import fakeailib
+
+        return fakeailib.complete("ping")
+    return "ok"
+'''
+
+FAKE_WEB_INSTRUMENTOR = '''
+import wrapt
+from opentelemetry import trace as trace_api
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.utils import unwrap
+
+
+class FakeWebInstrumentor(BaseInstrumentor):
+    def instrumentation_dependencies(self):
+        return ()
+
+    def _instrument(self, **kwargs):
+        tracer = trace_api.get_tracer("opentelemetry.instrumentation.fakeweb", None, kwargs.get("tracer_provider"))
+
+        def traced(wrapped, instance, args, call_kwargs):
+            with tracer.start_as_current_span("GET " + args[0], kind=trace_api.SpanKind.SERVER,
+                                              attributes={"http.target": args[0]}):
+                with tracer.start_as_current_span("http send"):
+                    return wrapped(*args, **call_kwargs)
+
+        wrapt.wrap_function_wrapper("fakeweblib", "handle", traced)
+
+    def _uninstrument(self, **kwargs):
+        unwrap(__import__("fakeweblib"), "handle")
+'''
+
+# A stand-in for the voice package's export step: it records the policies its mapped copy sees.
+FAKE_LIVEKIT = {
+    "traceai_livekit": '''
+SEEN = []
+
+
+class BaseMappedSpanExporter:
+    def _convert_attributes(self, attributes, *, recording_snapshot=False):
+        return {**attributes, "mapped": True}
+
+    def _mapped_copy(self, span):
+        from traceai_livekit._recording_boundary import _copy_span
+
+        SEEN.append(tuple(getattr(span.instrumentation_scope, "recording_policies", ())))
+        return _copy_span(span, attributes=self._convert_attributes(dict(span.attributes or {})))
+
+
+def enable_fi_attribute_mapping(*args, **kwargs):
+    return False
+
+
+def flush_on_job_shutdown(provider=None):
+    return True
+''',
+    "traceai_livekit/_recording_attributes": '''
+def _is_recording_snapshot(attributes, *, span_name=None):
+    return "lk.recording.operation" in attributes or span_name == "livekit.recording.snapshot"
+''',
+    "traceai_livekit/_recording_boundary": '''
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+
+
+class _RecordingScope(InstrumentationScope):
+    def __init__(self, scope, policies):
+        super().__init__(name=scope.name, version=scope.version, schema_url=scope.schema_url)
+        self.recording_policies = tuple(policies)
+
+
+def _copy_span(span, **changes):
+    fields = {key: getattr(span, key) for key in (
+        "name", "context", "parent", "resource", "attributes", "events", "links",
+        "kind", "status", "start_time", "end_time", "instrumentation_scope")}
+    fields.update(changes)
+    return ReadableSpan(**fields)
+''',
+}
+
+# Spans under a traceAI instrumentation scope are AI spans, so the Future AGI route carries them.
+AI_SCOPE = "traceai_test_app"
+
 _ENVIRONMENT = (
     "FI_API_KEY", "FI_SECRET_KEY", "FI_INSTRUMENTATIONS", "FI_DISABLED_INSTRUMENTATIONS",
     "FI_CONFIG_FILE", "OTEL_SDK_DISABLED", "FI_SAMPLE_RATE", "FI_PROJECT_NAME", "FI_PROJECT_TYPE",
     "FI_PROJECT_VERSION_NAME", "OTEL_SERVICE_NAME", "FI_AUTO_DEBUG", "FI_HIDE_INPUTS",
 )
 
+# Stand-ins that single tests write; removed from sys.modules around every test.
+_STAND_INS = ("fakeweblib", "fakewebinstr", "traceai_livekit", "latelib", "traceai_latelib",
+              "partiallib", "traceai_partiallib")
+
 
 def _instrumentor(target, fail):
     return FAKE_INSTRUMENTOR.replace("TARGET", target).replace("FAIL", str(fail))
+
+
+def _write_packages(root, packages):
+    """Write ``name`` (a package) or ``name/sub`` (a module in it) sources, visible to imports at once."""
+    for name, source in packages.items():
+        package, _, module = name.partition("/")
+        (root / package).mkdir(exist_ok=True)
+        (root / package / f"{module or '__init__'}.py").write_text(source)
+    importlib.invalidate_caches()
+
+
+def _forget_modules(names):
+    for module in list(sys.modules):
+        if module.split(".")[0] in names:
+            sys.modules.pop(module)
 
 
 def _reset_global_provider():
@@ -95,9 +203,7 @@ def fresh_state(monkeypatch, tmp_path):
         "traceai_brokenlib": _instrumentor("brokenlib", fail=True),
         "traceai_fakemapped": FAKE_MAPPER,
     }
-    for name, source in packages.items():
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "__init__.py").write_text(source)
+    _write_packages(tmp_path, packages)
     monkeypatch.syspath_prepend(str(tmp_path))
     integrations = (
         Integration("fake", ("fakeailib",), "traceAI-fake", "traceai_fakeailib", "FakeInstrumentor"),
@@ -117,14 +223,13 @@ def fresh_state(monkeypatch, tmp_path):
     for key in _ENVIRONMENT:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
-    for module in list(sys.modules):
-        if module.split(".")[0] in packages:
-            sys.modules.pop(module)
+    _forget_modules(set(packages) | set(_STAND_INS))
     _reset_global_provider()
     yield tmp_path
     _manager.shutdown()
     signal.signal(signal.SIGTERM, previous_sigterm)
     _reset_global_provider()
+    _forget_modules(_STAND_INS)
 
 
 def test_lazy_enable_on_first_import(fresh_state):
@@ -328,7 +433,7 @@ def test_repeated_init_reuses_app_processor_and_exporter(fresh_state):
     for _ in range(3):
         assert _manager.init(span_exporter=exporter, batch=False, project_name="coexist") is app_provider
     assert len(app_provider._active_span_processor._span_processors) == 1
-    with app_provider.get_tracer("app").start_as_current_span("one"):
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("one"):
         pass
     assert [s.name for s in exporter.get_finished_spans()] == ["one"]
     _manager.shutdown()
@@ -341,7 +446,7 @@ def test_repeated_init_preserves_original_project_and_exporter(fresh_state, monk
     provider = _manager.init(span_exporter=exporter, batch=False, project_name="first")
     assert _manager.init(span_exporter=exporter, batch=False, project_name="second") is provider
     assert calls == []
-    with provider.get_tracer("app").start_as_current_span("one"):
+    with provider.get_tracer(AI_SCOPE).start_as_current_span("one"):
         pass
     (span,) = exporter.get_finished_spans()
     assert span.resource.attributes["project_name"] == "first"
@@ -367,7 +472,7 @@ def test_second_init_cannot_replace_app_export_route(fresh_state):
     _manager.init(span_exporter=first, batch=False)
     _manager.init(span_exporter=second, batch=False)
     assert len(app_provider._active_span_processor._span_processors) == 1
-    with app_provider.get_tracer("app").start_as_current_span("one"):
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("one"):
         pass
     assert len(first.get_finished_spans()) == 1
     assert not second.get_finished_spans()
@@ -394,7 +499,7 @@ def test_app_resource_defaults_match_register(fresh_state):
     trace_api.set_tracer_provider(application)
     exporter = InMemorySpanExporter()
     _manager.init(span_exporter=exporter, batch=False)
-    with application.get_tracer("app").start_as_current_span("one"):
+    with application.get_tracer(AI_SCOPE).start_as_current_span("one"):
         pass
     attrs = exporter.get_finished_spans()[0].resource.attributes
     assert attrs["project_name"] == fresh_state.name
@@ -416,10 +521,137 @@ def test_attribute_mappers_change_only_the_future_agi_route(fresh_state, monkeyp
     trace_api.set_tracer_provider(app_provider)
     _manager.init(span_exporter=fi_exporter, batch=False, lazy=False)
     assert {s.name: s.status for s in _manager.report()}["mapped"] == _manager.INSTRUMENTED
-    with app_provider.get_tracer("app").start_as_current_span("one"):
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("one"):
         pass
     assert "mapped" not in app_exporter.get_finished_spans()[0].attributes
     assert fi_exporter.get_finished_spans()[0].attributes["mapped"] is True
+
+
+def _credential_bearing_span(tracer):
+    # An application HTTP client span: a credential-named query parameter and an authorization header.
+    attributes = {
+        "url.full": "https://api.example.com/v1/orders?api_key=sk-test-PLACEHOLDER",
+        "http.request.header.authorization": ("Bearer sk-test-PLACEHOLDER",),
+    }
+    with tracer.start_as_current_span("GET /v1/orders", kind=trace_api.SpanKind.CLIENT, attributes=attributes):
+        pass
+
+
+def _future_agi_text(exporter):
+    return repr([(s.name, dict(s.attributes or {})) for s in exporter.get_finished_spans()])
+
+
+def test_future_agi_route_carries_only_ai_spans_on_an_application_provider(fresh_state):
+    from fi_instrumentation import TraceConfig
+    from fi_instrumentation.instrumentation.config import REDACTED_VALUE
+
+    app_exporter, fi_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+    app_provider = TracerProvider()
+    app_provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    trace_api.set_tracer_provider(app_provider)
+    _manager.init(span_exporter=fi_exporter, batch=False, config=TraceConfig(hide_inputs=True))
+    _credential_bearing_span(app_provider.get_tracer("checkout.http"))
+    # A traceAI span that did not mask its own content is masked on the Future AGI copy.
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("raw", attributes={"input.value": "a prompt"}):
+        pass
+    import fakeailib
+
+    fakeailib.complete("ping")
+    # The application's own exporter still gets every span, unchanged.
+    assert [s.name for s in app_exporter.get_finished_spans()] == ["GET /v1/orders", "raw", "chat fake"]
+    assert app_exporter.get_finished_spans()[1].attributes["input.value"] == "a prompt"
+    assert [s.name for s in fi_exporter.get_finished_spans()] == ["raw", "chat fake"]
+    assert fi_exporter.get_finished_spans()[0].attributes["input.value"] == REDACTED_VALUE
+    assert "PLACEHOLDER" not in _future_agi_text(fi_exporter)
+
+
+def test_future_agi_route_carries_only_ai_spans_on_the_agent_provider(fresh_state):
+    from fi_instrumentation import TraceConfig
+    from fi_instrumentation.instrumentation.config import REDACTED_VALUE
+
+    fi_exporter, app_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+    provider = _manager.init(span_exporter=fi_exporter, batch=False, config=TraceConfig(hide_inputs=True))
+    assert provider is trace_api.get_tracer_provider()
+    # A processor the application adds to the agent's provider, for its own backend.
+    provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    _credential_bearing_span(trace_api.get_tracer("checkout.http"))
+    with trace_api.get_tracer(AI_SCOPE).start_as_current_span("raw", attributes={"input.value": "a prompt"}):
+        pass
+    assert [s.name for s in app_exporter.get_finished_spans()] == ["GET /v1/orders", "raw"]
+    assert app_exporter.get_finished_spans()[1].attributes["input.value"] == "a prompt"
+    assert [s.name for s in fi_exporter.get_finished_spans()] == ["raw"]
+    assert fi_exporter.get_finished_spans()[0].attributes["input.value"] == REDACTED_VALUE
+    assert "PLACEHOLDER" not in _future_agi_text(fi_exporter)
+
+
+def test_future_agi_route_keeps_only_request_roots_that_led_to_an_ai_call(fresh_state, monkeypatch):
+    _write_packages(fresh_state, {"fakeweblib": FAKE_WEB_LIBRARY, "fakewebinstr": FAKE_WEB_INSTRUMENTOR})
+    web = Integration("fakeweb", ("fakeweblib",), "opentelemetry-instrumentation-fakeweb", "fakewebinstr",
+                      "FakeWebInstrumentor", category="web", scopes=("opentelemetry.instrumentation.fakeweb",))
+    fake = Integration("fake", ("fakeailib",), "traceAI-fake", "traceai_fakeailib", "FakeInstrumentor")
+    monkeypatch.setattr(_registry, "ALL", (web, fake))
+    app_exporter, fi_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+    app_provider = TracerProvider()
+    app_provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    trace_api.set_tracer_provider(app_provider)
+    _manager.init(span_exporter=fi_exporter, batch=False, lazy=False)
+    statuses = {s.name: s.status for s in _manager.report()}
+    assert statuses == {"fakeweb": _manager.INSTRUMENTED, "fake": _manager.INSTRUMENTED}
+    import fakeweblib
+
+    # One route calls the AI library, one does not (a health check).
+    assert fakeweblib.handle("/chat") == "pong"
+    assert fakeweblib.handle("/health") == "ok"
+    # A request root from an instrumentation the agent did not enable stays with the application too.
+    with app_provider.get_tracer("checkout.server").start_as_current_span(
+            "POST /login", kind=trace_api.SpanKind.SERVER, attributes={"http.target": "/login?token=fi-secret-PLACEHOLDER"}):
+        fakeailib = sys.modules["fakeailib"]
+        fakeailib.complete("ping")
+    assert sorted(s.name for s in app_exporter.get_finished_spans()) == [
+        "GET /chat", "GET /health", "POST /login", "chat fake", "chat fake", "http send", "http send"]
+    # Only the AI route's request root and its AI child reach Future AGI, plus the other AI call.
+    assert [s.name for s in fi_exporter.get_finished_spans()] == ["chat fake", "GET /chat", "chat fake"]
+    assert "PLACEHOLDER" not in _future_agi_text(fi_exporter)
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_the_route_shows_its_exporter_to_duplicate_checks(fresh_state, batch):
+    exporter = InMemorySpanExporter()
+    provider = _manager.init(span_exporter=exporter, batch=batch)
+    # How integrations look for an exporter that already sends to the same place.
+    found = []
+    for processor in provider._active_span_processor._span_processors:
+        candidate = getattr(processor, "span_exporter", None)
+        if candidate is None:
+            candidate = getattr(getattr(processor, "_batch_processor", None), "_exporter", None)
+        found.append(candidate)
+    assert found == [exporter]
+
+
+def test_voice_route_rechecks_recordings_with_the_agent_config(fresh_state, monkeypatch):
+    from fi_instrumentation import TraceConfig
+
+    _write_packages(fresh_state, FAKE_LIVEKIT)
+    voice = Integration("livekit", ("fakeailib",), "traceAI-livekit", "traceai_livekit", "livekit",
+                        kind=_registry.SETUP, category="voice")
+    monkeypatch.setattr(_registry, "ALL", (voice,))
+    app_exporter, fi_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+    app_provider = TracerProvider()
+    app_provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    trace_api.set_tracer_provider(app_provider)
+    config = TraceConfig(hide_inputs=True)
+    _manager.init(span_exporter=fi_exporter, batch=False, lazy=False, config=config)
+    assert {s.name: s.status for s in _manager.report()}["livekit"] == _manager.INSTRUMENTED
+    with app_provider.get_tracer("traceai_livekit.recording").start_as_current_span(
+            "livekit.recording.snapshot", attributes={"lk.recording.operation": "snapshot"}):
+        pass
+    import traceai_livekit
+
+    # The package's export step ran on the Future AGI copy, with the agent's TraceConfig among its policies.
+    assert any(config in policies for policies in traceai_livekit.SEEN)
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["mapped"] is True
+    assert "mapped" not in app_exporter.get_finished_spans()[0].attributes
 
 
 def test_flush_and_shutdown_honor_deadlines(fresh_state, monkeypatch):
