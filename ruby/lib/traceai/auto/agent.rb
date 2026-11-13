@@ -604,8 +604,23 @@ module TraceAI
           s.finish
           flushed = flush(timeout: 5)
           collector = flushed && @exporter.last_result == OpenTelemetry::SDK::Trace::Export::SUCCESS ? 'accepted' : 'failed'
+        elsif test_export && active? && @exporter && @processor
+          # The dependency-free exporter sends the same probe directly, bypassing
+          # sampling, without activating any gem.
+          now = (Time.now.to_r * 1_000_000_000).to_i
+          probe = ExportRecord.new('traceai-auto doctor', :internal, LocalStatus.new(0, ''), "\0".b * 8, 1, 0, 0, now, now,
+                                   {'traceai.diagnostic' => true}, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
+                                   Random.urandom(8), Random.urandom(16), 1, '', false)
+          collector = @exporter.export([probe], timeout: 5).zero? ? 'accepted' : 'failed'
         end
-        {version: VERSION, active: active?, integrations: integrations, config: @config&.masked, collector: collector,
+        if collector == 'not_tested'
+          detail = if !test_export then 'test export not requested'
+                   elsif waiting_for_bundle? then 'waiting for the application to run Bundler.setup'
+                   elsif !active? then 'agent not active (no Future AGI key pair or application destination)'
+                   else 'no Future AGI route (explicit destinations without fi_export: true)'
+                   end
+        end
+        {version: VERSION, active: active?, integrations: integrations, config: @config&.masked, collector: collector, collector_detail: detail,
          projection_zero_limit_spans: defined?(AttributeProjection) ? AttributeProjection.zero_limit_spans : 0}
       end
     end

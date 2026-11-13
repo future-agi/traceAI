@@ -1,5 +1,14 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
+# Run from the application's directory, the doctor should see the application's
+# bundle, as the application itself would. Load it first when there is one.
+if !ENV['BUNDLE_GEMFILE'].to_s.empty? || File.file?('Gemfile') || File.file?('gems.rb')
+  begin
+    require 'bundler/setup'
+  rescue LoadError, StandardError => e
+    warn "traceai-auto: could not load the application's bundle (#{e.class.name}); continuing without it"
+  end
+end
 require 'traceai/auto'
 require 'traceai/auto/codec'
 case ARGV.shift
