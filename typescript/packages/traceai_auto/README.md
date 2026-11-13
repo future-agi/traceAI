@@ -73,7 +73,7 @@ The **Try it with OpenAI** example, as it appears in Future AGI (a real run with
 - **Model calls without per-call wrappers.** OpenAI instrumentation is included. Recognized AI requests through the process's global `fetch` are also captured, including compatible gateways.
 - **More context from installed integrations.** Dedicated packages can add framework, agent, tool, retrieval and database spans. They retain their own method/version limits; auto-registration does not expand their coverage.
 - **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression.
-- **Your OpenTelemetry setup stays yours.** The agent registers no global tracer provider, context manager or propagator, and never adds a processor to your provider. An SDK you start before or after the preload registers normally and its exporters keep receiving your spans. AI spans still parent under your active span.
+- **Your OpenTelemetry setup stays yours.** The agent registers no global tracer provider, context manager or propagator, and by default never adds a processor to your provider (the outgoing propagation opt-in below adds one that only observes span starts). An SDK you start before or after the preload registers normally and its exporters keep receiving your spans. AI spans still parent under your active span.
 - **Standard OpenTelemetry.** Send to Future AGI by default, or use an [application-owned provider/exporter](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#bring-your-own-opentelemetry-destination) without FI credentials.
 
 This is AI instrumentation, not a general-purpose APM agent. **Future AGI receives only AI spans**: wire spans and spans from traceAI integrations. Your HTTP, database, cache and custom spans stay with your own provider. Incoming HTTP spans are off unless `FI_INSTRUMENTATIONS` lists `http`; even then a request span is sent only when the request made an AI call. Database integrations that the agent enables (pgvector, Redis, MongoDB) trace only vector operations. Outgoing non-AI HTTP calls, arbitrary application functions and every possible AI transport are not automatically traced. To also send your application's own spans, as earlier releases did, set `FI_FORWARD_APP_SPANS=true` (or `forwardApplicationSpans: true` in `init()`); see [forwarding application spans](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#forwarding-application-spans).
@@ -225,6 +225,13 @@ node --import @traceai/auto/register app.mjs
 | `propagateOutgoingAdapters` | `TRACEAI_PROPAGATE_OUTGOING_ADAPTERS` | `propagate_outgoing_adapters` | `false` |
 | `propagateOutgoing` | `TRACEAI_PROPAGATE_OUTGOING` | `propagate_outgoing` | `default` |
 | `propagateHosts` | `TRACEAI_PROPAGATE_HOSTS` | `propagate_hosts` | No explicit rules |
+
+Headers are added only under spans whose start the agent observed. With the opt-in on
+and an FI route, the agent therefore adds one processor to your tracer provider (found
+on the API at startup, on the next tick, or at the next AI span start) that only notes when your spans
+start; it never exports, ends or changes a span, and is removed at shutdown. Requests
+read the active span through your context manager, so an application without its own
+OpenTelemetry setup gets no headers from this adapter.
 
 Policy alone, even `all`, never activates the adapter. Shared-catalog vendor hosts
 and provider ports (including Ollama's `11434`) are **unconditionally excluded**,

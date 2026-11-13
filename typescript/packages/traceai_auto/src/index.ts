@@ -36,6 +36,8 @@ interface AgentState {
   unsent: number; collectorFailed?: boolean;
   /** Forwarding switch only: attach to an application provider registered after init. */
   tryForward?: () => void; cancelForward?: () => void;
+  /** Outgoing propagation opt-in only: observe the application's span starts. */
+  tryObserve?: () => void; stopObserving?: () => void;
 }
 const STATE_KEY = Symbol.for("traceai.auto.agent.v1");
 let state: AgentState | undefined;
@@ -109,6 +111,32 @@ function forwardLater(agent: AgentState, processor: SpanProcessor): void {
   const immediate = setImmediate(attempt); immediate.unref?.();
   agent.cancelForward = () => { agent.tryForward = undefined; clearImmediate(immediate); };
 }
+/**
+ * Outgoing propagation opt-in only. Trace headers are added only under spans whose
+ * start the agent observed, so it notes the kind and redirect lineage of the
+ * application's spans. This observer never exports, ends or changes a span.
+ */
+function observeApplicationSpans(agent: AgentState, supplied: unknown): void {
+  const observer: SpanProcessor = { onStart: (span, parent) => noteOutgoingSpanStart(span, parent), onEnd() {}, async forceFlush() {}, async shutdown() {} };
+  let detach: (() => void) | undefined, immediate: ReturnType<typeof setImmediate> | undefined;
+  const attempt = () => {
+    if (detach) return;
+    const app = supplied ?? existingProvider();
+    if (!app || app === agent.provider) return;
+    agent.tryObserve = undefined;
+    detach = attach(app, observer);
+    if (!detach) { detach = () => {}; warn("outgoing-observer", "The application's provider cannot accept processors; outgoing requests get no trace headers."); }
+  };
+  agent.stopObserving = () => {
+    agent.tryObserve = undefined;
+    if (immediate) clearImmediate(immediate);
+    const remove = detach; detach = () => {};
+    remove?.();
+  };
+  attempt();
+  // The application may start its SDK after the preload.
+  if (!detach) { agent.tryObserve = attempt; immediate = setImmediate(attempt); immediate.unref?.(); }
+}
 // Incoming HTTP SERVER spans reach Future AGI only for traces with AI work.
 interface ServerGate { note(traceId: unknown): void; start(span: any): void; admit(span: any): boolean }
 function serverGate(): ServerGate {
@@ -135,7 +163,7 @@ function credentialsWarning(config: Config): string {
 function removeHooks(agent: AgentState): void {
   for (const remove of [
     () => { if (agent.beforeExit) process.removeListener("beforeExit", agent.beforeExit); },
-    () => agent.removeSignals?.(), () => agent.cancelForward?.(),
+    () => agent.removeSignals?.(), () => agent.cancelForward?.(), () => agent.stopObserving?.(),
     () => agent.removeOutgoing?.(), () => agent.fetch?.remove(), () => removePromiseObservation(), () => agent.removeObservation?.(), () => agent.removeLibraries?.(),
   ]) { try { remove(); } catch { /* A broken cleanup must not skip the others. */ } }
 }
@@ -187,7 +215,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // AI-only route: an incoming SERVER span passes only when its trace has AI work.
     const gate = !forwarding && !agent.processorIsObserver && explicitlyEnabled("http", config) ? serverGate() : undefined;
     const onStart = processor.onStart.bind(processor);
-    processor.onStart = (span, parent) => { agent.tryForward?.(); gate?.start(span); noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
+    processor.onStart = (span, parent) => { agent.tryForward?.(); agent.tryObserve?.(); gate?.start(span); noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
     // Where AI spans are created. By default this is the agent's own provider,
     // never registered globally, whose only processor is the FI route. The
     // application's provider is used only when init() is given one without an FI
@@ -269,7 +297,11 @@ export function init(options: Options = {}): TracerProvider | undefined {
     };
     // HTTP/HTTPS propagation is independent of wire/body capture and HTTP spans.
     // Adapters stay off unless explicitly selected; destination policy is not activation.
-    agent.removeOutgoing = installOutgoingPropagation(outgoingPolicyForConfig(config), createOutgoingPrivacy(config.traceConfig, credentialsForConfig(config)), agent.statuses, warn, config.propagateOutgoingAdapters);
+    const outgoingPolicy = outgoingPolicyForConfig(config);
+    agent.removeOutgoing = installOutgoingPropagation(outgoingPolicy, createOutgoingPrivacy(config.traceConfig, credentialsForConfig(config)), agent.statuses, warn, config.propagateOutgoingAdapters);
+    // With the FI processor on the application's provider (no FI route, or the
+    // forwarding switch), its start hook already observes the application's spans.
+    if (route && !forwarding && config.propagateOutgoingAdapters === true && outgoingPolicy.valid && outgoingPolicy.mode !== "none") observeApplicationSpans(agent, options.provider);
     if (config.wireCapture && enabled("wire", config)) agent.removeObservation = observeTransports();
     agent.removeLibraries = enableLibraries(config, options, instrumentationProvider, agent.statuses, warn, processor);
     // Stay outside the installed mapping adapters: Genkit can shorten an SDK-
