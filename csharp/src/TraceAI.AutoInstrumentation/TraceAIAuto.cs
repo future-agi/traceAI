@@ -506,22 +506,28 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     }
     /// <summary>Error messages, stack traces and status descriptions are omitted; error types stay.</summary>
     internal bool HideErrorDetails=>_mask.HideErrorDetails;
+    /// <summary>Custom property holding the FI context captured when an activity started.</summary>
+    internal const string ContextProperty="traceai.context";
     public override void OnStart(Activity activity)
     {
         try
         {
             if(!_enabled()) return;
             if(InstrumentationSuppression.Active) { activity.SetCustomProperty("traceai.suppressed",true); return; }
-            Map(activity);
-            for(var ancestor=activity;ancestor!=null;ancestor=ancestor.Parent)
-                if(ancestor.GetCustomProperty("traceai.model.covered") is true || ancestor.GetTagItem("gen_ai.span.kind") is "LLM" or "EMBEDDING" or "RERANKER" or "GUARDRAIL")
-                { activity.SetCustomProperty("traceai.model.covered",true); break; }
-            if(activity.GetTagItem("traceai.capture.layer") is not string layer || layer!="wire")
-                foreach(var (key,value) in HostContext.Attributes()) activity.SetTag(key,value);
+            // Never write tags here: application providers can export this same Activity.
+            // Only custom properties, which exporters do not read, are set. Mapping and the
+            // FI context are applied to the detached export copy (ExportSnapshot).
+            bool model=Kind(activity) is "LLM" or "EMBEDDING" or "RERANKER";
+            for(var ancestor=activity;!model&&ancestor!=null;ancestor=ancestor.Parent)
+                model=ancestor.GetCustomProperty("traceai.model.covered") is true || ancestor.GetTagItem("gen_ai.span.kind") is "LLM" or "EMBEDDING" or "RERANKER" or "GUARDRAIL";
+            if(model) activity.SetCustomProperty("traceai.model.covered",true);
+            // Wire spans carry the request's context from their own creation.
+            if(activity.GetTagItem("traceai.capture.layer") is not "wire" && HostContext.Attributes().ToArray() is { Length:>0 } context)
+                activity.SetCustomProperty(ContextProperty,context);
         }
         catch { }
     }
-    internal static void Map(Activity a)
+    internal static string? Kind(Activity a)
     {
         var operation=a.GetTagItem("gen_ai.operation.name") as string??a.OperationName.Split(' ')[0];
         string? kind=operation.ToLowerInvariant() switch {
@@ -529,7 +535,12 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
             "embeddings" or "embedding" or "embed" => "EMBEDDING", "rerank" => "RERANKER",
             "invoke_agent" or "create_agent" => "AGENT", "execute_tool" or "invoke_tool" => "TOOL", _=>null };
         if(kind==null&&a.Source.Name.StartsWith("Microsoft.SemanticKernel")) kind="CHAIN";
-        if(kind!=null&&a.GetTagItem("gen_ai.span.kind")==null) a.SetTag("gen_ai.span.kind",kind);
+        return kind;
+    }
+    /// <summary>Maps an export copy, never an application Activity.</summary>
+    internal static void Map(Activity a)
+    {
+        if(Kind(a) is {} kind&&a.GetTagItem("gen_ai.span.kind")==null) a.SetTag("gen_ai.span.kind",kind);
         foreach(var (legacy,current) in new[] { ("gen_ai.system","gen_ai.provider.name"),("gen_ai.usage.prompt_tokens","gen_ai.usage.input_tokens"),("gen_ai.usage.completion_tokens","gen_ai.usage.output_tokens") })
             if(a.GetTagItem(current)==null&&a.GetTagItem(legacy) is {} value) a.SetTag(current,value);
         if(a.GetTagItem("gen_ai.usage.total_tokens")==null &&
@@ -538,7 +549,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
             a.SetTag("gen_ai.usage.total_tokens",checked(Convert.ToInt64(input)+Convert.ToInt64(output)));
         if(a.Source.Name!=TraceAIAuto.Source.Name) a.SetTag("traceai.capture.layer","library");
     }
-    // No privacy mutation on OnEnd: other providers own the same Activity.
+    // No mutation on OnEnd either: other providers own the same Activity.
     internal ExportSnapshot PrepareExport(in Batch<Activity> batch,Resource resource,int? attributeLimit=null)
     {
         // A queue-backed OTel Batch is single-pass (enumeration dequeues it).

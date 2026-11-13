@@ -84,6 +84,16 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         }
         return result;
     }
+    // The FI context captured when the activity started joins the copy's candidates,
+    // so it passes the same privacy rules. The application's own tags win on a clash.
+    private static IEnumerable<KeyValuePair<string,object?>> WithContext(IEnumerable<KeyValuePair<string,object?>> tags,KeyValuePair<string,string>[]? context)
+    {
+        if(context==null||context.Length==0) return tags;
+        var merged=tags.ToList();
+        foreach(var pair in context)
+            if(!merged.Exists(tag=>tag.Key==pair.Key)) merged.Add(new(pair.Key,pair.Value));
+        return merged;
+    }
     private static ActivitySource Scope(ActivitySource original,Budget budget,Func<string,object,string?,object?> safe,Func<string,string> redact)
     {
         var scope=(ActivitySource)Clone(original);
@@ -125,7 +135,8 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 // Hidden error details keep the status code but never its description.
                 copy.SetStatus(original.Status==ActivityStatusCode.Unset?ActivityStatusCode.Ok:original.Status,
                     hideErrorDetails||original.StatusDescription==null?null:budget.Text(original.StatusDescription,redact));
-                foreach(var tag in Tags(original.TagObjects,budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
+                var context=original.GetCustomProperty(AutoProcessor.ContextProperty) as KeyValuePair<string,string>[];
+                foreach(var tag in Tags(WithContext(original.TagObjects,context),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
                 foreach(var item in original.Events)
                 {
                     budget.Node();
