@@ -81,6 +81,9 @@ module TraceAI
         return 1 unless socket_class
         # Use the application's already-loaded socket/TLS implementation. Even
         # requiring net/http here would select default gems in HTTPX-only apps.
+        # An application that never loaded OpenSSL (one that only calls a local
+        # http model server) gets it loaded here when no version can conflict.
+        load_tls if url.scheme == 'https' && !native_class('OpenSSL::SSL::SSLSocket')
         tls_context = native_class('OpenSSL::SSL::SSLContext') if url.scheme == 'https'
         tls_socket = native_class('OpenSSL::SSL::SSLSocket') if tls_context
         return 1 if url.scheme == 'https' && !tls_socket
@@ -148,8 +151,20 @@ module TraceAI
         end
         native_class('Socket')
       end
+      # Load OpenSSL only where no gem version can conflict: the application or
+      # its bundle already selected it, or only one version is installed.
+      def load_tls
+        return if @tls_attempted
+        @tls_attempted = true
+        selected = Gem.loaded_specs.key?('openssl') || Auto.bundle_ready? || Gem::Specification.find_all_by_name('openssl').size <= 1
+        require 'openssl' if selected
+      rescue LoadError, StandardError => e
+        Auto.debug(e)
+      end
+      # Walking every class holds the GVL, so a class found once is remembered;
+      # a missing one is looked up again on the next export.
       def native_class(name)
-        ObjectSpace.each_object(Class).find { |klass| Module.instance_method(:name).bind_call(klass) == name }
+        (@native_classes ||= {})[name] ||= ObjectSpace.each_object(Class).find { |klass| Module.instance_method(:name).bind_call(klass) == name }
       end
       def wait_for(io, state, deadline)
         remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
