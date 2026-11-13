@@ -22,7 +22,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from fi_instrumentation.auto import _registry
 from fi_instrumentation.auto._config import AutoConfig, resolve
-from fi_instrumentation.auto._registry import INSTRUMENTOR, MANUAL, PLUGIN, SERVICE, Integration
+from fi_instrumentation.auto._registry import INSTRUMENTOR, MANUAL, PLUGIN, SERVICE, SETUP, Integration
 
 logger = logging.getLogger("fi_instrumentation.auto")
 
@@ -292,6 +292,17 @@ def _cleanup(callback: Any, name: str) -> None:
 
 
 def _on_import(integration: Integration) -> None:
+    """A hooked library was imported. Plan an integration again if it was not ready at startup."""
+    state = _state
+    with state.lock:
+        current = state.statuses.get(integration.name)
+        if (not state.stopped and current is not None and state.settings is not None
+                and current.status in (NOT_INSTALLED, MISSING_INSTRUMENTOR)):
+            # Its library, or its traceAI package, became importable after startup.
+            status, action, _ = _plan(integration, state.settings, lazy=False)
+            state.statuses[integration.name] = status
+            if action != "now":
+                return
     _reconcile(integration)
 
 
@@ -330,12 +341,16 @@ def _plan(integration: Integration, settings: AutoConfig, lazy: bool) -> Tuple[I
     """Decide what to do with an integration without doing it.
 
     Returns the status to report, the action (``"now"``, ``"hook"`` or None) and the
-    installed import targets.
+    import targets to act on.
     """
     status = IntegrationStatus(integration.name, NOT_INSTALLED, integration.category, integration.package)
     installed = [t for t in integration.targets if module_available(t)]
+    # A library or traceAI package that is not importable yet can still arrive (a later-sorting
+    # .pth file, a sys.path change): wait for the library's first import and plan it again then.
+    later = (integration.kind in (INSTRUMENTOR, SETUP)
+             and settings.is_selected(integration.name, integration.default))
     if not installed:
-        return status, None, installed
+        return status, ("hook" if later else None), list(integration.targets)
     if not settings.is_selected(integration.name, integration.default):
         status.status = DISABLED
         status.detail = integration.note or "disabled by configuration"
@@ -346,7 +361,7 @@ def _plan(integration: Integration, settings: AutoConfig, lazy: bool) -> Tuple[I
     if not module_available(integration.module):
         status.status = MISSING_INSTRUMENTOR
         status.detail = f"not traced yet: pip install {integration.package}"
-        return status, None, installed
+        return status, ("hook" if later else None), installed
     if integration.kind == PLUGIN:
         status.status, status.detail = INSTRUMENTED, integration.note
         return status, None, installed
@@ -415,12 +430,12 @@ def auto_instrument(
             _state.statuses[integration.name] = status
             actions.append((integration, action, installed))
 
-    for integration, action, installed in actions:
+    for integration, action, targets in actions:
         if action == "now":
             _reconcile(integration)
         elif action == "hook" and integration.name not in _state.hooked:
             _state.hooked.add(integration.name)
-            for target in installed:
+            for target in targets:
                 wrapt.register_post_import_hook(lambda _module, i=integration: _on_import(i), target)
     with _state.lock:
         return {name: s.status for name, s in _state.statuses.items()}
@@ -434,7 +449,7 @@ def plan(settings: Optional[AutoConfig] = None) -> List[IntegrationStatus]:
 
 
 def report() -> List[IntegrationStatus]:
-    """Current status of every integration, refreshed for libraries imported since startup."""
+    """The status the agent holds for every integration. Statuses change as the app imports libraries."""
     with _state.lock:
         return sorted(_state.statuses.values(), key=lambda s: (s.category, s.name))
 
