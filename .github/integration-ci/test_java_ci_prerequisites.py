@@ -55,5 +55,24 @@ class JavaPrerequisiteTests(unittest.TestCase):
                     self.assertIn(snippet, blocks[0])
 
 
+    def test_zero_code_agent_runs_in_its_own_workflow_and_stays_out_of_shared_java_runs(self):
+        shared = (WORKFLOWS / 'java-ci.yml').read_text()
+        # Spec-only changes do not run every Java job, and shared runs skip the agent's child-JVM suite.
+        self.assertNotIn('spec/', shared)
+        self.assertNotIn('traceai-javaagent', shared)
+        self.assertIn('mvn -B -ntp verify -Dtraceai.javaagent.skipITs=true', shared)
+        release = (WORKFLOWS / 'release-java.yml').read_text()
+        self.assertIn('mvn -B -ntp verify -Dtraceai.javaagent.skipITs=true', release)
+        self.assertIn('mvn -B -ntp -P release deploy -Dtraceai.javaagent.skipITs=true', release)
+        agent = (WORKFLOWS / 'auto-java-tests.yml').read_text()
+        for path in ('java/traceai-javaagent/**', 'java/traceai-java-core/**', 'spec/auto-instrumentation/**'):
+            self.assertEqual(agent.count(f"'{path}'"), 2, f'{path} must trigger pull requests and pushes')
+        self.assertIn("java: ['17', '21']", agent)
+        self.assertIn('mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify', agent)
+        self.assertNotIn('skipITs', agent)
+        pom = (WORKFLOWS.parents[1] / 'java/traceai-javaagent/pom.xml').read_text()
+        self.assertIn('<skipITs>${traceai.javaagent.skipITs}</skipITs>', pom)
+
+
 if __name__ == '__main__':
     unittest.main()
