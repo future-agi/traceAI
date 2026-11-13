@@ -300,7 +300,7 @@ content is hidden, so the same content cannot leak through a second attribute.
 HTTP headers are never attributes. Credential-shaped JSON keys at any depth,
 signed URL query values, and echoed request credentials/FI keys (at least eight
 characters) are replaced with `<redacted>`, including in error descriptions and
-context string arrays. A process-wide known-secret registry is seeded at initialization
+context string arrays. A process-wide known-secret registry is seeded at activation
 with FI keys and values of credential-like environment variables, using the same
 catalog name predicate as transport observation and export sanitization. Transport
 hooks always register credential headers and credential/signed-URL query values,
@@ -310,7 +310,7 @@ RoundTrippers, including wrappers installed before `Init` or holding a saved nat
 transport. Existing application trace callbacks are composed unchanged. Headers
 such as `X-Amz-Security-Token` and `X-Auth-Token` are credential-bearing too.
 For concrete `*http.Transport`s passed to `Transport`, or installed as the default
-when `Init` runs, native proxy/configuration callbacks also observe HTTP/1.1
+when wire capture is armed or `Init` runs, native proxy/configuration callbacks also observe HTTP/1.1
 request targets and static/dynamic CONNECT authentication headers before a
 response exists. Installation wraps `Proxy` and an existing
 `GetProxyConnectHeader` callback in place; configure transports before installation
@@ -689,7 +689,7 @@ nothing here claims runtime parity outside them.
   `FI_HIDE_INPUTS`/`FI_HIDE_OUTPUTS`, the text/message/image hide switches above,
   or explicitly call `auto.RegisterSecret` with the actual string to be exported.
 - **Manual paths and retention:** Without the agent's transport hooks,
-  only FI keys, credential-like environment values present at initialization and
+  only FI keys, credential-like environment values present at activation and
   explicit `auto.RegisterSecret` calls seed value-based masking. Late environment
   changes are not rescanned. The 1024-value LRU may evict older credentials; values
   shorter than eight bytes are not registered (credential-named fields still
