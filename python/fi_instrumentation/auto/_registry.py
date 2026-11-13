@@ -191,11 +191,31 @@ def _semantic_kernel(module: Any, provider: Any, config: Any) -> str:
     return _SetupResult("diagnostics on, mapping processor installed", instrumentor.uninstrument)
 
 
+def _openinference_config(config: Any) -> Any:
+    """The agent's hide settings as the OpenInference TraceConfig that Agno's setup takes.
+
+    Only settings that hide something are copied, so the package's own OPENINFERENCE_HIDE_*
+    variables are never overridden with False; it adds the FI_HIDE_* environment settings itself.
+    """
+    from dataclasses import fields
+
+    from openinference.instrumentation import TraceConfig as OpenInferenceTraceConfig
+
+    names = {f.name for f in fields(OpenInferenceTraceConfig) if f.init}
+    values: Dict[str, Any] = {name: True for name in names
+                              if name.startswith("hide_") and getattr(config, name, None) is True}
+    limit = getattr(config, "base64_image_max_length", None)
+    if "base64_image_max_length" in names and limit is not None:
+        values["base64_image_max_length"] = limit
+    return OpenInferenceTraceConfig(**values)
+
+
 def _agno(module: Any, provider: Any, config: Any) -> str:
     handle = getattr(getattr(module, "AgnoInstrumentorWrapper", None), "_instance", None)
     if handle is not None and handle.is_instrumented:
         return "already instrumented"
-    handle = module.configure_agno_tracing(tracer_provider=provider)
+    handle = module.configure_agno_tracing(
+        tracer_provider=provider, config=None if config is None else _openinference_config(config))
     return _SetupResult("Agno tracing configured", handle.uninstrument)
 
 
@@ -230,6 +250,36 @@ def _ag2_classic(module: Any, provider: Any, config: Any) -> str:
     return _SetupResult("AG2 Classic native tracing enabled", handle.uninstrument)
 
 
+def _livekit_route_mapper(module: Any, config: Any) -> Optional[Callable[[Any], Any]]:
+    """LiveKit's own export step for the Future AGI copy of a span, with the agent's TraceConfig.
+
+    The package's mapped exporter maps attributes and, for recording snapshots, rechecks the
+    reserved keys of the span, its events and its links against the policies the recording scope
+    carries (the environment's TraceConfig when it carries none). The agent adds its TraceConfig to
+    those policies, so hide settings from futureagi.toml or init(config=) apply as well. Returns
+    None for a package release without recordings, which only maps attributes.
+    """
+    try:
+        from traceai_livekit._recording_attributes import _is_recording_snapshot
+        from traceai_livekit._recording_boundary import _copy_span, _RecordingScope
+    except ImportError:
+        return None
+    from fi_instrumentation import TraceConfig
+
+    exporter = module.BaseMappedSpanExporter()
+
+    def mapper(span: Any) -> Any:
+        scope = span.instrumentation_scope
+        if config is not None and scope is not None and (
+                isinstance(scope, _RecordingScope)
+                or _is_recording_snapshot(dict(span.attributes or {}), span_name=span.name)):
+            policies = scope.recording_policies if isinstance(scope, _RecordingScope) else (TraceConfig(),)
+            span = _copy_span(span, instrumentation_scope=_RecordingScope(scope, (*policies, config)))
+        return exporter._mapped_copy(span)
+
+    return mapper
+
+
 def _exporter_mapping(module: Any, provider: Any, config: Any) -> str:
     # Install the package's mapper on the agent's Future AGI route only, so other
     # exporters on the same provider keep the original attributes.
@@ -241,7 +291,11 @@ def _exporter_mapping(module: Any, provider: Any, config: Any) -> str:
         if not module.enable_fi_attribute_mapping():
             raise RuntimeError("no Future AGI exporter to map")
         return "exporter attribute mapping installed"
-    route.mappers.append(module.BaseMappedSpanExporter()._convert_attributes)
+    span_mapper = _livekit_route_mapper(module, config) if module.__name__ == "traceai_livekit" else None
+    if span_mapper is not None:
+        route.span_mappers.append(span_mapper)
+    else:
+        route.mappers.append(module.BaseMappedSpanExporter()._convert_attributes)
     if module.__name__ == "traceai_livekit":
         try:
             from livekit.agents.telemetry import set_tracer_provider
