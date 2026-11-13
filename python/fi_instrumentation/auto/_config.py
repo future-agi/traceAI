@@ -1,5 +1,6 @@
 """Agent settings: arguments, then environment, then ``futureagi.toml``, then defaults."""
 
+import logging
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -17,6 +18,8 @@ from fi_instrumentation._configuration import (  # noqa: F401  (re-exported)
     load_config_file,
     parse_config_text,
 )
+
+logger = logging.getLogger("fi_instrumentation.auto")
 
 _SECRET_KEYS = ("api_key", "secret_key")
 _SETTINGS = ("api_key", "secret_key", "base_url", "project_name", "project_type", "project_version_name",
@@ -156,6 +159,12 @@ def resolve(overrides: Optional[Mapping[str, Any]] = None, environ: Optional[Map
 
     for key in ("base_url", "project_name", "project_version_name"):
         value, source = pick(key)
+        if key == "base_url" and source == f"file {path}" and (pair is None or pair_source != source):
+            # The file may come with a checkout: it must not send keys from elsewhere, or the
+            # traces, to a collector it names.
+            logger.warning("traceAI: ignoring base_url from %s because the Future AGI keys do not come from "
+                           "that file; set FI_BASE_URL to send to another collector", path)
+            continue
         if value is not None:
             setattr(config, key, str(value))
             config.sources[key] = source
