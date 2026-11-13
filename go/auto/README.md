@@ -50,8 +50,9 @@ Each AI call becomes one CLIENT span with the model, messages, usage and timing,
 after the privacy rules below. Only AI spans leave the process for Future AGI:
 these wire spans, and spans from traceAI modules (marked `gen_ai.span.kind` or
 `fi.span.kind`) on an SDK tracer provider the agent attaches to (see below).
-Your other spans, such as HTTP server, database or application spans, are never
-sent to Future AGI. [`example/main.go`](example/main.go) is a
+AI spans from other instrumentation libraries are not forwarded unless they set
+`gen_ai.span.kind`. Your other spans, such as HTTP server, database or
+application spans, are never sent to Future AGI. [`example/main.go`](example/main.go) is a
 complete program; `go run github.com/future-agi/traceAI/go/auto/cmd/traceai-doctor`
 prints the resolved configuration with keys masked.
 
@@ -61,7 +62,10 @@ whichever comes first) and then attaches to your global SDK provider if you
 have installed one, so its wire spans join your traces; otherwise it keeps a
 private provider that only its wire spans use. A tracer you cache at package
 level keeps working. To use options such as `auto.WithTracerProvider(tp)`, call
-`auto.Init(ctx, options...)` before the first AI call.
+`auto.Init(ctx, options...)` before the first AI call. When the agent attaches
+to your provider, its wire spans, with their captured content, also go to that
+provider's own exporters. `FI_HIDE_*` applies to both copies; known-secret
+replacement applies only to the copy sent to Future AGI.
 
 **traceAI module spans need an SDK tracer provider.** The modules (for example
 `traceaieino` or `traceailangchaingo`) use the global tracer provider unless you
