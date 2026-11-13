@@ -2,6 +2,7 @@
 // app-after  the application starts its SDK after the agent's preload
 // app-first  the application's SDK is preloaded first (-r app-otel.cjs)
 // forward    as app-first, with an application span that another AI tracer wrote
+// plain-request  as app-first, with a plain request to a non-AI URL next to the AI call
 // globals    an explicit start with no application SDK
 // keys-only  FI keys in the environment and the package loaded, but never started
 const { trace, context, propagation } = require('@opentelemetry/api');
@@ -11,6 +12,13 @@ const PRIVATE = { prompt: 'PRIVATE-FOREIGN-PROMPT', answer: 'PRIVATE-FOREIGN-ANS
 async function ai() {
   const response = await fetch(process.env.MOCK_URL + '/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gpt-fixture', messages: [{ role: 'user', content: 'hello' }] }) });
   await response.text();
+}
+// The test server answers this non-AI route with the request headers it received.
+function plain() {
+  return new Promise((resolve, reject) => http.get(process.env.MOCK_URL + '/echo-headers', { headers: { 'x-plain': 'application' } }, res => {
+    const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject);
+    res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch (error) { reject(error); } });
+  }).on('error', reject));
 }
 function globals() {
   return {
@@ -49,6 +57,7 @@ function globals() {
       });
     }
     await ai();
+    if (mode === 'plain-request') work.plainHeaders = await plain();
     span.end();
   });
   if (process.env.APP_HTTP === 'true') {

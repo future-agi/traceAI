@@ -23,6 +23,8 @@ beforeAll(async () => {
       const body = Buffer.concat(chunks).toString();
       if (req.url === "/tracer/v1/traces") { collected.push(JSON.parse(body)); res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); return; }
       if (req.url === "/reject-collector") { res.writeHead(401, { "content-type": "application/json" }); res.end('{"error":"rejected"}'); return; }
+      // A plain, non-AI application route: it answers with the headers it received.
+      if (req.url === "/echo-headers") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(req.headers)); return; }
       requests++;
       if (req.url === "/v1/audio/speech") { res.writeHead(200, { "content-type": "audio/wav" }); res.end(Buffer.alloc(32)); return; }
       if (req.url === "/v1/audio/transcriptions") { res.writeHead(200, { "content-type": "application/json" }); res.end('{"text":"private transcript"}'); return; }
@@ -379,6 +381,19 @@ test("FI keys alone install nothing, and an explicit start registers no OpenTele
   const started = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "globals" });
   expect(JSON.parse(started.stdout.trim())).toEqual({ active: true, globals: noops });
   expect(wireSpans()).toHaveLength(1);
+});
+test("with incoming http and outgoing propagation switched on, the agent still registers no propagator or other OpenTelemetry global", async () => {
+  const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "globals", FI_INSTRUMENTATIONS: "wire,http", TRACEAI_PROPAGATE_OUTGOING_ADAPTERS: "true" });
+  expect(JSON.parse(output.stdout.trim())).toEqual({ active: true, globals: { trace: "NoopTracerProvider", context: "NoopContextManager", propagation: "NoopTextMapPropagator" } });
+  expect(wireSpans()).toHaveLength(1);
+});
+test("by default the agent adds no trace headers to a plain application request to a non-AI URL, next to a captured AI call", async () => {
+  const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "plain-request" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(wireSpans()).toHaveLength(1);
+  // The request ran inside the application's active span, so an addition would have had a parent.
+  expect(info.work.plainHeaders).toMatchObject({ "x-plain": "application" });
+  for (const name of ["traceparent", "tracestate", "baggage"]) expect(info.work.plainHeaders[name]).toBeUndefined();
 });
 test("explicitly enabled http sends a SERVER span only for a trace with AI work", async () => {
   await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", HEALTH: "true" });
