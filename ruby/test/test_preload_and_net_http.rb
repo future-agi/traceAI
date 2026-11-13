@@ -191,6 +191,26 @@ class EndToEndTest
     end
   end
 
+  # In a directory with a Gemfile the agent waits for Bundler.setup. If the
+  # application never calls it, the agent says so once at exit instead of
+  # staying silent. A Gemfile in a parent directory does not make it wait.
+  def test_gemfile_without_bundler_setup_warns_once_and_parent_gemfile_does_not_block
+    Dir.mktmpdir('unbundled-app', File.join(ROOT, '.bundle/tmp')) do |directory|
+      File.write(File.join(directory, 'Gemfile'), "source 'https://rubygems.org'\n")
+      overrides = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }
+      stdout, stderr, status = app(plain_code, overrides, chdir: directory)
+      assert status.success?, stderr; assert_equal CHAT, stdout
+      assert_empty export_spans
+      assert_equal 1, stderr.scan('traceai-auto:').length, stderr
+      assert_includes stderr, 'Bundler.setup'
+      nested = File.join(directory, 'scripts')
+      Dir.mkdir(nested)
+      stdout, stderr, status = app(plain_code, overrides, chdir: nested)
+      assert status.success?, stderr; assert_equal CHAT, stdout
+      assert_chat_span(export_spans)
+    end
+  end
+
   def test_default_gemfile_and_manual_bundler_setup_do_not_preactivate_agent_dependencies
     Dir.mktmpdir('default-json-bundle', File.join(ROOT, '.bundle/tmp')) do |directory|
       File.write(File.join(directory, 'Gemfile'), "source 'https://rubygems.org'\ngem 'json', '2.6.3'\n")
