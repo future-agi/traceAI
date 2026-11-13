@@ -512,13 +512,16 @@ Other provider structures have no new exception without catalog/source evidence.
 resource identity, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and an optional
 application `resource` are preserved.
 
+On spans made by an FI tracer (`FITracer`, which traceAI instrumentors use),
 `session.id` and `user.id` are exported as set, so don't use a credential or a
 session cookie as either. The same applies to the session ids that the Pi coding
 agent, Claude Agent SDK and Genkit integrations record under their own keys:
 `pi.session.id`; `claude_agent.session.id` and `claude_agent.session_id`, plus
 the resumed and forked-from session ids `claude_agent.resume_session_id`,
 `claude_agent.session.previous_id` and `claude_agent.session.fork_from`; and
-`genkit:metadata:agent:sessionId`.
+`genkit:metadata:agent:sessionId`. Spans made by any other tracer, such as
+application spans that `@traceai/auto` forwards, keep the credential name rule
+for these keys, so a session-named value on them is exported as `<redacted>`.
 
 Resource detection is minimal by default: the provider adds the Node.js runtime
 name and version (`process.runtime.*`) and nothing that identifies the machine,

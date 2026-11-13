@@ -17,7 +17,7 @@ import {
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext, getSession } from "../contextAttributes";
   import { type PrivacyHints, rememberSessionIdentity } from "../../privacy-runtime";
-  import { privacyFilter, rememberAuthoredRedactions, rememberProjectedAttributeDrops } from "../../export-privacy";
+  import { privacyFilter, rememberAuthoredRedactions, rememberFITracerSpan, rememberProjectedAttributeDrops } from "../../export-privacy";
   import { projectAttributes, tracerAttributeLimit } from "../../attribute-projection";
   
   /**
@@ -239,6 +239,9 @@ import {
           : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
         context,
       );
+      // Only spans made here export session and user grouping keys as set.
+      try { rememberFITracerSpan(span.spanContext()); }
+      catch { /* Without the mark the span keeps the stricter credential name rule. */ }
       // Auto only: bind the NUMBER of start values FI withheld or changed to the
       // export lineage. Nothing is written to, or replayed from, native storage.
       if (this.autoDestination) {

@@ -164,10 +164,12 @@ function truncatedValue(value: unknown, limit: number, budget = activeInspection
 // Q8b: no prefix, length, hash, digest or other content-dependent marker choice.
 function withheldMarker(key: string): string { return key === "session.id" ? "<redacted>" : HOST_TRUNCATED; }
 // Session, user and session-name grouping keys are correlation metadata, not
-// transport credentials. They are exempt from the credential NAME rule only:
-// registered secrets, credential-shaped values and media rules still apply to
-// their values, and SDK data loss still withholds them. Discovery reads their
-// values without their names, so an id never becomes a registered credential.
+// transport credentials. On spans made by an FI tracer they are exempt from the
+// credential NAME rule only: registered secrets, credential-shaped values and
+// media rules still apply to their values, and SDK data loss still withholds
+// them. Discovery reads their values without their names, so an id never becomes
+// a registered credential. Spans from any other tracer, such as forwarded
+// application spans, keep the credential name rule for these keys.
 const GROUPING_KEYS: ReadonlySet<string> = new Set(["session.id", "user.id", "session_name", "metadata.session_id", "metadata.user_id"]);
 // Integrations that also record a session id under their own attribute name (the
 // current session id, or a resumed or forked-from one) get the same name-only exemption. Exact
@@ -231,7 +233,7 @@ function carryAttributeEvidence(source: unknown, target: Attributes): void {
 // No content/native objects are retained by the cells. All identities are weak.
 // Existing detached views share future observations, not a one-time copied bit.
 const LOSS_REGISTRY = Symbol.for("traceai.auto.destination.loss.v2");
-type Lineage = { parent?: Lineage; limit: number; hostLoss: boolean; uncertain: boolean; authored: number; autoAuthored?: boolean };
+type Lineage = { parent?: Lineage; limit: number; hostLoss: boolean; uncertain: boolean; authored: number; autoAuthored?: boolean; fiAuthored?: boolean };
 type LossRegistry = { version: 2; cells: WeakMap<object, Lineage> };
 const lossHost = globalThis as typeof globalThis & { [LOSS_REGISTRY]?: LossRegistry };
 if (!lossHost[LOSS_REGISTRY]) Object.defineProperty(lossHost, LOSS_REGISTRY, { value: Object.freeze({ version: 2, cells: new WeakMap<object, Lineage>() }) });
@@ -280,6 +282,7 @@ function bindLineage(cell: Lineage, identity: unknown): Lineage {
       other.hostLoss ||= current.hostLoss; other.uncertain ||= current.uncertain;
       other.authored = Math.max(current.authored, other.authored);
       other.autoAuthored ||= current.autoAuthored === true;
+      other.fiAuthored ||= current.fiAuthored === true;
       current.parent = other; current = other;
     }
   }
@@ -294,6 +297,11 @@ function lineage(span: unknown): Lineage {
 /** @internal Final FI write failure: retain only a refusal bit on the native context. */
 export function rememberSpanPrivacyFailure(context: object): void {
   root(lineage(context)).uncertain = true;
+}
+/** @internal Called by FITracer for every span it makes, keyed by the native span
+ * context. Only such spans, and detached copies of them, export grouping keys as set. */
+export function rememberFITracerSpan(context: object): void {
+  root(lineage(context)).fiAuthored = true;
 }
 /** @internal Auto-only FI write accounting. Counts caller-supplied, non-null
  * attribute values that FI admission withheld or changed before the native
@@ -485,6 +493,10 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   const hideOutput = tc.hideOutputs || tc.hideOutputMessages || tc.hideOutputText;
   let spanBudget: { remaining: number; nodes: number; unknown: boolean } | undefined;
   let spanScanBudget: InspectionBudget | undefined;
+  // span() turns the grouping-key exemption off for spans not made by an FI tracer.
+  let identityExemption = true;
+  const groupingKey = (key: string): boolean => identityExemption && identityKey(key);
+  const groupingMetadata = (key: string): boolean => identityExemption && key === METADATA_KEY;
   const attributes = (attrs: unknown, requestSecrets?: readonly string[], operation?: unknown, capsuleDepth = 0, admission = false, incomplete = false, valueLimit = Infinity, unattestedCopy = false, spanType?: unknown, responseContext?: object, outputResponseContext?: object, withholdContent = false, authoredHints?: PrivacyHints): Attributes => {
     if (capsuleDepth > 16) throw new Error("Privacy capsule budget");
     const secrets = requestSecrets ?? snapshot();
@@ -548,8 +560,8 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       const lostContext = incomplete && !admitted;
       const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
-      const groupingKey = identityKey(key);
-      if (!admission && !groupingKey && isCredentialName(key)) return credentialAttributeSentinel;
+      const grouping = groupingKey(key);
+      if (!admission && !grouping && isCredentialName(key)) return credentialAttributeSentinel;
       if (tc.hideEmbeddingVectors && /(?:^|\.)(?:embedding|embeddings|vector|vectors)(?:\.|$)/i.test(key) && !/(?:count|dimension|text)/i.test(key)) return REDACTED_VALUE;
       if (typeof item === "number" || typeof item === "boolean") {
         // Numeric registered secrets outrank even media ancestry and metric roles.
@@ -569,7 +581,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (lostContext && redactedItem.length >= valueLimit && /^\s*[\[{"]/.test(redactedItem)) {
           try { JSON.parse(redactedItem); } catch { return "<omitted: media>"; }
         }
-        const skipName = (groupingKey || admission) && isCredentialName(key);
+        const skipName = (grouping || admission) && isCredentialName(key);
         // Name-only exceptions must not discard the original media path/hints.
         let clean = redactedItem === REDACTED_VALUE ? redactedItem : (skipName ? mediaValue(redactedItem) : undefined)
           ?? s1MediaPrefixReplacement(redactedItem)
@@ -592,7 +604,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     // masked, through the same value policy as the grouping attribute keys.
     // Only a canonical rendering is re-serialized, so no other member changes.
     const metadataGrouping = (original: string, cleaned: Attributes[string]): Attributes[string] => {
-      if (typeof cleaned !== "string" || cleaned === original || !METADATA_GROUPING_FIELDS.some(field => original.indexOf(`"${field}"`) >= 0)) return cleaned;
+      if (!identityExemption || typeof cleaned !== "string" || cleaned === original || !METADATA_GROUPING_FIELDS.some(field => original.indexOf(`"${field}"`) >= 0)) return cleaned;
       if ((budget.remaining -= original.length + cleaned.length) < 0) throw new Error("Privacy text budget");
       let source: unknown, output: unknown;
       try { source = JSON.parse(original); output = JSON.parse(cleaned); } catch { return cleaned; }
@@ -786,11 +798,11 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
-        } else if (identityKey(key)) {
+        } else if (groupingKey(key)) {
           // Same single debit; the value is discovered without its name.
           requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
           sources.push(paid(undefined, item));
-        } else if (key === METADATA_KEY && typeof item === "string") {
+        } else if (groupingMetadata(key) && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           const parts = metadataDiscoverySources(item, () => undefined);
           if (parts) for (const part of parts) sources.push(paid(undefined, part));
@@ -819,9 +831,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && spanBudget) spanBudget.unknown = true;
         // Conservative export fallback: discover ordinary credentials with the
         // budgeted adapter, then withhold, rather than invoke provider internals.
-        const metadataParts = key === METADATA_KEY && typeof item === "string"
+        const metadataParts = groupingMetadata(key) && typeof item === "string"
           ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
-        if (identityKey(key)) {
+        if (groupingKey(key)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
         } else if (metadataParts) {
@@ -905,7 +917,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       return attributes(attrs, undefined, data(attrs, "gen_ai.operation.name"), 0, true, false, Infinity, false, undefined, responseContext, undefined, false, authoredHints);
     },
     span(span: ReadableSpan, requestSecrets: readonly string[] | null = [], extraResource: Attributes = {}): ReadableSpan {
-      const previousBudget = spanBudget, previousScanBudget = spanScanBudget, previousInspection = activeInspection;
+      const previousBudget = spanBudget, previousScanBudget = spanScanBudget, previousInspection = activeInspection, previousExemption = identityExemption;
+      // Unknown provenance keeps the credential name rule until the lineage says otherwise.
+      identityExemption = false;
       const scanBudget = inspectionBudget();
       activeInspection = scanBudget; spanScanBudget = scanBudget;
       spanBudget = { remaining: 8 * 1024 * 1024, nodes: 20000, unknown: false };
@@ -935,6 +949,8 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         cell.hostLoss = observedDrops;
         cell = bindLineage(lineage(span), rawContext);
         root(cell).hostLoss ||= observedDrops;
+        // Grouping keys export as set only on spans made by an FI tracer.
+        identityExemption = root(cell).fiAuthored === true;
         let discoveryIncomplete = requestSecrets === null;
         const attemptDiscovery = (work: () => void): void => {
           if (scanBudget.exhausted) { discoveryIncomplete = true; return; }
@@ -1063,7 +1079,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
           bindLineage(cell, identity); bindLineage(cell, result);
         } catch { /* Registry failure cannot expose a partial view. */ }
         return result;
-      } finally { spanBudget = previousBudget; spanScanBudget = previousScanBudget; activeInspection = previousInspection; }
+      } finally { spanBudget = previousBudget; spanScanBudget = previousScanBudget; activeInspection = previousInspection; identityExemption = previousExemption; }
     },
   };
 }
