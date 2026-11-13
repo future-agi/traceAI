@@ -1,6 +1,6 @@
 {
   "name": "@traceai/auto",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Fail-open, zero-code AI auto-instrumentation for Node.js",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",

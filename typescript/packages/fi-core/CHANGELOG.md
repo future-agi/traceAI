@@ -1,3 +1,10 @@
+## [1.2.5] - pending release
+
+### Fixed
+
+- session.id set any way other than setSession on a startActiveSpan span, the session_name resource attribute and the session_id field of the metadata attribute are exported as set instead of "<redacted>". So are the Pi coding agent's pi.session.id, the Claude Agent SDK's claude_agent.session.id and claude_agent.session_id with its resumed and forked-from session ids (claude_agent.resume_session_id, claude_agent.session.previous_id, claude_agent.session.fork_from), and Genkit's genkit:metadata:agent:sessionId, which also stops session.id turning into "<redacted>" on those integrations' spans. A value equal to a configured key or a known secret, or shaped like a credential, is still scrubbed, and other session-named attributes such as session tokens and cookies stay masked. On a span where data was lost (for example attributes, events or links dropped by OpenTelemetry limits, or a value at or over the attribute length limit), these ids are withheld as before, and session.id shows "<redacted>". user.id and the metadata user id were already exported as set. Don't use a credential or a session cookie as session.id, user.id or any of these session id keys.
+- Spans started with FITracer.startSpan carry the FI context attributes of the active or passed context (session, user, metadata, tags, prompt template and attributes set with the context setAttributes), like FITracer.startActiveSpan spans.
+
 ## [1.2.4] - pending release
 
 ### Fixed
