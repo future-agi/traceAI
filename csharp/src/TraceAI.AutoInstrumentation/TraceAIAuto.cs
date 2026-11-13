@@ -125,10 +125,13 @@ public static class TraceAIAuto
     { try { if(Warnings.TryAdd(key,0)) Console.Error.WriteLine("[traceAI auto] "+message); } catch { } }
 }
 
-internal sealed record Integration(string Name,string[] Sources,string[] Assemblies,bool Manual=false);
+internal sealed record Integration(string Name,string[] Sources,string[] Assemblies,bool Manual=false,bool Exact=false);
 internal sealed class Agent : IDisposable
 {
-    // Source patterns are intentionally prefixes, not hard package references; late assembly loads are covered.
+    /// <summary>Incoming web request spans; sent only for traces with a captured AI span.</summary>
+    internal const string WebRequestSource="Microsoft.AspNetCore";
+    // AI source patterns are intentionally prefixes, not hard package references; late assembly
+    // loads are covered. Web requests use the exact source, not other framework sources under it.
     internal static readonly Integration[] Integrations = [
         new("openai",["OpenAI."],["OpenAI"]),
         new("extensions_ai",["Experimental.Microsoft.Extensions.AI","Microsoft.Extensions.AI"],["Microsoft.Extensions.AI"],true),
@@ -136,7 +139,7 @@ internal sealed class Agent : IDisposable
         new("azure_inference",["Azure.AI.Inference"],["Azure.AI.Inference"]),
         new("azure_openai",["Azure.AI.OpenAI"],["Azure.AI.OpenAI"]),
         new("agents",["Experimental.Microsoft.Agents.AI","Microsoft.Agents.AI"],["Microsoft.Agents.AI"],true),
-        new("aspnetcore",["Microsoft.AspNetCore"],["Microsoft.AspNetCore"]),
+        new("aspnetcore",[WebRequestSource],["Microsoft.AspNetCore"],Exact:true),
         new("wire",[],[])
     ];
     private readonly AutoConfig _config;
@@ -173,7 +176,7 @@ internal sealed class Agent : IDisposable
             builder=Sdk.CreateTracerProviderBuilder()
                 .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(privacy.SanitizeResource(resource).Attributes))
                 .SetSampler(sampler).AddSource(TraceAIAuto.Source.Name).AddProcessor(privacy);
-            foreach(var integration in Integrations.Where(i=>config.Enabled(i.Name))) foreach(var prefix in integration.Sources) builder.AddSource(prefix+"*");
+            foreach(var integration in Integrations.Where(i=>config.Enabled(i.Name))) foreach(var prefix in integration.Sources) builder.AddSource(integration.Exact?prefix:prefix+"*");
         }
         BaseExporter<Activity>? exporter=null;
         if(config.Options.Exporter!=null) exporter=new BorrowedExporter(config.Options.Exporter,privacy,_completion);
@@ -219,7 +222,9 @@ internal sealed class Agent : IDisposable
         }
         catch { _discovery.Dispose(); if(_ownsProvider) _provider.Dispose(); else _batch?.Dispose(); throw; }
     }
-    internal static Integration? IntegrationForSource(string source) => Integrations.FirstOrDefault(i=>i.Sources.Any(p=>source.StartsWith(p,StringComparison.Ordinal)));
+    internal static Integration? IntegrationForSource(string source) => Integrations.FirstOrDefault(i=>i.Sources.Any(p=>i.Exact?source==p:source.StartsWith(p,StringComparison.Ordinal)));
+    /// <summary>The agent's own wire source and every AI integration source.</summary>
+    internal static bool AiSource(string source) => source==TraceAIAuto.Source.Name || IntegrationForSource(source) is { Name:not "aspnetcore" };
     internal IntegrationStatus Status(Integration i)
     {
         if(!_config.Enabled(i.Name)) return new(i.Name,"disabled","configuration");
@@ -469,6 +474,7 @@ internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,Expo
     : BatchExportProcessor<Activity>(exporter,2048,1000,2500,512)
 {
     private long _submitted;
+    private readonly TraceMemory _aiTraces=new();
     internal long Submitted => Interlocked.Read(ref _submitted);
     public override void OnEnd(Activity data)
     {
@@ -479,6 +485,10 @@ internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,Expo
             // agent's own provider the Recorded flag is the application's, never ours.
             if(requireRecorded && !data.Recorded) return;
             if(!sampler.Export(data.TraceId)) return;
+            // A web request span is sent only when an AI span of the same trace was captured.
+            // The AI spans a request causes end before the request does.
+            if(data.Source.Name==Agent.WebRequestSource) { if(!_aiTraces.TryGet(data.TraceId,out _)) return; }
+            else if(Agent.AiSource(data.Source.Name)) _aiTraces.Set(data.TraceId,true);
             // Include dropped queue entries: telemetry lost to overload must not
             // turn a later Flush into a false claim that all submissions completed.
             Interlocked.Increment(ref _submitted);
