@@ -279,7 +279,10 @@ module TraceAI
         # Only load dependencies whose versions the application already selected.
         # Bundler normally selects them all. Standalone HTTP scripts use the
         # dependency-free pipeline, never activating even an unrelated default gem.
-        if %w[opentelemetry-sdk opentelemetry-api opentelemetry-common opentelemetry-registry opentelemetry-semantic_conventions logger uri timeout].all? { |name| Gem.loaded_specs.key?(name) }
+        # An SDK the application has already loaded is enough by itself: a
+        # lockfile need not list the default gems (uri, timeout, logger) it uses.
+        sdk_loaded = defined?(OpenTelemetry::SDK::Trace::TracerProvider) ? true : false
+        if sdk_loaded || %w[opentelemetry-sdk opentelemetry-api opentelemetry-common opentelemetry-registry opentelemetry-semantic_conventions logger uri timeout].all? { |name| Gem.loaded_specs.key?(name) }
           require 'opentelemetry/sdk'
           @sdk = true
         end
