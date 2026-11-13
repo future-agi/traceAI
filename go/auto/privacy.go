@@ -466,16 +466,18 @@ func (l *exportLimits) value() int {
 // providerValueLengthLimit mirrors providerAttributeLimit: one read-only look
 // at the pinned SDK's immutable numeric configuration, failing closed.
 func providerValueLengthLimit(provider *sdktrace.TracerProvider) int {
-	if provider != nil {
-		limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
-		if limits.IsValid() && limits.Kind() == reflect.Struct {
-			length := limits.FieldByName("AttributeValueLengthLimit")
-			if length.IsValid() && length.Kind() == reflect.Int {
-				return int(length.Int())
-			}
+	if provider == nil {
+		warn()
+		return 0
+	}
+	limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
+	if limits.IsValid() && limits.Kind() == reflect.Struct {
+		length := limits.FieldByName("AttributeValueLengthLimit")
+		if length.IsValid() && length.Kind() == reflect.Int {
+			return int(length.Int())
 		}
 	}
-	warn()
+	spanLimitsUnreadable()
 	return 0
 }
 

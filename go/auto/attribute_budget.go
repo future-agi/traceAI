@@ -1,31 +1,47 @@
 package auto
 
 import (
+	"log"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/future-agi/traceAI/go/auto/internal/wire"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+// spanLimitsWarning is printed once when the OpenTelemetry SDK in the build
+// does not expose its span limits the way the pinned SDK does. It names the
+// SDK, because the cause is a dependency version, not credentials or a
+// collector.
+const spanLimitsWarning = "traceai auto: cannot read span limits from this version of the OpenTelemetry SDK (go.opentelemetry.io/otel/sdk); wire spans keep no attributes and every exported value is treated as cut; use the SDK version go/auto requires; application continues unchanged"
+
+var spanLimitsOnce sync.Once
+
+func spanLimitsUnreadable() {
+	spanLimitsOnce.Do(func() { log.Print(spanLimitsWarning) })
+}
+
 // The pinned Go SDK has no public limit getter. Read only its immutable numeric
 // configuration once, before registering the agent. No unsafe, setters, probes,
 // synthetic spans, sampler calls, or changes to host configuration. The ABI is
 // regression-tested; an unsupported layout fails closed to a zero-slot budget.
 func providerAttributeLimit(provider *sdktrace.TracerProvider) int {
-	if provider != nil {
-		limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
-		if limits.IsValid() && limits.Kind() == reflect.Struct {
-			count := limits.FieldByName("AttributeCountLimit")
-			if count.IsValid() && count.Kind() == reflect.Int {
-				return int(count.Int())
-			}
+	if provider == nil {
+		warn()
+		return 0
+	}
+	limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
+	if limits.IsValid() && limits.Kind() == reflect.Struct {
+		count := limits.FieldByName("AttributeCountLimit")
+		if count.IsValid() && count.Kind() == reflect.Int {
+			return int(count.Int())
 		}
 	}
-	warn()
+	spanLimitsUnreadable()
 	return 0
 }
 
