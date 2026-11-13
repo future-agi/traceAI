@@ -28,6 +28,7 @@ func cleanEnv() []string {
 	}
 	return append(out, "GOTOOLCHAIN=auto")
 }
+
 // Child builds and runtimes use the optional test host gate (see testhost).
 func hostCommand(name string, args ...string) *exec.Cmd {
 	return testhost.Command(name, args...)

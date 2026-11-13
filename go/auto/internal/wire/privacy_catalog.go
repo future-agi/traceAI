@@ -297,6 +297,7 @@ func (p *compiledPrivacy) excluded(s string) bool {
 	}
 	return false
 }
+
 // redactValueShapes replaces every catalog credential value shape (provider
 // keys, access key IDs, JWTs, authorization values, private-key PEM) in text,
 // whatever key the text sits under. The replacement marker matches no shape.

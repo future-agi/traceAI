@@ -171,6 +171,7 @@ func TestDedupAndSuppression(t *testing.T) {
 		})
 	}
 }
+
 // Real OpenAI and Anthropic SDK clients are checked in the sdkcompat test
 // module, so consumers of this module never inherit those SDK requirements.
 
