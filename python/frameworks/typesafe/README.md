@@ -54,6 +54,10 @@ trace_provider.force_flush()
 The instrumentor never sets `base_url` or a model. Point the client wherever you already do
 (`base_url=` or `TYPESAFE_BASE_URL`); `server.address` records the host.
 
+When you supply `extra_body`, captured state, questions and request model follow the SDK's
+shallow, last-write-wins overrides. Replaced inputs and question names are not retained;
+privacy settings apply to the effective values. Other `extra_body` fields are not captured.
+
 ## Privacy
 
 Like every traceAI instrumentor, content is captured by default:
