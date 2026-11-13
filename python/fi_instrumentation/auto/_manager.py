@@ -632,6 +632,9 @@ class _ResourceOverlayProcessor(SpanProcessor):
             _bounded_call(task[0], 5000, task[1])
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
+        if self._closed:
+            # A closed route holds nothing, and must not end a provider-wide flush of the others.
+            return True
         delegate = self._delegate
         return _bounded_call(lambda: delegate.force_flush(timeout_millis), timeout_millis, self._operation)
 
@@ -924,7 +927,9 @@ def shutdown(timeout_millis: int = 5000) -> None:
         with _lifecycle_lock:
             for overlay in overlays:
                 overlay.shutdown()
-            if state.owned_provider and state.provider is not None and not overlays:
+            if state.owned_provider and state.provider is not None:
+                # The agent created this provider, so it also flushes and closes the processors the
+                # application or an integration added to it, as register()'s exit hook would.
                 state.owned_provider = False
                 state.provider.shutdown()
 
