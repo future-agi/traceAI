@@ -71,6 +71,35 @@ module TraceAI
         @bundler_hook = nil
         debug(e)
       end
+      # One targeted hook on OpenTelemetry.tracer_provider= so that the agent
+      # attaches to the application's provider when the application sets it,
+      # never before. Off once an application provider is in use.
+      def watch_provider(api)
+        return if @provider_hook || !provider_watch_needed?
+        setter = api.method(:tracer_provider=)
+        @provider_hook = TracePoint.new(:return) do |_event|
+          provider_changed
+        rescue StandardError => e
+          debug(e)
+        end
+        @provider_hook.enable(target: setter)
+      rescue NameError, ArgumentError, TypeError => e
+        @provider_hook = nil
+        debug(e)
+      end
+      def provider_watch_needed?
+        return false if @config.nil? || @config.truthy?('sdk_disabled')
+        return true if @pending
+        !!(@active && @sdk && @own_provider && @provider.equal?(@own_provider))
+      end
+      def provider_changed
+        if @active
+          adopt_host_provider
+          sync_hooks
+        else
+          after_require
+        end
+      end
       def load_hook_needed?
         return false if @config.nil? || @config.truthy?('sdk_disabled')
         return true if @pending
@@ -98,6 +127,7 @@ module TraceAI
           @load_hook.disable
         end
         @bundler_hook.disable if @bundler_hook&.enabled? && (@bundle_ready || @initialized || !@pending)
+        @provider_hook.disable if @provider_hook&.enabled? && !provider_watch_needed?
       rescue StandardError => e
         debug(e)
       end
@@ -124,8 +154,10 @@ module TraceAI
       def observe_targets
         @scanning_targets = true
         ObjectSpace.each_object(Class) { |klass| observe_target(klass) }
-        # Bundler is a module, not a class. Never trigger an autoload.
-        observe_target(Object.const_get(:Bundler, false)) if Object.const_defined?(:Bundler, false) && !Object.autoload?(:Bundler)
+        # Bundler and OpenTelemetry are modules, not classes. Never trigger an autoload.
+        %i[Bundler OpenTelemetry].each do |name|
+          observe_target(Object.const_get(name, false)) if Object.const_defined?(name, false) && !Object.autoload?(name)
+        end
       ensure
         @scanning_targets = false
       end
@@ -133,6 +165,8 @@ module TraceAI
         name = Module.instance_method(:name).bind_call(klass)
         if name == 'Bundler'
           watch_bundler(klass)
+        elsif name == 'OpenTelemetry'
+          watch_provider(klass)
         elsif TARGETS.include?(name)
           (@targets ||= {})[name] = klass
         else
@@ -148,9 +182,14 @@ module TraceAI
       def after_require
         return if @initializing
         if @active
+          adopt_host_provider
           install_transports
         elsif @pending && !waiting_for_bundle?
-          if bundle_ready? && (@config.credentials? || sdk_host_provider)
+          # Start at once only when the application has its own SDK provider, or
+          # when the bundle has no OpenTelemetry SDK, so that the dependency-free
+          # exporter cannot take over anything. Otherwise wait for the
+          # application's provider, an explicit init or the first AI request.
+          if sdk_host_provider || (bundle_ready? && @config.credentials? && !Gem.loaded_specs.key?('opentelemetry-sdk'))
             init
           elsif bundle_ready? && !Gem.loaded_specs.key?('opentelemetry-sdk')
             # Nothing can become a destination: there is no FI key pair, and an
@@ -227,7 +266,7 @@ module TraceAI
           require 'opentelemetry/sdk'
           @sdk = true
         end
-        @owned_processors = []; @borrowed_flush_targets = []
+        @owned_processors = []; @borrowed_flush_targets = []; @attached_processors = []
         if @sdk
           @capture_key = OpenTelemetry::Context.create_key('traceai.wire.capture')
           @attributes_key = OpenTelemetry::Context.create_key('traceai.context.attributes')
@@ -236,9 +275,12 @@ module TraceAI
             raise ArgumentError unless candidate.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
             @provider = candidate
           else
+            # A private provider for wire spans only. It is never made global:
+            # the application's own OpenTelemetry configuration stays in charge,
+            # and adopt_host_provider moves to the application's provider once
+            # the application sets one.
             sampler = OpenTelemetry::SDK::Trace::Samplers.parent_based(root: OpenTelemetry::SDK::Trace::Samplers.trace_id_ratio_based(@config['sample_rate']))
-            @provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default, sampler: sampler)
-            OpenTelemetry.tracer_provider = @provider
+            @provider = @own_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default, sampler: sampler)
           end
           attached = @provider.instance_variable_get(:@span_processors)
           supplied_processor = destinations[:processor]
@@ -246,7 +288,7 @@ module TraceAI
           if supplied_processor
             # A processor takes precedence when both are supplied; never attach
             # an already-installed host processor/exporter a second time.
-            @provider.add_span_processor(supplied_processor) unless attached.any? { |item| item.equal?(supplied_processor) }
+            attach_processor(supplied_processor) unless attached.any? { |item| item.equal?(supplied_processor) }
             @borrowed_flush_targets << supplied_processor
           elsif supplied_exporter && !attached.any? { |item| item.instance_variable_get(:@exporter).equal?(supplied_exporter) || item.instance_variable_get(:@span_exporter).equal?(supplied_exporter) }
             destination = ResourceExporter.new(supplied_exporter, ExportResource.new({}), sdk_records: true)
@@ -256,7 +298,7 @@ module TraceAI
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
-          @provider.add_span_processor(CoveredAncestry.new)
+          attach_processor(CoveredAncestry.new)
           @tracer = @provider.tracer('traceai-auto', VERSION)
         elsif fi_route && !neutral
           @capture_key = :capture; @attributes_key = :attributes
@@ -288,9 +330,33 @@ module TraceAI
       def add_owned_processor(destination)
         processor = OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(destination, exporter_timeout: 4000, max_queue_size: 512, max_export_batch_size: 64)
         processor.singleton_class.prepend(QuietBatchResult)
-        @provider.add_span_processor(processor)
+        attach_processor(processor)
         @owned_processors << processor
         @processor = processor; @exporter = destination
+      end
+      # Everything the agent adds to a provider, so that the same processors
+      # follow the agent to the application's provider when it is adopted.
+      def attach_processor(processor)
+        @provider.add_span_processor(processor)
+        @attached_processors << processor
+      end
+      # The agent started on its private provider (an AI request came before the
+      # application configured OpenTelemetry). Once the application sets its
+      # own SDK provider, attach the same processors there and parent later wire
+      # spans under the application's spans. Nothing is made global.
+      def adopt_host_provider
+        return unless @sdk && @own_provider && @provider.equal?(@own_provider)
+        host = sdk_host_provider
+        return unless host && !host.equal?(@own_provider)
+        attached = host.instance_variable_get(:@span_processors) || []
+        @attached_processors.each do |processor|
+          host.add_span_processor(processor) unless attached.any? { |item| item.equal?(processor) }
+        end
+        @borrowed_flush_targets.map! { |target| target.equal?(@own_provider) ? host : target }
+        @tracer = host.tracer('traceai-auto', VERSION)
+        @provider = host
+      rescue StandardError => e
+        debug(e)
       end
       def auto_instrument(instrumentations: nil)
         init unless @initialized
@@ -360,6 +426,7 @@ module TraceAI
       def emit(request, response, parent, started, finished = Time.now)
         result = Wire.build(request, response, limit: @config['wire_max_body_bytes'])
         return unless result
+        adopt_host_provider if @own_provider && @provider.equal?(@own_provider)
         context_attrs = parent.value(@attributes_key) || {}
         attributes = Privacy.mask(Privacy.scrub_attributes(context_attrs.merge(result.attributes)), @config)
         description = Privacy.hide_errors?(@config) ? '__REDACTED__' : result.description.to_s
