@@ -16,6 +16,8 @@ final class PrivacyCatalog {
     // Exact declared usage/byte counter keys; true when the catalog types them as nonnegative safe integers.
     private final Map<String, Boolean> scalarMetrics = new HashMap<>();
     private final Set<String> signed, mimeNames, mimeExact, mimePayload, audioFields, audioPayload, audioTypes, metadata, base64Fields;
+    // Catalog v3 media.image and media.video: type and modality declarations.
+    private final Set<String> imageTypes, imageModalities, imagePayload, videoTypes, videoModalities;
     private final List<String> mimePrefixes;
     private final List<List<MagicTest>> magic = new ArrayList<>();
     private final String alphabet, replacement, otherReplacement, dataReplacement, omissionFormat;
@@ -23,9 +25,11 @@ final class PrivacyCatalog {
     final int maxDepth, maxNodes, maxText;
     private record Exclusion(Pattern regex, List<String> guards) {}
     private record MagicTest(int offset, byte[] expected, byte[] mask) {}
-    record Hint(boolean media, boolean audio) {
-        static final Hint NONE = new Hint(false, false);
-        Hint merge(Hint other) { return new Hint(media || other.media, audio || other.audio); }
+    /** image is extra image evidence (image type, modality or MIME): it only widens omission. */
+    record Hint(boolean media, boolean audio, boolean image) {
+        static final Hint NONE = new Hint(false, false, false);
+        Hint(boolean media, boolean audio) { this(media, audio, false); }
+        Hint merge(Hint other) { return new Hint(media || other.media, audio || other.audio, image || other.image); }
     }
     record Context(boolean media, boolean audio, boolean payload) {}
     record QueryPair(String name, String equals, String value, String decodedName, String decodedValue) {}
@@ -72,6 +76,10 @@ final class PrivacyCatalog {
         var audio = WireCore.map(media.get("audio"));
         audioFields = strings(audio.get("fields"), false); audioPayload = strings(audio.get("payload_fields"), false);
         audioTypes = strings(audio.get("type_names"), false); metadata = strings(audio.get("metadata_fields"), false);
+        var image = WireCore.map(media.get("image")); var video = WireCore.map(media.get("video"));
+        imageTypes = strings(image.get("type_names"), false); imageModalities = strings(image.get("modality_names"), false);
+        imagePayload = strings(image.get("payload_fields"), false);
+        videoTypes = strings(video.get("type_names"), false); videoModalities = strings(video.get("modality_names"), false);
         for (Object rule : WireCore.list(media.get("magic"))) {
             List<MagicTest> tests = new ArrayList<>();
             for (Object test : WireCore.list(WireCore.get(rule, "tests"))) {
@@ -175,13 +183,37 @@ final class PrivacyCatalog {
         }
         if (!(value instanceof String text)) return Hint.NONE;
         String leaf = leaf(name);
-        if (!mimeNames.contains(leaf) && !leaf.equals("type")) return Hint.NONE;
+        if (!mimeNames.contains(leaf) && !leaf.equals("type") && !leaf.equals("modality")) return Hint.NONE;
         if (text.length() > maxText) throw new IllegalStateException("Privacy text budget");
-        if (mimeNames.contains(leaf)) {
-            String mime = text.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
-            return new Hint(mimeExact.contains(mime) || mimePrefixes.stream().anyMatch(mime::startsWith), mime.startsWith("audio/"));
+        String type = text.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+        if (mimeNames.contains(leaf)) return new Hint(mimeExact.contains(type) || mimePrefixes.stream().anyMatch(type::startsWith), type.startsWith("audio/"), type.startsWith("image/"));
+        if (leaf.equals("modality")) {
+            boolean image = imageModalities.contains(type);
+            return new Hint(image || videoModalities.contains(type), false, image);
         }
-        return new Hint(false, audioTypes.contains(normalize(text)));
+        // Image and video types establish the generic media context; audio types establish audio context only.
+        boolean image = imageTypes.contains(normalize(type));
+        return new Hint(image || videoTypes.contains(normalize(type)), audioTypes.contains(normalize(text)), image);
+    }
+    /**
+     * An encoded value under an image declaration (type, modality or MIME) whose path reaches a catalog
+     * image payload field (image, image_url, url and the generic payload names). Audio metadata
+     * components end the declaration unless they are image payload fields themselves (url), and a
+     * fresh image hint below starts it again. Ordinary HTTP image URLs are not encoded, so they stay text.
+     */
+    private boolean declaredImagePayload(String path, Map<String, Hint> hints) {
+        boolean image = hints.getOrDefault("", Hint.NONE).image, payload = false;
+        StringBuilder prefix = new StringBuilder();
+        for (String part : path(path, true)) {
+            if (!prefix.isEmpty()) prefix.append('.'); prefix.append(part);
+            if (!numeric(part)) {
+                String folded = normalize(part); boolean field = imagePayload.contains(folded);
+                if (metadata.contains(folded) && !field) { image = false; payload = false; }
+                if (image && field) payload = true;
+            }
+            image |= hints.getOrDefault(prefix.toString(), Hint.NONE).image;
+        }
+        return payload;
     }
     static String hintParent(String name) {
         var parts = path(name, true);
@@ -258,6 +290,7 @@ final class PrivacyCatalog {
         if (framed) { String data = dataUri(value); if (data != null) return data; }
         boolean encoded = base64(value);
         if (encoded && magic(value) || context(path, media, audio, hints).payload) return encoded ? omitted(value.length()) : otherReplacement;
+        if (encoded && declaredImagePayload(path, hints)) return omitted(value.length());
         if (encoded && base64Fields.contains(leaf(path)) && value.length() > threshold) return omitted(value.length());
         return null;
     }
