@@ -1,0 +1,2217 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Future AGI attachment contract",
+    "version": "1.0.0",
+    "description": "Contract only. All media private; no support claim. Authentication eligibility and authorization are enforced per operation and occurrence."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/tracer/v1/attachment-sessions": {
+      "post": {
+        "operationId": "bootstrapAttachmentSession",
+        "description": "Share ingestion project resolution; unknown policy retains no bytes. Invalid explicit workspace never falls back.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "attachment_eligible_identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/BootstrapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/BootstrapRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/uploads": {
+      "post": {
+        "operationId": "initializeAttachmentUpload",
+        "description": "Reserve capacity atomically; server binds writer/session and normalized parent. No write token authorizes existing links. Initialization authenticates the explicitly eligible original identity; the response delivers a secret upload-bound write capability. Never log response bodies; Cache-Control: private, no-store.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "attachment_eligible_identity",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/UploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/UploadRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/uploads/{upload_id}/content": {
+      "put": {
+        "operationId": "streamAttachmentContent",
+        "description": "Bounded streaming content; Content-Length must equal reservation. No redirects. Check capability/generation before and during transfer; suppress body/access logging.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "write",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Content-Length",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 52428800
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/uploads/{upload_id}/complete": {
+      "post": {
+        "operationId": "completeAttachmentUpload",
+        "description": "Only server finalizes multipart and validates immutable bytes. Accepted is not ready.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "write",
+        "responses": {
+          "202": {
+            "description": "Accepted; readiness requires validated bytes and authorized binding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/CompleteRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/uploads/{upload_id}/abort": {
+      "post": {
+        "operationId": "abortAttachmentUpload",
+        "description": "Abort only this capability-owned job; settle reservation once. Never delete an existing attachment.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "write",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/CompleteRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/uploads/{upload_id}/status": {
+      "get": {
+        "operationId": "attachmentUploadStatus",
+        "description": "Content-free status only for the capability-owned job.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "write",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          }
+        ]
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/imports": {
+      "post": {
+        "operationId": "importAttachment",
+        "description": "Private envelope reference or registered completed provider output only. Provider connection authority is separate; write-only upload capabilities cannot select a connection. Single-attachment imports retain UploadRequest ceilings. mode=completed_recording uses RecordingImportRequest, reserves exact whole-source bytes plus a bounded output window, reads immutable source ranges no larger than min(max_upload_bytes, segment_bytes), and produces recording segments under both byte and duration limits. It requires a terminal completed source; it never starts a recorder or Egress. See README completed-recording protocol for length, reservation and publication invariants.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_import_identity",
+        "responses": {
+          "202": {
+            "description": "Accepted; readiness requires validated bytes and authorized binding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/ImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/ImportRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/occurrences": {
+      "post": {
+        "operationId": "linkAttachmentOccurrence",
+        "description": "Authorize readable source occurrence AND target parent; never infer association from IDs.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_application_identity",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Occurrence"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/LinkRequest"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listAttachmentOccurrences",
+        "description": "Require trace parent scope; per-item policy. Never expose locations, hashes, filenames or denied child counts.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_application_identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/OccurrencePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/TraceInput"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/SpanID"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ]
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/resolve": {
+      "post": {
+        "operationId": "resolveAttachmentOccurrences",
+        "description": "Read-only handler, separate from mutations. Current viewer + expected parent for EACH item; unknown/foreign both not_found. Private no-store. Same-origin session-bound gateway only.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_application_identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/ResolveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/ResolveRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/occurrences/{occurrence_id}": {
+      "delete": {
+        "operationId": "deleteAttachmentOccurrence",
+        "description": "Tombstone just this occurrence; generation fences in-flight work. Source parent provided in query; authorize full tuple.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_application_identity",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/TraceInput"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/SpanID"
+            }
+          }
+        ]
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/recordings/{recording_id}/manifest": {
+      "put": {
+        "operationId": "updateRecordingManifest",
+        "description": "Same registered recording/session/parent capability only; monotonically append ordered segments under reserved moving window; 1 MiB body ceiling. Never authorize arbitrary occurrence relinks. Requires recording_id in verified write-capability claims and complete operation. Every segment is bound to that recording/session/parent.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "write",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "recording_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            },
+            "description": "Scoped to full tenant/parent/actor/session/operation. Identical normalized request replays; changed request returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "contract.schema.json#/$defs/RecordingManifest"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "readRecordingManifest",
+        "description": "Authorize every surviving occurrence against expected parent. Source locations and speaker names are forbidden.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_application_identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/RecordingManifest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "recording_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/TraceInput"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/SpanID"
+            }
+          }
+        ]
+      }
+    },
+    "/tracer/v1/attachment-media-sessions": {
+      "post": {
+        "operationId": "exchangeAttachmentMediaSession",
+        "description": "Authenticated application-session exchange; CSRF + exact Origin. Set host-only Secure HttpOnly SameSite=Strict fi_media_session cookie with Path=/tracer/v1/attachment-media/. Bound to original application session; revoke on logout/membership change.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_application_identity",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tracer/v1/attachment-media/{occurrence_id}/{grant_id}": {
+      "get": {
+        "operationId": "getAttachmentMedia",
+        "description": "Media session plus narrow occurrence grant; reauthorize before 200/206/304 and every bounded chunk (<=5s). No public storage/source URL. GET/HEAD/Range/conditional all private,no-store; nosniff; same-origin CORP; inert Content-Disposition. Range validated and bounded. Grant identifier alone is insufficient.",
+        "security": [
+          {
+            "MediaSession": []
+          }
+        ],
+        "x-authority": "media",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Authorized bounded byte range"
+          },
+          "304": {
+            "description": "Authorized conditional response; never before authorization"
+          },
+          "416": {
+            "description": "Unsatisfiable byte range"
+          }
+        },
+        "parameters": [
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "grant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ]
+      },
+      "head": {
+        "operationId": "headAttachmentMedia",
+        "description": "Media session plus narrow occurrence grant; reauthorize before 200/206/304 and every bounded chunk (<=5s). No public storage/source URL. GET/HEAD/Range/conditional all private,no-store; nosniff; same-origin CORP; inert Content-Disposition. Range validated and bounded. Grant identifier alone is insufficient.",
+        "security": [
+          {
+            "MediaSession": []
+          }
+        ],
+        "x-authority": "media",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Authorized bounded byte range"
+          },
+          "304": {
+            "description": "Authorized conditional response; never before authorization"
+          },
+          "416": {
+            "description": "Unsatisfiable byte range"
+          }
+        },
+        "parameters": [
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "grant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/Token"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/imports/{job_id}/status": {
+      "get": {
+        "operationId": "getAttachmentImportStatus",
+        "description": "Content-free status for the original scoped import identity and exact job. No upload capability, provider location or playback authority is returned. Foreign and absent jobs are indistinguishable.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_import_identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/ImportStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AttachmentCredential": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Eligible existing application identity or broker-issued narrow attachment write capability; never a provider key. This scheme does not widen existing ingest key eligibility."
+      },
+      "ApplicationSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "sessionid"
+      },
+      "MediaSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fi_media_session"
+      }
+    },
+    "schemas": {
+      "BootstrapRequest": {
+        "$ref": "contract.schema.json#/$defs/BootstrapRequest"
+      },
+      "BootstrapResponse": {
+        "$ref": "contract.schema.json#/$defs/BootstrapResponse"
+      },
+      "UploadRequest": {
+        "$ref": "contract.schema.json#/$defs/UploadRequest"
+      },
+      "UploadResponse": {
+        "$ref": "contract.schema.json#/$defs/UploadResponse"
+      },
+      "CompleteRequest": {
+        "$ref": "contract.schema.json#/$defs/CompleteRequest"
+      },
+      "StatusResponse": {
+        "$ref": "contract.schema.json#/$defs/StatusResponse"
+      },
+      "ImportRequest": {
+        "$ref": "contract.schema.json#/$defs/ImportRequest"
+      },
+      "ImportResponse": {
+        "$ref": "contract.schema.json#/$defs/ImportResponse"
+      },
+      "LinkRequest": {
+        "$ref": "contract.schema.json#/$defs/LinkRequest"
+      },
+      "Reference": {
+        "$ref": "contract.schema.json#/$defs/Reference"
+      },
+      "References": {
+        "$ref": "contract.schema.json#/$defs/References"
+      },
+      "SpanAttributes": {
+        "$ref": "contract.schema.json#/$defs/SpanAttributes"
+      },
+      "MessageURI": {
+        "$ref": "contract.schema.json#/$defs/MessageURI"
+      },
+      "Occurrence": {
+        "$ref": "contract.schema.json#/$defs/Occurrence"
+      },
+      "OccurrencePage": {
+        "$ref": "contract.schema.json#/$defs/OccurrencePage"
+      },
+      "ResolveRequest": {
+        "$ref": "contract.schema.json#/$defs/ResolveRequest"
+      },
+      "ResolveResponse": {
+        "$ref": "contract.schema.json#/$defs/ResolveResponse"
+      },
+      "WriteCapabilityClaims": {
+        "$ref": "contract.schema.json#/$defs/WriteCapabilityClaims"
+      },
+      "PlaybackGrantClaims": {
+        "$ref": "contract.schema.json#/$defs/PlaybackGrantClaims"
+      },
+      "RecordingManifest": {
+        "$ref": "contract.schema.json#/$defs/RecordingManifest"
+      },
+      "OperationRegistryEntry": {
+        "$ref": "contract.schema.json#/$defs/OperationRegistryEntry"
+      },
+      "Error": {
+        "$ref": "contract.schema.json#/$defs/Error"
+      },
+      "AttachmentMetadata": {
+        "$ref": "contract.schema.json#/$defs/AttachmentMetadata"
+      }
+    }
+  }
+}

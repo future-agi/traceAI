@@ -1,0 +1,918 @@
+{
+  "schema_version": 1,
+  "context_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "action",
+      "scope_matches",
+      "parent_matches",
+      "writer_matches",
+      "nonce_matches",
+      "credential_eligible",
+      "operation_allowed",
+      "policy_current",
+      "generation_current",
+      "not_expired",
+      "private_storage_verified",
+      "immutable_version_verified",
+      "serving_identity_server_owned",
+      "bytes_ready",
+      "binding_observed",
+      "source_retained",
+      "retention_provenance_known",
+      "viewer_authorized",
+      "session_matches",
+      "representation_matches",
+      "csrf_origin_valid",
+      "source_occurrence_authorized",
+      "target_authorized",
+      "reservation_available",
+      "idempotency_matches",
+      "decoder_isolated",
+      "source_envelope_private",
+      "direct_upload_qualified",
+      "live_authorization_checked"
+    ],
+    "properties": {
+      "action": {
+        "enum": [
+          "initialize",
+          "transfer",
+          "complete",
+          "promote",
+          "bind",
+          "link",
+          "resolve",
+          "GET",
+          "HEAD",
+          "Range",
+          "conditional",
+          "import",
+          "direct_upload"
+        ]
+      },
+      "scope_matches": {
+        "type": "boolean"
+      },
+      "parent_matches": {
+        "type": "boolean"
+      },
+      "writer_matches": {
+        "type": "boolean"
+      },
+      "nonce_matches": {
+        "type": "boolean"
+      },
+      "credential_eligible": {
+        "type": "boolean"
+      },
+      "operation_allowed": {
+        "type": "boolean"
+      },
+      "policy_current": {
+        "type": "boolean"
+      },
+      "generation_current": {
+        "type": "boolean"
+      },
+      "not_expired": {
+        "type": "boolean"
+      },
+      "private_storage_verified": {
+        "type": "boolean"
+      },
+      "immutable_version_verified": {
+        "type": "boolean"
+      },
+      "serving_identity_server_owned": {
+        "type": "boolean"
+      },
+      "bytes_ready": {
+        "type": "boolean"
+      },
+      "binding_observed": {
+        "type": "boolean"
+      },
+      "source_retained": {
+        "type": "boolean"
+      },
+      "retention_provenance_known": {
+        "type": "boolean"
+      },
+      "viewer_authorized": {
+        "type": "boolean"
+      },
+      "session_matches": {
+        "type": "boolean"
+      },
+      "representation_matches": {
+        "type": "boolean"
+      },
+      "csrf_origin_valid": {
+        "type": "boolean"
+      },
+      "source_occurrence_authorized": {
+        "type": "boolean"
+      },
+      "target_authorized": {
+        "type": "boolean"
+      },
+      "reservation_available": {
+        "type": "boolean"
+      },
+      "idempotency_matches": {
+        "type": "boolean"
+      },
+      "decoder_isolated": {
+        "type": "boolean"
+      },
+      "source_envelope_private": {
+        "type": "boolean"
+      },
+      "direct_upload_qualified": {
+        "type": "boolean"
+      },
+      "live_authorization_checked": {
+        "type": "boolean"
+      }
+    }
+  },
+  "rules": [
+    {
+      "id": "scope-parent",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "transfer",
+                  "complete",
+                  "promote",
+                  "bind",
+                  "link",
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional",
+                  "import",
+                  "direct_upload"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "scope_matches"
+                ],
+                "properties": {
+                  "scope_matches": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "parent_matches"
+                ],
+                "properties": {
+                  "parent_matches": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "current-authority",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "transfer",
+                  "complete",
+                  "promote",
+                  "bind",
+                  "link",
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional",
+                  "import",
+                  "direct_upload"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "credential_eligible"
+                ],
+                "properties": {
+                  "credential_eligible": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "operation_allowed"
+                ],
+                "properties": {
+                  "operation_allowed": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "policy_current"
+                ],
+                "properties": {
+                  "policy_current": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "generation_current"
+                ],
+                "properties": {
+                  "generation_current": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "not_expired"
+                ],
+                "properties": {
+                  "not_expired": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "source-live",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "transfer",
+                  "complete",
+                  "promote",
+                  "bind",
+                  "link",
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional",
+                  "import",
+                  "direct_upload"
+                ]
+              }
+            }
+          },
+          {
+            "required": [
+              "source_retained"
+            ],
+            "properties": {
+              "source_retained": {
+                "const": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "private-storage",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "transfer",
+                  "complete",
+                  "promote",
+                  "bind",
+                  "link",
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional",
+                  "import",
+                  "direct_upload"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "private_storage_verified"
+                ],
+                "properties": {
+                  "private_storage_verified": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "writer-binding",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "transfer",
+                  "complete",
+                  "bind",
+                  "import"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "writer_matches"
+                ],
+                "properties": {
+                  "writer_matches": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "nonce_matches"
+                ],
+                "properties": {
+                  "nonce_matches": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "aggregate-reservation",
+      "reason": "throttled",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "transfer",
+                  "import",
+                  "direct_upload"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "reservation_available"
+                ],
+                "properties": {
+                  "reservation_available": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "idempotency-conflict",
+      "reason": "conflict",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "complete",
+                  "import",
+                  "link"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "idempotency_matches"
+                ],
+                "properties": {
+                  "idempotency_matches": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "immutable-promotion",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "promote",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "immutable_version_verified"
+                ],
+                "properties": {
+                  "immutable_version_verified": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "serving_identity_server_owned"
+                ],
+                "properties": {
+                  "serving_identity_server_owned": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "decoder-isolation",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "promote"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "decoder_isolated"
+                ],
+                "properties": {
+                  "decoder_isolated": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "retention-binding",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "bind",
+                  "link",
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "retention_provenance_known"
+                ],
+                "properties": {
+                  "retention_provenance_known": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ready-bound",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "bytes_ready"
+                ],
+                "properties": {
+                  "bytes_ready": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "binding_observed"
+                ],
+                "properties": {
+                  "binding_observed": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "current-viewer",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "resolve",
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "viewer_authorized"
+                ],
+                "properties": {
+                  "viewer_authorized": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "live_authorization_checked"
+                ],
+                "properties": {
+                  "live_authorization_checked": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "session-grant",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "Range",
+                  "conditional"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "session_matches"
+                ],
+                "properties": {
+                  "session_matches": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "representation_matches"
+                ],
+                "properties": {
+                  "representation_matches": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "csrf-origin",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "initialize",
+                  "complete",
+                  "link",
+                  "resolve",
+                  "import"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "csrf_origin_valid"
+                ],
+                "properties": {
+                  "csrf_origin_valid": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "two-sided-relink",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "link"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "source_occurrence_authorized"
+                ],
+                "properties": {
+                  "source_occurrence_authorized": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "target_authorized"
+                ],
+                "properties": {
+                  "target_authorized": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "private-source-envelope",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "import"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "source_envelope_private"
+                ],
+                "properties": {
+                  "source_envelope_private": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "qualified-direct-upload",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "direct_upload"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "direct_upload_qualified"
+                ],
+                "properties": {
+                  "direct_upload_qualified": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "allow": {
+    "decision": "allow",
+    "reason": "ready",
+    "effects": [
+      "operation"
+    ]
+  },
+  "deny_effects": []
+}

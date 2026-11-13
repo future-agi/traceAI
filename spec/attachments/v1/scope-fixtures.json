@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "key_fields": [
+    "organization_id",
+    "workspace_id",
+    "project_id",
+    "trace_id",
+    "span_id",
+    "actor_id",
+    "capture_session_id",
+    "operation",
+    "idempotency_key"
+  ],
+  "base": {
+    "organization_id": "00000001-0000-0000-0000-000000000001",
+    "workspace_id": "00000002-0000-0000-0000-000000000001",
+    "project_id": "00000003-0000-0000-0000-000000000001",
+    "trace_id": "0123456789abcdef0123456789abcdef",
+    "span_id": "0123456789abcdef",
+    "actor_id": "0000000f-0000-0000-0000-000000000001",
+    "capture_session_id": "00000004-0000-0000-0000-000000000001",
+    "operation": "initialize",
+    "idempotency_key": "same_public_id"
+  },
+  "cases": [
+    {
+      "id": "same-scope-same-request",
+      "overrides": {},
+      "request_equal": true,
+      "expected": "replay"
+    },
+    {
+      "id": "same-key-different-body",
+      "overrides": {},
+      "request_equal": false,
+      "expected": "conflict"
+    },
+    {
+      "id": "same-public-id-different-organization_id",
+      "overrides": {
+        "organization_id": "00000012-0000-0000-0000-000000000001"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    },
+    {
+      "id": "same-public-id-different-workspace_id",
+      "overrides": {
+        "workspace_id": "00000012-0000-0000-0000-000000000001"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    },
+    {
+      "id": "same-public-id-different-project_id",
+      "overrides": {
+        "project_id": "00000012-0000-0000-0000-000000000001"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    },
+    {
+      "id": "same-public-id-different-trace_id",
+      "overrides": {
+        "trace_id": "fedcba9876543210fedcba9876543210"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    },
+    {
+      "id": "same-public-id-different-span_id",
+      "overrides": {
+        "span_id": "abcdef0123456789"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    },
+    {
+      "id": "same-public-id-different-actor_id",
+      "overrides": {
+        "actor_id": "00000012-0000-0000-0000-000000000001"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    },
+    {
+      "id": "same-public-id-different-capture_session_id",
+      "overrides": {
+        "capture_session_id": "00000012-0000-0000-0000-000000000001"
+      },
+      "request_equal": true,
+      "expected": "distinct"
+    }
+  ]
+}
