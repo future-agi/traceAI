@@ -34,7 +34,7 @@ test("S6 one credential predicate drives headers, query, parsed body and export 
     expect(privacyFilter().attributes({ [`metadata.${name}[0]`]: secret })[`metadata.${name}[0]`]).toBe("<redacted>");
   }
   const response = { usage: { input_tokens_details: { cache_read: "123456789" } }, choices: [{ logprobs: { content: [{ token: "ordinary-word" }] } }] };
-  // RL 2299t restores ordinary tokens only at an explicitly parsed provider root.
+  // Ordinary tokens are restored only at an explicitly parsed provider root.
   expect(discoverProviderResponseSecrets(response)).toEqual([]);
   // fi-security (7): identical untrusted attribute/user JSON retains the name rule.
   expect(discoverSecrets([response])).toEqual(["ordinary-word"]);

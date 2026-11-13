@@ -24,7 +24,7 @@ from traceai_fireworks._stream import _AsyncStream, _Stream
 
 def _resolved_default_image_cap():
     """The installed core's default cap. The core-floor job installs the oldest supported
-    fi-instrumentation-otel, whose default is 32000; F2 (RL 2310bu) cores default to 0."""
+    fi-instrumentation-otel, whose default is 32000; newer cores default to 0."""
     saved = os.environ.pop("FI_BASE64_IMAGE_MAX_LENGTH", None)
     try:
         return TraceConfig().base64_image_max_length
@@ -89,7 +89,7 @@ def test_image_privacy_every_exported_copy(monkeypatch, asynchronous, env, polic
     elif policy in ("limit", "boundary"):
         config["base64_image_max_length"] = len(url) - (policy == "limit")
     elif policy == "visible":
-        # F2 (RL 2310bu): the former default is now an explicit opt-in twin.
+        # The former default is now an explicit opt-in twin.
         config["base64_image_max_length"] = 32_000
     if env:
         for key, value in config.items():

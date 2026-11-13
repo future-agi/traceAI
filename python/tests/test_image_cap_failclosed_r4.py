@@ -1468,7 +1468,7 @@ def test_r4c8_protected_false_flag():
         ('r4c8/false_flag/7/array', '["data:image/png;name=\\"x;ba%26#115;e64;y\\",QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD","unchanged"]', 0, '["data:image/png;name=\\"x;ba%26#115;e64;y\\",QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD","unchanged"]', 0),
     )
     for case_id, value, maximum, expected, count in cases:
-        # F2 (RL 2310bu, CAP0-OVERREDACTION-r2): cap 0 now redacts every data: image mention; the precise
+        # Cap 0 now redacts every data: image mention; the precise
         # false-flag protection is asserted at the strictest positive cap instead.
         maximum = max(maximum, 1)
         assert _cap_base64_images_counted(value, maximum, A) == (expected, count), case_id
@@ -1547,7 +1547,7 @@ def test_r4c6_lead_ts_lens_witnesses_python_outputs():
     assert cap_base64_images(first, 64, A) == first
 
 
-# Lead slice (RL 2193; F2-PY-PTC-AND-COMPAT P2): the r4c8 inputs whose precise assertions moved to cap 1
+# The r4c8 inputs whose precise assertions moved to cap 1
 # keep their cap-0 (F2 default) expectations here: whole Q1 scope [image-redacted], count 1, idempotent.
 F2_CAP0_R4C8 = (
     ('r4c8/false_flag/0/raw', 'data:image/png;base64=ordinary,QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD', '[image-redacted]'),

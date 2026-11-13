@@ -8,7 +8,7 @@ import { mask, maskAttributes, redactValue } from "../trace/trace-config/masking
 import { FITracer } from "../trace/trace-config/FITracer";
 import { TraceConfigOptions } from "../trace/trace-config/types";
 
-// F2 r4c6 rebase under LANE-CALL-NIKM4-5A-F2-CAP0-OVERREDACTION-r2. Runtime NOT_RUN.
+// F2: the default image cap is 0.
 // Cap-0 trigger: in one Q1 scope view, a case-insensitive "data:", then "image/",
 // then ",". The protected split-token pair stays byte-identical.
 // TS-F2-R6 (PENDING PTC-TS-F2-R6-A1): each view is searched with the ASCII members

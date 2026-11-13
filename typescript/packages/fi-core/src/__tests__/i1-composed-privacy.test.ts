@@ -232,7 +232,7 @@ test("I1-O1 cap mechanism has exact boundary while composed A remains stronger",
   expect(clean.name).toBe("retained span");
   expect(clean.attributes.safe).toBe("ordinary words");
   // PENDING I1xF2-PRECEDENCE T10: TS I1 media omission dominates positive caps.
-  // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1; retain the original omission/absence checks.
+  // Retain the original omission/absence checks.
   expect(clean.attributes.arbitrary).toBe("<omitted: 150 base64 chars>");
   expect(clean.attributes.arbitrary).toContain("<omitted:");
   expect(JSON.stringify(clean)).not.toContain(png);

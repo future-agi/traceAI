@@ -1,4 +1,4 @@
-// Fail-closed r4 witness controls (fi-security 628059fc; RL 2310ah). Lead-authored from the fail-closed r3 lens witnesses; RED on the r3 base.
+// Fail-closed r4 witness controls, derived from the fail-closed r3 witnesses; they fail on the r3 code.
 import { capBase64Images } from "../trace/trace-config/imageCap";
 
 const BS = String.fromCharCode(92);

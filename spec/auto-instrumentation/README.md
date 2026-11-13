@@ -332,8 +332,8 @@ Every SDK runs every case in `privacy-fixtures.json`. Recognition gaps are fixed
 a catalog rule applied inconsistently at different sites is an SDK bug.
 
 The initial vocabulary is the union of the six SDKs' privacy implementations and missed names
-reported in the round-4/5 verdicts. `credentials.sources`, `seed_names`, and
-`missed_name_sources` retain the provenance. All seed and missed names have generated cases.
+reported in the round-4/5 verdicts. `credentials.sources` and `seed_names` retain the provenance;
+`missed_name_sources` groups the missed names by review. All seed and missed names have generated cases.
 
 1. **Credential patterns and exclusions.** ASCII-lowercase names and fold `-`, `_`, and `.`.
    Match the catalog's `contains` patterns (`token`, `secret`, `key`, `auth`, `password`,
@@ -362,7 +362,7 @@ reported in the round-4/5 verdicts. `credentials.sources`, `seed_names`, and
    `session_token`, `token_secret`, `api_token_latency_key` and `auth_token` remain private.
    Credential ancestors/descendants still win; timing names are not blanket subtree exemptions.
 
-   `credentials.contextual_exclusions` remains empty. RL 2299t's reviewed exception
+   `credentials.contextual_exclusions` remains empty. The reviewed name-only exception
    is instead the closed, versioned `logprob_tokens` list and an explicit parsed
    provider-response entry point, not a name/path heuristic available to every
    JSON payload. In that context, **logprob tokens are checked against registered secrets and credential shapes, not key-name rules**.
@@ -574,7 +574,7 @@ python3 -I spec/auto-instrumentation/sync.py
 ```
 
 On shared hosts, prefix **every** generator/test/runtime invocation with the host-safety
-wrapper `/Volumes/nikm4/futureagi/tmp/traceai-auto-review/heavy.sh` via `bash`.
+wrapper that the host provides, if it has one.
 
 ### Review follow-up (2026-10-30)
 
@@ -1026,7 +1026,7 @@ implementation, resource preservation or attribute-container admission.
 
 ## Node manual and zero-code batching compatibility
 
-RL2299h preserves the manual public API: explicit **or omitted** `batch: false`
+The manual public API is preserved: explicit **or omitted** `batch: false`
 on fi-core `register()` / `FITracerProvider` selects SimpleSpanProcessor. Manual
 `batch: true` selects bounded BatchSpanProcessor. The zero-code auto agent
 explicitly constructs BatchSpanProcessor for its owned export route and requests
@@ -1046,7 +1046,7 @@ Neither queuing nor successful local handoff proves remote collector acceptance.
 
 The shared credential catalog still masks access-key identifiers and untrusted
 token-named fields. Only the explicitly bound provider-root logprob paths above
-use RL 2299t's name-only exception and required reconstruction rule; numeric token
+use the reviewed name-only exception and required reconstruction rule; numeric token
 metrics remain available. Credential values use `<redacted>`; embedding-vector hiding is
 a fi-core content policy and uses its dev `__REDACTED__` marker, not a new catalog
 credential replacement. Generated privacy fixture bundles must be regenerated

@@ -2,7 +2,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "
 import { privacyFilter } from "../export-privacy";
 import { FITracer } from "../trace/trace-config/FITracer";
 
-// Lead control (RL 2193, disclosed): LIMIT-SURFACES-r2 and EVIDENCE-CLASS-r2. The host default resource
+// Disclosed control: the host default resource
 // service.name (unknown_service:<argv0>, at least 16 characters) at a value limit of 16 is class (b)
 // host-loss evidence, so the lineage is withheld by design (over-redaction, disclosed).
 const savedEnv = { ...process.env }, registryKey = Symbol.for("traceai.secrets");

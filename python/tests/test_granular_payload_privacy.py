@@ -36,7 +36,7 @@ def test_text_privacy_is_directional(direction, opposite):
 
 
 def test_text_flag_keeps_explicitly_typed_images():
-    # F2 (RL 2310bu): the text flag never hides typed images; pinned at the previous
+    # The text flag never hides typed images; pinned at the previous
     # default cap. At the default cap 0 a typed image value is an over-cap payload.
     config = TraceConfig(hide_input_text=True, base64_image_max_length=32_000)
     assert config.mask("gen_ai.input.images.0", "image-reference") == "image-reference"

@@ -255,18 +255,16 @@ for mode in truncated masked-secret context-secret inflight request-field error-
 done
 ```
 
-Run the zero-code S5 matrix from `typescript` (each Node invocation must be individually wrapped by the shared-host helper when using the shared laptop):
+Run the zero-code S5 matrix from `typescript`:
 
 ```bash
 for source in 0 1; do
   for mode in signed-url context-url fi-wrapper late-context background failed-context transport json-string numeric; do
     TS_NODE_PROJECT=packages/traceai_auto/tsconfig.json VERIFY_SOURCE="$source" \
-      bash /Volumes/nikm4/futureagi/tmp/traceai-auto-review/heavy.sh \
       node -r ts-node/register/transpile-only packages/traceai_genkit/contract/auto_s5.cjs "$mode" || exit
   done
   for mode in signed-url context-url json-string numeric; do
     TS_NODE_PROJECT=packages/traceai_auto/tsconfig.json VERIFY_SOURCE="$source" VERIFY_HIDE=1 \
-      bash /Volumes/nikm4/futureagi/tmp/traceai-auto-review/heavy.sh \
       node -r ts-node/register/transpile-only packages/traceai_genkit/contract/auto_s5.cjs "$mode" || exit
   done
 done
@@ -278,7 +276,6 @@ Run the S6 shared-core release gate separately from the S5 regression matrix (fr
 for source in 0 1; do
   for mode in catalog-header catalog-field catalog-media; do
     TS_NODE_PROJECT=packages/traceai_auto/tsconfig.json VERIFY_SOURCE="$source" \
-      bash /Volumes/nikm4/futureagi/tmp/traceai-auto-review/heavy.sh \
       node -r ts-node/register/transpile-only packages/traceai_genkit/contract/auto_s5.cjs "$mode" || exit
   done
 done

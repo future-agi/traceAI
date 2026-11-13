@@ -39,7 +39,7 @@ def test_case_insensitive_scheme_preserves_original_reference(url, hide, cap):
     result = json.loads(TraceConfig(**options).mask("input.value", ChatInput(payload)))
     text, image = result["messages"][0]["content"]
     assert text["text"] == (REDACTED_VALUE if hide == "hide_input_text" else "visible")
-    # F2 (RL 2310bu): at the default cap 0 the hidden slot of an image part is an image
+    # At the default cap 0 the hidden slot of an image part is an image
     # payload position, so its marker is replaced whole; a positive cap keeps the marker.
     hidden_image = REDACTED_VALUE if cap else "[image-redacted]"
     assert image["image_url"] == (hidden_image if hide == "hide_input_images" else {"url": url})

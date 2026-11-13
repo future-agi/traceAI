@@ -9,7 +9,7 @@ beforeEach(() => { for (const key of Object.keys(process.env)) if (/^(FI_|OTEL_)
 afterEach(() => { process.env = { ...saved }; });
 
 // Projection-only carry from r2. Retention priority does not exempt a value from privacy.
-// LANE-CALL-NIKM4-5A-EMBEDDING-MODEL-NAME-CUT-r1 drops the vector-hiding exemption cases.
+// Hiding embedding vectors also hides the model name, so the vector-hiding exemption cases are dropped.
 test("projection reserves exact legacy model identity before embedding payload groups", () => {
   const attrs: Attributes = {
     "fi.span.kind": "EMBEDDING", "gen_ai.operation.name": "embeddings",

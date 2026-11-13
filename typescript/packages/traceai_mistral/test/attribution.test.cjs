@@ -124,8 +124,7 @@ for (const sdk of ['mistral-current', 'mistral-floor']) {
           const attrs = span.attributes;
           assert.equal(attrs['fi.span.kind'], 'EMBEDDING');
           assert.equal(attrs['gen_ai.provider.name'], 'mistralai');
-          // PENDING I1-STRICTER: hideEmbeddingVectors also hides embedding.model_name
-          // (LANE-CALL-NIKM4-5A-EMBEDDING-MODEL-NAME-CUT-r1).
+          // PENDING I1-STRICTER: hideEmbeddingVectors also hides embedding.model_name.
           assert.equal(attrs['embedding.model_name'], privateContent ? '__REDACTED__' : model);
           assert.equal(attrs['gen_ai.response.model'], error ? undefined : 'resolved-model');
           if (!error) {

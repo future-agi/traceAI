@@ -752,7 +752,7 @@ def test_f2_fixed_marker_remains_protected():
         cap_base64_images("ordinary", 0, "[image-redacted]")
 
 
-# Ruling r2 continuation (LANE-CALL-NIKM4-5A-F2-CAP0-OVERREDACTION-r2): the cap-0
+# The cap-0
 # trigger is data:, then image/, then a comma, within one Q1 scope view.
 
 

@@ -71,7 +71,7 @@ const DECLARATIONS: Array<[string, Record<string, string>]> = [
   ["mimeType image", { mimeType: "image/bmp" }],
   ["mediaType image", { mediaType: "image/bmp" }],
   ["content_type image", { content_type: "image/bmp" }],
-  // Lead edit (RL 2310en AMENDED-3 coverage): other image media types on every route.
+  // Other image media types on every route.
   ["mime_type image/png", { mime_type: "image/png" }],
   ["mime_type image/jpeg", { mime_type: "image/jpeg" }],
   ["mime_type image/gif", { mime_type: "image/gif" }],
