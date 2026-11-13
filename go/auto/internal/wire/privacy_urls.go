@@ -329,7 +329,9 @@ func privacyText(s string, secrets []string, framed, cut bool) string {
 			s = strings.Join(parts, CredentialRedacted)
 		}
 	}
-	return s
+	// Known values first, then catalog value shapes over the assembled text,
+	// including URL components and query values.
+	return redactValueShapes(s)
 }
 
 // querySecrets uses the same framing/name decoding as export-time URL handling.

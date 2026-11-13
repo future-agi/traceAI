@@ -29,6 +29,7 @@ type privacyCatalog struct {
 		Contextual []struct {
 			Regex string `json:"path_regex"`
 		} `json:"contextual_exclusions"`
+		Shapes []struct{ Regex, Flags string } `json:"value_shapes"`
 	}
 	SignedURL struct{ Parameters []string } `json:"signed_url"`
 	Media     struct {
@@ -78,6 +79,7 @@ type compiledPrivacy struct {
 	fold       *strings.Replacer
 	exclusions []nameExclusion
 	contextual []*regexp.Regexp
+	shapes     []*regexp.Regexp
 	magic      [][]magicTest
 	signed     map[string]bool
 	alphabet   [256]bool
@@ -108,6 +110,19 @@ func loadPrivacyCatalog() *compiledPrivacy {
 	}
 	for _, exclusion := range p.Credentials.Contextual {
 		p.contextual = append(p.contextual, regexp.MustCompile(exclusion.Regex))
+	}
+	for _, shape := range p.Credentials.Shapes {
+		flags := ""
+		for _, flag := range shape.Flags {
+			if !strings.ContainsRune("ims", flag) {
+				panic("invalid embedded credential value shape")
+			}
+			flags += string(flag)
+		}
+		if flags != "" {
+			flags = "(?" + flags + ")"
+		}
+		p.shapes = append(p.shapes, regexp.MustCompile(flags+shape.Regex))
 	}
 	p.signed = map[string]bool{}
 	for _, name := range p.SignedURL.Parameters {
@@ -184,6 +199,15 @@ func (p *compiledPrivacy) excluded(s string) bool {
 		}
 	}
 	return false
+}
+// redactValueShapes replaces every catalog credential value shape (provider
+// keys, access key IDs, JWTs, authorization values, private-key PEM) in text,
+// whatever key the text sits under. The replacement marker matches no shape.
+func redactValueShapes(s string) string {
+	for _, shape := range privacyRules.shapes {
+		s = shape.ReplaceAllLiteralString(s, CredentialRedacted)
+	}
+	return s
 }
 func (p *compiledPrivacy) pattern(s string) bool {
 	for _, pattern := range p.Credentials.Patterns {
