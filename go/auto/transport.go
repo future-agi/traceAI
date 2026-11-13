@@ -565,6 +565,9 @@ func (t *wireTransport) finish(ctx context.Context, start, end time.Time, m *wir
 		}
 		values = append(captureWire(values, contextual, cfg, operation), captureContext(contextual, values, cfg, operation)...)
 	}
+	if id, ok := ctx.Value(sessionKey).(string); ok {
+		values = withSessionID(values, id, cfg, operation)
+	}
 	values = budgetAttributes(values, t.state.attributeLimit)
 	spanContext := context.WithoutCancel(ctx)
 	_, span := t.state.tracer().Start(spanContext, captureString(result.Name, cfg), trace.WithTimestamp(start), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(values...))
@@ -578,6 +581,23 @@ func (t *wireTransport) finish(ctx context.Context, start, end time.Time, m *wir
 		span.SetStatus(codes.Error, captureString(desc, cfg))
 	}
 	span.End(trace.WithTimestamp(end))
+}
+
+// withSessionID writes the session id set with ContextWithSessionID as
+// session.id, in place of any session.id from other context attributes. Its
+// name is not treated as a credential marker: the value gets structural and
+// credential-shape scrubbing here and known-secret scrubbing at export.
+func withSessionID(values []attribute.KeyValue, id string, cfg Config, operation string) []attribute.KeyValue {
+	out := make([]attribute.KeyValue, 0, len(values)+1)
+	for _, kv := range values {
+		if kv.Key != "session.id" {
+			out = append(out, kv)
+		}
+	}
+	if kv, keep := cfg.TraceConfig.mask(attribute.String("session.id", captureString(id, cfg)), operation); keep {
+		out = append(out, kv)
+	}
+	return out
 }
 
 // responseCapture is the bounded body copy plus its transport observations:

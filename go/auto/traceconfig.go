@@ -158,6 +158,7 @@ const (
 	suppressionKey contextKey = iota
 	captureKey
 	attributesKey
+	sessionKey
 )
 
 // SuppressInstrumentation prevents wire capture (including nested transports).
@@ -166,15 +167,23 @@ func SuppressInstrumentation(ctx context.Context) context.Context {
 	return context.WithValue(ctx, suppressionKey, true)
 }
 
-// ContextWithAttributes carries session.id, user.id, metadata, or other context
-// attributes to wire children. Keys private to other modules cannot be read.
+// ContextWithAttributes carries user.id, metadata, or other context attributes
+// to wire children. Keys private to other modules cannot be read. A session.id
+// given here is redacted like any credential-named key; use
+// ContextWithSessionID to export a session id.
 func ContextWithAttributes(ctx context.Context, kvs ...attribute.KeyValue) context.Context {
 	old, _ := ctx.Value(attributesKey).([]attribute.KeyValue)
 	all := append(append([]attribute.KeyValue(nil), old...), kvs...)
 	return context.WithValue(ctx, attributesKey, all)
 }
+
+// ContextWithSessionID sets the session id the agent writes as session.id on
+// wire spans under ctx. It is exported as its value: unlike a session-like
+// name from headers, bodies or other attributes, it is not redacted for its
+// name. Known secrets and credential-shaped values inside it are still
+// redacted. It replaces a session.id set with ContextWithAttributes.
 func ContextWithSessionID(ctx context.Context, id string) context.Context {
-	return ContextWithAttributes(ctx, attribute.String("session.id", id))
+	return context.WithValue(ctx, sessionKey, id)
 }
 func ContextWithUserID(ctx context.Context, id string) context.Context {
 	return ContextWithAttributes(ctx, attribute.String("user.id", id))

@@ -150,6 +150,11 @@ type spanSanitizer struct {
 	// context may have been dropped or truncated by a span limit, or discarded
 	// by a fallback. A zero MediaRisk (nil scopes) puts every path at risk.
 	risk *wire.MediaRisk
+	// session, set for the attributes of the agent's own wire spans, marks a
+	// top-level session.id as the value ContextWithSessionID set: its value is
+	// scrubbed, but its name is not a credential marker. Any other session.id
+	// on a wire span was already redacted at capture.
+	session bool
 }
 
 func (s *spanSanitizer) spend(n, bytes, depth int) {
@@ -170,6 +175,7 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 	// hints. The catalog walker is shared with JSON bodies, not reimplemented here.
 	values := make(map[string]any, len(attrs))
 	original := make(map[string]attribute.Value, len(attrs))
+	var session map[string]string
 	for _, kv := range attrs {
 		key := string(kv.Key)
 		s.spend(0, len(key), depth)
@@ -178,6 +184,11 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 		}
 		kv, keep := s.config.TraceConfig.mask(kv, s.operation)
 		if !keep {
+			continue
+		}
+		if s.session && depth == 0 && key == "session.id" && kv.Value.Type() == attribute.STRING {
+			// Known secrets and credential shapes in the value, not the name.
+			session = map[string]string{key: s.text("", kv.Value.AsString())}
 			continue
 		}
 		original[key] = kv.Value
@@ -207,6 +218,11 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 	out := make([]attribute.KeyValue, 0, len(attrs))
 	for _, kv := range attrs {
 		key := string(kv.Key)
+		if value, ok := session[key]; ok {
+			out = append(out, attribute.String(key, value))
+			delete(session, key)
+			continue
+		}
 		if value, ok := fields[key]; ok {
 			// The host hide-policy marker is not raw base64. Keep that stronger
 			// policy's stable result even if its spelling resembles media magic.
@@ -611,6 +627,7 @@ func exportSpanLimited(span sdktrace.ReadOnlySpan, c Config, res *resource.Resou
 	scope.Name, scope.Version, scope.SchemaURL = s.text("", scope.Name), s.text("", scope.Version), s.text("", scope.SchemaURL)
 	scope.Attributes = attribute.NewSet(s.attrs(scope.Attributes.ToSlice(), false, 0, 0)...)
 	s.risk = mediaRisk(span.Attributes(), span.DroppedAttributes(), valueLimit)
+	s.session = span.InstrumentationScope().Name == wireScope
 	attrs := s.attrs(span.Attributes(), false, 0, 0)
 	return privateSpan{ReadOnlySpan: span, name: s.text("", span.Name()), attrs: attrs, events: events, links: links, status: status, res: r, scope: scope, ctx: s.spanContext(span.SpanContext()), parent: s.spanContext(span.Parent())}
 }
