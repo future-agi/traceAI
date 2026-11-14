@@ -98,8 +98,9 @@ TraceAI::Auto.init(provider: my_tracer_provider)
 
 Call `init` before the first AI request. Until then it applies its destinations
 and settings, also when the agent has already attached to your provider or
-answered a `doctor` report; AI spans the agent had queued for Future AGI before
-that call are dropped rather than sent with the settings you replaced. After the
+answered a `doctor` report. AI spans started before an explicit `init` are not
+sent to Future AGI: the agent drops the ones it had queued rather than send them
+with the settings you replaced. After the
 first AI request, or after an earlier `init`, further `init` calls return the
 provider in use, change nothing and print one warning.
 
@@ -263,7 +264,7 @@ install anything.
   targeted ones on `Bundler.setup` and on setting the OpenTelemetry tracer
   provider) are turned off as soon as nothing is left to find, and in any case
   at the end of a startup window of 60 seconds after the agent loads. The
-  window is checked when a class or module definition completes, so an idle
+  window is fixed and cannot be changed in this release. It is checked when a class or module definition completes, so an idle
   process drops the hooks at its next definition. This also bounds the hooks in
   tools such as `bundle`, `gem` and `irb` when `RUBYOPT` is exported. After the
   window:
