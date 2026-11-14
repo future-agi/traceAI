@@ -191,6 +191,112 @@ class EndToEndTest
     end
   end
 
+  # Every wait of the startup hooks ends with the startup window, which is
+  # checked when a class or module definition completes. The children below end
+  # the window at once and define one module, instead of waiting it out.
+  END_STARTUP_WINDOW = <<~RUBY
+    TraceAI::Auto.instance_variable_set(:@watch_until, 0.0)
+    module StartupWindowProbe; end
+  RUBY
+  def hook_counts(stdout)
+    stdout.scan(/^(BEFORE|AFTER|FINAL)=(\d+)$/).to_h { |name, count| [name, count.to_i] }
+  end
+
+  # (a) A Gemfile in the working directory and no Bundler.setup: tools such as
+  # gem or irb started with RUBYOPT exported, or bundle itself, which loads
+  # Bundler without setting the bundle up.
+  def test_startup_hooks_end_with_the_window_when_bundler_setup_never_runs
+    Dir.mktmpdir('window-gemfile', File.join(ROOT, '.bundle/tmp')) do |directory|
+      File.write(File.join(directory, 'Gemfile'), "source 'https://rubygems.org'\n")
+      overrides = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }
+      ['', "require 'bundler'"].each do |tool|
+        code = <<~RUBY
+          #{tool}
+          puts 'BEFORE=' + #{ENABLED_TRACE_HOOKS}.to_s
+          #{END_STARTUP_WINDOW}
+          puts 'AFTER=' + #{ENABLED_TRACE_HOOKS}.to_s
+        RUBY
+        stdout, stderr, status = app(code, overrides, chdir: directory)
+        assert status.success?, stderr
+        counts = hook_counts(stdout)
+        assert_operator counts.fetch('BEFORE'), :>=, 1, tool
+        assert_equal 0, counts.fetch('AFTER'), tool
+        assert_equal 1, stderr.scan('traceai-auto:').length, stderr
+        assert_includes stderr, 'Bundler.setup'
+        assert_empty export_spans
+      end
+    end
+  end
+
+  # (b) A standalone script that has made no request yet. After the window the
+  # hooks are off, and the first AI request is still traced.
+  def test_startup_hooks_end_with_the_window_in_a_standalone_script_before_its_first_request
+    overrides = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }
+    code = <<~RUBY
+      require 'net/http'
+      puts 'BEFORE=' + #{ENABLED_TRACE_HOOKS}.to_s
+      #{END_STARTUP_WINDOW}
+      puts 'AFTER=' + #{ENABLED_TRACE_HOOKS}.to_s
+      abort 'agent started without an AI request' if TraceAI::Auto.active?
+      #{plain_code}
+      puts
+      puts 'FINAL=' + #{ENABLED_TRACE_HOOKS}.to_s
+    RUBY
+    stdout, stderr, status = app(code, overrides, chdir: File.dirname(ROOT))
+    assert status.success?, stderr
+    assert_includes stdout, CHAT
+    assert_equal({'BEFORE' => 1, 'AFTER' => 0, 'FINAL' => 0}, hook_counts(stdout))
+    assert_chat_span(export_spans)
+  end
+
+  # (c) The OpenTelemetry SDK is in the bundle, but the application sets no
+  # provider, calls no init and makes no request during the window. Afterwards
+  # the hooks are off; a provider set later is used from the first AI request.
+  def test_startup_hooks_end_with_the_window_while_waiting_for_an_application_provider
+    code = <<~RUBY
+      require 'opentelemetry/sdk'; require 'net/http'
+      puts 'BEFORE=' + #{ENABLED_TRACE_HOOKS}.to_s
+      #{END_STARTUP_WINDOW}
+      puts 'AFTER=' + #{ENABLED_TRACE_HOOKS}.to_s
+      OpenTelemetry.tracer_provider = OpenTelemetry::SDK::Trace::TracerProvider.new
+      abort 'a hook was still watching the provider' if TraceAI::Auto.active?
+      #{plain_code}
+      abort 'agent did not use the application provider' unless TraceAI::Auto.provider.equal?(OpenTelemetry.tracer_provider)
+      puts
+      puts 'FINAL=' + #{ENABLED_TRACE_HOOKS}.to_s
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    assert_includes stdout, CHAT
+    counts = hook_counts(stdout)
+    assert_operator counts.fetch('BEFORE'), :>=, 1
+    assert_equal [0, 0], counts.values_at('AFTER', 'FINAL')
+    assert_chat_span(export_spans)
+  end
+
+  # (d) The agent is active, but a client gem of the bundle (HTTPX here) is
+  # never loaded. The hook does not wait for it beyond the window.
+  def test_startup_hooks_end_with_the_window_when_a_client_gem_is_never_loaded
+    code = <<~RUBY
+      require 'net/http'
+      TraceAI::Auto.init
+      abort 'HTTPX loaded' if defined?(HTTPX)
+      puts 'BEFORE=' + #{ENABLED_TRACE_HOOKS}.to_s
+      #{END_STARTUP_WINDOW}
+      puts 'AFTER=' + #{ENABLED_TRACE_HOOKS}.to_s
+      #{plain_code}
+      puts
+      puts 'FINAL=' + #{ENABLED_TRACE_HOOKS}.to_s
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    assert_includes stdout, CHAT
+    counts = hook_counts(stdout)
+    assert_operator counts.fetch('BEFORE'), :>=, 1
+    assert_equal [0, 0], counts.values_at('AFTER', 'FINAL')
+    assert_chat_span(export_spans)
+  end
+
   # In a directory with a Gemfile the agent waits for Bundler.setup. If the
   # application never calls it, the agent says so once at exit instead of
   # staying silent. A Gemfile in a parent directory does not make it wait.
