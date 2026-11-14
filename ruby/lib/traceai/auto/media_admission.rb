@@ -41,8 +41,25 @@ module TraceAI
 
       private
 
+      # Only agent-attached providers participate, and only spans an agent
+      # export can receive: with the Future AGI route alone, AI spans and
+      # server spans. Other application spans (database, queue, HTTP client)
+      # skip the bookkeeping entirely.
       def traceai_media_enabled?
-        @span_processors&.any? { |processor| processor.instance_of?(CoveredAncestry) }
+        return false unless @span_processors&.any? { |processor| processor.instance_of?(CoveredAncestry) }
+        return true if @traceai_media_wanted
+        unless Auto.media_wanted?(@kind, @attributes, @instrumentation_scope)
+          @traceai_media_skipped = true
+          return false
+        end
+        # A span can get its AI marker after other calls. Those calls were not
+        # observed, so everything recorded so far counts as lossy and its
+        # export omits whatever may be media.
+        @traceai_attribute_media = Privacy::Admission.new({}, true, nil) if @traceai_media_skipped
+        @traceai_media_wanted = true
+      rescue StandardError
+        @traceai_media_failed = true
+        true
       end
 
       def trim_span_attributes(attributes)

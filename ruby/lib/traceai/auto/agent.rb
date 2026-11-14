@@ -9,6 +9,7 @@ module TraceAI
     INIT_MUTEX = Mutex.new
     TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester].freeze
     MODEL_KINDS = %w[LLM EMBEDDING RERANKER GUARDRAIL].freeze
+    AI_MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
     class << self
       attr_reader :config, :provider, :tracer, :processor, :exporter
       def warn_once(message)
@@ -356,8 +357,25 @@ module TraceAI
         processor = OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(destination, exporter_timeout: 4000, max_queue_size: 512, max_export_batch_size: 64)
         processor.singleton_class.prepend(QuietBatchResult)
         attach_processor(ai_only ? AISpanFilter.new(processor) : processor)
+        # A supplied exporter receives a sanitized copy of every span.
+        @snapshots_every_span = true unless ai_only
         @owned_processors << processor
         @processor = processor; @exporter = destination
+      end
+      # An AI span: one that carries gen_ai.span.kind or traceai.capture.layer,
+      # or one made by the agent's own tracer (a wire span keeps its scope even
+      # if a tight attribute limit dropped traceai.capture.layer).
+      def ai_marked?(attributes, scope)
+        return true if attributes && AI_MARKERS.any? { |key| attributes.key?(key) }
+        !!(scope && scope.name == 'traceai-auto')
+      end
+      # Media bookkeeping (MediaAdmission) runs inside the application's span
+      # calls, so it is limited to spans an agent export can receive. With the
+      # Future AGI route alone those are AI spans and server spans; a supplied
+      # exporter receives every span.
+      def media_wanted?(kind, attributes, scope)
+        return true unless @active && !@snapshots_every_span
+        kind == :server || ai_marked?(attributes, scope)
       end
       # Everything the agent adds to a provider, so that the same processors
       # follow the agent to the application's provider when it is adopted.
@@ -717,7 +735,6 @@ module TraceAI
     # exporters. Server spans end after their children, so AI trace ids are
     # remembered in a small bounded set until then.
     class AISpanFilter
-      MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
       TRACE_LIMIT = 4096
       def initialize(delegate)
         @delegate = delegate
@@ -740,12 +757,7 @@ module TraceAI
       def shutdown(timeout: nil) = @delegate.shutdown(timeout: timeout)
       private
       def ai_span?(span)
-        attributes = span.attributes || {}
-        return true if MARKERS.any? { |key| attributes.key?(key) }
-        # Wire spans keep their scope even if a tight attribute limit dropped
-        # traceai.capture.layer.
-        scope = span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil
-        !!(scope && scope.name == 'traceai-auto')
+        Auto.ai_marked?(span.attributes, span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil)
       end
       def remember(trace_id)
         @mutex.synchronize do
