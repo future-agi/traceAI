@@ -166,6 +166,49 @@ def test_a_colon_heavy_url_is_scanned_in_linear_time():
     assert time.monotonic() - start < 5
 
 
+# URL query parameter names of many parts. The checks of a query value read its name as a path, so a
+# name past the path limits is not read, and its value is not sent. Each scan must finish inside
+# SCAN_BOUND seconds (below).
+LONG_QUERY_NAMES = {"dots": "a." * 100000, "brackets": "a[" * 100000}
+
+
+@pytest.mark.parametrize("case", sorted(LONG_QUERY_NAMES))
+def test_a_long_query_name_in_text_is_scanned_in_bounded_time(case):
+    from fi_instrumentation.auto import _privacy
+
+    name = LONG_QUERY_NAMES[case]
+    start = time.monotonic()
+    clean = _privacy.scrub("see ?" + name + "=1", "input.value")
+    elapsed = time.monotonic() - start
+    assert clean == "see ?" + name + "=<redacted>"
+    assert elapsed < SCAN_BOUND, f"{case} took {elapsed:.2f}s"
+
+
+@pytest.mark.parametrize("case", sorted(LONG_QUERY_NAMES))
+def test_a_long_query_name_in_a_url_attribute_is_scanned_in_bounded_time(case):
+    from fi_instrumentation.auto import _privacy
+
+    url = "?" + LONG_QUERY_NAMES[case] + "=1"
+    start = time.monotonic()
+    copy = _privacy.sanitize_span(_span({"input.value": "a prompt", "url.full": url}))
+    elapsed = time.monotonic() - start
+    # The attribute stays; only the value under the name that was not read is left out.
+    assert sorted(copy.attributes) == ["input.value", "url.full"]
+    assert copy.attributes["url.full"] == url[:-1] + "<redacted>"
+    assert elapsed < SCAN_BOUND, f"{case} took {elapsed:.2f}s"
+
+
+def test_a_query_name_past_the_path_limits_keeps_no_value():
+    from fi_instrumentation.auto import _privacy
+
+    # The limits of a value's path: at most 1,024 characters and fewer than 64 separators.
+    for name, kept in (("a" * 1024, True), ("a" * 1025, False), ("a." * 63, True), ("a." * 64, False),
+                       ("a[" * 63, True), ("a[" * 64, False)):
+        url = "https://example.invalid/search?q=1&" + name + "=1"
+        expected = url if kept else url[:-1] + "<redacted>"
+        assert _privacy.scrub(url, "url.full") == expected, (len(name), kept)
+
+
 # Every value shape in the catalog, read for the work Python's backtracking engine can do on it,
 # with the text that makes it do the most. Each scan must finish well inside SCAN_BOUND seconds; the
 # bounded scans take milliseconds.
