@@ -1,11 +1,19 @@
-## [1.2.4] - pending release
+## [1.3.0] - pending release
+
+### Added
+- Three supported public functions. `rememberFITracerSpan(span)` marks a span as traceAI's own, so an integration that exports converted copies of its framework's spans keeps their session, user and session-name ids. `runInFIContext(ctx, fn)` runs work with `ctx` active for traceAI, and `activeFIContext()` returns the context traceAI treats as active. Both work in an app with no OpenTelemetry context manager and register nothing with OpenTelemetry.
 
 ### Changed
 - A privacy switch with an unrecognised value now hides: `FI_HIDE_*` and `FI_PII_REDACTION` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, and any other non-empty value turns the switch on with one warning that never repeats the value. Before, only `true` turned a switch on, so for existing users this hides more, with one exception: `FI_HIDE_ERROR_DETAILS` set to `off`, `no` or `0` now shows error details, as `false` already did, where those values used to be ignored.
 
 ### Fixed
+- Session, user and session-name ids are exported as set only on spans that traceAI's own tracers make, or that an integration marks with `rememberFITracerSpan`. On any other span that reaches the export boundary, such as an application span, they keep the credential name rule and are exported as `<redacted>`. A session id seen first on such a span is no longer learned as a secret, so later traceAI spans with the same id keep it.
+- The active span is carried without a global context manager. In an app with no OpenTelemetry context manager, spans started with `startActiveSpan` now nest, and their span is active only inside the callback and the work it starts, never in the code that runs after it or beside it. Apps with a context manager see no change.
+
+## [1.2.4] - pending release
+
+### Fixed
 - A full collector URL set in the environment is used as given, so traces are delivered instead of failing with 404.
-- In an app with no OpenTelemetry context manager, spans started with `startActiveSpan` now nest, and their span is active only inside the callback and the work it starts, never in the code that runs after it or beside it. Nothing is registered with OpenTelemetry; apps with a context manager see no change. Two new helpers, `runInFIContext(ctx, fn)` and `activeFIContext()`, run work in that same context and read it.
 
 ## [1.2.3] - pending release
 ### Fix
