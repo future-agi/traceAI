@@ -7,7 +7,8 @@ require_relative '../lib/traceai/auto/config'
 # hide; false, 0, no and off show; a blank value is not set; any other value
 # hides, with one warning that names the variable and the accepted values and
 # never prints the value. A hide line in the file is never dropped, however its
-# value is written. Other switches keep their own parsing.
+# value is written. A config file that is there but cannot be used says so once,
+# by its path and never by its content. Other switches keep their own parsing.
 class HideSwitchValuesTest < Minitest::Test
   A = TraceAI::Auto
   P = TraceAI::Auto::Privacy
@@ -163,6 +164,78 @@ class HideSwitchValuesTest < Minitest::Test
     end
   ensure
     File.unlink(file) if file && File.exist?(file)
+  end
+  # A config file that is there but cannot be used must say so: the hide
+  # settings in it do nothing, and that must never be silent. One warning names
+  # the file's path and what failed, never the file's content. What the file
+  # sets does not change.
+  def test_config_file_lines_that_are_not_utf8_warn_once_by_path_and_never_by_content
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-not-utf8-#{Process.pid}.toml")
+    # Two lines saved as Latin-1, around one line that is valid UTF-8.
+    File.binwrite(file, "hide_inputs = true # PRIVATE_NOTE caf\xE9\nhide_outputs = true\nproject_name = \"PRIVATE_NAME_\xE9\"\n".b)
+    config, stderr = read('FI_CONFIG_FILE' => file)
+    assert_equal 1, stderr.lines.length, stderr
+    assert_includes stderr, file
+    assert_includes stderr, 'not valid UTF-8'
+    refute_includes stderr, 'PRIVATE'
+    assert_equal 1, config.warnings.length
+    # The file is read as before: a line that is valid UTF-8 applies, the others are skipped.
+    assert hides?(config, 'hide_outputs'), 'the line that is valid UTF-8'
+    refute hides?(config, 'hide_inputs'), 'the line that is not valid UTF-8'
+    # Every read gives the same text, which is how the agent prints it once per process.
+    again, = read('FI_CONFIG_FILE' => file)
+    assert_equal config.warnings, again.warnings
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  def test_config_file_over_the_size_limit_warns_once_by_path_and_never_by_content
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-too-large-#{Process.pid}.toml")
+    File.write(file, "hide_inputs = true\n" + "# PRIVATE_NOTE #{'x' * 60}\n" * 1000)
+    assert_operator File.size(file), :>, 65_536
+    config, stderr = read('FI_CONFIG_FILE' => file)
+    assert_equal 1, stderr.lines.length, stderr
+    assert_includes stderr, file
+    assert_includes stderr, '64 KiB'
+    assert_includes stderr, 'none of its settings apply'
+    refute_includes stderr, 'PRIVATE'
+    assert_equal 1, config.warnings.length
+    refute hides?(config, 'hide_inputs'), 'a file over the limit is still not read'
+    # A file of exactly the limit is read and prints nothing.
+    line = "hide_inputs = true\n"
+    File.write(file, line + '#' * (65_536 - line.bytesize - 1) + "\n")
+    assert_equal 65_536, File.size(file)
+    config, stderr = read('FI_CONFIG_FILE' => file)
+    assert hides?(config, 'hide_inputs'), 'a file of exactly the limit'
+    assert_empty stderr
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  def test_config_file_that_cannot_be_read_warns_once_by_path_and_never_by_content
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-unreadable-#{Process.pid}.toml")
+    File.write(file, "hide_inputs = true # PRIVATE_NOTE\n")
+    config = stderr = nil
+    # The file is there, and reading it fails (as it does without the permission to read it).
+    File.stub(:binread, ->(*) { raise Errno::EACCES }) { config, stderr = read('FI_CONFIG_FILE' => file) }
+    assert_equal 1, stderr.lines.length, stderr
+    assert_includes stderr, file
+    assert_includes stderr, 'could not be read'
+    assert_includes stderr, 'none of its settings apply'
+    refute_includes stderr, 'PRIVATE'
+    assert_equal 1, config.warnings.length
+    refute hides?(config, 'hide_inputs'), 'a file that cannot be read still sets nothing'
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  def test_config_file_that_is_not_there_prints_nothing
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-absent-#{Process.pid}.toml")
+    refute File.exist?(file)
+    # Named by the variable, and named by the init option.
+    [[{'FI_CONFIG_FILE' => file}, {}], [{}, {config_file: file}]].each do |env, arguments|
+      config, stderr = read(env, arguments)
+      assert_empty stderr
+      assert_empty config.warnings
+      refute hides?(config, 'hide_inputs')
+    end
   end
   def test_other_switches_keep_their_own_parsing
     ['on', 'yes', '1', ' TRUE ', 'maybe'].each do |value|

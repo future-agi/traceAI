@@ -726,6 +726,27 @@ class EndToEndTest < Minitest::Test
     assert_includes warnings.first, 'hidden unless an init option sets it'
     refute_includes stderr, 'maybe'
   end
+  # A config file that is there but cannot be used is reported once per process,
+  # by its path and never by its content, although the agent reads it when it
+  # loads and again at init. What the file sets does not change.
+  def test_config_file_over_the_size_limit_is_reported_once_per_process
+    file = File.join(ROOT, '.bundle/tmp', "too-large-#{Process.pid}.toml")
+    File.write(file, "hide_inputs = true\n" + "# PRIVATE_NOTE #{'x' * 60}\n" * 1000)
+    stdout, stderr, status = app("TraceAI::Auto.init\n" + plain_code, {'FI_CONFIG_FILE' => file})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    spans = export_spans
+    assert_equal 1, spans.length
+    a = attrs(spans.first.first.attributes)
+    assert_kind_of String, a['input.value']
+    refute_equal '__REDACTED__', a['input.value']
+    warnings = stderr.lines.select { |line| line.include?(file) }
+    assert_equal 1, warnings.length, stderr
+    assert_includes warnings.first, '64 KiB'
+    assert_includes warnings.first, 'none of its settings apply'
+    refute_includes stderr, 'PRIVATE'
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
   def test_sigterm_flush_preserves_signal_exit
     code = "STDOUT.sync = true\n" + plain_code + "\nputs 'READY'; loop { sleep 1 }"
     stdin, stdout, stderr, waiter = Open3.popen3(child_env, RbConfig.ruby, '-e', code, chdir: ROOT)
