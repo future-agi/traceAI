@@ -208,6 +208,8 @@ Prompts, responses and tool content are **captured by default**, as with a manua
 | `FI_HIDE_ERROR_DETAILS` | `hide_error_details` | Error messages and stack traces |
 | `FI_PII_REDACTION` | `pii_redaction` | Pattern-based PII redaction (off by default) |
 
+Each switch takes `true`, `1`, `yes` or `on` to turn it on and `false`, `0`, `no` or `off` to turn it off, in any case. An empty value counts as unset. Any other value turns the switch on, so the content is hidden, and logs one warning that names the setting but not its value.
+
 In code, pass `config=TraceConfig(...)` to `init()`. `fi-instrument doctor` shows the value in effect for each setting and where it came from; of the keys it shows only the start of `FI_API_KEY` and whether `FI_SECRET_KEY` is set.
 
 Everything the agent sends to Future AGI then passes the **shared traceAI privacy catalog**, the same rules every traceAI zero-code agent applies. It runs on the copy for Future AGI only, after the settings above, over span and event names, attributes (including JSON text inside them), the error description, event and link attributes, the resource, the instrumentation scope and the tracestate:
