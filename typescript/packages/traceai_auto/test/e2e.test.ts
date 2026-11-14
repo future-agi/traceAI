@@ -484,7 +484,7 @@ test("no FI keys with an application provider first gives one warning and leaves
   expect(output.stderr).toContain("auto-instrumentation is disabled");
   expect(allSpans()).toHaveLength(0);
 });
-test.each(["sigterm-idle", "sigterm-failed"])("SIGTERM reaches the application at once when the FI route has nothing to send (%s)", async mode => {
+test.each(["sigterm-idle", "sigterm-failed", "sigterm-record-only"])("SIGTERM reaches the application at once when the FI route has nothing to send (%s)", async mode => {
   const output = await child("review.cjs", [], { MODE: mode });
   expect(output.stdout.trim().split("\n")).toEqual(["application-once", "application-handler"]);
 });

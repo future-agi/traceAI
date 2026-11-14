@@ -60,14 +60,18 @@ function installProvider() {
     release(); await closing;
     console.log(JSON.stringify({exported:exported.length,appSpans:appSpans.length,processorsDuringDrain,processorsAfter:provider._activeSpanProcessor._spanProcessors.length,output:exported[0]?.attributes['output.value']})); return;
   }
-  if (mode === 'sigterm-order' || mode === 'sigterm-idle' || mode === 'sigterm-failed') {
+  if (mode === 'sigterm-order' || mode === 'sigterm-idle' || mode === 'sigterm-failed' || mode === 'sigterm-record-only') {
     const keepalive = setInterval(() => {},1000);
     let signalled = false;
     process.once('SIGTERM', () => console.log('application-once'));
     if (mode === 'sigterm-failed') exporter.export = (_spans, done) => done({code:1});
     exporter.forceFlush = async () => { if (!signalled) return; console.log('flush-start'); await new Promise(resolve => setImmediate(resolve)); console.log('flush-finished'); };
     globalThis.fetch = async () => new Response('{"choices":[{"message":{"role":"assistant","content":"answer"}}]}',{headers:{'content-type':'application/json'}});
-    const auto = require('@traceai/auto'); auto.init({...options,exporter});
+    // An application provider whose sampler records spans without sampling them; they are never exported.
+    const recordOnly = mode === 'sigterm-record-only' ? new BasicTracerProvider({sampler:{shouldSample:() => ({decision:1}),toString:() => 'RecordOnly'}}) : undefined;
+    if (recordOnly) trace.setGlobalTracerProvider(recordOnly);
+    const auto = require('@traceai/auto'); auto.init({...options,exporter,...(recordOnly ? {forwardApplicationSpans:true} : {})});
+    if (recordOnly) recordOnly.getTracer('application').startSpan('recorded-not-sampled').end();
     const call = async () => { await (await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',body:'{"messages":[]}'})).text(); await new Promise(resolve => setImmediate(resolve)); };
     // The collector fails on the first flush.
     if (mode === 'sigterm-failed') { await call(); await auto.forceFlush(); }
