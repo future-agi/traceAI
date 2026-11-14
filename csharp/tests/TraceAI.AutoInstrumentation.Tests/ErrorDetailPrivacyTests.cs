@@ -49,27 +49,59 @@ public class ErrorDetailPrivacyTests : InitIsolation
         Assert.Equal(Echo,span.StatusDescription); Assert.Equal(Echo,span.GetTagItem("error.message"));
         Assert.Equal(Echo,Assert.Single(span.Events).Tags.Single(pair=>pair.Key=="exception.message").Value);
     }
+    private static void AssertErrorDetails(AutoProcessor processor,bool hidden)
+    {
+        Assert.Equal(hidden,processor.HideErrorDetails);
+        foreach(var key in new[] { "exception.message","exception.stacktrace","error.message" })
+        {
+            if(hidden) Assert.Null(processor.Mask(key,Echo));
+            else Assert.Equal(Echo,processor.Mask(key,Echo));
+        }
+        Assert.Equal("400",processor.Mask("error.type","400"));
+    }
     [Theory]
     [InlineData("hide_inputs = true",true)]
     [InlineData("hide_output_text = true",true)]
     [InlineData("hide_error_details = true",true)]
     [InlineData("hide_inputs = true\nhide_error_details = false",false)]
     [InlineData("hide_input_images = true",false)]
+    // Values are trimmed and case-insensitive; an unrecognised error-detail value is
+    // ignored, so error details follow the content flags instead of being shown.
+    [InlineData("hide_inputs = true\nhide_error_details = \"on\"",true)]
+    [InlineData("hide_inputs = true\nhide_error_details = \" true \"",true)]
+    [InlineData("hide_inputs = \" yes\"",true)]
+    [InlineData("hide_inputs = true\nhide_error_details = \"NO\"",false)]
     public void ErrorDetailFlagFollowsContentFlagsUnlessSetExplicitly(string settings,bool hidden)
     {
         string path=Path.Combine(Path.GetTempPath(),"traceai-error-details-"+Guid.NewGuid()+".toml");
         try
         {
             File.WriteAllText(path,settings+"\n");
-            var processor=new AutoProcessor(Config(new MemoryExporter(),path));
-            foreach(var key in new[] { "exception.message","exception.stacktrace","error.message" })
-            {
-                if(hidden) Assert.Null(processor.Mask(key,Echo));
-                else Assert.Equal(Echo,processor.Mask(key,Echo));
-            }
-            Assert.Equal("400",processor.Mask("error.type","400"));
+            AssertErrorDetails(new AutoProcessor(Config(new MemoryExporter(),path)),hidden);
         }
         finally { File.Delete(path); }
+    }
+    [Theory]
+    [InlineData("true","on",true)]
+    [InlineData("true","y",true)]
+    [InlineData("true","true ",true)]
+    [InlineData("true ",null,true)]
+    [InlineData("true","false",false)]
+    public void ErrorDetailEnvironmentFlagIsTrimmedAndIgnoresUnrecognisedValues(string inputs,string? details,bool hidden)
+    {
+        var names=new[] { "FI_HIDE_INPUTS","FI_HIDE_ERROR_DETAILS" };
+        var previous=names.ToDictionary(name=>name,name=>Environment.GetEnvironmentVariable(name));
+        var error=Console.Error; var captured=new StringWriter();
+        try
+        {
+            AgentStartupTests.ClearWarnings(); Console.SetError(captured);
+            Environment.SetEnvironmentVariable("FI_HIDE_INPUTS",inputs); Environment.SetEnvironmentVariable("FI_HIDE_ERROR_DETAILS",details);
+            AssertErrorDetails(new AutoProcessor(Config(new MemoryExporter())),hidden);
+            // An ignored value is reported once by name, so a user who meant to hide more learns why.
+            if(details is "on" or "y") Assert.Contains("FI_HIDE_ERROR_DETAILS",captured.ToString());
+            else Assert.DoesNotContain("FI_HIDE_ERROR_DETAILS",captured.ToString());
+        }
+        finally { Console.SetError(error); foreach(var pair in previous) Environment.SetEnvironmentVariable(pair.Key,pair.Value); }
     }
     public static IEnumerable<object[]> EchoCases=>from framework in new[] { "net8.0","net10.0" }
         from flag in new[] { "FI_HIDE_INPUTS","FI_HIDE_ERROR_DETAILS" } select new object[] { framework,flag };

@@ -139,9 +139,9 @@ public class StartupHookTests
         return new(process.ExitCode,await stdout,await stderr);
     }
     private static string Configuration=>AppContext.BaseDirectory.Contains("/Release/")?"Release":"Debug";
-    /// <summary>The startup hook a user would publish for an application on this framework:
-    /// one net8.0 payload serves .NET 8 and .NET 10 applications.</summary>
-    internal static string HookPath(string framework)=>
+    /// <summary>The startup hook a user would publish: one net8.0 payload serves .NET 8
+    /// and .NET 10 applications.</summary>
+    internal static string HookPath()=>
         Path.Combine(WireFixtureTests.Repo,"csharp","src","TraceAI.AutoInstrumentation","bin",Configuration,"net8.0","TraceAI.AutoInstrumentation.dll");
     internal static Process StartApp(string url,string mode,Dictionary<string,string?> environment,string framework="net10.0",bool stock=false)
     {
@@ -155,7 +155,7 @@ public class StartupHookTests
         start.ArgumentList.Add(url); start.ArgumentList.Add(mode);
         foreach(var key in start.Environment.Keys.Where(k=>k.StartsWith("FI_")||k.StartsWith("OTEL_")||k=="DOTNET_STARTUP_HOOKS").ToArray()) start.Environment.Remove(key);
         start.Environment["DOTNET_ROOT"]=Path.GetDirectoryName(host);
-        start.Environment["DOTNET_STARTUP_HOOKS"]=HookPath(framework);
+        start.Environment["DOTNET_STARTUP_HOOKS"]=HookPath();
         foreach(var pair in environment) if(pair.Value==null) start.Environment.Remove(pair.Key); else start.Environment[pair.Key]=pair.Value;
         return Process.Start(start)!;
     }

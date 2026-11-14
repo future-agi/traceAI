@@ -16,7 +16,7 @@ public class AgentStartupTests : InitIsolation
         ["FI_API_KEY"]="test-key",["FI_SECRET_KEY"]="test-secret",["FI_BASE_URL"]=server.Url };
     private static AutoConfig Config()=>new(new AutoOptions { ApiKey="startup-api-key",SecretKey="startup-secret-key",Exporter=new MemoryExporter(),
         ConfigFile=Path.Combine(WireFixtureTests.Repo,"csharp","absent.toml") });
-    private static void ClearWarnings()=>((IDictionary)typeof(TraceAIAuto).GetField("Warnings",BindingFlags.Static|BindingFlags.NonPublic)!.GetValue(null)!).Clear();
+    internal static void ClearWarnings()=>((IDictionary)typeof(TraceAIAuto).GetField("Warnings",BindingFlags.Static|BindingFlags.NonPublic)!.GetValue(null)!).Clear();
     [Theory]
     [InlineData("net8.0",8)] [InlineData("net10.0",10)]
     public async Task EveryReflectedRuntimeMemberResolvesOnEachSupportedRuntime(string framework,int runtime)
@@ -31,19 +31,19 @@ public class AgentStartupTests : InitIsolation
         Assert.Empty(root.GetProperty("missing").EnumerateArray().Select(item=>item.GetString()));
     }
     [Theory]
-    [InlineData("hook built for .NET 10")] [InlineData("missing payload")]
+    [InlineData("published payload")] [InlineData("missing payload")]
     public async Task DotNet8ApplicationKeepsRunningWithAnyPublishedHookOrAMissingPayload(string hook)
     {
         await using var server=new MockServer(Encoding.UTF8.GetBytes(JsonResponse),"application/json");
         var directory=Directory.CreateTempSubdirectory("traceai-hook-");
         try
         {
-            string path=StartupHookTests.HookPath("net10.0");
+            string path=StartupHookTests.HookPath();
             if(hook=="missing payload")
             {
                 // Only the bootstrap assembly, without the runtime it loads.
                 path=Path.Combine(directory.FullName,"TraceAI.AutoInstrumentation.dll");
-                File.Copy(StartupHookTests.HookPath("net8.0"),path);
+                File.Copy(StartupHookTests.HookPath(),path);
             }
             var environment=Keys(server); environment["DOTNET_STARTUP_HOOKS"]=path;
             var child=await StartupHookTests.RunApp(server.Url+"v1/chat/completions","json",environment,"net8.0");
