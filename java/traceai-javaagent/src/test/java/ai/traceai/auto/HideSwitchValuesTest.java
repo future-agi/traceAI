@@ -21,7 +21,9 @@ class HideSwitchValuesTest {
     private static final Map<String, String> SWITCHES = Map.of(
         "FI_HIDE_INPUTS", "input.value", "FI_HIDE_INPUT_MESSAGES", "gen_ai.input.messages.0.message.content", "FI_HIDE_INPUT_TEXT", "input.value",
         "FI_HIDE_OUTPUTS", "output.value", "FI_HIDE_OUTPUT_MESSAGES", "gen_ai.output.messages.0.message.content", "FI_HIDE_OUTPUT_TEXT", "output.value",
-        "FI_HIDE_INPUT_IMAGES", "gen_ai.image.url", "FI_HIDE_LLM_INVOCATION_PARAMETERS", "llm.invocation_parameters");
+        "FI_HIDE_INPUT_IMAGES", "gen_ai.image.url", "FI_HIDE_LLM_INVOCATION_PARAMETERS", "llm.invocation_parameters", "FI_HIDE_ERROR_DETAILS", "exception.message");
+    private static final byte[] BYTE_ORDER_MARK = {(byte)0xEF, (byte)0xBB, (byte)0xBF};
+    private static final List<String> ERROR_KEYS = List.of("exception.message", "exception.stacktrace", "error.message", "error.stack");
     private static AutoConfig env(String name, String value) { return AutoConfig.resolve(Map.of("config_file", NO_FILE), Map.of(name, value)); }
     private static boolean hides(AutoConfig config, String name) { return TraceAIAuto.hidden(SWITCHES.get(name), null, config); }
 
@@ -47,7 +49,7 @@ class HideSwitchValuesTest {
             assertTrue(AutoConfig.resolve(Map.of("config_file", NO_FILE, "hide_inputs", value), Map.of("FI_HIDE_INPUTS", "true")).masking.isHideInputs(), "blank init option over the environment");
         } finally { Files.deleteIfExists(file); }
     }
-    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS"})
+    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS", "FI_HIDE_ERROR_DETAILS"})
     void everySwitchReadsOnAndOffAndHidesOnAnUnknownValue(String name) {
         assertFalse(hides(AutoConfig.resolve(Map.of("config_file", NO_FILE), Map.of()), name), name + " not set");
         assertTrue(hides(env(name, "on"), name), name + "=on");
@@ -86,7 +88,7 @@ class HideSwitchValuesTest {
             }
         } finally { Files.deleteIfExists(file); }
     }
-    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS"})
+    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS", "FI_HIDE_ERROR_DETAILS"})
     void everySwitchReadsItsConfigFileSettingHoweverTheValueIsWritten(String name) throws Exception {
         String option = name.substring(3).toLowerCase(Locale.ROOT);
         Path file = Files.createTempFile(Path.of("target"), "hide-switch-", ".toml");
@@ -99,6 +101,101 @@ class HideSwitchValuesTest {
                 Files.writeString(file, option + " = " + value + "\n");
                 assertFalse(hides(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()), name), option + " = " + value);
             }
+        } finally { Files.deleteIfExists(file); }
+    }
+    /** The same kind of line in a file written with a UTF-8 byte order mark first, as Windows editors write it. */
+    @Test void configFileThatStartsWithAByteOrderMarkIsReadFromItsFirstLine() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-bom-", ".toml");
+        try {
+            byte[] text = "hide_inputs = true\nhide_outputs = false\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] bytes = new byte[BYTE_ORDER_MARK.length + text.length];
+            System.arraycopy(BYTE_ORDER_MARK, 0, bytes, 0, BYTE_ORDER_MARK.length); System.arraycopy(text, 0, bytes, BYTE_ORDER_MARK.length, text.length);
+            Files.write(file, bytes);
+            AutoConfig config = AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of());
+            assertTrue(config.masking.isHideInputs(), "the first line is read although the file starts with a byte order mark");
+            assertFalse(config.masking.isHideOutputs());
+            assertTrue(hides(config, "FI_HIDE_INPUTS"));
+        } finally { Files.deleteIfExists(file); }
+    }
+    /** A valid array on a hide key is read as its items. */
+    @Test void configFileArrayOnAHideKeyIsReadAsItsItems() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-array-", ".toml");
+        try {
+            for (String value : List.of("[\"on\"]", "[ \"yes\" ]")) {
+                Files.writeString(file, "hide_inputs = " + value + "\n");
+                assertTrue(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+            for (String value : List.of("[\"off\"]", "[ \"no\" ]")) {
+                Files.writeString(file, "hide_inputs = " + value + "\n");
+                assertFalse(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+            // Two items are not one switch value, so the setting hides.
+            Files.writeString(file, "hide_inputs = [\"on\", \"off\"]\n");
+            assertTrue(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs());
+        } finally { Files.deleteIfExists(file); }
+    }
+    /** A one-line triple-quoted string is not decoded, so a hide key set to it hides, even for "off". The e2e test checks the warning. */
+    @Test void configFileOneLineTripleQuotedValueOnAHideKeyHides() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-triple-", ".toml");
+        try {
+            for (String value : List.of("\"\"\"off\"\"\"", "\"\"\"on\"\"\"")) {
+                Files.writeString(file, "hide_inputs = " + value + "\n");
+                assertTrue(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+    /** Only hide keys read a single-quoted string as its text; any other setting keeps its value as written. */
+    @Test void singleQuotedValueOfAnotherSettingKeepsItsQuotes() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-quoted-", ".toml");
+        try {
+            Files.writeString(file, "project_name = 'quoted-project'\n");
+            assertEquals("'quoted-project'", AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).get("FI_PROJECT_NAME"));
+            Files.writeString(file, "project_name = \"double-quoted-project\"\n");
+            assertEquals("double-quoted-project", AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).get("FI_PROJECT_NAME"));
+        } finally { Files.deleteIfExists(file); }
+    }
+    /** FI_HIDE_ERROR_DETAILS hides the provider's error text and nothing else. */
+    @ParameterizedTest @ValueSource(strings = {"true", "on", "1", "maybe"})
+    void errorDetailsSwitchHidesTheErrorTextAndNothingElse(String value) {
+        AutoConfig config = env("FI_HIDE_ERROR_DETAILS", value);
+        assertTrue(config.masking.isHideErrorDetails(), value);
+        for (String key : ERROR_KEYS) assertTrue(TraceAIAuto.hidden(key, null, config), value + " " + key);
+        for (String key : List.of("input.value", "output.value", "gen_ai.input.messages.0.message.content", "gen_ai.output.messages.0.message.content", "llm.invocation_parameters", "http.response.status_code"))
+            assertFalse(TraceAIAuto.hidden(key, null, config), value + " " + key);
+        assertFalse(config.masking.isHideInputs()); assertFalse(config.masking.isHideOutputs());
+        assertFalse(TraceAIAuto.hidesContent(config), "error details are not content");
+    }
+    @ParameterizedTest @ValueSource(strings = {"false", "off", "no", "0"})
+    void errorDetailsSwitchOffShowsTheErrorText(String value) {
+        AutoConfig config = env("FI_HIDE_ERROR_DETAILS", value);
+        assertFalse(config.masking.isHideErrorDetails(), value);
+        for (String key : ERROR_KEYS) assertFalse(TraceAIAuto.hidden(key, null, config), value + " " + key);
+    }
+    /** An input or output content switch still hides the error text, as before. */
+    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT"})
+    void aContentSwitchStillHidesTheErrorText(String name) {
+        AutoConfig config = env(name, "true");
+        for (String key : ERROR_KEYS) assertTrue(TraceAIAuto.hidden(key, null, config), name + " " + key);
+        assertFalse(config.masking.isHideErrorDetails(), "the content switch is not the error details switch");
+    }
+    /**
+     * The warning prints the file's path through the same masking as the doctor report: a credential the agent knows
+     * is never printed, even inside a path.
+     */
+    @Test void configFileWarningMasksAKnownCredentialInThePath() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-SYNTH_KEY_PLACEHOLDER-", ".toml");
+        try {
+            Files.write(file, "hide_inputs = true # note café\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+            var output = new java.io.ByteArrayOutputStream(); var stderr = System.err;
+            try (var captured = new java.io.PrintStream(output, true, java.nio.charset.StandardCharsets.UTF_8)) {
+                System.setErr(captured);
+                AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of("FI_API_KEY", "SYNTH_KEY_PLACEHOLDER", "FI_SECRET_KEY", "SYNTH_SECRET_PLACEHOLDER"));
+            } finally { System.setErr(stderr); }
+            String text = output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            List<String> warnings = text.lines().filter(line -> line.contains("] Config file ")).toList();
+            assertEquals(1, warnings.size(), text);
+            assertTrue(warnings.get(0).contains("not valid UTF-8"), text);
+            assertFalse(text.contains("SYNTH_KEY_PLACEHOLDER"), "the credential in the path is masked");
         } finally { Files.deleteIfExists(file); }
     }
     /**
@@ -123,7 +220,7 @@ class HideSwitchValuesTest {
             // Saved as Latin-1: the last letter of the comment is one byte that is not valid UTF-8.
             Files.write(file, "hide_inputs = true # PRIVATE_NOTE café\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
             String output = errorsWhenResolvedTwice(file.toString());
-            List<String> warnings = output.lines().filter(line -> line.contains(file.toString())).toList();
+            List<String> warnings = output.lines().filter(line -> line.contains("] Config file ")).toList();
             assertEquals(1, warnings.size(), output);
             assertTrue(warnings.get(0).contains("not valid UTF-8") && warnings.get(0).contains("none of its settings apply"), output);
             assertFalse(output.contains("PRIVATE_NOTE"), output);
@@ -136,7 +233,7 @@ class HideSwitchValuesTest {
             // Taking away the permission to read does not stop every user (root reads any file); the case is skipped then.
             org.junit.jupiter.api.Assumptions.assumeTrue(file.toFile().setReadable(false) && !Files.isReadable(file), "this user can read the file whatever its permissions");
             String output = errorsWhenResolvedTwice(file.toString());
-            List<String> warnings = output.lines().filter(line -> line.contains(file.toString())).toList();
+            List<String> warnings = output.lines().filter(line -> line.contains("] Config file ")).toList();
             assertEquals(1, warnings.size(), output);
             assertTrue(warnings.get(0).contains("could not be read") && warnings.get(0).contains("none of its settings apply"), output);
             assertFalse(output.contains("PRIVATE_NOTE"), output);

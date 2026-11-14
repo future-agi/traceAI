@@ -18,6 +18,7 @@ public final class PlainApp {
         if (args[2].startsWith("parity")) { ParityApp.run(args); return; }
         if (args[2].startsWith("reconfigure")) { ReconfigurationApp.run(args); return; }
         if (args[2].startsWith("coexist")) { CoexistApp.run(args); return; }
+        if (args[2].equals("unsampled_app")) { UnsampledApp.run(args); return; }
         if (args[2].startsWith("verify_headers")) { HeaderPrivacyApp.run(args); return; }
         if (args[2].equals("legacy_okhttp")) { legacyOkhttp(args); return; }
         if (args[2].equals("verify_wrapper") || args[2].equals("verify_parent") || args[2].equals("verify_cohere")) { WrapperPrivacyApp.run(args); return; }

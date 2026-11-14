@@ -331,11 +331,76 @@ class AgentE2ETest {
             String path = file.toAbsolutePath().toString();
             String log = run("jdk", "late_keys", Map.of("FI_CONFIG_FILE", path), false);
             assertSpan(); assertTrue(attributes(spans.get(0)).containsKey("input.value"), "the file's hide setting does not apply");
-            List<String> warnings = log.lines().filter(line -> line.contains(path)).toList();
+            List<String> warnings = log.lines().filter(line -> line.contains("] Config file ")).toList();
             assertEquals(1, warnings.size(), log);
             assertTrue(warnings.get(0).contains("not valid UTF-8") && warnings.get(0).contains("none of its settings apply"), log);
             assertFalse(log.contains("PRIVATE_NOTE"), log);
         } finally { Files.deleteIfExists(file); }
+    }
+    /** A one-line triple-quoted string on a hide key is not decoded: the content is hidden, even for "off", and the file says so once. */
+    @Test void oneLineTripleQuotedHideSettingInTheConfigFileHidesAndWarnsOnce() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-triple-e2e-", ".toml");
+        try {
+            Files.writeString(file, "hide_inputs = \"\"\"off\"\"\"\n");
+            String log = run("jdk", "basic", Map.of("FI_CONFIG_FILE", file.toAbsolutePath().toString()), true);
+            assertEquals(1, spans.size(), spans.toString()); Map<String,Object> attrs = attributes(spans.get(0));
+            assertFalse(attrs.containsKey("input.value"), attrs.toString()); assertEquals("Hello world", attrs.get("output.value"));
+            List<String> warnings = log.lines().filter(line -> line.contains("FI_HIDE_INPUTS")).toList();
+            assertEquals(1, warnings.size(), log);
+        } finally { Files.deleteIfExists(file); }
+    }
+    /** The provider's error text, in every place the agent writes it. */
+    static final String PRIVATE_ERROR = "PRIVATE_PROVIDER_ERROR_TEXT";
+    void assertErrorTextWithheld(String log) {
+        assertEquals(1, spans.size(), spans.toString()); Map<String,Object> span = spans.get(0), attrs = attributes(span);
+        assertEquals("401", attrs.get("error.type"));
+        assertEquals("", WireCore.get(span.get("status"), "message"), "the status description is withheld");
+        for (String key : List.of("exception.message", "exception.stacktrace", "error.message", "error.stack")) assertFalse(attrs.containsKey(key), key);
+        assertFalse(WireCore.dump(collectorPayloads).contains(PRIVATE_ERROR), "no part of the exported span carries the error text");
+        // Only the error text is withheld: the request is still captured.
+        assertTrue(attrs.containsKey("input.value"), attrs.toString());
+    }
+    /** With FI_HIDE_ERROR_DETAILS as the only hide switch, the error text never reaches Future AGI. An unknown value hides it and warns once. */
+    @ParameterizedTest @ValueSource(strings = {"true", "on", "maybe"})
+    void errorDetailsSwitchWithholdsTheProviderErrorText(String value) throws Exception {
+        status = 401; payload = ("{\"error\":{\"message\":\"" + PRIVATE_ERROR + "\"}}").getBytes(StandardCharsets.UTF_8);
+        String log = run("jdk", "basic", Map.of("FI_HIDE_ERROR_DETAILS", value), true);
+        assertErrorTextWithheld(log);
+        List<String> warnings = log.lines().filter(line -> line.contains("FI_HIDE_ERROR_DETAILS")).toList();
+        assertEquals(value.equals("maybe") ? 1 : 0, warnings.size(), log);
+        assertTrue(log.lines().noneMatch(line -> line.contains("[traceai-auto]") && line.contains("maybe")), log);
+    }
+    @Test void errorDetailsSwitchOffLetsTheProviderErrorTextReachFutureAgi() throws Exception {
+        status = 401; payload = ("{\"error\":{\"message\":\"" + PRIVATE_ERROR + "\"}}").getBytes(StandardCharsets.UTF_8);
+        run("jdk", "basic", Map.of("FI_HIDE_ERROR_DETAILS", "false"), true);
+        assertEquals(1, spans.size(), spans.toString());
+        assertEquals(PRIVATE_ERROR, WireCore.get(spans.get(0).get("status"), "message"));
+    }
+    @Test void errorDetailsSwitchWorksFromTheConfigFileToo() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-error-details-e2e-", ".toml");
+        try {
+            Files.writeString(file, "hide_error_details = true\n");
+            status = 401; payload = ("{\"error\":{\"message\":\"" + PRIVATE_ERROR + "\"}}").getBytes(StandardCharsets.UTF_8);
+            assertErrorTextWithheld(run("jdk", "basic", Map.of("FI_CONFIG_FILE", file.toAbsolutePath().toString()), true));
+        } finally { Files.deleteIfExists(file); }
+    }
+    /**
+     * The agent's AI spans are sampled by trace id at FI_SAMPLE_RATE. The application's own sampling decision does not
+     * drop them: here the application's SDK samples nothing, and the call under its span still reaches Future AGI as
+     * a child of that span, while the application's own span stays unsampled and never leaves the application.
+     */
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
+    void aCallUnderAnApplicationSpanThatTheApplicationDoesNotSampleIsStillTraced(String client) throws Exception {
+        String log = run(client, "unsampled_app", Map.of(), true);
+        assertTrue(log.contains("APP_SPAN_SAMPLED=false"), log); assertTrue(log.contains("APP_SPAN_STAYED_UNSAMPLED=true"), log);
+        assertSpan(); assertEquals(line(log, "APP_SPAN="), spans.get(0).get("parentSpanId"));
+        assertFalse(WireCore.dump(collectorPayloads).contains("application-unsampled-span"));
+    }
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
+    void sampleRateZeroDropsEvenACallUnderAnUnsampledApplicationSpan(String client) throws Exception {
+        String log = run(client, "unsampled_app", Map.of("FI_SAMPLE_RATE", "0"), true);
+        assertTrue(log.contains("APP_SPAN_SAMPLED=false"), log);
+        assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty());
     }
     @Test void bodyLimitDoesNotClaimUnknownHostOrAffectApp() throws Exception { run("jdk", "basic", Map.of("FI_WIRE_MAX_BODY_BYTES", "10"), true); assertTrue(spans.isEmpty()); }
     @Test void legacyOkHttpRequestsMatchNoAgentBaseline() throws Exception {
