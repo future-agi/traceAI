@@ -154,7 +154,7 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 
 </details>
 
-Dedicated instrumentors other than OpenAI are not installed implicitly. The bundled server-build adapters are inactive until you add their plugin to your build configuration. Genkit and Vercel versions without an enable entry report `manual`. Mastra is manual-only in this release. See each integration's README for supported methods and versions, and use doctor to inspect the version actually installed in your app.
+Dedicated instrumentors other than OpenAI are not installed implicitly. The bundled server-build adapters are inactive until you add their plugin to your build configuration. Genkit and Vercel versions without an enable entry report `manual`. Mastra is manual-only in this release. LangChain is not traced by the agent yet, in ES-module and CommonJS apps alike: the integration stays `pending`, and the model requests LangChain sends are still captured as wire spans. See each integration's README for supported methods and versions, and use doctor to inspect the version actually installed in your app.
 
 ### HTTP protocol coverage
 
@@ -325,6 +325,7 @@ npx --no-install traceai-auto doctor --no-check
 - **Response-driven completion:** unread and never-ending responses do not produce completed wire spans. Flush does not consume them for you. Cancelling a clone can end the shared capture before another branch finishes.
 - **Provider error semantics:** an error inside an HTTP 200 stream can retain HTTP-derived OK status; inspect finish reasons as well.
 - **Best-effort delivery:** natural-exit/SIGTERM flushes are bounded. Hard termination, Lambda freezing and collector failures can lose spans. The agent never makes app success depend on export success.
+- **LangChain is not traced by the agent yet:** in ES-module and CommonJS apps alike, the LangChain integration stays `pending` and records no LangChain spans. The model requests LangChain sends are still captured as wire spans, so the calls themselves are not lost. Use `@traceai/langchain`'s own API until a later release adds it.
 
 [Architecture, complete capture limits and redistribution notices](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md)
 
