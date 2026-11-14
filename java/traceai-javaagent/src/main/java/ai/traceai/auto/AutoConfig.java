@@ -34,9 +34,10 @@ public final class AutoConfig {
         String path = String.valueOf(overrides.containsKey("config_file") ? overrides.get("config_file") : overrides.containsKey("FI_CONFIG_FILE") ? overrides.get("FI_CONFIG_FILE") : environment.getOrDefault("FI_CONFIG_FILE", "futureagi.toml"));
         // A config file that is there but cannot be used is reported, never dropped without a word; none of its settings apply.
         List<String> lines = List.of();
+        String unusable = null;
         try { lines = Files.readAllLines(Path.of(path)); }
-        catch (java.nio.charset.CharacterCodingException error) { fileNotUsed(path, "it is not valid UTF-8 and could not be decoded"); }
-        catch (Exception error) { fileNotUsed(path, "it could not be read"); }
+        catch (java.nio.charset.CharacterCodingException error) { unusable = "it is not valid UTF-8 and could not be decoded"; }
+        catch (Exception error) { unusable = "it could not be read"; }
         try {
             boolean first = true;
             for (String line : lines) {
@@ -97,15 +98,20 @@ public final class AutoConfig {
         result.putIfAbsent("FI_PROJECT_TYPE", "observe"); result.putIfAbsent("FI_WIRE_CAPTURE", "true");
         result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_SAMPLE_RATE", "1.0"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
         result.put("FI_CONFIG_FILE", path);
-        return new AutoConfig(result, credentialValues);
+        AutoConfig resolved = new AutoConfig(result, credentialValues);
+        if (unusable != null) resolved.reportUnusableFile(path, unusable);
+        return resolved;
     }
     /**
      * Reports a config file that is there but cannot be used: once per file and cause in this JVM, by its path and never
-     * by its content. A path with no regular file behind it (a file that is not there, a directory) is not reported.
+     * by its content. The path is printed through the same masking as the doctor report's FI_CONFIG_FILE, so a credential
+     * inside it is not printed. A path with no regular file behind it (a file that is not there, a directory) is not reported.
      */
-    private static void fileNotUsed(String path, String cause) {
+    private void reportUnusableFile(String path, String cause) {
         try { if (!Files.isRegularFile(Path.of(path))) return; } catch (RuntimeException error) { return; }
-        String message = "[traceai-auto] Config file " + path + " is not used: " + cause + ", so none of its settings apply";
+        String shown;
+        try { shown = masked().get("FI_CONFIG_FILE"); } catch (RuntimeException error) { shown = "<masked>"; }
+        String message = "[traceai-auto] Config file " + shown + " is not used: " + cause + ", so none of its settings apply";
         if (FILE_WARNED.add(message)) System.err.println(message);
     }
     /** fi's named-profile files, kept as separate atomic sources even across project/user layers. */
