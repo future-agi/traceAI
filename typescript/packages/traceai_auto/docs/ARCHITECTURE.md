@@ -122,9 +122,16 @@ captured as a wire span. That includes a parent-based sampler in a trace it did 
 sample, because the agent's model span is then unsampled too. Such a span keeps the
 trace id, but it is not matched by trace id: a separate AI request in the same trace,
 such as a plain `fetch` beside an SDK call, looks the same, and a match would drop it.
-A duplicate is the stated limit; a lost AI request is not accepted. Two or more
+In this case the call is sent twice: the agent never drops a request on a guess from
+the trace id. Two or more
 recorded application spans in a row are not followed, and the call is then also
-captured as a wire span. Outgoing credential observation is never skipped by these rules: fetch reads
+captured as a wire span. A request under a covered model span is still skipped
+whether or not it is that call's own: a different model request that code inside the
+call sends (for example a custom `fetch` that first asks another model) gets no wire
+span. Without an application context manager, a covered model span is active only
+inside its SDK call (see [Existing OTel SDKs](#existing-otel-sdks)), except for Groq,
+Mistral and Portkey, which replace SDK methods directly: a request the caller sends
+beside one of their calls, until the call ends, is skipped too. Outgoing credential observation is never skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span
@@ -282,9 +289,17 @@ The FI route is never attached to the application's provider, and Future AGI rec
 only spans from agent-bound tracers. AI spans read the active context through the
 OpenTelemetry API, so they parent under the application's active span when it has a
 context manager. Without one, the agent's tracers keep parent links between the agent's
-own spans with a private `AsyncLocalStorage` that is never registered globally: a span
-an agent tracer starts becomes the parent of the work its caller starts next, until it
-ends. Spans started together from the same synchronous code may therefore nest.
+own spans with a private `AsyncLocalStorage` that is never registered globally. Each
+patched SDK call of an integration the agent loads, when that integration patches
+through the instrumentation's wrap method, runs in its own scope of that store
+(`store.run`). The span the integration starts is the parent of the call's own work,
+such as the SDK's provider request, and the scope ends when the call returns. So, as
+with an application context manager, the caller's next work, such as a plain `fetch`
+beside the call in the same tick or while it reads a stream, does not run under that
+span. Groq, Mistral and Portkey replace SDK methods directly, so the agent cannot
+scope their calls: their span stays the parent of the work the caller starts next,
+until it ends, and spans started together from the same synchronous code may nest.
+The same holds for a span an agent tracer starts outside a scoped call.
 
 With the forwarding switch (`FI_FORWARD_APP_SPANS=true` or `forwardApplicationSpans`),
 the application's provider keeps its processors and the FI processor is added beside
