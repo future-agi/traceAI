@@ -733,6 +733,45 @@ class EndToEndTest < Minitest::Test
     assert status.success?, stderr; assert_equal CHAT, stdout
     assert_chat_span(export_spans)
   end
+  # The same race at its real window: the first request arrives after the start
+  # stopped being provisional and before the new setup exists.
+  def test_explicit_init_racing_the_first_ai_request_at_the_start_of_the_new_setup
+    code = <<~RUBY
+      require 'net/http'; require 'json'
+      TraceAI::Auto.report
+      abort 'not started' unless TraceAI::Auto.active?
+      $inside = Queue.new; $resume = Queue.new
+      TraceAI::Auto.singleton_class.prepend(Module.new do
+        def initialize_once(arguments)
+          $inside.push(1)
+          $resume.pop(timeout: 5)
+          super
+        end
+      end)
+      init = Thread.new { TraceAI::Auto.init }
+      $inside.pop
+      Thread.new { sleep 0.5; $resume.push(1) }
+      #{plain_code}
+      init.join
+    RUBY
+    stdout, stderr, status = app(code, {}, chdir: File.dirname(ROOT))
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_chat_span(export_spans)
+  end
+  # HTTPX serializes the headers again at the protocol layer; the session id
+  # repeated there is still exported as set.
+  def test_session_id_repeated_in_an_httpx_header_is_still_exported_as_set
+    code = <<~RUBY
+      require 'httpx'
+      TraceAI::Auto.using_session('checkout-session-42') do
+        response = HTTPX.with(headers: {'x-session-id' => 'checkout-session-42', 'content-type' => 'application/json'}).post('#{@provider.url}/v1/chat/completions', body: JSON.generate(model: 'gpt-4o-mini', messages: [{role: 'user', content: 'hi'}]))
+        STDOUT.write(response.body.to_s)
+      end
+    RUBY
+    stdout, stderr, status = app("require 'json'\n" + code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_equal 'checkout-session-42', assert_chat_span(export_spans)['session.id']
+  end
   def test_coexists_with_existing_provider
     # Preload manual agent API only; app sets its provider before one-line init.
     code = <<~RUBY

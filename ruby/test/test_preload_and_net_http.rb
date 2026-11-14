@@ -301,20 +301,33 @@ class EndToEndTest
   # AI request starts the agent on its own provider, which leaves one targeted
   # hook on the provider setter. It ends with the window too, whatever the
   # application defines afterwards.
+  # The bundle holds the SDK and no HTTP client gem, so after the first request
+  # only the targeted provider hook is left on: no definition can end it.
   def test_startup_hooks_end_with_the_window_after_a_start_on_the_agents_own_provider
+    gemfile = Tempfile.new(['hooks-own-provider', '.Gemfile'], File.join(ROOT, '.bundle/tmp'))
+    gemfile.write("source 'https://rubygems.org'\ngem 'opentelemetry-sdk'\n"); gemfile.close
+    overrides = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }.merge('BUNDLE_GEMFILE' => gemfile.path)
     code = <<~RUBY
+      require 'bundler/setup'
       require 'opentelemetry/sdk'; require 'net/http'
       #{plain_code}
       puts
-      #{END_STARTUP_WINDOW}
+      puts 'BEFORE=' + #{ENABLED_TRACE_HOOKS}.to_s
+      TraceAI::Auto.instance_variable_set(:@watch_until, 0.0)
+      module StartupWindowProbe; end
       #{plain_code}
       puts
       puts 'FINAL=' + #{ENABLED_TRACE_HOOKS}.to_s
     RUBY
-    stdout, stderr, status = app(code)
+    stdout, stderr, status = app(code, overrides)
     assert status.success?, stderr
-    assert_equal 0, hook_counts(stdout).fetch('FINAL'), stdout
+    counts = hook_counts(stdout)
+    assert_operator counts.fetch('BEFORE'), :>=, 1, stdout
+    assert_equal 0, counts.fetch('FINAL'), stdout
     assert_equal 2, export_spans.length
+  ensure
+    File.unlink(gemfile.path + '.lock') if gemfile && File.exist?(gemfile.path + '.lock')
+    gemfile&.unlink
   end
 
   # In a directory with a Gemfile the agent waits for Bundler.setup. If the
