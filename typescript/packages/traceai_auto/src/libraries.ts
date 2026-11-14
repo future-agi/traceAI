@@ -11,7 +11,7 @@ import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config, enabled, explicitlyEnabled, Options } from "./config";
 import { readIncomingParent } from "./incoming-parent";
-import { runIntegrationCall } from "./agent-context";
+import { incomingServerSpan, runIntegrationCall } from "./agent-context";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
 /** vectorOnly: the database integration traces only vector operations when the agent enables it. */
@@ -265,11 +265,18 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true, startIncomingSpanHook: readIncomingParent });
       // Without an application context manager, the SERVER span is active for the work
       // its request starts, and not for anything after it, as for an integration's call.
+      // Only the request event gets this scope, and only the SERVER span is made active
+      // in it: a span another integration starts while the request runs makes nothing
+      // active, as outside a call, so a request sent beside it is still captured.
       const wrapMethod = instance._wrap;
       instance._wrap = function(target: any, name: string, wrapper: any) {
         return wrapMethod.call(this, target, name, (original: any) => {
           const instrumented = wrapper(original);
-          return function(this: unknown, ...args: unknown[]) { return runIntegrationCall(() => Reflect.apply(instrumented, this, args)); };
+          if (name !== "emit") return instrumented;
+          return function(this: unknown, ...args: unknown[]) {
+            if (args[0] !== "request") return Reflect.apply(instrumented, this, args);
+            return runIntegrationCall(() => Reflect.apply(instrumented, this, args), incomingServerSpan);
+          };
         });
       };
       removers.push(registerInstrumentations({ tracerProvider: provider, instrumentations: [instance] }));

@@ -49,11 +49,20 @@ interface CallCell {
   readonly active: WeakMap<Context, Context>;
   // For each span in the cell: what was active where it started, to go back to once it ends.
   readonly before: WeakMap<object, Context>;
+  // The spans this call was opened for. Any other span started in the call makes nothing active.
+  readonly accepts?: AcceptSpan;
 }
+
+/** A span start, as an integration call's accept check sees it: the tracer's name and the span kind. */
+export interface SpanStart { readonly scope: string | undefined; readonly kind: SpanKind | undefined }
+export type AcceptSpan = (start: SpanStart) => boolean;
+
+/** For an incoming request: only the SERVER span the agent's HTTP instrumentation starts. */
+export const incomingServerSpan: AcceptSpan = start => start.scope === HTTP_SCOPE && start.kind === SpanKind.SERVER;
 
 function callCell(ctx: Context): CallCell | undefined {
   const cell = ctx.getValue(INTEGRATION_CALL) as CallCell | undefined;
-  return cell && cell.active instanceof WeakMap && cell.before instanceof WeakMap ? cell : undefined;
+  return cell && cell.active instanceof WeakMap && cell.before instanceof WeakMap && (cell.accepts === undefined || typeof cell.accepts === "function") ? cell : undefined;
 }
 
 // The context that is active where ctx is current: inside an integration call, the
@@ -75,15 +84,16 @@ function inCall(ctx: Context): Context {
   return ctx;
 }
 
-// Inside an integration call, a span an agent-bound tracer starts is active for the
-// rest of that call, where the context it started in is current. Outside a call
-// nothing is made active: the caller's next work never runs under the span.
-function activateInCall(parent: Context, span: Span): void {
+// Inside an integration call, a span the call was opened for is active for the rest
+// of that call, where the context it started in is current. Any other span, and any
+// span outside a call, makes nothing active: the caller's next work never runs under it.
+function activateInCall(parent: Context, span: Span, start: SpanStart): void {
   try {
     if (!span.isRecording()) return;
     const current = activeFIContext(), cell = callCell(current);
-    if (!cell) return;
-    cell.before.set(span, cell.active.get(current) ?? current);
+    if (!cell || (cell.accepts && !cell.accepts(start))) return;
+    // Keep what is active now, not an ended span, so ended spans are not retained.
+    cell.before.set(span, inCall(current));
     cell.active.set(current, trace.setSpan(parent, span));
   } catch { /* Parent links are best effort and never change the application. */ }
 }
@@ -108,12 +118,13 @@ export function withContext<T>(ctx: Context, fn: () => T): T {
  * caller's context is back: a request the caller sends beside the call, in the same
  * tick or while it reads a stream, starts outside the span and is captured. With an
  * application context manager, the integration's own context.with already ends with the call.
+ * accepts names the spans the call is opened for; without it, every span started in the call.
  */
-export function runIntegrationCall<T>(fn: () => T): T {
+export function runIntegrationCall<T>(fn: () => T, accepts?: AcceptSpan): T {
   if (applicationContextManager()) return fn();
   let scope: Context | undefined;
   try {
-    const cell: CallCell = { active: new WeakMap<Context, Context>(), before: new WeakMap<object, Context>() };
+    const cell: CallCell = { active: new WeakMap<Context, Context>(), before: new WeakMap<object, Context>(), accepts };
     // A call made inside another call starts under that call's span.
     scope = activeContext().setValue(INTEGRATION_CALL, cell);
   } catch { /* The call runs as it is. */ }
@@ -167,7 +178,7 @@ function parentFor(ctx: Context | undefined): { parent: Context; implicit: boole
   return { parent: inCall(ctx), implicit: false };
 }
 
-function startSpan(tracer: Tracer, name: string, options?: SpanOptions, ctx?: Context): Span {
+function startSpan(tracer: Tracer, scope: string | undefined, name: string, options?: SpanOptions, ctx?: Context): Span {
   if (applicationContextManager()) {
     const span = tracer.startSpan(name, options, ctx);
     markAgentSpan(span);
@@ -177,9 +188,9 @@ function startSpan(tracer: Tracer, name: string, options?: SpanOptions, ctx?: Co
   const span = tracer.startSpan(name, implicit ? withContextAttributes(options, parent) : options, parent);
   markAgentSpan(span);
   // Instrumentations call the API's context.with, which does nothing without a
-  // context manager. Inside an integration call, the call's cell makes this span
-  // the parent of the rest of the call's own work. Outside one, nothing changes.
-  activateInCall(parent, span);
+  // context manager. Inside an integration call opened for this span, the call's cell
+  // makes it the parent of the rest of the call's own work. Otherwise nothing changes.
+  activateInCall(parent, span, { scope, kind: options?.kind });
   return span;
 }
 
@@ -211,7 +222,7 @@ export function contextBoundProvider(provider: TracerProvider): TracerProvider {
   const facade = Object.create(provider) as TracerProvider;
   Object.defineProperty(facade, "getTracer", { value: (...args: Parameters<TracerProvider["getTracer"]>) => {
     const native = provider.getTracer(...args);
-    const http = args[0] === HTTP_SCOPE;
+    const scope = typeof args[0] === "string" ? args[0] : undefined, http = scope === HTTP_SCOPE;
     let bound = tracers.get(native);
     if (!bound) {
       bound = Object.create(native) as Tracer;
@@ -219,7 +230,7 @@ export function contextBoundProvider(provider: TracerProvider): TracerProvider {
         // Incoming SERVER spans join a remote parent read by the private propagator
         // when the application has none.
         startSpan: { value: (name: string, options?: SpanOptions, ctx?: Context) =>
-          startSpan(native, name, options, http && options?.kind === SpanKind.SERVER ? incomingParent(ctx) : ctx) },
+          startSpan(native, scope, name, options, http && options?.kind === SpanKind.SERVER ? incomingParent(ctx) : ctx) },
         startActiveSpan: { value: (...rest: unknown[]) => startActiveSpan(native, rest) },
       });
       tracers.set(native, bound);
