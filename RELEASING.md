@@ -23,6 +23,7 @@ The publisher acknowledges each completed merged release PR by replacing `autore
 | Java | `java/pom.xml`; release-please updates reactor POMs together | `java-vX.Y.Z` | signed Maven Central reactor, `com.futureagi` |
 | Go | `.release-please-manifest.json` entry per module | `go/<module>/vX.Y.Z` | source tag; request Go proxy `.info` afterwards |
 | NuGet | `csharp/src/FIInstrumentation/FIInstrumentation.csproj` | `nuget-fi-instrumentation-otel-vX.Y.Z` | `dotnet pack`, verified local consumer, push with `--skip-duplicate` |
+| NuGet (startup hook) | `csharp/src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj` | `nuget-TraceAI.AutoInstrumentation-vX.Y.Z` | same gated route; the package holds the published hook directory under `tools/net8.0/any/`, and the build also starts a stock application with it |
 
 The Go proxy URL escapes uppercase letters: `traceAI` becomes `trace!a!i`. A module tag such as `go/openai/v0.1.0` is queried at `https://proxy.golang.org/github.com/future-agi/trace!a!i/go/openai/@v/v0.1.0.info`. No Go registry credentials are needed. JitPack remains a Java commit-preview route; Maven Central is the release route.
 

@@ -155,13 +155,16 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
         out.append({"ecosystem": "go", "name": module, "version": version,
                     "dir": path, "tag": f"{path}/v{version}", "core": False,
                     "changelog": f"{path}/CHANGELOG.md"})
-    for f in sorted((root / "csharp/src/FIInstrumentation").glob("*.csproj")):
-        p = ET.fromstring(f.read_text())
-        name, version = p.findtext(".//PackageId"), p.findtext(".//Version")
-        out.append({"ecosystem": "nuget", "name": name, "version": version,
-                    "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
-                    "tag": f"nuget-{name}-v{version}", "core": False,
-                    "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # The startup hook's own folder also holds its private runtime and SDK projects; only the
+    # project in the folder's top level is a package.
+    for folder in ("csharp/src/FIInstrumentation", "csharp/src/TraceAI.AutoInstrumentation"):
+        for f in sorted((root / folder).glob("*.csproj")):
+            p = ET.fromstring(f.read_text())
+            name, version = p.findtext(".//PackageId"), p.findtext(".//Version")
+            out.append({"ecosystem": "nuget", "name": name, "version": version,
+                        "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
+                        "tag": f"nuget-{name}-v{version}", "core": False,
+                        "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
     # Ruby is inventoried for release-please coverage but intentionally held
     # from the five-ecosystem publisher until a RubyGems publisher is configured.
     ruby_version = root / "ruby/roast/lib/traceai/roast/version.rb"

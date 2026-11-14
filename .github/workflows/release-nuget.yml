@@ -38,6 +38,17 @@ jobs:
           dotnet add smoke package "$NAME" --version "$VERSION" --source "$RUNNER_TEMP/dist" --no-restore
           dotnet restore smoke --source "$RUNNER_TEMP/dist" --source https://api.nuget.org/v3/index.json
           dotnet build smoke --no-restore
+      - name: Check the startup hook payload and start a stock application with it
+        if: matrix.name == 'TraceAI.AutoInstrumentation'
+        working-directory: ${{ runner.temp }}
+        run: |
+          unzip -q "dist/$NAME.$VERSION.nupkg" -d hook
+          test -f hook/tools/net8.0/any/TraceAI.AutoInstrumentation.dll
+          test -f hook/tools/net8.0/any/TraceAI.AutoInstrumentation.Runtime.dll
+          test -f hook/tools/net8.0/any/FIInstrumentation.dll
+          test -f hook/tools/net8.0/any/OpenTelemetry.dll
+          test ! -d hook/lib
+          DOTNET_STARTUP_HOOKS="$PWD/hook/tools/net8.0/any/TraceAI.AutoInstrumentation.dll" dotnet smoke/bin/Debug/net10.0/smoke.dll
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.tag }}

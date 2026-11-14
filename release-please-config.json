@@ -1044,6 +1044,18 @@
         }
       ]
     },
+    "csharp/src/TraceAI.AutoInstrumentation": {
+      "release-type": "simple",
+      "component": "nuget-traceai-autoinstrumentation",
+      "package-name": "TraceAI.AutoInstrumentation",
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "TraceAI.AutoInstrumentation.csproj",
+          "xpath": "/Project/PropertyGroup/Version"
+        }
+      ]
+    },
     "python": {
       "release-type": "simple",
       "component": "fi-instrumentation-otel",
