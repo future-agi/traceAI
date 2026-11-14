@@ -241,7 +241,7 @@ module TraceAI
         {kind: :text, text: data.dup.force_encoding('UTF-8').scrub}
       end
       def build(request, response, limit: MAX_BODY)
-        Privacy.observe_request(request[:headers] || {}, request[:url])
+        Privacy.observe_request(request[:headers] || {}, request[:url], request[:session_id])
         m = match(request[:method], request[:url]); return nil unless m
         Parser.new(m, request, response, limit).build
       end

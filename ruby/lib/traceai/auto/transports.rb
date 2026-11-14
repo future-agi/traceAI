@@ -266,7 +266,7 @@ module TraceAI
           # Native #request adds proxy authentication after our entry hook.
           # Observe the finalized headers even with wire capture suppressed;
           # never consume bodies or change Net::HTTP's retries/block shape.
-          Privacy.observe_request(req.each_header.to_h, req.path) if Auto.active?
+          Privacy.observe_request(req.each_header.to_h, req.path, Auto.current_session_id) if Auto.active?
           capture = Auto.current_capture
           token = Auto.attach_context(Auto.capture_context) if capture.is_a?(Capture) && !capture.net_request.equal?(req)
         rescue StandardError => e
@@ -282,7 +282,7 @@ module TraceAI
         Thread.current[:traceai_lazy_timing] = nil
         capture = nil; token = nil
         begin
-          Privacy.observe_request(req.each_header.to_h, req.path) if Auto.active?
+          Privacy.observe_request(req.each_header.to_h, req.path, Auto.current_session_id) if Auto.active?
           if Auto.capture_allowed? && Auto.transport_enabled?('net_http')
             scheme = use_ssl? ? 'https' : 'http'
             host = address.include?(':') ? "[#{address}]" : address
@@ -518,7 +518,7 @@ module TraceAI
       def send_request(req, ...)
         started = Time.now; clock = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         begin
-          Privacy.observe_request(req.headers.to_h, req.uri.to_s) if Auto.active?
+          Privacy.observe_request(req.headers.to_h, req.uri.to_s, Auto.current_session_id) if Auto.active?
           batch = Thread.current[:traceai_httpx_batch]
           batch.enabled = Auto.capture_allowed? && Auto.transport_enabled?('httpx') if batch && batch.enabled.nil?
           if batch&.enabled

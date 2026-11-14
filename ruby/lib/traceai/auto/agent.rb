@@ -286,7 +286,7 @@ module TraceAI
         require_relative 'wire'
         url = url.to_s
         begin
-          Privacy.observe_request(headers, url) if headers.instance_of?(Hash)
+          Privacy.observe_request(headers, url, current_session_id) if headers.instance_of?(Hash)
         rescue StandardError => e
           debug(e)
         end
@@ -680,6 +680,14 @@ module TraceAI
       def session_id(context)
         return unless context && @attributes_key
         value = (context.value(@attributes_key) || {})['session.id']
+        value if value.instance_of?(String)
+      rescue StandardError => e
+        debug(e); nil
+      end
+      # The session id of the request being made now, also before the agent has
+      # started (the context helpers then keep it in the early attributes).
+      def current_session_id
+        value = session_id(request_context) || (Thread.current[:traceai_early_attributes] || {})['session.id']
         value if value.instance_of?(String)
       rescue StandardError => e
         debug(e); nil

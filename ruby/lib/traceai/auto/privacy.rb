@@ -40,16 +40,24 @@ module TraceAI
       end
       # Observation is independent of wire-span eligibility. Suppressed requests
       # read only the native headers/URL already in hand, never their bodies.
-      def observe_request(headers, url)
+      # `session_id` is the id the application set for this request
+      # (using_session). A header or query value equal to it, or equal to it
+      # after the scheme word (Bearer <id>), is correlation data the application
+      # chose to export, so it is not learned as a secret.
+      def observe_request(headers, url, session_id = nil)
+        session_id = nil unless Codec.type(session_id) == String && !session_id.empty?
         headers.each do |name, value|
           next unless Codec.type(name) == String && Codec.type(value) == String
           key = name.downcase
           next unless credential?(key)
+          bare = value.sub(/\A\S+\s+/, '')
+          next if session_id && (value == session_id || bare == session_id)
           Auto.register_secret(value)
-          Auto.register_secret(value.sub(/\A\S+\s+/, '')) if leaf(key).end_with?('authorization')
+          Auto.register_secret(bare) if leaf(key).end_with?('authorization')
         end
         query_parts(url)[2].each do |_, equals, raw_value, name, decoded|
           next if equals.empty? || !query_credential?(name)
+          next if session_id && (raw_value == session_id || decoded == session_id)
           Auto.register_secret(raw_value)
           Auto.register_secret(decoded)
         end
