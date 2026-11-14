@@ -12,7 +12,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * futureagi.toml setting: true, 1, yes and on hide; false, 0, no and off show; a blank value is not set; any other
  * value hides. A hide line in the file is never dropped, however its value is written. The warning is printed once
  * per variable in a JVM, so these cases check only what is hidden; the warning, and its absence for a single-quoted
- * value, are checked in a child JVM by AgentE2ETest. Other switches keep their own parsing.
+ * value, are checked in a child JVM by AgentE2ETest. Other switches keep their own parsing. A config file that is
+ * there but cannot be used is reported once, by its path and never by its content.
  */
 class HideSwitchValuesTest {
     private static final String NO_FILE = "target/no-hide-switch-config.toml";
@@ -99,6 +100,52 @@ class HideSwitchValuesTest {
                 assertFalse(hides(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()), name), option + " = " + value);
             }
         } finally { Files.deleteIfExists(file); }
+    }
+    /**
+     * Resolves the configuration twice with the given config file, which sets hide_inputs when it can be read, and
+     * returns what was printed to standard error. The file's settings must not apply either time.
+     */
+    private static String errorsWhenResolvedTwice(String configFile) {
+        var output = new java.io.ByteArrayOutputStream(); var stderr = System.err;
+        try (var captured = new java.io.PrintStream(output, true, java.nio.charset.StandardCharsets.UTF_8)) {
+            System.setErr(captured);
+            for (int i = 0; i < 2; i++) assertFalse(AutoConfig.resolve(Map.of("config_file", configFile), Map.of()).masking.isHideInputs(), "the file's settings do not apply");
+        } finally { System.setErr(stderr); }
+        return output.toString(java.nio.charset.StandardCharsets.UTF_8);
+    }
+    /**
+     * A config file that is there but cannot be used must say so: the hide settings in it do nothing, and that must
+     * never be silent. One warning per JVM names the file's path and what failed, never the file's content.
+     */
+    @Test void configFileThatIsNotValidUtf8IsReportedOnceByPathAndNeverByContent() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-not-utf8-", ".toml");
+        try {
+            // Saved as Latin-1: the last letter of the comment is one byte that is not valid UTF-8.
+            Files.write(file, "hide_inputs = true # PRIVATE_NOTE café\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+            String output = errorsWhenResolvedTwice(file.toString());
+            List<String> warnings = output.lines().filter(line -> line.contains(file.toString())).toList();
+            assertEquals(1, warnings.size(), output);
+            assertTrue(warnings.get(0).contains("not valid UTF-8") && warnings.get(0).contains("none of its settings apply"), output);
+            assertFalse(output.contains("PRIVATE_NOTE"), output);
+        } finally { Files.deleteIfExists(file); }
+    }
+    @Test void configFileThatCannotBeReadIsReportedOnceByPathAndNeverByContent() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-unreadable-", ".toml");
+        try {
+            Files.writeString(file, "hide_inputs = true # PRIVATE_NOTE\n");
+            // Taking away the permission to read does not stop every user (root reads any file); the case is skipped then.
+            org.junit.jupiter.api.Assumptions.assumeTrue(file.toFile().setReadable(false) && !Files.isReadable(file), "this user can read the file whatever its permissions");
+            String output = errorsWhenResolvedTwice(file.toString());
+            List<String> warnings = output.lines().filter(line -> line.contains(file.toString())).toList();
+            assertEquals(1, warnings.size(), output);
+            assertTrue(warnings.get(0).contains("could not be read") && warnings.get(0).contains("none of its settings apply"), output);
+            assertFalse(output.contains("PRIVATE_NOTE"), output);
+        } finally { file.toFile().setReadable(true); Files.deleteIfExists(file); }
+    }
+    @Test void configFileThatIsNotThereIsNotReported() {
+        assertFalse(Files.exists(Path.of(NO_FILE)));
+        String output = errorsWhenResolvedTwice(NO_FILE);
+        assertTrue(output.lines().noneMatch(line -> line.contains(NO_FILE)), output);
     }
     @Test void otherSwitchesKeepTheirOwnParsing() {
         for (String value : List.of("on", "yes", "1", " TRUE ", "maybe")) {

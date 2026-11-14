@@ -319,6 +319,24 @@ class AgentE2ETest {
             assertTrue(log.lines().noneMatch(line -> line.contains("FI_HIDE_INPUTS")), log);
         } finally { Files.deleteIfExists(file); }
     }
+    /**
+     * A config file that is there but is not valid UTF-8 is reported once per JVM, by its path and never by its content.
+     * The configuration is resolved twice here, at a start without keys and again at init with keys. The file's settings do not apply.
+     */
+    @Test void configFileThatIsNotValidUtf8IsReportedOnceWhenTheConfigurationIsResolvedTwice() throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "not-utf8-e2e-", ".toml");
+        try {
+            // Saved as Latin-1: the last letter of the comment is one byte that is not valid UTF-8.
+            Files.write(file, "hide_inputs = true # PRIVATE_NOTE café\n".getBytes(StandardCharsets.ISO_8859_1));
+            String path = file.toAbsolutePath().toString();
+            String log = run("jdk", "late_keys", Map.of("FI_CONFIG_FILE", path), false);
+            assertSpan(); assertTrue(attributes(spans.get(0)).containsKey("input.value"), "the file's hide setting does not apply");
+            List<String> warnings = log.lines().filter(line -> line.contains(path)).toList();
+            assertEquals(1, warnings.size(), log);
+            assertTrue(warnings.get(0).contains("not valid UTF-8") && warnings.get(0).contains("none of its settings apply"), log);
+            assertFalse(log.contains("PRIVATE_NOTE"), log);
+        } finally { Files.deleteIfExists(file); }
+    }
     @Test void bodyLimitDoesNotClaimUnknownHostOrAffectApp() throws Exception { run("jdk", "basic", Map.of("FI_WIRE_MAX_BODY_BYTES", "10"), true); assertTrue(spans.isEmpty()); }
     @Test void legacyOkHttpRequestsMatchNoAgentBaseline() throws Exception {
         String baseline = run("okhttp", "legacy_okhttp", Map.of("TRACEAI_TEST_NO_AGENT", "true"), true); assertTrue(spans.isEmpty());
