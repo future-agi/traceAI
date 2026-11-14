@@ -436,6 +436,12 @@ def auto_instrument(
                 continue
             status, action, installed = _plan(integration, settings, lazy)
             _state.statuses[integration.name] = status
+            if status.status == STATUS_MANUAL and integration.scopes:
+                # The application sets this one up itself, with the package's exporter on the Future
+                # AGI provider it registered: its library spans must reach that exporter.
+                for overlay in _state.overlays.values():
+                    if overlay.borrowed:
+                        overlay.admit(integration)
             actions.append((integration, action, installed))
 
     for integration, action, targets in actions:
@@ -589,9 +595,9 @@ class _ResourceOverlayProcessor(SpanProcessor):
         """Carry the spans of an integration that is on: its scopes, or its request roots."""
         scopes = tuple(scope.lower() for scope in integration.scopes)
         if integration.category == "web":
-            self.server_scopes += scopes
+            self.server_scopes += tuple(scope for scope in scopes if scope not in self.server_scopes)
         else:
-            self.scopes += scopes
+            self.scopes += tuple(scope for scope in scopes if scope not in self.scopes)
 
     def on_start(self, span: Any, parent_context: Any = None) -> None:
         # Deliberately not forwarded: a processor that tracks open spans would end the

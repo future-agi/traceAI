@@ -9,7 +9,9 @@ The Future AGI route carries spans from traceAI instrumentation scopes, and span
 that carry an AI span kind (``gen_ai.span.kind`` or ``fi.span.kind``). ``scopes`` adds the
 instrumentation scope prefixes of spans an integration routes but does not create itself: the
 library's own spans, which its traceAI package maps. For ``web`` entries they are the server
-instrumentation's scopes, and only request root spans of traces with an AI span are carried.
+instrumentation's scopes, and only request root spans of traces with an AI span are carried. For a
+``manual`` entry they are carried only to the Future AGI export of a provider the application
+registered, where its setup line puts the package's exporter.
 """
 
 from dataclasses import dataclass
@@ -91,7 +93,9 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("semantic_kernel", ("semantic_kernel",), "traceAI-semantic-kernel", "traceai_semantic_kernel", "semantic_kernel", kind=SETUP, category="framework",
                 scopes=("semantic_kernel",)),
     # Its privacy and attribute conversion happen in an exporter wrapper the agent does not install.
+    # The app passes that exporter to register(); the library's own spans (``scopes``) reach it.
     Integration("strands", ("strands",), "traceai-strands", "traceai_strands", kind=MANUAL, category="framework",
+                scopes=("strands.telemetry.tracer",),
                 note="Install traceai-strands and, before creating an Agent, call register(set_global_tracer_provider=True, "
                      "span_exporter=StrandsSpanExporter(HTTPSpanExporter(), capture_content=True)) as its README shows. "
                      "To trace other libraries too, call fi_instrumentation.init() after it instead of starting with "
