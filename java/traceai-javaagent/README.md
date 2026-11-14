@@ -109,7 +109,7 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` | `false`; omit text, including transcripts and tool arguments. |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | `false`; omit invocation parameters. |
 | `FI_HIDE_INPUT_IMAGES` | `false`; omit image and file inputs while keeping text parts. |
-| `FI_HIDE_ERROR_DETAILS` | `false`; omit the provider's error text: the status description, `exception.message`, `exception.stacktrace`, `error.message`, `error.stack` and the output of a failed call. An input or output content switch hides the error text too. |
+| `FI_HIDE_ERROR_DETAILS` | `false`; omit the provider's error text: the status description, `exception.message`, `exception.stacktrace`, `error.message`, `error.stack`, and the `output.value` and `output.mime_type` of a failed call. Partial output messages of a stream that failed partway stay under the output switches (`FI_HIDE_OUTPUTS`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_OUTPUT_TEXT`). An input or output content switch hides the error text too. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent. |
 
 Each `FI_HIDE_*` switch in the table above, its `init` option or its
