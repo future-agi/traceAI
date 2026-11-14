@@ -149,9 +149,11 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
         // retained wrapper inert before cleanup, including rollback/error paths.
         active = false; return Reflect.apply(disableInstance, this, args);
       };
-      // Integrations that own their patching can scope a call without using _wrap.
-      const INTEGRATION_CALL = Symbol.for("traceai.auto.integration-call.v1");
-      Object.defineProperty(instance, INTEGRATION_CALL, {
+      // Integrations that keep their own patching run a traced call
+      // through this hook.
+      const INTEGRATION_CALL_HOOK =
+        Symbol.for("traceai.auto.integration-call.v1");
+      Object.defineProperty(instance, INTEGRATION_CALL_HOOK, {
         enumerable: false, configurable: true,
         value: <T>(fn: () => T): T => active ? runIntegrationCall(fn) : fn(),
       });
