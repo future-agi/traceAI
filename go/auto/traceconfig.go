@@ -26,12 +26,20 @@ type TraceConfig struct {
 	Base64ImageMaxLength        int
 }
 
-func traceConfigValues(get func(string, string) string) TraceConfig {
+func traceConfigValues(get func(string, string) string, ignore map[string]bool) TraceConfig {
 	max, _ := strconv.Atoi(get("BASE64_IMAGE_MAX_LENGTH", "32000"))
 	if max <= 0 {
 		max = 32000
 	}
-	return TraceConfig{Base64ImageMaxLength: max, HideLLMInvocationParameters: boolValue(get("HIDE_LLM_INVOCATION_PARAMETERS", "false")), HideInputs: boolValue(get("HIDE_INPUTS", "false")), HideOutputs: boolValue(get("HIDE_OUTPUTS", "false")), HideInputMessages: boolValue(get("HIDE_INPUT_MESSAGES", "false")), HideOutputMessages: boolValue(get("HIDE_OUTPUT_MESSAGES", "false")), HideInputImages: boolValue(get("HIDE_INPUT_IMAGES", "false")), HideInputText: boolValue(get("HIDE_INPUT_TEXT", "false")), HideOutputText: boolValue(get("HIDE_OUTPUT_TEXT", "false"))}
+	// A switch that a code option replaces is not read, so it cannot print a
+	// warning about content that the option then decides.
+	hide := func(key string) bool {
+		if ignore["*"] || ignore[key] {
+			return false
+		}
+		return hideValue(key, get(key, ""))
+	}
+	return TraceConfig{Base64ImageMaxLength: max, HideLLMInvocationParameters: hide("HIDE_LLM_INVOCATION_PARAMETERS"), HideInputs: hide("HIDE_INPUTS"), HideOutputs: hide("HIDE_OUTPUTS"), HideInputMessages: hide("HIDE_INPUT_MESSAGES"), HideOutputMessages: hide("HIDE_OUTPUT_MESSAGES"), HideInputImages: hide("HIDE_INPUT_IMAGES"), HideInputText: hide("HIDE_INPUT_TEXT"), HideOutputText: hide("HIDE_OUTPUT_TEXT")}
 }
 func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	return c.mask(kv, "")

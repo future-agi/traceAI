@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -74,6 +75,34 @@ func splitList(v string) []string {
 	return ss
 }
 func boolValue(s string) bool { return strings.EqualFold(strings.TrimSpace(s), "true") }
+
+// hideWarned holds the hide switches already reported in this process. The
+// configuration is read at package initialization and again at activation.
+var hideWarned sync.Map
+
+// blankHide reports a hide switch with a blank value. It counts as not set, so
+// a blank environment value does not replace the config file's value.
+func blankHide(key, value string) bool {
+	return strings.HasPrefix(key, "HIDE_") && strings.TrimSpace(value) == ""
+}
+
+// hideValue reads one hide switch, an FI_HIDE_* variable or its config file
+// setting, ignoring case and surrounding spaces: true, 1, yes and on hide;
+// false, 0, no and off show; a blank value is not set. Any other value hides,
+// because a hide switch someone set must never silently do nothing. It is
+// reported once per variable, by name and never by value.
+func hideValue(key, value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "false", "0", "no", "off":
+		return false
+	case "true", "1", "yes", "on":
+		return true
+	}
+	if _, reported := hideWarned.LoadOrStore(key, true); !reported {
+		log.Printf("traceai auto: FI_%s has a value that is not recognised, so this content is hidden; use true, 1, yes or on to hide it, or false, 0, no or off to show it", key)
+	}
+	return true
+}
 func readConfig(overrides ...func(*Config)) (Config, error) {
 	return readConfigWithOverrides(nil, overrides...)
 }
@@ -87,7 +116,7 @@ func readConfigWithOverrides(ignore map[string]bool, overrides ...func(*Config))
 		return Config{ConfigFile: path}, err
 	}
 	get := func(k, def string) string {
-		if v, ok := os.LookupEnv("FI_" + k); ok {
+		if v, ok := os.LookupEnv("FI_" + k); ok && !blankHide(k, v) {
 			return v
 		}
 		if v, ok := values[k]; ok {
@@ -118,7 +147,7 @@ func readConfigWithOverrides(ignore map[string]bool, overrides ...func(*Config))
 	if c.WireMaxBodyBytes, err = strconv.ParseInt(get("WIRE_MAX_BODY_BYTES", "4194304"), 10, 64); err != nil {
 		c.WireMaxBodyBytes = -1
 	}
-	c.TraceConfig = traceConfigValues(get)
+	c.TraceConfig = traceConfigValues(get, ignore)
 	// Validate the resolved configuration, not an inherited value that a code
 	// option replaces. Invalid sentinels must survive until overrides run.
 	for _, override := range overrides {
@@ -230,7 +259,8 @@ func readFlatConfig(path string, ignore map[string]bool) (map[string]string, err
 		if credentialOnly && !isCredential {
 			continue
 		}
-		_, overridden := os.LookupEnv("FI_" + key)
+		env, overridden := os.LookupEnv("FI_" + key)
+		overridden = overridden && !blankHide(key, env)
 		if isCredential {
 			// An incomplete environment source must not discard half of the
 			// complete file pair. Empty env values are absence, not a pair.
