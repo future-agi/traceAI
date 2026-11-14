@@ -22,6 +22,9 @@
              -DskipITs still works as usual. -->
         <traceai.javaagent.skipITs>false</traceai.javaagent.skipITs>
         <skipITs>${traceai.javaagent.skipITs}</skipITs>
+        <!-- The OkHttp 4 and 5 jars are only for the child-JVM suite, so a build that skips tests
+             does not fetch them (see the three profiles below). -->
+        <traceai.javaagent.skipOkHttpJars>false</traceai.javaagent.skipOkHttpJars>
     </properties>
 
     <dependencies>
@@ -173,6 +176,7 @@
                             <goal>copy</goal>
                         </goals>
                         <configuration>
+                            <skip>${traceai.javaagent.skipOkHttpJars}</skip>
                             <artifactItems>
                                 <artifactItem>
                                     <groupId>com.squareup.okhttp3</groupId>
@@ -206,6 +210,7 @@
                             <goal>copy</goal>
                         </goals>
                         <configuration>
+                            <skip>${traceai.javaagent.skipOkHttpJars}</skip>
                             <artifactItems>
                                 <artifactItem>
                                     <groupId>com.squareup.okhttp3</groupId>
@@ -383,6 +388,23 @@
     </build>
 
     <profiles>
+        <!-- No test runs, so the OkHttp 4 and 5 test jars are not downloaded. One profile per property,
+             because a profile activates on a single property. -D with no value means true. -->
+        <profile>
+            <id>skip-okhttp-jars-skip-its</id>
+            <activation><property><name>traceai.javaagent.skipITs</name><value>true</value></property></activation>
+            <properties><traceai.javaagent.skipOkHttpJars>true</traceai.javaagent.skipOkHttpJars></properties>
+        </profile>
+        <profile>
+            <id>skip-okhttp-jars-skip-tests</id>
+            <activation><property><name>skipTests</name><value>true</value></property></activation>
+            <properties><traceai.javaagent.skipOkHttpJars>true</traceai.javaagent.skipOkHttpJars></properties>
+        </profile>
+        <profile>
+            <id>skip-okhttp-jars-test-skip</id>
+            <activation><property><name>maven.test.skip</name><value>true</value></property></activation>
+            <properties><traceai.javaagent.skipOkHttpJars>true</traceai.javaagent.skipOkHttpJars></properties>
+        </profile>
         <!-- Held from JitPack as well: the build still compiles and flattens this module on that route,
              but does not install it, so its jar and POM are not harvested. The hold_artifacts entry
              in .github/release/config.json drives java/scripts/prepare_jitpack.py and
