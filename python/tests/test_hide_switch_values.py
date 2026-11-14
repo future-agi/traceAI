@@ -27,6 +27,19 @@ def clean_env(monkeypatch):
     config_module._warned_switches.clear()
 
 
+@pytest.fixture
+def switch_warnings(caplog):
+    """The warnings the switches log. Their logger does not pass records on to the root logger,
+    where caplog listens, so caplog's handler is attached to it for the test."""
+    logger = logging.getLogger(LOGGER)
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
 @pytest.mark.parametrize("raw", ["true", "1", "yes", "on", " TRUE ", "On"])
 def test_true_values_hide(clean_env, monkeypatch, raw):
     monkeypatch.setenv("FI_HIDE_INPUTS", raw)
@@ -47,23 +60,23 @@ def test_blank_value_is_unset(clean_env, monkeypatch, raw):
     assert config.hide_error_details is False
 
 
-def test_unrecognised_value_hides_with_one_warning_that_names_the_variable_and_not_the_value(clean_env, monkeypatch, caplog):
+def test_unrecognised_value_hides_with_one_warning_that_names_the_variable_and_not_the_value(clean_env, monkeypatch, switch_warnings):
     monkeypatch.setenv("FI_HIDE_OUTPUT_TEXT", "maybe-later")
-    with caplog.at_level(logging.WARNING, logger=LOGGER):
-        assert TraceConfig().hide_output_text is True
-        assert TraceConfig().hide_output_text is True
-    messages = [record.getMessage() for record in caplog.records]
+    assert TraceConfig().hide_output_text is True
+    assert TraceConfig().hide_output_text is True
+    messages = [record.getMessage() for record in switch_warnings.records]
     named = [message for message in messages if "FI_HIDE_OUTPUT_TEXT" in message]
     assert len(named) == 1
     assert "true, 1, yes, on" in named[0]
     assert all("maybe-later" not in message for message in messages)
 
 
-def test_unrecognised_error_details_value_hides_error_details(clean_env, monkeypatch, caplog):
+def test_unrecognised_error_details_value_hides_error_details(clean_env, monkeypatch, switch_warnings):
     monkeypatch.setenv("FI_HIDE_ERROR_DETAILS", "enabled-please")
-    with caplog.at_level(logging.WARNING, logger=LOGGER):
-        assert TraceConfig().hide_error_details is True
-    assert all("enabled-please" not in record.getMessage() for record in caplog.records)
+    assert TraceConfig().hide_error_details is True
+    messages = [record.getMessage() for record in switch_warnings.records]
+    assert len([message for message in messages if "FI_HIDE_ERROR_DETAILS" in message]) == 1
+    assert all("enabled-please" not in message for message in messages)
 
 
 def test_recognised_error_details_value_still_wins_over_the_content_switches(clean_env, monkeypatch):
@@ -82,8 +95,10 @@ def test_an_explicit_argument_still_wins_over_the_environment(clean_env, monkeyp
     assert TraceConfig(hide_inputs=False).hide_inputs is False
 
 
-def test_a_number_that_cannot_be_read_warns_without_its_value(clean_env, monkeypatch, caplog):
+def test_a_number_that_cannot_be_read_warns_without_its_value(clean_env, monkeypatch, switch_warnings):
     monkeypatch.setenv("FI_BASE64_IMAGE_MAX_LENGTH", "not-a-number-xyz")
-    with caplog.at_level(logging.WARNING, logger=LOGGER):
-        TraceConfig()
-    assert all("not-a-number-xyz" not in record.getMessage() for record in caplog.records)
+    TraceConfig()
+    messages = [record.getMessage() for record in switch_warnings.records]
+    # The image cap logs under its own module, which passes records on to caplog as usual.
+    assert any("image cap" in message for message in messages)
+    assert all("not-a-number-xyz" not in message for message in messages)
