@@ -45,13 +45,20 @@ It runs on the HTTP clients each runtime uses for AI calls:
    library layer, meaning its `gen_ai.span.kind` is one of `LLM`, `EMBEDDING`, `RERANKER`,
    `GUARDRAIL`. The dedicated instrumentor already records that call with richer data.
    In Node without an application context manager, the active span is the one in the
-   agent's private context. Inside an SDK call the agent scopes, that is the model span
-   the integration started in that call; after the call returns, and beside it, it is not.
-   An integration the agent cannot scope (one that replaces SDK methods itself, such as
-   Groq; one that records spans from the SDK's own callbacks or trace processor, such as
-   BeeAI and the OpenAI Agents SDK; or one turned on through its own enable entry) can
-   therefore send its own request twice, as its span and as a wire span. A request beside
-   a call is never skipped.
+   agent's private context. The agent scopes SDK calls through the instrumentation's
+   `_wrap` method or a per-instance call-scope hook under
+   `Symbol.for('traceai.auto.integration-call.v1')`. Groq, Mistral and Portkey keep their
+   own patching and use that hook. The agent defines it only on the instrumentation
+   instance it builds, never on a global, prototype or module export; without the hook,
+   those integrations run as before. Inside either scope, the active span is the model
+   span the integration started in that call; after the call returns, and beside it, it
+   is not. Groq, Mistral and Portkey calls therefore arrive once, not also as wire spans.
+   BeeAI and the OpenAI Agents SDK record spans from the SDK's own events or trace
+   processor, so the agent cannot tie the SDK's request to its span without guessing.
+   The Vercel AI SDK 7 and Genkit integrations are turned on through their own enable
+   entry, outside the agent's call scopes. These four integrations can therefore send
+   their own request twice, as their span and as a wire span. Neither the call nor a
+   request beside it is dropped.
 2. A wire span is not created when OpenTelemetry instrumentation is suppressed in the
    current context (Python `_SUPPRESS_INSTRUMENTATION_KEY`, JS `suppressTracing`, and so on).
    Exporters run suppressed, so the SDK never traces its own export traffic.

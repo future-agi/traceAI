@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* Inside the zero-code agent (@traceai/auto), the call's own request no longer arrives twice.
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/npm-traceai-groq-v0.1.0...npm-traceai-groq-v0.1.1) (2026-11-05)
 
 
