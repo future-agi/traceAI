@@ -13,7 +13,7 @@ captured by default (the `FI_HIDE_*` settings hide it). Future AGI receives only
 AI spans, masked by the shared privacy catalog; your application's own
 OpenTelemetry provider and its other spans are left as they are.
 
-- Gem name `traceai-auto`, require path `traceai/auto`, Ruby 3.1 or newer.
+- Gem name `traceai-auto`, require path `traceai/auto`, Ruby 3.2 or newer.
 - No runtime gem dependencies. The agent never activates a gem version on your
   application's behalf, so it is safe to inject before Bundler.
 - Status: version 0.1.0, not yet published to RubyGems. Install it from this
@@ -77,7 +77,7 @@ What happens at startup:
   `https://api.futureagi.com`). It loads OpenSSL itself when your application has
   not, and it connects directly: `HTTPS_PROXY` and other proxy settings are not
   used.
-- On Ruby older than 3.1 the agent prints one warning and the application runs
+- On Ruby older than 3.2 the agent prints one warning and the application runs
   untraced. Any initialization error also leaves the application running.
 - Files and environment values are read as UTF-8 whatever the process locale,
   so containers started with `LANG=C` work.
@@ -331,7 +331,7 @@ install anything.
   controls when content must never leave the process.
 - The context helpers apply to the current Fiber. Other threads and Fibers must
   propagate their own OpenTelemetry context.
-- Written for CRuby 3.1 and newer. JRuby, TruffleRuby and Windows have not been
+- Written for CRuby 3.2 and newer. JRuby, TruffleRuby and Windows have not been
   tested.
 
 ## Development

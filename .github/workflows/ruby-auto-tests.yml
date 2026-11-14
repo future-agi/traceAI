@@ -33,6 +33,7 @@ jobs:
         working-directory: ruby
         run: |
           bundle config set --local path .bundle/vendor
+          bundle config set --local frozen true
           bundle install
       - name: Install the older json gem that child-process tests pin
         working-directory: ruby

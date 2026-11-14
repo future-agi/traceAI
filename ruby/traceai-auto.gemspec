@@ -5,7 +5,7 @@ Gem::Specification.new do |s|
   s.summary = 'Zero-code, privacy-aware AI wire tracing for Ruby'
   s.authors = ['Future AGI']
   s.license = 'Apache-2.0'
-  s.required_ruby_version = '>= 3.1'
+  s.required_ruby_version = '>= 3.2'
   # privacy-fixtures.json stays in the repository for the tests and the spec
   # sync; nothing in lib reads it, so the gem does not ship it.
   s.files = Dir['lib/**/*', 'bin/*', 'README.md', 'LICENSE'] - ['lib/traceai/auto/privacy-fixtures.json']

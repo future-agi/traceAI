@@ -7,12 +7,12 @@ require 'tempfile'
 class EndToEndTest
   def test_unsupported_ruby_injection_fails_open_before_loading_agent
     skip 'System Ruby unavailable on this platform' unless File.executable?('/usr/bin/ruby')
-    # Only a Ruby older than 3.1 exercises the fail-open gate; Linux images
+    # Only a Ruby older than 3.2 exercises the fail-open gate; Linux images
     # often ship a current /usr/bin/ruby, which loads the agent normally.
     clean = ENV.keys.grep(/\A(?:RUBY|GEM_|BUNDL)/).to_h { |key| [key, nil] }
     system_version, = Timeout.timeout(15) { Open3.capture2(clean, '/usr/bin/ruby', '-e', 'print RUBY_VERSION') }
-    older = system_version.match?(/\A\d+\.\d+/) && Gem::Version.new(system_version) < Gem::Version.new('3.1')
-    skip "System Ruby #{system_version} is not older than 3.1" unless older
+    older = system_version.match?(/\A\d+\.\d+/) && Gem::Version.new(system_version) < Gem::Version.new('3.2')
+    skip "System Ruby #{system_version} is not older than 3.2" unless older
     code = 'puts "APPLICATION_RAN"; abort "Ruby-3 agent loaded" if $LOADED_FEATURES.any? { |f| f.end_with?("traceai/auto/agent.rb") }'
     stdout, stderr, status = Timeout.timeout(15) do
       Open3.capture3(child_env, '/usr/bin/ruby', '-I' + File.join(ROOT, 'lib'), '-rtraceai/auto', '-e', code, chdir: ROOT)
@@ -20,7 +20,7 @@ class EndToEndTest
     assert status.success?, stderr
     assert_equal "APPLICATION_RAN\n", stdout
     assert_equal 1, stderr.scan('traceai-auto:').length
-    assert_includes stderr, 'Ruby >= 3.1 required'
+    assert_includes stderr, 'Ruby >= 3.2 required'
     assert_empty export_spans
   end
 
