@@ -112,9 +112,15 @@ spans. On the AI-only route only ancestors made by the agent's tracers count: a 
 span on the application's own provider never reaches Future AGI, so the call is
 captured as a wire span under it. The agent does not see the application's spans on
 that route, so when an application span is active, the parent id it records is
-looked up among the agent's live spans: one application span directly under a model
-span the agent made does not hide that model span. Two or more application spans in
-a row are not followed, and the call is then also captured as a wire span. Outgoing credential observation is never skipped by these rules: fetch reads
+looked up among the agent's live spans: one recorded application span directly under
+a model span the agent made does not hide that model span. A span that does not record
+but carries the model span's own span context, as the API's no-op tracer gives an
+application with a context manager and no tracer provider, is looked up by its own
+ids; a remote span context is not. A span the application's sampler did not record
+has a new span id and no parent id, so the walk stops there and the call is also
+captured as a wire span. That includes a parent-based sampler in a trace it did not
+sample, because the agent's model span is then unsampled too. Two or more application
+spans in a row are not followed, and the call is then also captured as a wire span. Outgoing credential observation is never skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span

@@ -15,8 +15,11 @@ const DEDUP_KINDS = new Set(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"]);
 const ancestors = new WeakMap<object, object>();
 // The same tracked spans while they are live, by trace and span id. On the AI-only
 // route the agent never sees the application's spans, so an application span made
-// inside an AI call has no ancestry entry. Its own parent id still names the agent's
-// span, so the walk steps over that one application span.
+// inside an AI call has no ancestry entry. A recorded one still names the agent's
+// span as its parent, and a span from the API's no-op tracer (an application with a
+// context manager but no tracer provider) carries that span's own span context, so
+// the walk steps over that one application span. A span the application's sampler
+// did not record has a new span id and no parent id, so the walk stops there.
 const live = new Map<string, object>();
 const LIVE_LIMIT = 4096;
 function own(value: any, key: string): any {
@@ -35,6 +38,17 @@ function liveParent(span: any): object | undefined {
     const spanId = own(span, "parentSpanContext")?.spanId ?? own(span, "parentSpanId");
     const traceId = span.spanContext().traceId;
     return typeof spanId === "string" && typeof traceId === "string" ? live.get(`${traceId}-${spanId}`) : undefined;
+  } catch { return undefined; }
+}
+// A span that does not record and carries the span context of the span it started
+// under, as the no-op tracer's spans do. A remote span context, read from incoming
+// headers, is not followed.
+function liveSelf(span: any): object | undefined {
+  try {
+    const { traceId, spanId, isRemote } = span.spanContext();
+    if (isRemote === true || typeof traceId !== "string" || typeof spanId !== "string") return undefined;
+    const found = live.get(`${traceId}-${spanId}`);
+    return found === span ? undefined : found;
   } catch { return undefined; }
 }
 export function trackCoverage(span: object, parent: Context): void {
@@ -62,7 +76,7 @@ function wireAllowed(ctx: Context, phase: "guard" | "inspect" | "request"): bool
   // scope must never reacquire a MODEL above its boundary via this legacy cache.
   let span: any = trace.getSpan(ctx);
   const seen = new Set<object>();
-  for (let depth = 0; span && depth < 256 && !seen.has(span); depth++, span = span.span ?? ancestors.get(span) ?? liveParent(span)) {
+  for (let depth = 0; span && depth < 256 && !seen.has(span); depth++, span = span.span ?? ancestors.get(span) ?? liveParent(span) ?? liveSelf(span)) {
     seen.add(span);
     const kind = span.attributes?.["gen_ai.span.kind"] ?? span.attributes?.["fi.span.kind"];
     if (kind !== undefined && kind !== null && !DEDUP_KINDS.has(kind)) break;
