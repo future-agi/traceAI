@@ -31,6 +31,24 @@ test("privacy options honor file/env/code precedence without mutating the enviro
     expect(resolveConfig({ configFile: path }, {}).traceConfig).toEqual({ hideInputs: true, hideOutputs: true });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test("an empty privacy variable is unset, so the config file's value still applies", () => {
+  const dir = mkdtempSync(join(__dirname, ".empty-switch-")), path = join(dir, "futureagi.toml");
+  try {
+    writeFileSync(path, 'hide_inputs = true\nhide_output_text = "on"\npii_redaction = true\n');
+    for (const empty of ["", "   "]) {
+      // A deployment that passes an undefined variable through as an empty string.
+      const config = resolveConfig({ configFile: path }, { FI_HIDE_INPUTS: empty, FI_HIDE_OUTPUT_TEXT: empty, FI_PII_REDACTION: empty });
+      expect(config.traceConfig).toEqual({ hideInputs: true, hideOutputText: true, piiRedaction: true });
+      // An empty option string in code is not set either.
+      expect(resolveConfig({ configFile: path, traceConfig: { hideInputs: empty as any } }, {}).traceConfig.hideInputs).toBe(true);
+    }
+    // A variable that is set still wins over the file, and an option over both.
+    expect(resolveConfig({ configFile: path }, { FI_HIDE_INPUTS: "off" }).traceConfig.hideInputs).toBe(false);
+    expect(resolveConfig({ configFile: path, traceConfig: { hideInputs: false } }, { FI_HIDE_INPUTS: "on" }).traceConfig.hideInputs).toBe(false);
+    // With every source empty or missing, the switch is left out.
+    expect(resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_HIDE_INPUTS: "" }).traceConfig).toEqual({});
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 test("allowlist, denylist, wire setting, disabled SDK and numeric validation", () => {
   const config = resolveConfig({}, { FI_INSTRUMENTATIONS: "OpenAI, Wire", FI_DISABLED_INSTRUMENTATIONS: "openai", FI_SAMPLE_RATE: "2", FI_WIRE_MAX_BODY_BYTES: "bad", FI_AUTO_DEBUG: "true" });
   expect(enabled("openai", config)).toBe(false); expect(enabled("wire", config)).toBe(true); expect(enabled("langchain", config)).toBe(false);
