@@ -284,13 +284,15 @@ public final class TraceAIAuto {
                 for (Map.Entry<String, Object> e : attrs.entrySet()) {
                     String k = e.getKey(); Object v = e.getValue();
                     if (hidden(k, capture.match, state.config())) continue;
+                    // With the error details hidden, a failed call's output is withheld as well: it may be the provider's error body.
+                    if (!result.ok() && state.config().masking.isHideErrorDetails() && (k.equals("output.value") || k.equals("output.mime_type"))) continue;
                     if (v instanceof String) span.setAttribute(k, (String)v);
                     else if (v instanceof Boolean) span.setAttribute(k, (Boolean)v);
                     else if (v instanceof Float || v instanceof Double) span.setAttribute(k, ((Number)v).doubleValue());
                     else if (v instanceof Number) span.setAttribute(k, ((Number)v).longValue());
                     else if (v instanceof List<?> list) span.setAttribute(AttributeKey.stringArrayKey(k), list.stream().map(item -> item instanceof String s ? s : item == null ? "null" : item.getClass().getName()).toList());
                 }
-                span.setStatus(result.ok() ? StatusCode.OK : StatusCode.ERROR, result.description() == null || hidesContent(state.config()) ? "" : result.description());
+                span.setStatus(result.ok() ? StatusCode.OK : StatusCode.ERROR, result.description() == null || hidesErrorText(state.config()) ? "" : result.description());
             } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource); }
         } catch (Throwable ignored) { }
     }
@@ -305,9 +307,11 @@ public final class TraceAIAuto {
             || key.equals("cohere.preamble") || key.equals("embedding.input_text") || key.startsWith("embedding.input_text.") || key.equals("gen_ai.reranker.query"))) return true;
         // Existing wrappers also emit generated tool calls outside gen_ai.output.messages.
         if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
-        if ((inputText || inputMessages || outputText || outputMessages) && Set.of("exception.message", "exception.stacktrace", "error.message", "error.stack").contains(key)) return true;
+        if ((inputText || inputMessages || outputText || outputMessages || config.masking.isHideErrorDetails()) && Set.of("exception.message", "exception.stacktrace", "error.message", "error.stack").contains(key)) return true;
         return key.equals("gen_ai.audio.transcript") && ("text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages);
     }
+    /** True when the error text (status description, exception and error attributes) is withheld: its own switch, or any content switch. */
+    static boolean hidesErrorText(AutoConfig config) { return config.masking.isHideErrorDetails() || hidesContent(config); }
     static boolean hidesContent(AutoConfig config) {
         return config.masking.isHideInputs() || config.masking.isHideOutputs() || config.masking.isHideInputMessages() || config.masking.isHideOutputMessages()
             || config.hides("FI_HIDE_INPUT_TEXT") || config.hides("FI_HIDE_OUTPUT_TEXT") || config.hides("FI_HIDE_INPUT_IMAGES") || config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS");

@@ -11,7 +11,7 @@ public final class AutoConfig {
     final TraceConfig masking;
     /** The hide switches this agent reads. */
     private static final List<String> HIDE_SWITCHES = List.of("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES",
-        "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS");
+        "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS", "FI_HIDE_ERROR_DETAILS");
     /** Hide switches already reported in this JVM: one warning per variable, however often the configuration is resolved. */
     private static final Set<String> HIDE_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Config file warnings already printed in this JVM: one per file and cause, however often the configuration is resolved. */
@@ -171,9 +171,8 @@ public final class AutoConfig {
         for (String key : HIDE_SWITCHES) if (hideValue(key, get(key))) on.add(key);
         hidden = Set.copyOf(on);
         // The five hide switches the core builder would otherwise read from the environment itself are passed explicitly.
-        // FI_HIDE_ERROR_DETAILS is not honoured by this agent yet, so it is passed as false instead of being left to that reading.
         masking = TraceConfig.builder().hideInputs(hides("FI_HIDE_INPUTS")).hideOutputs(hides("FI_HIDE_OUTPUTS"))
-            .hideInputMessages(hides("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(hides("FI_HIDE_OUTPUT_MESSAGES")).hideErrorDetails(false).build();
+            .hideInputMessages(hides("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(hides("FI_HIDE_OUTPUT_MESSAGES")).hideErrorDetails(hides("FI_HIDE_ERROR_DETAILS")).build();
     }
     private static boolean blankHide(String key, String value) { return key.startsWith("FI_HIDE_") && (value == null || value.isBlank()); }
     /**

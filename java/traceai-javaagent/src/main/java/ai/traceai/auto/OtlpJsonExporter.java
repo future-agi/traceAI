@@ -62,7 +62,7 @@ final class OtlpJsonExporter implements SpanExporter {
         boolean own = TraceAIAuto.SCOPE.equals(span.getInstrumentationScopeInfo().getName());
         Attributes attrs = ExportPrivacy.attributes(span.getAttributes(), privacy, config, false, operation, own);
         data.put("attributes", attributes(attrs)); data.put("droppedAttributesCount", Math.max(0, span.getTotalAttributeCount() - attrs.size()));
-        data.put("status", Map.of("code", span.getStatus().getStatusCode().ordinal(), "message", TraceAIAuto.hidesContent(config) ? "" : privacy.text(span.getStatus().getDescription())));
+        data.put("status", Map.of("code", span.getStatus().getStatusCode().ordinal(), "message", TraceAIAuto.hidesErrorText(config) ? "" : privacy.text(span.getStatus().getDescription())));
         List<Object> events = new ArrayList<>(), links = new ArrayList<>();
         for (var event : span.getEvents()) {
             Attributes clean = ExportPrivacy.attributes(event.getAttributes(), privacy, config, true, operation);
