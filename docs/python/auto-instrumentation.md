@@ -270,6 +270,7 @@ auto.shutdown()   # stop the agent; it cannot be restarted in the same process
 | `web server integrations are off: the agent cannot put its AI-only filter in front of ...` | Your registered provider's first processor is one the agent does not know, or `init()` got a `span_exporter=` while that provider sends to Future AGI. See [Existing OpenTelemetry setup](#existing-opentelemetry-setup). |
 | HTTP, database or other spans are missing in Future AGI | Only AI spans are sent there; your own exporters still receive the rest. To send a span of your own, give it an AI span kind (`FITracer` with `fi_span_kind`). |
 | A value shows as `<redacted>` or `<omitted: ...>` in Future AGI | The shared privacy catalog matched its name, its shape or its media; see [Privacy](#privacy). Your own exporters receive the original value. |
+| `traceAI: the privacy catalog could not be loaded (...)` | The package's data file `fi_instrumentation/auto/wire/privacy.json` is missing or unreadable, for example in a zipped or frozen app that did not collect package data. Until it is there, Future AGI receives only the ids, timing and status code of each span. |
 | Spans move to another project after adding `fi-instrument` | Your manual `register()` setup no longer applies; see [Existing OpenTelemetry setup](#existing-opentelemetry-setup). |
 | Duplicate spans | Remove manual `instrument()` calls for the same library, or disable that integration with `FI_DISABLED_INSTRUMENTATIONS`. |
 

@@ -14,6 +14,9 @@ packages = [
 
 exclude = [
     "frameworks",
+    # A byte-identical copy of spec/auto-instrumentation/privacy-fixtures.json, kept beside the
+    # catalog for the repository's catalog check. Only privacy.json ships in the package.
+    "fi_instrumentation/auto/wire/privacy-fixtures.json",
 ]
 
 # FI_AUTO_INSTRUMENT=true starts the agent at interpreter start: the wheel puts this file in

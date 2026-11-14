@@ -973,12 +973,17 @@ _resources: Dict[int, Tuple[Any, Tuple[str, ...], Any]] = {}
 _warned = False
 
 
-def _warn() -> None:
+def _warn(cause: Optional[str] = None) -> None:
+    """The one warning for content that could not be checked; ``cause`` names a catalog that did not load."""
     global _warned
     if not _warned:
         _warned = True
-        logger.warning("traceAI: the content of a span could not be checked for Future AGI, so only its "
-                       "ids, timing and status code were sent")
+        if cause:
+            logger.warning("traceAI: %s, so spans reach Future AGI with only their ids, timing and status code",
+                           cause)
+        else:
+            logger.warning("traceAI: the content of a span could not be checked for Future AGI, so only its "
+                           "ids, timing and status code were sent")
     logger.debug("traceAI: privacy check failed", exc_info=True)
 
 
@@ -1210,7 +1215,9 @@ def sanitize_span(span: ReadableSpan, session_id: Optional[str] = None,
     try:
         walker = _Walker(_catalog(), _KNOWN.snapshot())
     except Exception:
-        _warn()
+        # A catalog file that is missing or unreadable, for example in a zipped or frozen app that
+        # did not collect the package's data files, is named in the one warning.
+        _warn(_load_error)
         return _unchecked(span, None)
     try:
         return walker.span(span, session_id, cut)
