@@ -227,6 +227,15 @@ test("wire capture privacy applies to flattened messages and raw input/output", 
   expect(serialized).not.toContain("hello private text"); expect(serialized).not.toContain("hello world");
   expect(serialized).not.toContain("mock-fi-api-key"); expect(serialized).not.toContain("mock-fi-secret-key");
 });
+test("FI_HIDE_INPUTS=on and an unrecognised FI_HIDE_OUTPUTS value hide captured content in what Future AGI receives", async () => {
+  const output = await child("plain.cjs", undefined, { FI_HIDE_INPUTS: "on", FI_HIDE_OUTPUTS: "maybe-later" });
+  expect(wireSpans()).toHaveLength(1);
+  const serialized = JSON.stringify(allSpans());
+  expect(serialized).not.toContain("hello private text"); expect(serialized).not.toContain("hello world");
+  // The warning names the variable and never repeats its value.
+  expect(output.stderr).toContain("FI_HIDE_OUTPUTS");
+  expect(output.stderr).not.toContain("maybe-later");
+});
 test.each(["library-error", "library-error-positive-cap", "library-hide", "owned-privacy", "wire-context-privacy"])("export privacy protects %s without changing app spans/errors", async mode => {
   const output = await child("review.cjs", [], { MODE: mode });
   expect(JSON.parse(output.stdout)).toMatchObject({ protected: true, applicationUnchanged: true, exported: 1 });
@@ -479,6 +488,28 @@ test("an AI call whose request runs inside two application spans in a row reache
   expect(attempt.parentSpanId).toBe(outer.spanId);
   expect(wire[0].traceId).toBe(ai.traceId);
   expect(wire[0].parentSpanId).toBe(attempt.spanId);
+});
+test("under a parent-based application sampler, an AI call whose request runs inside an application span the sampler did not record reaches Future AGI once", async () => {
+  // ParentBased(TraceIdRatioBased(0)) with wire capture on. The application's span around
+  // the provider request is not recorded: it keeps the trace id, and has a span id of its
+  // own and no parent id.
+  const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero" });
+  const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(requests).toBe(1);
+  // The application's backend receives nothing for this trace.
+  expect(app.appSpans).toEqual([]);
+  // Future AGI receives the call once, as the AI span, and no wire span.
+  expect(wireSpans()).toHaveLength(0);
+  expect(allSpans()).toHaveLength(1);
+  const ai = allSpans()[0], aiAttributes = attrs(ai);
+  expect(aiAttributes["gen_ai.span.kind"] ?? aiAttributes["fi.span.kind"]).toBe("LLM");
+  expect(ai.traceId).toBe(app.request.traceId); expect(ai.parentSpanId).toBe(app.request.spanId);
+  // The application's span around the request is in the AI span's trace, with its own span id.
+  const [, insideTraceId, insideSpanId] = app.providerTraceparent.split("-");
+  expect(insideTraceId).toBe(ai.traceId); expect(insideSpanId).not.toBe(ai.spanId);
+  // None of the application's spans reaches Future AGI, by span id or by name.
+  const appIds = new Set([app.request.spanId, insideSpanId]), appNames = new Set(["app-request", "app-before", "app-provider-request", "app-after"]);
+  expect(allSpans().filter(span => appIds.has(span.spanId) || appNames.has(span.name)).map(span => span.name)).toEqual([]);
 });
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });

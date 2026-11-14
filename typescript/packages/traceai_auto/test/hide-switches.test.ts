@@ -39,6 +39,21 @@ test("an unrecognised FI_HIDE_ERROR_DETAILS hides error details even with every 
   }
 });
 
+test("the warning names the source the value was read from", () => {
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    // A null option is not set, so the value comes from the environment.
+    const config = resolveConfig({ traceConfig: { hideInputImages: null as any } }, { FI_HIDE_INPUT_IMAGES: "maybe-later" });
+    expect(config.traceConfig.hideInputImages).toBe(true);
+    const lines = warn.mock.calls.map(call => String(call[0]));
+    expect(lines.filter(line => line.includes("FI_HIDE_INPUT_IMAGES"))).toHaveLength(1);
+    expect(lines.filter(line => line.includes("traceConfig.hideInputImages"))).toHaveLength(0);
+    for (const line of lines) expect(line).not.toContain("maybe-later");
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 test("FI_PII_REDACTION=on turns redaction on", () => {
   expect(resolveConfig({}, { FI_PII_REDACTION: "on" }).traceConfig.piiRedaction).toBe(true);
 });
