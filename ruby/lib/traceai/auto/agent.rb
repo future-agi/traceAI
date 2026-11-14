@@ -90,6 +90,11 @@ module TraceAI
       def startup_window_over?
         @window_closed || (!@watch_until.nil? && Process.clock_gettime(Process::CLOCK_MONOTONIC) > @watch_until)
       end
+      # One clock read from paths that always run (a finished AI request, a
+      # provider change), so that no hook outlives the window.
+      def check_startup_window
+        close_startup_window if !@window_closed && startup_window_over?
+      end
       def close_startup_window
         @window_closed = true
         if @pending && waiting_for_bundle?
@@ -539,6 +544,7 @@ module TraceAI
       # own SDK provider, attach the same processors there and parent later wire
       # spans under the application's spans. Nothing is made global.
       def adopt_host_provider
+        check_startup_window
         return unless @sdk && @own_provider && @provider.equal?(@own_provider)
         host = sdk_host_provider
         return unless host && !host.equal?(@own_provider)
@@ -640,6 +646,7 @@ module TraceAI
         128
       end
       def emit(request, response, parent, started, finished = Time.now)
+        check_startup_window
         result = Wire.build(request, response, limit: @config['wire_max_body_bytes'])
         return unless result
         adopt_host_provider if @own_provider && @provider.equal?(@own_provider)
