@@ -22,7 +22,9 @@ The application's own processors and exporters never see this copy. Work is boun
 catalog's depth, node and text limits, and by a limit on the path of a value (its attribute key and
 the member names above it): the name checks at each value read its whole path, so a path longer
 than PATH_LIMIT characters or with more than PATH_PARTS components is not checked, and its
-attribute is left out. A text scan reads each run of characters a bounded number of times: two of
+attribute is left out. The checks of a URL query value read the parameter's name as its path, so a
+query name past the same limits is not checked either, and its value becomes ``<redacted>``.
+A text scan reads each run of characters a bounded number of times: two of
 the catalog's value shapes, the provider key and the JWT, would make Python's backtracking engine
 walk a long run back from every start in it, so they are matched in an equivalent form whose
 failed starts never rescan their run. Content that cannot be checked within
@@ -62,7 +64,8 @@ SECRET_LIMIT = 1024
 SECRET_MIN_LENGTH = 8
 #: The longest path, in characters and in components, whose names are checked. The checks at each
 #: value read its whole path, so without this limit a long member name above many values would be
-#: read once per value. A value past it fails its attribute: the attribute is left out.
+#: read once per value. A value past it fails its attribute: the attribute is left out. A URL
+#: query parameter's name is the path of its value: past the limit, that value becomes <redacted>.
 PATH_LIMIT = 1024
 PATH_PARTS = 64
 
