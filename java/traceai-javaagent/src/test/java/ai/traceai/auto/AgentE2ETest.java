@@ -207,6 +207,14 @@ class AgentE2ETest {
         var warnings = log.lines().filter(l -> l.contains("[traceai-auto]")).toList();
         assertEquals(1, warnings.size(), log); assertTrue(warnings.get(0).contains("OpenTelemetry Java agent"), log);
     }
+    @Test void packagedJarHoldsOnlyTheAgentsOwnPackagesAndMetadata() throws Exception {
+        // Everything bundled is relocated under ai/traceai/auto/, so nothing can clash with the application's classpath.
+        try (var jar = new java.util.jar.JarFile(agentJar().toFile())) {
+            var foreign = jar.stream().map(java.util.zip.ZipEntry::getName)
+                .filter(name -> !name.startsWith("ai/traceai/auto/") && !name.startsWith("META-INF/") && !name.equals("ai/") && !name.equals("ai/traceai/")).toList();
+            assertEquals(List.of(), foreign);
+        }
+    }
     @Test void deadCollectorDoesNotAffectApplication() throws Exception { String log = run("jdk", "basic", Map.of("FI_BASE_URL", "http://127.0.0.1:1"), true); assertTrue(spans.isEmpty()); assertEquals(1, log.lines().filter(l -> l.contains("[traceai-auto]")).count(), log); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void individualTransportCanBeDisabled(String client) throws Exception { run(client, "basic", Map.of("FI_DISABLED_INSTRUMENTATIONS", client.equals("jdk") ? "java.net.http" : "okhttp"), true); assertTrue(spans.isEmpty()); }
     @Test void disabledWireDoesNotAffectApplication() throws Exception { run("okhttp", "basic", Map.of("FI_DISABLED_INSTRUMENTATIONS", "wire"), true); assertTrue(spans.isEmpty()); }
