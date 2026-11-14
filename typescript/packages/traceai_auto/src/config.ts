@@ -159,7 +159,8 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
       else {
         // A privacy switch: an empty value is unset (hideErrorDetails then follows the content
         // switches); an unrecognised value hides, with one warning that names only the variable.
-        const where = options.traceConfig?.[key] !== undefined ? `traceConfig.${key}` : env[`FI_${snake.toUpperCase()}`] !== undefined ? `FI_${snake.toUpperCase()}` : `${snake} in the config file`;
+        // Named by the same order the value is read in: a null option or variable is not set.
+        const where = options.traceConfig?.[key] != null ? `traceConfig.${key}` : env[`FI_${snake.toUpperCase()}`] != null ? `FI_${snake.toUpperCase()}` : `${snake} in the config file`;
         const value = hideSwitch(raw, where);
         if (value !== undefined) traceConfig[key] = value;
       }
