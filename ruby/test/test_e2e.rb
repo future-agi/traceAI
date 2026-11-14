@@ -88,10 +88,15 @@ class EndToEndTest < Minitest::Test
   end
   # The application's own SDK resource holds environment values as the SDK read
   # them. Under LANG=C a non-ASCII service name must not cost the wire span its
-  # content or its resource.
+  # content or its resource. The SDK reads OTEL_SERVICE_NAME only into its
+  # default resource, the one OpenTelemetry::SDK.configure uses; a bare
+  # TracerProvider.new has an empty resource. So this application gives its
+  # provider the default resource, as an application that names its service does.
   def test_posix_locale_keeps_span_content_with_a_non_ascii_service_name_on_the_application_provider
     service = "caf\u{e9}-service"
-    stdout, stderr, status = app(app_sdk + plain_code, POSIX_LOCALE.merge('OTEL_SERVICE_NAME' => service))
+    sdk = "require 'opentelemetry/sdk'\n" \
+          "OpenTelemetry.tracer_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default) unless OpenTelemetry.tracer_provider.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)\n"
+    stdout, stderr, status = app(sdk + plain_code, POSIX_LOCALE.merge('OTEL_SERVICE_NAME' => service))
     assert status.success?, stderr.b
     assert_equal CHAT, stdout
     spans = export_spans
