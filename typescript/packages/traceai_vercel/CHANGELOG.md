@@ -2,6 +2,9 @@
 
 ## [0.1.5] - pending release
 
+### Changed
+- A privacy switch now accepts every on and off value, and an unrecognised value hides. `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, their message/text/image variants, `FI_HIDE_EMBEDDING_VECTORS` and `FI_HIDE_ERROR_DETAILS` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, in any case and with surrounding spaces ignored, and an empty value counts as unset. Any other value turns the switch on, with one warning per variable through the OpenTelemetry diagnostic logger that never repeats the value. Before, only `true` turned a content switch on and `FI_HIDE_ERROR_DETAILS` accepted only `true` and `false`, so this hides more, with one exception: with input or output hidden, `FI_HIDE_ERROR_DETAILS` set to `off`, `no` or `0` now keeps error details, as `false` already did, where those values used to be ignored and error details were hidden.
+
 ### Fixed
 - Embedding calls made with embed and embedMany keep their token usage in auto mode.
 
@@ -16,7 +19,7 @@
 - `addFIAttributesToSpan` keeps existing attribute values, so native GenAI attributes take precedence over mapped values.
 - AI SDK 7 spans with supported `gen_ai.operation.name` values now receive FI span kinds when `operation.name` is absent. `ai.rerank` and `ai.rerank.doRerank` map to `RERANKER`.
 - Tool-message conversion reads AI SDK 5+ `input` and `output` fields, with `args` and `result` fallbacks. It emits one message per tool result and preserves available tool-call IDs in output `tool_calls`.
-- When `FI_HIDE_ERROR_DETAILS` is unset or invalid, input/output, message or text hiding flags also hide error details. `FI_HIDE_INPUT_IMAGES` alone does not trigger this. Explicit `FI_HIDE_ERROR_DETAILS=true` or `false` takes precedence.
+- When `FI_HIDE_ERROR_DETAILS` is unset or empty, input/output, message or text hiding flags also hide error details. `FI_HIDE_INPUT_IMAGES` alone does not trigger this. A set `FI_HIDE_ERROR_DETAILS` takes precedence: `true`, `1`, `yes`, `on` or an unrecognised value hides error details, and `false`, `0`, `no` or `off` keeps them.
 
 ### Runtime
 - The package root is now Node.js-only. Importing it also loads auto-instrumentation and `@traceai/fi-core`, even when using only the manual processors.
