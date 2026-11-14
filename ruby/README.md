@@ -259,9 +259,20 @@ install anything.
   process has a Future AGI key pair or an OpenTelemetry SDK tracer provider, and
   a proxy `CONNECT` is not observed: the proxy credentials of a connection
   opened before the first AI request are learned from later connections only.
-- The agent watches class definitions only until every client class it can wrap
-  has loaded, so a client gem required for the first time much later in the
-  process may not be traced.
+- The agent's startup hooks (one on completed class and module definitions, and
+  targeted ones on `Bundler.setup` and on setting the OpenTelemetry tracer
+  provider) are turned off as soon as nothing is left to find, and in any case
+  at the end of a startup window of 60 seconds after the agent loads. The
+  window is checked when a class or module definition completes, so an idle
+  process drops the hooks at its next definition. This also bounds the hooks in
+  tools such as `bundle`, `gem` and `irb` when `RUBYOPT` is exported. After the
+  window:
+  - a client library loaded for the first time is not traced until you call
+    `TraceAI::Auto.auto_instrument`;
+  - a `Bundler.setup` that has still not run is no longer waited for, and the
+    process is not traced (one warning at exit when keys are set);
+  - a tracer provider set later is used from the next AI request instead of at
+    once.
 - If your application replaces its global tracer provider a second time, the
   agent stays on the first application provider it attached to.
 - Future AGI receives only AI spans, so a span it receives can name a parent

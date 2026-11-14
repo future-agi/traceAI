@@ -11,6 +11,8 @@ module TraceAI
     TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester].freeze
     MODEL_KINDS = %w[LLM EMBEDDING RERANKER GUARDRAIL].freeze
     AI_MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
+    # Seconds the startup hooks may run after the agent loads (see load_hook).
+    STARTUP_WINDOW = 60.0
     class << self
       attr_reader :config, :provider, :tracer, :processor, :exporter
       def warn_once(message)
@@ -52,8 +54,9 @@ module TraceAI
         end
         # Never wait silently: a Gemfile in the working directory (or
         # BUNDLE_GEMFILE) without the application's Bundler.setup traces nothing.
-        at_exit { warn_once("found a Gemfile but the application never ran Bundler.setup; nothing was traced (start with 'bundle exec' or require 'bundler/setup')") if @pending && @config.credentials? && waiting_for_bundle? }
+        at_exit { warn_once("found a Gemfile but the application did not run Bundler.setup at startup; nothing was traced (start with 'bundle exec' or require 'bundler/setup')") if @config.credentials? && (@bundle_wait_expired || (@pending && waiting_for_bundle?)) }
         @pending = true
+        open_startup_window
         observe_targets
         load_hook.enable unless load_hook.enabled?
         after_require
@@ -65,18 +68,44 @@ module TraceAI
       # Observe completed class and module definitions (:end events) only. Never
       # hook method calls, resolve application constants (including autoload
       # namespaces) or wrap require. sync_hooks turns this off once nothing is
-      # left to find.
+      # left to find, and the startup window bounds every other wait.
       def load_hook
         @load_hook ||= TracePoint.new(:end) do |event|
           observe_target(event.self)
+          close_startup_window if startup_window_over?
         rescue StandardError => e
           debug(e)
         end
       end
+      # The startup hooks wait for things that may never happen: Bundler.setup
+      # in a tool such as bundle, gem or irb started with RUBYOPT exported, an
+      # application provider, a first request, a client gem that is in the
+      # bundle but never loaded. Each wait ends with the startup window. It is
+      # checked when a class or module definition completes, so there is no
+      # timer thread, and an idle process drops the hooks at its next
+      # definition. Closing is final: nothing turns the hooks on again.
+      def open_startup_window
+        @watch_until ||= Process.clock_gettime(Process::CLOCK_MONOTONIC) + STARTUP_WINDOW
+      end
+      def startup_window_over?
+        @window_closed || (!@watch_until.nil? && Process.clock_gettime(Process::CLOCK_MONOTONIC) > @watch_until)
+      end
+      def close_startup_window
+        @window_closed = true
+        if @pending && waiting_for_bundle?
+          # Bundler.setup did not run during startup: stop waiting for it. With
+          # keys set, the exit warning says that nothing was traced.
+          @pending = false
+          @bundle_wait_expired = true
+        end
+        [@load_hook, @bundler_hook, @provider_hook].each { |hook| hook.disable if hook&.enabled? }
+      rescue StandardError => e
+        debug(e)
+      end
       # One targeted hook on Bundler.setup itself, enabled once Bundler defines
       # it and turned off after its first return.
       def watch_bundler(bundler)
-        return if @bundler_hook || @bundle_ready || @initialized || bundle_ready?
+        return if @window_closed || @bundler_hook || @bundle_ready || @initialized || bundle_ready?
         setup = bundler.method(:setup)
         @bundler_hook = TracePoint.new(:return) do |_event|
           @bundle_ready = true
@@ -93,7 +122,7 @@ module TraceAI
       # attaches to the application's provider when the application sets it,
       # never before. Off once an application provider is in use.
       def watch_provider(api)
-        return if @provider_hook || !provider_watch_needed?
+        return if @window_closed || @provider_hook || !provider_watch_needed?
         setter = api.method(:tracer_provider=)
         @provider_hook = TracePoint.new(:return) do |_event|
           provider_changed
@@ -119,7 +148,7 @@ module TraceAI
         end
       end
       def load_hook_needed?
-        return false if @config.nil? || @config.truthy?('sdk_disabled')
+        return false if @window_closed || @config.nil? || @config.truthy?('sdk_disabled')
         return true if @pending
         return false unless @active
         seen = @targets || {}
@@ -139,7 +168,9 @@ module TraceAI
         (@possible ||= {}).fetch(name) { @possible[name] = installed?(name) }
       end
       def sync_hooks
+        return close_startup_window if startup_window_over?
         if load_hook_needed?
+          open_startup_window
           load_hook.enable unless load_hook.enabled?
         elsif @load_hook&.enabled?
           @load_hook.disable
