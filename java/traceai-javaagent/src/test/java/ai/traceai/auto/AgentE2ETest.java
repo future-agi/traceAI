@@ -30,6 +30,8 @@ class AgentE2ETest {
     volatile byte[] payload;
     volatile String type = "application/json", encoding;
     volatile int status = 200;
+    /** When set, the child JVM runs on these OkHttp, Okio and Kotlin jars instead of the build's OkHttp 3 and Okio 1. */
+    volatile List<Path> okHttpRuntime;
     static final String BASIC = "{\"id\":\"mock-id\",\"model\":\"test-model\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"Hello world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}";
     static final String STREAM = "data: {\"id\":\"mock-id\",\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello \"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
     /** The packaged agent jar; the build passes its versioned path to the integration tests. */
@@ -96,6 +98,12 @@ class AgentE2ETest {
             cp = legacy + File.pathSeparator + String.join(File.pathSeparator, Arrays.stream(cp.split(java.util.regex.Pattern.quote(File.pathSeparator)))
                 .filter(p -> !Path.of(p).getFileName().toString().matches("okhttp-[0-9].*\\.jar")).toList());
         }
+        if (okHttpRuntime != null) {
+            // The application's own OkHttp, Okio and Kotlin jars replace every copy the build put on the classpath.
+            for (Path jar : okHttpRuntime) assertTrue(Files.isRegularFile(jar), "the build copies " + jar);
+            cp = String.join(File.pathSeparator, okHttpRuntime.stream().map(Path::toString).toList()) + File.pathSeparator + String.join(File.pathSeparator, Arrays.stream(cp.split(java.util.regex.Pattern.quote(File.pathSeparator)))
+                .filter(p -> !Path.of(p).getFileName().toString().matches("(okhttp|okhttp-jvm|okio|okio-jvm|kotlin-stdlib|kotlin-stdlib-jdk7|kotlin-stdlib-jdk8|kotlin-stdlib-common)-[0-9].*\\.jar")).toList());
+        }
         Path output = Files.createTempFile(Path.of("target"), "agent-e2e-", ".log");
         String path = scenario.equals("audio") ? "/v1/audio/speech" : scenario.startsWith("multipart") ? "/v1/audio/transcriptions" : scenario.equals("metadata_ordinary") ? "/v1/ordinary" : "/v1/chat/completions";
         String endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + path;
@@ -115,7 +123,7 @@ class AgentE2ETest {
             command.addAll(List.of("-jar", app.toAbsolutePath().toString(), endpoint));
         } else if (client.equals("init")) {
             command.addAll(List.of("-cp", agent + File.pathSeparator + Path.of("target", "test-classes").toAbsolutePath(), OneLineApp.class.getName(), endpoint));
-        } else command.addAll(List.of("-cp", scenario.equals("coexist_existing") ? agent + File.pathSeparator + cp : cp, PlainApp.class.getName(), client, endpoint, scenario));
+        } else command.addAll(List.of("-cp", scenario.equals("coexist_existing") ? agent + File.pathSeparator + cp : cp, (scenario.startsWith("okhttp_version") ? OkHttpVersionApp.class : PlainApp.class).getName(), client, endpoint, scenario));
         ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         Map<String, String> env = pb.environment(); env.keySet().removeIf(k -> k.startsWith("FI_") || k.startsWith("OTEL_"));
         env.put("FI_CONFIG_FILE", "target/no-e2e-config.toml"); env.put("FI_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort());
@@ -287,6 +295,36 @@ class AgentE2ETest {
             observed.lines().filter(line -> line.startsWith("LEGACY_") || line.startsWith("BODY=")).toList());
     }
     @Test void defaultOkHttpConstructorIsCaptured() throws Exception { run("okhttp", "defaultclient", Map.of(), true); assertSpan(); }
+    // OkHttp 4.x and 5.x on the application's classpath: folder under target, then the OkHttp, Okio and Kotlin jars the build copies there.
+    static final String OKHTTP_4 = "okhttp-4,okhttp-4.12.0.jar,okio-jvm-3.6.0.jar,kotlin-stdlib-1.8.21.jar", OKHTTP_5 = "okhttp-5,okhttp-jvm-5.0.0.jar,okio-jvm-3.15.0.jar,kotlin-stdlib-2.2.0.jar";
+    /** Runs the application's own OkHttp client on those jars and checks the child JVM really loaded them. */
+    String runOnOkHttp(String scenario, String folder, String okhttp, String okio, String kotlin) throws Exception {
+        okHttpRuntime = List.of(Path.of("target", folder, okhttp).toAbsolutePath(), Path.of("target", folder, okio).toAbsolutePath(), Path.of("target", folder, kotlin).toAbsolutePath());
+        String log = run("okhttp", scenario, Map.of(), true);
+        assertEquals(okhttp, line(log, "OKHTTP_JAR="), log); assertEquals(okio, line(log, "OKIO_JAR="), log); assertEquals(kotlin, line(log, "KOTLIN_JAR="), log);
+        return log;
+    }
+    /** The same wire span the OkHttp 3 tests expect, and no line from the agent: it neither failed open nor skipped an integration. */
+    void assertTracedWithoutAgentWarning(String log) {
+        assertEquals(1, spans.size(), log); assertWireSpan(spans.get(0));
+        assertEquals(List.of(), log.lines().filter(l -> l.contains("[traceai-auto]")).toList(), log);
+    }
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({OKHTTP_4, OKHTTP_5})
+    void okHttp4And5ChatCallIsTracedAndTheResponseIsUnchanged(String folder, String okhttp, String okio, String kotlin) throws Exception {
+        // run() compares the request the server received and the response body the application read.
+        assertTracedWithoutAgentWarning(runOnOkHttp("okhttp_version", folder, okhttp, okio, kotlin));
+    }
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({OKHTTP_4, OKHTTP_5})
+    void okHttp4And5StreamingIsByteForByteUnchanged(String folder, String okhttp, String okio, String kotlin) throws Exception {
+        payload = STREAM.getBytes(StandardCharsets.UTF_8); type = "text/event-stream";
+        assertTracedWithoutAgentWarning(runOnOkHttp("okhttp_version", folder, okhttp, okio, kotlin));
+        assertEquals(true, attributes(spans.get(0)).get("gen_ai.request.stream")); assertTrue(attributes(spans.get(0)).containsKey("gen_ai.response.time_to_first_chunk"));
+    }
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({OKHTTP_4, OKHTTP_5})
+    void okHttp4And5AsynchronousStreamingIsTraced(String folder, String okhttp, String okio, String kotlin) throws Exception {
+        payload = STREAM.getBytes(StandardCharsets.UTF_8); type = "text/event-stream";
+        assertTracedWithoutAgentWarning(runOnOkHttp("okhttp_version_async", folder, okhttp, okio, kotlin));
+    }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void encodedGzipStreamIsUnchangedAndParsed(String client) throws Exception {
         var out = new java.io.ByteArrayOutputStream(); try (var gzip = new java.util.zip.GZIPOutputStream(out)) { gzip.write(STREAM.getBytes(StandardCharsets.UTF_8)); }
         payload = out.toByteArray(); type = "text/event-stream"; encoding = "gzip";
