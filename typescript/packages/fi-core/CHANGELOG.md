@@ -5,6 +5,7 @@
 
 ### Fixed
 - A full collector URL set in the environment is used as given, so traces are delivered instead of failing with 404.
+- In an app with no OpenTelemetry context manager, spans started with `startActiveSpan` now nest, and their span is active only inside the callback and the work it starts, never in the code that runs after it or beside it. Nothing is registered with OpenTelemetry; apps with a context manager see no change. Two new helpers, `runInFIContext(ctx, fn)` and `activeFIContext()`, run work in that same context and read it.
 
 ## [1.2.3] - pending release
 ### Fix
