@@ -127,6 +127,7 @@ module TraceAI
       # an init option that sets the switch then decides; the text allows for it.
       def read_hide(key, value)
         text = begin
+          value = value.map(&:to_s).join(',') if value.instance_of?(Array)
           Config.utf8(value.to_s).strip.downcase
         rescue StandardError
           nil
@@ -194,9 +195,12 @@ module TraceAI
         text = File.binread(path).force_encoding(Encoding::UTF_8).delete_prefix([0xFEFF].pack('U'))
         undecodable = false
         values = text.each_line.each_with_object({}) do |line, out|
-          unless line.valid_encoding?
+          # A line that is not valid UTF-8 is scrubbed. It is kept only when its
+          # key is a hide switch, so that read_hide decides what it means.
+          damaged = !line.valid_encoding?
+          if damaged
             undecodable = true
-            next
+            line = line.scrub
           end
           # Remove comments outside quoted strings, respecting JSON/TOML escapes.
           quote = false; escape = false; clean = +''
@@ -208,9 +212,12 @@ module TraceAI
             elsif c == '"' then quote = !quote
             end
           end
-          found = /\A\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*\z/.match(clean)
+          found = /\A\s*([A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*"|'[A-Za-z_][A-Za-z0-9_]*')\s*=\s*(.*?)\s*\z/.match(clean)
           next unless found
-          key = found[1] == 'debug' ? 'auto_debug' : found[1]
+          # TOML treats a quoted key as the same key.
+          name = found[1].length >= 2 && %w[" '].include?(found[1][0]) ? found[1][1...-1] : found[1]
+          key = name == 'debug' ? 'auto_debug' : name
+          next if damaged && !HIDE_SWITCHES.include?(key)
           begin
             out[key] = parse_value(found[2])
           rescue ArgumentError, RangeError, EncodingError
@@ -220,7 +227,13 @@ module TraceAI
             # quotes, otherwise as written) and read_hide decides.
             raw = found[2]
             next unless HIDE_SWITCHES.include?(key) && !raw.empty?
-            out[key] = raw.length >= 2 && raw.start_with?("'") && raw.end_with?("'") ? raw[1...-1] : raw
+            out[key] = if raw.length >= 6 && (raw.start_with?('"""') && raw.end_with?('"""') || raw.start_with?("'''") && raw.end_with?("'''"))
+                         raw[3...-3]
+                       elsif raw.length >= 2 && raw.start_with?("'") && raw.end_with?("'")
+                         raw[1...-1]
+                       else
+                         raw
+                       end
           end
         end
         if undecodable
