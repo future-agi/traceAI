@@ -493,6 +493,25 @@ class EndToEndTest < Minitest::Test
     # Only AI spans reach Future AGI: the wire span and the two tagged spans.
     assert_equal %w[chat\ gpt-4o-mini dedicated framework], spans.map(&:name).sort
   end
+  # Applications often send their session id to the provider as well, under a
+  # credential-like body key. The session id set through the agent is still
+  # exported as set; the body copy keeps the name rule.
+  def test_session_id_repeated_in_the_request_body_is_still_exported_as_set
+    code = <<~RUBY
+      require 'net/http'; require 'json'
+      uri = URI('#{@provider.url}/v1/chat/completions')
+      req = Net::HTTP::Post.new(uri); req['Content-Type'] = 'application/json'
+      req.body = JSON.generate(model: 'gpt-4o-mini', messages: [{role: 'user', content: 'hi'}], metadata: {session_id: 'checkout-session-42'})
+      TraceAI::Auto.using_session('checkout-session-42') do
+        STDOUT.write(Net::HTTP.start(uri.host, uri.port) { |http| http.request(req).body })
+      end
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    a = assert_chat_span(export_spans)
+    assert_equal 'checkout-session-42', a['session.id']
+    refute_includes a['input.value'], 'checkout-session-42'
+  end
   def test_coexists_with_existing_provider
     # Preload manual agent API only; app sets its provider before one-line init.
     code = <<~RUBY

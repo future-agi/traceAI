@@ -151,6 +151,24 @@ class SafetyTest < Minitest::Test
     assert_equal '<redacted>', P.scrub({'session.id' => secret}, [secret])['session.id']
     assert_equal 'id <redacted>', P.scrub({'session.id' => 'id ' + secret}, [secret])['session.id']
   end
+  # An application may also send its session id to the provider under a
+  # credential-like body key. That body value is the session id the application
+  # set through the agent, so it is not learned as a secret; other credentials
+  # in the same body still are.
+  def test_body_value_equal_to_the_session_id_is_not_registered_as_a_secret
+    session = 'test-checkout-session-12345678'
+    other = 'test-body-only-credential-12345678'
+    body = {model: 'm', messages: [{role: 'user', content: 'hi'}], metadata: {session_id: session, client_secret: other}}
+    result = W.build(request('/v1/chat/completions', 'api.openai.com', body).merge(session_id: session), response)
+    refute_nil result
+    refute_includes TraceAI::Auto.secret_values, session
+    assert_includes TraceAI::Auto.secret_values, other
+    assert_equal session, P.scrub({'session.id' => session}, TraceAI::Auto.secret_values)['session.id']
+    # Without a session id in the request's context the name rule applies as before.
+    unrelated = 'test-unrelated-session-12345678'
+    W.build(request('/v1/chat/completions', 'api.openai.com', body.merge(metadata: {session_id: unrelated})).merge(session_id: session), response)
+    assert_includes TraceAI::Auto.secret_values, unrelated
+  end
   # A checked-in config file must not redirect the user's Future AGI keys: its
   # base_url counts only when the key pair comes from the same file.
   def test_config_file_base_url_needs_the_key_pair_from_the_same_file
