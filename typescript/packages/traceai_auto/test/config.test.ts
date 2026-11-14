@@ -47,6 +47,11 @@ test("an empty privacy variable is unset, so the config file's value still appli
     expect(resolveConfig({ configFile: path, traceConfig: { hideInputs: false } }, { FI_HIDE_INPUTS: "on" }).traceConfig.hideInputs).toBe(false);
     // With every source empty or missing, the switch is left out.
     expect(resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_HIDE_INPUTS: "" }).traceConfig).toEqual({});
+    // FI_HIDE_ERROR_DETAILS is read the same way: empty, it is not set, so the file's false
+    // applies and error details are kept, even with a content switch on.
+    const errors = join(dir, "errors.toml");
+    writeFileSync(errors, "hide_inputs = true\nhide_error_details = false\n");
+    expect(resolveConfig({ configFile: errors }, { FI_HIDE_ERROR_DETAILS: "" }).traceConfig).toEqual({ hideInputs: true, hideErrorDetails: false });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test("allowlist, denylist, wire setting, disabled SDK and numeric validation", () => {
