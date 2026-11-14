@@ -1,7 +1,7 @@
 import { Attributes, createContextKey, createTraceState, INVALID_SPAN_CONTEXT, SpanContext, trace } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { generateTraceConfig } from "./trace/trace-config/traceConfig";
+import { generateTraceConfig, parseSwitch } from "./trace/trace-config/traceConfig";
 import { REDACTED_VALUE } from "./trace/trace-config/constants";
 import { stripStackTrace } from "./trace/trace-config/errorDetails";
 import { maskAttributes, redactValue } from "./trace/trace-config/maskingRules";
@@ -485,12 +485,15 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     }
     return lastSnapshot;
   };
-  const invocation = options.hideLLMInvocationParameters ?? process.env.FI_HIDE_LLM_INVOCATION_PARAMETERS?.trim().toLowerCase() === "true";
+  // Both variables read here follow the rule of every privacy switch (parseSwitch): an
+  // empty value is unset, and an unrecognised one turns the switch on with one warning.
+  const invocation = options.hideLLMInvocationParameters
+    ?? parseSwitch(process.env.FI_HIDE_LLM_INVOCATION_PARAMETERS ?? "", "FI_HIDE_LLM_INVOCATION_PARAMETERS") ?? false;
   const resolved = generateTraceConfig(options);
   // Derive this from resolved policy, not only the explicit options. Environment
   // image hiding must protect status/exception details identically.
   const explicitErrors = options.hideErrorDetails !== undefined
-    || /^(?:true|false)$/i.test(process.env.FI_HIDE_ERROR_DETAILS?.trim() ?? "");
+    || parseSwitch(process.env.FI_HIDE_ERROR_DETAILS ?? "", "FI_HIDE_ERROR_DETAILS") !== undefined;
   const tc = generateTraceConfig({ ...resolved, ...(invocation && !explicitErrors ? { hideErrorDetails: true } : {}) });
   const hideInput = tc.hideInputs || tc.hideInputMessages || tc.hideInputText;
   const hideOutput = tc.hideOutputs || tc.hideOutputMessages || tc.hideOutputText;

@@ -17,8 +17,9 @@ const warnedSwitches = new Set<string>();
  * nothing: true, 1, yes and on turn it on, false, 0, no and off turn it off (any case,
  * surrounding spaces ignored), and an empty value counts as unset. Any other value turns it
  * on, with one warning per variable that names the accepted values and never the value.
+ * The export boundary reads its own two switches with the same function.
  */
-function parseSwitch(envValue: string, envKey: string): boolean | undefined {
+export function parseSwitch(envValue: string, envKey: string): boolean | undefined {
   const normalized = envValue.trim().toLowerCase();
   if (normalized === "") return undefined;
   if (SWITCH_ON.includes(normalized)) return true;
