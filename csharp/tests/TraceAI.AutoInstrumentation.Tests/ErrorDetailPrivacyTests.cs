@@ -65,12 +65,15 @@ public class ErrorDetailPrivacyTests : InitIsolation
     [InlineData("hide_error_details = true",true)]
     [InlineData("hide_inputs = true\nhide_error_details = false",false)]
     [InlineData("hide_input_images = true",false)]
-    // Values are trimmed and case-insensitive; an unrecognised error-detail value is
-    // ignored, so error details follow the content flags instead of being shown.
+    // Values are trimmed and case-insensitive; on and off count too; an unrecognised
+    // error-detail value hides error details, whatever the content flags say.
     [InlineData("hide_inputs = true\nhide_error_details = \"on\"",true)]
     [InlineData("hide_inputs = true\nhide_error_details = \" true \"",true)]
     [InlineData("hide_inputs = \" yes\"",true)]
     [InlineData("hide_inputs = true\nhide_error_details = \"NO\"",false)]
+    [InlineData("hide_inputs = \"on\"",true)]
+    [InlineData("hide_inputs = true\nhide_error_details = \"off\"",false)]
+    [InlineData("hide_error_details = \"maybe\"",true)]
     public void ErrorDetailFlagFollowsContentFlagsUnlessSetExplicitly(string settings,bool hidden)
     {
         string path=Path.Combine(Path.GetTempPath(),"traceai-error-details-"+Guid.NewGuid()+".toml");
@@ -87,7 +90,7 @@ public class ErrorDetailPrivacyTests : InitIsolation
     [InlineData("true","true ",true)]
     [InlineData("true ",null,true)]
     [InlineData("true","false",false)]
-    public void ErrorDetailEnvironmentFlagIsTrimmedAndIgnoresUnrecognisedValues(string inputs,string? details,bool hidden)
+    public void ErrorDetailEnvironmentFlagIsTrimmedAndHidesOnUnrecognisedValues(string inputs,string? details,bool hidden)
     {
         var names=new[] { "FI_HIDE_INPUTS","FI_HIDE_ERROR_DETAILS" };
         var previous=names.ToDictionary(name=>name,name=>Environment.GetEnvironmentVariable(name));
@@ -97,8 +100,9 @@ public class ErrorDetailPrivacyTests : InitIsolation
             AgentStartupTests.ClearWarnings(); Console.SetError(captured);
             Environment.SetEnvironmentVariable("FI_HIDE_INPUTS",inputs); Environment.SetEnvironmentVariable("FI_HIDE_ERROR_DETAILS",details);
             AssertErrorDetails(new AutoProcessor(Config(new MemoryExporter())),hidden);
-            // An ignored value is reported once by name, so a user who meant to hide more learns why.
-            if(details is "on" or "y") Assert.Contains("FI_HIDE_ERROR_DETAILS",captured.ToString());
+            // on is a recognised value. An unrecognised one hides error details and is reported
+            // once by name, so the user learns which values are read.
+            if(details is "y") Assert.Contains("FI_HIDE_ERROR_DETAILS",captured.ToString());
             else Assert.DoesNotContain("FI_HIDE_ERROR_DETAILS",captured.ToString());
         }
         finally { Console.SetError(error); foreach(var pair in previous) Environment.SetEnvironmentVariable(pair.Key,pair.Value); }
