@@ -164,14 +164,23 @@ internal sealed class AutoConfig
             var text=line[..end].Trim(); if(text.Length==0||text.StartsWith('[')) continue;
             var pair=text.Split('=',2); if(pair.Length!=2) continue;
             var key=pair[0].Trim(); var value=pair[1].Trim(); if(key.Length==0||value.Length==0) continue;
+            var name=key=="debug"?"FI_AUTO_DEBUG":"FI_"+key.ToUpperInvariant();
+            // A hide switch someone set must never be dropped. When its value is outside the flat
+            // subset, keep the text (a single-quoted string without its quotes) and let Hide() decide.
+            bool hide=name.StartsWith("FI_HIDE_",StringComparison.Ordinal);
             try
             {
                 if(value.StartsWith('[')) value=string.Join(',',JsonSerializer.Deserialize<string[]>(value)??[]);
                 else if(value.StartsWith('"')) value=JsonSerializer.Deserialize<string>(value)??"";
-                else if(value is not ("true" or "false")&&!double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out _)) continue;
-                result[key=="debug"?"FI_AUTO_DEBUG":"FI_"+key.ToUpperInvariant()]=value;
+                else if(value is not ("true" or "false")&&!double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out _))
+                {
+                    if(!hide) continue;
+                    if(value.Length>=2&&value[0]=='\''&&value[^1]=='\'') value=value[1..^1];
+                }
+                result[name]=value;
             }
-            catch(JsonException) { /* Ignore malformed flat-subset values. */ }
+            // Other malformed flat-subset values are ignored.
+            catch(JsonException) { if(hide) result[name]=value; }
         }
         return result;
     }
