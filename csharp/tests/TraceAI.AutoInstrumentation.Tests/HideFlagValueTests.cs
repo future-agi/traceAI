@@ -7,7 +7,8 @@ namespace TraceAI.AutoInstrumentation.Tests;
 /// <summary>A hide switch someone set must never silently do nothing. For every FI_HIDE_*
 /// variable and its futureagi.toml setting: true, 1, yes and on hide; false, 0, no and off
 /// show; a blank value is not set; any other value hides, with one warning that names the
-/// variable and never prints the value. Other switches keep their own parsing.</summary>
+/// variable and the accepted values and never prints the value. A hide line in the file is
+/// never dropped, however its value is written. Other switches keep their own parsing.</summary>
 public class HideFlagValueTests : InitIsolation
 {
     private const string Text="user said PRIVATE_HIDE_FLAG_TEXT";
@@ -105,6 +106,15 @@ public class HideFlagValueTests : InitIsolation
         Assert.Equal(1,reading.WarningsNaming(name));
         Assert.DoesNotContain("maybe",reading.Warnings);
     }
+    [Fact]
+    public void WarningListsTheAcceptedValues()
+    {
+        var reading=Read([("FI_HIDE_INPUTS","maybe")]);
+        var line=Assert.Single(reading.Warnings.Split('\n'),text=>text.Contains("FI_HIDE_INPUTS",StringComparison.Ordinal));
+        Assert.Contains("true, 1, yes or on",line);
+        Assert.Contains("false, 0, no or off",line);
+        Assert.DoesNotContain("maybe",line);
+    }
     [Theory]
     // A recognised error-detail value wins over the content switches.
     [InlineData("true","off",false,0)]
@@ -132,12 +142,39 @@ public class HideFlagValueTests : InitIsolation
     [InlineData("hide_inputs = \"\"",false,0)]
     [InlineData("hide_inputs = \"maybe\"",true,1)]
     [InlineData("hide_inputs = 2",true,1)]
+    // A hide line is never dropped: a single-quoted string and a bare word are read as their text.
+    [InlineData("hide_inputs = 'on'",true,0)]
+    [InlineData("hide_inputs = ' Yes '",true,0)]
+    [InlineData("hide_inputs = 'off'",false,0)]
+    [InlineData("hide_inputs = ''",false,0)]
+    [InlineData("hide_inputs = on",true,0)]
+    [InlineData("hide_inputs = True",true,0)]
+    [InlineData("hide_inputs = on # hide prompts",true,0)]
+    [InlineData("hide_inputs = off",false,0)]
+    [InlineData("hide_inputs = 'maybe'",true,1)]
+    [InlineData("hide_inputs = maybe",true,1)]
+    [InlineData("hide_inputs = ture",true,1)]
+    // So is a value the file reader cannot decode.
+    [InlineData("hide_inputs = \"\"\"on\"\"\"",true,1)]
+    [InlineData("hide_inputs = \"on",true,1)]
     public void ConfigFileValuesFollowTheSameRule(string settings,bool hidden,int warnings)
     {
         var reading=Read([],settings);
         Assert.Equal(hidden,reading.Mask.HideInputs);
         Assert.Equal(warnings,reading.WarningsNaming("FI_HIDE_INPUTS"));
         Assert.DoesNotContain("maybe",reading.Warnings);
+    }
+    [Theory]
+    [MemberData(nameof(SwitchNames))]
+    public void EverySwitchReadsASingleQuotedOrBareValueFromTheConfigFile(string name)
+    {
+        var key=name["FI_".Length..].ToLowerInvariant();
+        var on=Read([],key+" = 'on'");
+        Assert.True(Switches[name](on.Mask)); Assert.Equal(0,on.WarningsNaming(name));
+        var off=Read([],key+" = off");
+        Assert.False(Switches[name](off.Mask)); Assert.Equal(0,off.WarningsNaming(name));
+        var mistyped=Read([],key+" = ture");
+        Assert.True(Switches[name](mistyped.Mask)); Assert.Equal(1,mistyped.WarningsNaming(name));
     }
     [Theory]
     [InlineData("yes",true)] [InlineData(" TRUE ",true)] [InlineData("1",true)]
