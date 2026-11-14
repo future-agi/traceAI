@@ -7,10 +7,17 @@ require('./app-otel.cjs');
 const { trace } = require('@opentelemetry/api');
 const OpenAI = require('openai');
 const tracer = trace.getTracer('own-app');
-// Application code in the request path of the AI call.
+// Application code in the request path of the AI call. With INSIDE_DEPTH=2 it also
+// starts a second span of its own, for the attempt, inside the first one.
+const depth = Number(process.env.INSIDE_DEPTH || 1);
 function fetchWithOwnSpan(url, init) {
   return tracer.startActiveSpan('app-provider-request', async span => {
-    try { return await globalThis.fetch(url, init); } finally { span.end(); }
+    try {
+      if (depth < 2) return await globalThis.fetch(url, init);
+      return await tracer.startActiveSpan('app-provider-attempt', async attempt => {
+        try { return await globalThis.fetch(url, init); } finally { attempt.end(); }
+      });
+    } finally { span.end(); }
   });
 }
 (async () => {

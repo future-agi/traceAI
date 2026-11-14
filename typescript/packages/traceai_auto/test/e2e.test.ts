@@ -423,6 +423,28 @@ test("an AI call whose request runs inside an application span reaches Future AG
   const inside = app.find((span: any) => span.name === "app-provider-request");
   expect(inside.parentSpanId).toBe(ai.spanId);
 });
+test("an AI call whose request runs inside two application spans in a row reaches Future AGI twice, and none of the application's spans reach it", async () => {
+  // A stated limit. The wire layer follows one application span back to the AI span, not
+  // two, so the same request is also sent as a wire span. Its parent is the inner
+  // application span, which Future AGI never receives.
+  const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", INSIDE_DEPTH: "2" });
+  const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!).appSpans;
+  expect(requests).toBe(1);
+  // The application's own spans stay with the application: none reaches Future AGI.
+  const appIds = new Set(app.map((span: any) => span.spanId)), appNames = new Set(app.map((span: any) => span.name));
+  expect(allSpans().filter(span => appIds.has(span.spanId) || appNames.has(span.name)).map(span => span.name)).toEqual([]);
+  // Future AGI receives the AI span and one wire span for the same request.
+  expect(allSpans()).toHaveLength(2);
+  const wire = wireSpans();
+  expect(wire).toHaveLength(1);
+  const ai = allSpans().find(span => attrs(span)["traceai.capture.layer"] !== "wire");
+  expect(attrs(ai)["gen_ai.span.kind"] ?? attrs(ai)["fi.span.kind"]).toBe("LLM");
+  const outer = app.find((span: any) => span.name === "app-provider-request"), attempt = app.find((span: any) => span.name === "app-provider-attempt");
+  expect(outer.parentSpanId).toBe(ai.spanId);
+  expect(attempt.parentSpanId).toBe(outer.spanId);
+  expect(wire[0].traceId).toBe(ai.traceId);
+  expect(wire[0].parentSpanId).toBe(attempt.spanId);
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
