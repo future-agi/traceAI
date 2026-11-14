@@ -687,7 +687,10 @@ module TraceAI
       # The session id of the request being made now, also before the agent has
       # started (the context helpers then keep it in the early attributes).
       def current_session_id
-        value = session_id(request_context) || (Thread.current[:traceai_early_attributes] || {})['session.id']
+        # Before the start there is no context class yet (current_context would
+        # raise), so only the early attributes are read then.
+        value = @attributes_key ? session_id(request_context) : nil
+        value ||= (Thread.current[:traceai_early_attributes] || {})['session.id']
         value if value.instance_of?(String)
       rescue StandardError => e
         debug(e); nil
