@@ -36,10 +36,20 @@ public final class AutoConfig {
                 if (line.isEmpty() || line.startsWith("[")) continue;
                 String[] pair = line.split("=", 2); if (pair.length != 2) continue;
                 String key = envKey(pair[0].trim()), value = pair[1].trim();
+                // A hide switch someone set must never be dropped: a value that cannot be decoded is kept as written, so it hides.
+                boolean hide = key.startsWith("FI_HIDE_");
                 if (value.startsWith("[")) {
-                    Object array = WireCore.parse(value); if (!(array instanceof List)) continue;
-                    value = String.join(",", WireCore.list(array).stream().map(String::valueOf).toList());
-                } else if (value.startsWith("\"")) { Object parsed = WireCore.parse(value); if (!(parsed instanceof String)) continue; value = (String)parsed; }
+                    Object array = WireCore.parse(value);
+                    if (array instanceof List) value = String.join(",", WireCore.list(array).stream().map(String::valueOf).toList());
+                    else if (!hide) continue;
+                } else if (value.startsWith("\"")) {
+                    Object parsed = WireCore.parse(value);
+                    if (parsed instanceof String) value = (String)parsed;
+                    else if (!hide) continue;
+                } else if (hide && value.length() >= 2 && value.startsWith("'") && value.endsWith("'")) {
+                    // A single-quoted string is its text, as in readProfile. Other settings keep their value as written.
+                    value = value.substring(1, value.length() - 1);
+                }
                 result.put(key, value);
             }
         } catch (Exception ignored) { }
@@ -140,9 +150,10 @@ public final class AutoConfig {
         Set<String> on = new HashSet<>();
         for (String key : HIDE_SWITCHES) if (hideValue(key, get(key))) on.add(key);
         hidden = Set.copyOf(on);
-        // Every value is passed explicitly, so the core builder never falls back to its own reading of the environment.
+        // The five hide switches the core builder would otherwise read from the environment itself are passed explicitly.
+        // FI_HIDE_ERROR_DETAILS is not honoured by this agent yet, so it is passed as false instead of being left to that reading.
         masking = TraceConfig.builder().hideInputs(hides("FI_HIDE_INPUTS")).hideOutputs(hides("FI_HIDE_OUTPUTS"))
-            .hideInputMessages(hides("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(hides("FI_HIDE_OUTPUT_MESSAGES")).build();
+            .hideInputMessages(hides("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(hides("FI_HIDE_OUTPUT_MESSAGES")).hideErrorDetails(false).build();
     }
     private static boolean blankHide(String key, String value) { return key.startsWith("FI_HIDE_") && (value == null || value.isBlank()); }
     /**
