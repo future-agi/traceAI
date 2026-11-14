@@ -1,5 +1,8 @@
 ## [1.2.4] - pending release
 
+### Changed
+- A privacy switch with an unrecognised value now hides: `FI_HIDE_*` and `FI_PII_REDACTION` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, and any other non-empty value turns the switch on with one warning that never repeats the value. For existing users this only hides more: before, only `true` turned a switch on.
+
 ### Fixed
 - A full collector URL set in the environment is used as given, so traces are delivered instead of failing with 404.
 
