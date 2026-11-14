@@ -684,4 +684,20 @@ describe("Redis vector-only mode", () => {
 
     expect(mockSpan.end).toHaveBeenCalledTimes(2);
   });
+
+  it("traces VECTOR_RANGE searches and leaves text searches that only mention knn alone", async () => {
+    const search = (jest.fn() as MockFn).mockResolvedValue({ total: 0, documents: [] });
+    const mockClient = { ft: { search } };
+    const mockModule = { createClient: jest.fn().mockReturnValue(mockClient) };
+
+    instrumentation.manuallyInstrument(mockModule);
+    const client = mockModule.createClient() as typeof mockClient;
+
+    await client.ft.search("idx:docs", "@embedding:[VECTOR_RANGE $radius $vector]=>{$YIELD_DISTANCE_AS: score}", { PARAMS: { radius: 0.2, vector: Buffer.alloc(8) } });
+    await client.ft.search("idx:docs", "(@genre:{drama})=>[KNN $K @embedding $vector]", { PARAMS: { K: 3, vector: Buffer.alloc(8) } });
+    await client.ft.search("idx:titles", "@title:knn");
+    await client.ft.search("idx:titles", "knn algorithms explained");
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(2);
+  });
 });
