@@ -11,7 +11,8 @@ import (
 
 const RedactedValue = "__REDACTED__"
 
-// TraceConfig uses the same switches as the existing Go middleware modules.
+// TraceConfig uses the same switch names as the existing Go middleware modules.
+// Its values follow the shared rule (see the README), which those modules do not yet.
 // Audio transcripts and raw JSON receive additional content redaction so that
 // hiding text cannot leak it through a second attribute.
 type TraceConfig struct {

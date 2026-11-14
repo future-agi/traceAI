@@ -311,7 +311,7 @@ Allow/deny lists report manual library integrations as disabled; they cannot
 remove middleware you explicitly added yourself. Provider-specific allowlists
 do not filter wire requests: `wire` is the integration that owns that layer.
 
-Privacy switches match the other Go modules: `FI_HIDE_INPUTS`,
+Privacy switches have the same names as in the other Go modules: `FI_HIDE_INPUTS`,
 `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`,
 `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES`,
 `FI_HIDE_LLM_INVOCATION_PARAMETERS`, and `FI_BASE64_IMAGE_MAX_LENGTH` (32000).
@@ -319,7 +319,7 @@ A hide switch, or its `futureagi.toml` setting, reads `true`, `1`, `yes` or `on`
 as hide and `false`, `0`, `no` or `off` as show, ignoring case and surrounding
 spaces; a blank value counts as not set. Any other value hides that content and
 prints one warning that names the variable, so a mistyped switch never leaves
-content visible. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG` and `OTEL_SDK_DISABLED` are
+content visible. The other traceAI Go modules still read only `true` for now. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG` and `OTEL_SDK_DISABLED` are
 not hide switches: they are on only for `true`, case-insensitively. Inputs/outputs are
 redacted with `__REDACTED__`; messages are dropped or text-redacted. This module
 also redacts raw JSON under text-hide switches and audio transcripts when
