@@ -57,12 +57,18 @@ module TraceAI
       # Only call for bodies/fields the wire layer has already parsed. Match the
       # codec's larger input bounds, not the export sanitizer's smaller budget:
       # every credential in an accepted body must protect unrelated later spans.
-      def observe_body_credentials(value)
-        observe_credentials(value, nil, 0, [100_000, 64 * 1024 * 1024])
+      # `session_id` is the session id the application set through the agent
+      # for this request (using_session). A body value that is exactly that id
+      # is correlation data the application chose to export, so it is not
+      # learned as a secret even under a credential-like key such as
+      # metadata.session_id. The key itself still gets the name rule on export.
+      def observe_body_credentials(value, session_id = nil)
+        session_id = nil unless Codec.type(session_id) == String && !session_id.empty?
+        observe_credentials(value, nil, 0, [100_000, 64 * 1024 * 1024], session_id)
       rescue Limit
         nil
       end
-      def observe_credentials(value, key, depth, budget)
+      def observe_credentials(value, key, depth, budget, session_id = nil)
         budget[0] -= 1
         raise Limit if depth > 64 || budget[0] < 0
         klass = Codec.type(value)
@@ -73,13 +79,14 @@ module TraceAI
             path = key && !key.empty? ? key + '.' + name : name
             budget[1] -= path.bytesize
             raise Limit if budget[1] < 0
-            observe_credentials(item, path, depth + 1, budget)
+            observe_credentials(item, path, depth + 1, budget, session_id)
           end
         elsif klass == Array
-          value.each { |item| observe_credentials(item, key, depth + 1, budget) }
+          value.each { |item| observe_credentials(item, key, depth + 1, budget, session_id) }
         elsif klass == String && key && credential?(key)
           budget[1] -= value.bytesize
           raise Limit if budget[1] < 0
+          return if session_id && value == session_id
           Auto.register_secret(value)
           Auto.register_secret(value.sub(/\A\S+\s+/, '')) if leaf(key).end_with?('authorization')
         end

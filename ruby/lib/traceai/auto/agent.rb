@@ -476,6 +476,16 @@ module TraceAI
       rescue StandardError => e
         debug(e)
       end
+      # The session id set through using_session or with_attributes in a
+      # request's context. A request body that repeats exactly this value is
+      # not learned as a credential (Privacy.observe_body_credentials).
+      def session_id(context)
+        return unless context && @attributes_key
+        value = (context.value(@attributes_key) || {})['session.id']
+        value if value.instance_of?(String)
+      rescue StandardError => e
+        debug(e); nil
+      end
       def using_session(id, &block) = with_attributes({'session.id' => id}, &block)
       def using_user(id, &block) = with_attributes({'user.id' => id}, &block)
       def using_metadata(value)

@@ -16,7 +16,9 @@ module TraceAI
       # Redirects are part of one logical call. Use the final recognized route's
       # metadata without changing its original parent/start or emitting twice.
       def reset_request!(method, url, headers, body, metadata = {})
-        @request = {method: method, url: url, headers: headers}.merge(metadata)
+        # The session id of the request's own context (using_session): a body
+        # value equal to it is not learned as a credential.
+        @request = {method: method, url: url, headers: headers, session_id: Auto.session_id(@parent)}.merge(metadata)
         if body.is_a?(String)
           ctype = Wire.content_type(headers)
           if ctype.start_with?('multipart/')
@@ -31,7 +33,7 @@ module TraceAI
         elsif !@request[:fields] && !@request[:binary] && method != 'GET'
           @request[:unavailable] = true
         end
-        Privacy.observe_body_credentials(@request[:fields]) if @request[:fields]
+        Privacy.observe_body_credentials(@request[:fields], @request[:session_id]) if @request[:fields]
         reset_response!
       end
       # A retry is a new response, not another chunk of the previous attempt.
@@ -111,7 +113,7 @@ module TraceAI
       def finish
         return if @finished
         @finished = true
-        Privacy.observe_body_credentials(@upload_reader.fields) if @upload_reader
+        Privacy.observe_body_credentials(@upload_reader.fields, @request[:session_id]) if @upload_reader
         if @upload_reader&.complete
           @request[:fields] = @upload_reader.fields; @request[:files] = @upload_reader.files; @request[:unavailable] = false
         end

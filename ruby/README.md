@@ -193,9 +193,10 @@ of `spec/auto-instrumentation/privacy.json`, version 3):
   media MIME type.
 - The `session.id` you set with `TraceAI::Auto.using_session` (or
   `with_attributes`) is exported as set, so Future AGI can group a session's
-  traces. A registered secret or credential-shaped value inside it is still
-  redacted, and every other session-named field (`session_id`, session tokens,
-  cookies) is replaced with `<redacted>`.
+  traces, also when the same request sends that id to the provider in its body.
+  A registered secret or credential-shaped value inside it is still redacted,
+  and every other session-named field (`session_id`, session tokens, cookies) is
+  replaced with `<redacted>`.
 
 Logprob tokens in ordinary payloads are treated like any other token-named field.
 Code that holds a parsed OpenAI chat response can call

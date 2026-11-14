@@ -360,7 +360,7 @@ module TraceAI
           elsif body && body.bytesize > @limit && !Wire.binary?(ctype)
             @req[:truncated] = true; body = nil
           end
-          Privacy.observe_body_credentials(fields) if fields
+          Privacy.observe_body_credentials(fields, @req[:session_id]) if fields
           unavailable = @req[:unavailable] || @req[:truncated] || (body.nil? && fields.nil? && @req[:method] != 'GET' && !@req[:binary])
           if unavailable
             return false unless @m[:known]
@@ -380,7 +380,7 @@ module TraceAI
             put('gen_ai.audio.mime_type', ctype); put('traceai.audio.input_bytes', @req[:body_size] || body&.bytesize)
           elsif body
             parsed = Wire.json(body)
-            Privacy.observe_body_credentials(parsed) unless parsed.nil?
+            Privacy.observe_body_credentials(parsed, @req[:session_id]) unless parsed.nil?
             if @format == 'bedrock.invoke' && (!parsed.nil? || body.strip == 'null') && !parsed.is_a?(Hash)
               @input, @input_mime = Codec.generate(parsed), 'application/json'
             else
