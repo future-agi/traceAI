@@ -164,12 +164,13 @@ function truncatedValue(value: unknown, limit: number, budget = activeInspection
 // Q8b: no prefix, length, hash, digest or other content-dependent marker choice.
 function withheldMarker(key: string): string { return key === "session.id" ? "<redacted>" : HOST_TRUNCATED; }
 // Session, user and session-name grouping keys are correlation metadata, not
-// transport credentials. On spans made by an FI tracer they are exempt from the
-// credential NAME rule only: registered secrets, credential-shaped values and
-// media rules still apply to their values, and SDK data loss still withholds
-// them. Discovery reads their values without their names, so an id never becomes
-// a registered credential. Spans from any other tracer, such as forwarded
-// application spans, keep the credential name rule for these keys.
+// transport credentials. On spans made by an FI tracer, or converted and marked
+// by a traceAI integration, they are exempt from the credential NAME rule only:
+// registered secrets, credential-shaped values and media rules still apply to
+// their values, and SDK data loss still withholds them. Spans from any other
+// tracer, such as forwarded application spans, keep the credential name rule for
+// these keys. On every span, discovery reads their values without their names,
+// so an id never becomes a registered credential.
 const GROUPING_KEYS: ReadonlySet<string> = new Set(["session.id", "user.id", "session_name", "metadata.session_id", "metadata.user_id"]);
 // Integrations that also record a session id under their own attribute name (the
 // current session id, or a resumed or forked-from one) get the same name-only exemption. Exact
@@ -298,8 +299,10 @@ function lineage(span: unknown): Lineage {
 export function rememberSpanPrivacyFailure(context: object): void {
   root(lineage(context)).uncertain = true;
 }
-/** @internal Called by FITracer for every span it makes, keyed by the native span
- * context. Only such spans, and detached copies of them, export grouping keys as set. */
+/** Marks a span as FI-authored, keyed by its native span context. FITracer calls
+ * it for every span it makes; a traceAI integration that exports converted copies
+ * of its framework's spans (such as Genkit) calls it with the native span context.
+ * Only such spans, and detached copies of them, export grouping keys as set. */
 export function rememberFITracerSpan(context: object): void {
   root(lineage(context)).fiAuthored = true;
 }
@@ -493,10 +496,10 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   const hideOutput = tc.hideOutputs || tc.hideOutputMessages || tc.hideOutputText;
   let spanBudget: { remaining: number; nodes: number; unknown: boolean } | undefined;
   let spanScanBudget: InspectionBudget | undefined;
-  // span() turns the grouping-key exemption off for spans not made by an FI tracer.
+  // span() turns the grouping-key name exemption off for spans not made by an FI
+  // tracer. Discovery reads grouping values without their names on every span.
   let identityExemption = true;
   const groupingKey = (key: string): boolean => identityExemption && identityKey(key);
-  const groupingMetadata = (key: string): boolean => identityExemption && key === METADATA_KEY;
   const attributes = (attrs: unknown, requestSecrets?: readonly string[], operation?: unknown, capsuleDepth = 0, admission = false, incomplete = false, valueLimit = Infinity, unattestedCopy = false, spanType?: unknown, responseContext?: object, outputResponseContext?: object, withholdContent = false, authoredHints?: PrivacyHints): Attributes => {
     if (capsuleDepth > 16) throw new Error("Privacy capsule budget");
     const secrets = requestSecrets ?? snapshot();
@@ -798,11 +801,12 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
-        } else if (groupingKey(key)) {
-          // Same single debit; the value is discovered without its name.
+        } else if (identityKey(key)) {
+          // Same single debit; the value is discovered without its name, on every
+          // span, so a session or user id never becomes a registered secret.
           requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
           sources.push(paid(undefined, item));
-        } else if (groupingMetadata(key) && typeof item === "string") {
+        } else if (key === METADATA_KEY && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           const parts = metadataDiscoverySources(item, () => undefined);
           if (parts) for (const part of parts) sources.push(paid(undefined, part));
@@ -831,9 +835,11 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && spanBudget) spanBudget.unknown = true;
         // Conservative export fallback: discover ordinary credentials with the
         // budgeted adapter, then withhold, rather than invoke provider internals.
-        const metadataParts = groupingMetadata(key) && typeof item === "string"
+        // Grouping values are discovered without their names on every span; only
+        // the export masking of their names depends on the span's provenance.
+        const metadataParts = key === METADATA_KEY && typeof item === "string"
           ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
-        if (groupingKey(key)) {
+        if (identityKey(key)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
         } else if (metadataParts) {
