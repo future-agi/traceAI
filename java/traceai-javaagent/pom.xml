@@ -383,6 +383,24 @@
     </build>
 
     <profiles>
+        <!-- Held from JitPack as well: the build still compiles and flattens this module on that route,
+             but does not install it, so its jar and POM are not harvested. The hold_artifacts entry
+             in .github/release/config.json drives java/scripts/prepare_jitpack.py and
+             check_central.py; remove this profile with that entry. -->
+        <profile>
+            <id>jitpack</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-install-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- Held from Maven Central until the owner approves the agent's first release. The Java
              release still builds, tests and signs this module, but leaves it out of the Central
              bundle; hold_artifacts in .github/release/config.json keeps it out of the release's

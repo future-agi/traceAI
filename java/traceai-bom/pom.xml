@@ -19,11 +19,6 @@
             </dependency>
             <dependency>
                 <groupId>com.futureagi</groupId>
-                <artifactId>traceai-javaagent</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-openai</artifactId>
                 <version>${project.version}</version>
             </dependency>

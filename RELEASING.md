@@ -52,7 +52,7 @@ Two manifests are tracked but intentionally **never published**:
 
 Java publishing refuses legacy `ai.traceai` coordinates and SNAPSHOT versions. Merge the Java namespace/release-profile PR before expecting Central delivery. The release workflow will not claim that a legacy-coordinate build is a Central release.
 
-A Java reactor module listed under `hold_artifacts` in `.github/release/config.json` is built and tested by the Java release but not deployed: its own `release` profile sets `skipPublishing` for the Central plugin, and the release plan leaves it out of the Central check. The zero-code agent, `com.futureagi:traceai-javaagent`, is held this way until its first release is approved. To publish it, remove its `hold_artifacts` entry and the `release` profile in `java/traceai-javaagent/pom.xml`.
+A Java reactor module listed under `hold_artifacts` in `.github/release/config.json` is built and tested by the Java release but not deployed: its own `release` profile sets `skipPublishing` for the Central plugin, and the release plan leaves it out of the Central check. The zero-code agent, `com.futureagi:traceai-javaagent`, is held this way until its first release is approved. The hold also keeps it out of `java/traceai-bom/pom.xml` and out of the JitPack harvest (the module's `jitpack` profile skips its install, and `java/scripts/check_central.py` and `java/scripts/prepare_jitpack.py` read the same list). To publish it, remove its `hold_artifacts` entry, the `release` and `jitpack` profiles in `java/traceai-javaagent/pom.xml`, and add its `<dependency>` back to `java/traceai-bom/pom.xml`; `check_central.py` then fails until the BOM names it.
 
 ## One-time maintainer setup
 
