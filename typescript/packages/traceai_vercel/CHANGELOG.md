@@ -19,7 +19,7 @@
 - `addFIAttributesToSpan` keeps existing attribute values, so native GenAI attributes take precedence over mapped values.
 - AI SDK 7 spans with supported `gen_ai.operation.name` values now receive FI span kinds when `operation.name` is absent. `ai.rerank` and `ai.rerank.doRerank` map to `RERANKER`.
 - Tool-message conversion reads AI SDK 5+ `input` and `output` fields, with `args` and `result` fallbacks. It emits one message per tool result and preserves available tool-call IDs in output `tool_calls`.
-- When `FI_HIDE_ERROR_DETAILS` is unset or empty, input/output, message or text hiding flags also hide error details. `FI_HIDE_INPUT_IMAGES` alone does not trigger this. A set `FI_HIDE_ERROR_DETAILS` takes precedence: `true`, `1`, `yes`, `on` or an unrecognised value hides error details, and `false`, `0`, `no` or `off` keeps them.
+- When `FI_HIDE_ERROR_DETAILS` is unset or invalid, input/output, message or text hiding flags also hide error details. `FI_HIDE_INPUT_IMAGES` alone does not trigger this. Explicit `FI_HIDE_ERROR_DETAILS=true` or `false` takes precedence.
 
 ### Runtime
 - The package root is now Node.js-only. Importing it also loads auto-instrumentation and `@traceai/fi-core`, even when using only the manual processors.
