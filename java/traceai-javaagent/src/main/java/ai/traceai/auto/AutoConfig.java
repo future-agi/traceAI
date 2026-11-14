@@ -14,6 +14,8 @@ public final class AutoConfig {
         "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS");
     /** Hide switches already reported in this JVM: one warning per variable, however often the configuration is resolved. */
     private static final Set<String> HIDE_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Config file warnings already printed in this JVM: one per file and cause, however often the configuration is resolved. */
+    private static final Set<String> FILE_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** The hide switches that are on. */
     private final Set<String> hidden;
     final double sampleRate;
@@ -30,8 +32,13 @@ public final class AutoConfig {
     static AutoConfig resolve(Map<String, ?> overrides, Map<String, String> environment, Path workingDirectory) {
         Map<String, String> result = new LinkedHashMap<>();
         String path = String.valueOf(overrides.containsKey("config_file") ? overrides.get("config_file") : overrides.containsKey("FI_CONFIG_FILE") ? overrides.get("FI_CONFIG_FILE") : environment.getOrDefault("FI_CONFIG_FILE", "futureagi.toml"));
+        // A config file that is there but cannot be used is reported, never dropped without a word; none of its settings apply.
+        List<String> lines = List.of();
+        try { lines = Files.readAllLines(Path.of(path)); }
+        catch (java.nio.charset.CharacterCodingException error) { fileNotUsed(path, "it is not valid UTF-8 and could not be decoded"); }
+        catch (Exception error) { fileNotUsed(path, "it could not be read"); }
         try {
-            for (String line : Files.readAllLines(Path.of(path))) {
+            for (String line : lines) {
                 line = stripComment(line).trim();
                 if (line.isEmpty() || line.startsWith("[")) continue;
                 String[] pair = line.split("=", 2); if (pair.length != 2) continue;
@@ -87,6 +94,15 @@ public final class AutoConfig {
         result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_SAMPLE_RATE", "1.0"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
         result.put("FI_CONFIG_FILE", path);
         return new AutoConfig(result, credentialValues);
+    }
+    /**
+     * Reports a config file that is there but cannot be used: once per file and cause in this JVM, by its path and never
+     * by its content. A path with no regular file behind it (a file that is not there, a directory) is not reported.
+     */
+    private static void fileNotUsed(String path, String cause) {
+        try { if (!Files.isRegularFile(Path.of(path))) return; } catch (RuntimeException error) { return; }
+        String message = "[traceai-auto] Config file " + path + " is not used: " + cause + ", so none of its settings apply";
+        if (FILE_WARNED.add(message)) System.err.println(message);
     }
     /** fi's named-profile files, kept as separate atomic sources even across project/user layers. */
     private static List<Map<String, String>> fiProfiles(Map<String, String> environment, String profile, Path directory) {
