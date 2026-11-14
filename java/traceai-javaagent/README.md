@@ -111,13 +111,18 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_HIDE_INPUT_IMAGES` | `false`; omit image and file inputs while keeping text parts. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent. |
 
-A `FI_HIDE_*` switch, its `init` option or its `futureagi.toml` setting reads
-`true`, `1`, `yes` or `on` as hide and `false`, `0`, `no` or `off` as show,
-ignoring case and surrounding spaces; a blank value counts as not set. Any other
-value hides that content and prints one warning that names the variable, so a
-mistyped switch never leaves content visible. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG`
-and `OTEL_SDK_DISABLED` are not hide switches: they are on only for `true`, in
-any letter case.
+Each `FI_HIDE_*` switch in the table above, its `init` option or its
+`futureagi.toml` setting (`hide_inputs` and so on) reads `true`, `1`, `yes` or
+`on` as hide and `false`, `0`, `no` or `off` as show, ignoring case and
+surrounding spaces; a blank value counts as not set. Any other value hides that
+content and prints one warning that names the variable and the accepted values,
+so a mistyped switch never leaves content visible. In `futureagi.toml` a hide
+value may be a boolean, a number, a string in double or single quotes, or a bare
+word (`hide_inputs = on`); a hide line whose value cannot be decoded is kept as
+written, so it hides with that warning instead of being skipped. A `FI_HIDE_*`
+variable that is not in the table is not read: any value of it does nothing and
+prints nothing. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG` and `OTEL_SDK_DISABLED` are
+not hide switches: they are on only for `true`, in any letter case.
 
 ```toml
 # futureagi.toml (a flat subset: strings, booleans, numbers, one-line string arrays)
