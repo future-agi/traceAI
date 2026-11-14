@@ -11,6 +11,7 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { getAttributesFromContext, REDACTED_VALUE, rememberSpanValueLimit, type TraceConfigOptions } from "@traceai/fi-core";
+import * as fiCore from "@traceai/fi-core";
 import { mapGenkitAttributes } from "./mapping";
 import {
   type ContentPolicy,
@@ -212,6 +213,22 @@ function isGlobalTracerProvider(provider: unknown): boolean {
   }
 }
 
+// A @traceai/fi-core release without this mark keeps its own export behaviour.
+const rememberFITracerSpan = (fiCore as { rememberFITracerSpan?: (context: object) => void }).rememberFITracerSpan;
+
+/**
+ * Converted spans are first-party traceAI spans. Marking the native span context
+ * makes the Future AGI export boundary treat the copy like an FI tracer span, so
+ * the session and user ids it carries export as set for Sessions grouping.
+ */
+function markFIAuthored(ctx: SpanContext): void {
+  try {
+    if (typeof rememberFITracerSpan === "function" && ctx && typeof ctx === "object") rememberFITracerSpan(ctx);
+  } catch {
+    // The span is still exported; its grouping keys then keep the credential name rule.
+  }
+}
+
 /** Build the sdk-trace-base 2.x view of a span with new attributes and the Future AGI resource. */
 export function toExportableSpan(
   span: GenkitReadableSpan,
@@ -220,6 +237,7 @@ export function toExportableSpan(
   privacy: ExportPrivacy = {},
 ): ExportableSpan {
   const ctx = span.spanContext();
+  markFIAuthored(ctx);
   let parentSpanContext = span.parentSpanContext;
   const parentSpanId = parentSpanContext?.spanId ?? span.parentSpanId;
   if (!parentSpanContext && parentSpanId) {
