@@ -2,7 +2,7 @@
 
 Zero-code tracing for Java 17+ applications. Add one `-javaagent` flag and the agent:
 
-* traces AI provider HTTP calls made through the JDK `java.net.http.HttpClient` and OkHttp 3.14+ (OpenAI-compatible APIs, Anthropic, Gemini/Vertex AI, Cohere, Bedrock JSON APIs, Ollama, Deepgram, ElevenLabs, AssemblyAI, Cartesia and reranking APIs), including streaming;
+* traces AI provider HTTP calls made through the JDK `java.net.http.HttpClient` and OkHttp (OpenAI-compatible APIs, Anthropic, Gemini/Vertex AI, Cohere, Bedrock JSON APIs, Ollama, Deepgram, ElevenLabs, AssemblyAI, Cartesia and reranking APIs), including streaming. OkHttp is tested with versions 3.14.9, 4.12.0 and 5.0.0 only; see [Limitations](#limitations);
 * sends only those spans to Future AGI, with credentials and media scrubbed.
 
 The application's own OpenTelemetry setup is left alone. The agent does not register a global provider, and it never wraps, copies or changes the application's providers, span processors, exporters or spans. Spans that the application creates, including spans from the `traceai-java-*` wrappers, go only where the application sends them. On Java 8 to 16 the agent prints one line and the application starts untraced.
@@ -60,7 +60,7 @@ If the agent started with `-javaagent` but without keys, a later `init(Map.of("a
 * **No duplicates under library spans:** a call made while an LLM, EMBEDDING, RERANKER or GUARDRAIL span is the active span (for example inside a `traceai-java-*` wrapper call) is not traced again. The agent reads only the active span: a call under a plain span, such as an HTTP client span below a wrapper span, is traced. Use `try (var ignored = TraceAIAuto.suppress()) { ... }` to skip calls explicitly.
 * **Attribute limits:** when a span has more attributes than the host limit allows, identity, outcome, model, usage and timing attributes are kept first, then output, then the newest input. `traceai.capture.dropped_content_count` records how many content attributes were left out.
 
-SDKs such as openai-java, anthropic-java, google-genai, LangChain4j and Spring AI are traced when they send requests through the JDK HttpClient or OkHttp. The agent does not wrap SDK clients. The existing wrappers keep working and `doctor` reports them as `manual`:
+The agent traces at the HTTP client, not at the SDK. A call from an SDK such as openai-java, anthropic-java, google-genai, LangChain4j or Spring AI is traced when the SDK sends it through the JDK HttpClient, or through OkHttp in one of the tested versions (see [Limitations](#limitations)). The tests drive those two HTTP clients directly; they do not run the SDKs themselves. The agent does not wrap SDK clients. The existing wrappers keep working and `doctor` reports them as `manual`:
 
 ```java
 new ai.traceai.openai.TracedOpenAIClient(client, tracer);
@@ -68,7 +68,7 @@ new ai.traceai.langchain4j.TracedChatLanguageModel(model, tracer, "openai");
 new ai.traceai.spring.TracedChatModel(model, tracer, "openai");
 ```
 
-With `TraceAI.init(...)` and Future AGI keys beside `-javaagent`, the wrappers' own exporter sends each wrapper span once, and the agent does not trace the call inside it again.
+With `TraceAI.init(...)` and Future AGI keys beside `-javaagent`, the wrappers' own exporter sends each wrapper span once. The agent does not trace the call inside a wrapper span again when that wrapper span is the current span on the thread that sends the HTTP call. Otherwise the same call can be traced twice, once by the wrapper and once by the agent: for example when an SDK sends the request on its own executor thread, where the wrapper span is not current, or when another span, such as an HTTP client span, is current below the wrapper span. A call that the agent skips this way reaches Future AGI only as the wrapper span, through the wrappers' own exporter.
 
 ## Privacy
 
@@ -133,14 +133,15 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 
 ## Limitations
 
-* This release traces AI calls made through the JDK HttpClient and OkHttp 3.x. Apache HttpClient, Reactor Netty (Spring WebClient), the AWS SDK v2 clients and gRPC clients are not covered yet, nor are WebSockets and native clients. OkHttp is tested with 3.14.9; 4.x and 5.x are not yet verified.
+* This release traces AI calls made through the JDK HttpClient and OkHttp. Apache HttpClient, Reactor Netty (Spring WebClient), the AWS SDK v2 clients and gRPC clients are not covered yet, nor are WebSockets and native clients.
+* OkHttp is tested with three versions: 3.14.9; 4.12.0 (with Okio 3.6.0 and Kotlin 1.8.21); and 5.0.0 (the `okhttp-jvm` artifact, with Okio 3.15.0 and Kotlin 2.2.0). On each, the tests send a chat call, a streamed call and an asynchronous streamed call through an `OkHttpClient` built by the application. Other OkHttp versions are not verified. OkHttp older than 3.14 is not traced; the application runs unchanged (tested with 3.8.1).
 * OkHttp is traced when it is loaded by the system class loader, as with `java -cp` or a plain `-jar` application. When OkHttp sits in a nested or child class loader (Spring Boot executable jars with `BOOT-INF/lib`, WAR files in an application server, Quarkus), OkHttp calls may not be traced; the JDK HttpClient is unaffected. This has not been tested yet.
 * No server spans for servlet or Spring MVC yet, and no automatic wrapping of SDK clients.
 * The agent needs FI keys to start. It does not yet export to an application-owned OpenTelemetry destination without them.
 * `FI_HIDE_ERROR_DETAILS` is not yet honored by the agent.
 * Export is OTLP/HTTP JSON in bounded batches, without disk spooling. It has been tested against a local mock collector only.
 * Binary Bedrock event streams record request information and status only.
-* The agent stays off, with one warning, when the OpenTelemetry Java agent runs in the same JVM, whichever `-javaagent` comes first; the application runs unchanged. When the OpenTelemetry Java agent is listed after this one, the warning appears at the application's first HTTP call, before anything is traced. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
+* The agent stays off, with one warning, when the OpenTelemetry Java agent runs in the same JVM, whichever `-javaagent` comes first; the application runs unchanged. When the OpenTelemetry Java agent is listed after this one, the warning appears at the latest when the application first sends a request through the JDK HttpClient or first builds an OkHttp client, before anything is traced; an OkHttp client built from then on gets none of this agent's interceptors. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
 * Credentials that an application transforms before sending (re-encoded, split, numeric) are not matched by value; register them with `TraceAIAuto.registerSecret` or use the hide controls.
 
 ## Tests
@@ -149,4 +150,4 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify
 ```
 
-This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers, beside the existing wrappers' own exporter and beside the OpenTelemetry Java agent. No real provider or Future AGI request is made. The Java SDK's full-reactor runs skip the child-JVM tests with `-Dtraceai.javaagent.skipITs=true`; they run in the agent's own workflow.
+This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers, on OkHttp 3.14.9, 4.12.0 and 5.0.0, beside the existing wrappers' own exporter and beside the OpenTelemetry Java agent. No real provider or Future AGI request is made. The Java SDK's full-reactor runs skip the child-JVM tests with `-Dtraceai.javaagent.skipITs=true`; they run in the agent's own workflow.
