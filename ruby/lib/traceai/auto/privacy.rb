@@ -395,11 +395,14 @@ module TraceAI
         end
       end
       def hide_errors?(config)
-        return config.truthy?('hide_error_details') unless config['hide_error_details'].nil?
-        %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text].any? { |k| config.truthy?(k) }
+        # A recognised hide_error_details value wins, and an unrecognised one hides.
+        # When it is not set, any content hide switch also hides error text.
+        explicit = config.hide_setting('hide_error_details')
+        return explicit unless explicit.nil?
+        %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text].any? { |k| config.hidden?(k) }
       end
       def mask(attributes, config, operation = nil)
-        hide = ->(key) { config.truthy?(key) }
+        hide = ->(key) { config.hidden?(key) }
         attributes.each_with_object({}) do |(k, v), out|
           next if (k == 'input.mime_type' && hide.call('hide_inputs')) || (k == 'output.mime_type' && hide.call('hide_outputs'))
           input = k == 'input' || k.start_with?('input.', 'gen_ai.input.')

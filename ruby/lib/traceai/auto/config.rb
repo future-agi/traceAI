@@ -6,6 +6,12 @@ module TraceAI
     class Config
       DEFAULTS = {'base_url' => 'https://api.futureagi.com', 'project_type' => 'observe', 'wire_capture' => true,
                   'wire_max_body_bytes' => 4_194_304, 'sample_rate' => 1.0, 'auto_debug' => false}.freeze
+      # The hide switches the agent reads: an FI_HIDE_* variable, the init option
+      # or the config file key of the same name.
+      HIDE_SWITCHES = %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text
+                         hide_input_images hide_embedding_vectors hide_llm_invocation_parameters hide_error_details].freeze
+      HIDE_VALUES = {'true' => true, '1' => true, 'yes' => true, 'on' => true,
+                     'false' => false, '0' => false, 'no' => false, 'off' => false}.freeze
       attr_reader :values, :warnings, :credential_values
       # Config values are UTF-8 whatever the process locale. Under LANG=C, Ruby
       # tags environment values and paths as US-ASCII even when they hold UTF-8.
@@ -32,7 +38,9 @@ module TraceAI
           out[name.delete_prefix('FI_').downcase] = Config.utf8(v) if name.start_with?('FI_')
         end
         explicit = arguments.to_h { |k, v| [Config.utf8(k.to_s), v] }
-        @values = DEFAULTS.merge(file_values).merge(environment).merge(explicit)
+        # A blank hide switch is not set, so it does not replace a lower source's value.
+        set = ->(source) { source.reject { |key, value| HIDE_SWITCHES.include?(key) && Config.blank?(value) } }
+        @values = DEFAULTS.merge(file_values).merge(set.call(environment)).merge(set.call(explicit))
         # Credentials are one atomic pair per source, never independently merged.
         @warnings = []
         @credential_values = [explicit, environment, file_values].flat_map do |source|
@@ -60,6 +68,9 @@ module TraceAI
           @values['base_url'] = DEFAULTS['base_url']
           @warnings << 'config file base_url ignored: the key pair does not come from the same file'
         end
+        # Hide switches are read once, here, from the merged values, so a value that
+        # a higher source replaces is never reported.
+        @hidden = HIDE_SWITCHES.to_h { |key| [key, read_hide(key, @values[key])] }.freeze
         @warnings.freeze
         @warnings.each { |message| warn 'traceai-auto: ' + message } if announce
         @values['auto_debug'] = @values.delete('debug') if @values.key?('debug')
@@ -81,7 +92,12 @@ module TraceAI
         end.freeze
       end
       def [](key) = @values[key.to_s]
+      # Switches other than the hide switches: on only for true, in any letter case.
       def truthy?(key) = self[key] == true || self[key].to_s.downcase == 'true'
+      # A hide switch as read at startup: true (hide), false (show) or nil (not set).
+      def hide_setting(key) = @hidden[key.to_s]
+      # True when the named hide switch hides its content.
+      def hidden?(key) = hide_setting(key) == true
       def list(key)
         v = self[key]
         v.is_a?(Array) ? v.map(&:to_s) : v.to_s.split(',').map(&:strip).reject(&:empty?)
@@ -98,7 +114,24 @@ module TraceAI
       rescue StandardError
         {}
       end
+      def self.blank?(value) = value.nil? || (value.instance_of?(String) && utf8(value).strip.empty?)
       private
+      # Reads one hide switch, ignoring case and surrounding spaces: true, 1, yes
+      # and on hide; false, 0, no and off show; nil when the value is blank (not
+      # set). Any other value hides, because a hide switch someone set must never
+      # silently do nothing. The warning names the variable and never the value.
+      def read_hide(key, value)
+        text = begin
+          Config.utf8(value.to_s).strip.downcase
+        rescue StandardError
+          nil
+        end
+        return nil if text == ''
+        return HIDE_VALUES[text] if HIDE_VALUES.key?(text)
+        @warnings << "FI_#{key.upcase} has a value that is not recognised, so this content is hidden; " \
+                     'use true, 1, yes or on to hide it, or false, 0, no or off to show it'
+        true
+      end
       QUOTED_STRING = /"(?:[^"\\\x00-\x1f]|\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4}))*"/.freeze
       ESCAPES = {'"' => '"', '\\' => '\\', '/' => '/', 'b' => "\b", 'f' => "\f", 'n' => "\n", 'r' => "\r", 't' => "\t"}.freeze
       def parse_string(raw)
