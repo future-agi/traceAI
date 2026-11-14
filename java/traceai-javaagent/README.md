@@ -3,25 +3,18 @@
 Zero-code tracing for Java 17+ applications. Add one `-javaagent` flag and the agent:
 
 * traces AI provider HTTP calls made through the JDK `java.net.http.HttpClient` and OkHttp 3.14+ (OpenAI-compatible APIs, Anthropic, Gemini/Vertex AI, Cohere, Bedrock JSON APIs, Ollama, Deepgram, ElevenLabs, AssemblyAI, Cartesia and reranking APIs), including streaming;
-* forwards the spans your application already creates with the OpenTelemetry SDK, including spans from the `traceai-java-*` wrappers;
-* scrubs credentials and media from everything it exports.
+* sends only those spans to Future AGI, with credentials and media scrubbed.
 
-The application keeps its own OpenTelemetry setup, exporters and providers. On Java 8 to 16 the agent prints one line and the application starts untraced.
+The application's own OpenTelemetry setup is left alone. The agent does not register a global provider, and it never wraps, copies or changes the application's providers, span processors, exporters or spans. Spans that the application creates, including spans from the `traceai-java-*` wrappers, go only where the application sends them. On Java 8 to 16 the agent prints one line and the application starts untraced.
 
 ## Quickstart
 
-1. Get the agent jar. It is published to Maven Central as `com.futureagi:traceai-javaagent` with the Java SDK, at the same version as `traceai-bom`:
-
-   ```sh
-   VERSION=...  # the Java SDK release
-   curl -fLO "https://repo1.maven.org/maven2/com/futureagi/traceai-javaagent/$VERSION/traceai-javaagent-$VERSION.jar"
-   ```
-
-   Until it appears there, build it from this repository (Maven and JDK 17+):
+1. Build the agent jar from this repository (Maven and JDK 17+). It is not on Maven Central yet: it is held from the Java SDK releases until its first release is approved.
 
    ```sh
    mvn -B -f java/pom.xml -pl traceai-javaagent -am -DskipTests package
    # The jar is java/traceai-javaagent/target/traceai-javaagent-<version>.jar
+   VERSION=...  # the <version> in that file name
    ```
 
 2. Run your application with the agent and your Future AGI keys:
@@ -54,14 +47,17 @@ TraceAIAuto.init();
 // Or: TraceAIAuto.init(Map.of("project_name", "checkout", "sample_rate", 0.25));
 ```
 
-`init()` attaches the agent dynamically. Some JVM policies forbid that; the agent then warns once and the application keeps running. Prefer `-javaagent` in production. Dynamic attachment cannot add an interceptor to an OkHttp client that was already built.
+`init()` attaches the agent dynamically. Some JVM policies forbid that; the agent then warns once and the application keeps running. On JDK 21 and later the JVM prints its own warning about a dynamically loaded agent unless the application starts with `-XX:+EnableDynamicAgentLoading`, and later JDKs are expected to refuse dynamic loading by default. Prefer `-javaagent` in production; with it, `init()` attaches nothing. Dynamic attachment cannot add an interceptor to an OkHttp client that was already built.
+
+If the agent started with `-javaagent` but without keys, a later `init(Map.of("api_key", ..., "secret_key", ...))` starts it.
 
 ## What gets traced
 
 * **Spans:** one CLIENT span per provider call, created when the response completes, with the parent taken from the request's context. HTTP and transport errors are `ERROR` spans. Messages, tool calls, token usage, model, finish reasons and streaming timing (`gen_ai.response.time_to_first_chunk`, `gen_ai.response.time_to_first_text`) follow the shared traceAI conventions. Context from `ContextAttributes` (session, user, metadata, tags) is attached, subject to the privacy rules below.
+* **Only the agent's spans:** Future AGI receives the agent's own spans and nothing else. A call made under one of your spans gets that span as its parent, but your span itself is not sent.
 * **Formats:** every format in the shared wire catalog (`spec/auto-instrumentation/wire-protocols.json`), recognized by protocol rather than client brand, so OpenAI-compatible gateways work too.
 * **Audio:** binary and multipart bodies are counted, never buffered; only file name, type, size and bounded text fields are kept.
-* **No duplicates:** calls made under an existing LLM, EMBEDDING, RERANKER or GUARDRAIL span (for example from a `traceai-java-*` wrapper) are not traced again. Use `try (var ignored = TraceAIAuto.suppress()) { ... }` to skip calls explicitly.
+* **No duplicates under library spans:** a call made while an LLM, EMBEDDING, RERANKER or GUARDRAIL span is the active span (for example inside a `traceai-java-*` wrapper call) is not traced again. The agent reads only the active span: a call under a plain span, such as an HTTP client span below a wrapper span, is traced. Use `try (var ignored = TraceAIAuto.suppress()) { ... }` to skip calls explicitly.
 * **Attribute limits:** when a span has more attributes than the host limit allows, identity, outcome, model, usage and timing attributes are kept first, then output, then the newest input. `traceai.capture.dropped_content_count` records how many content attributes were left out.
 
 SDKs such as openai-java, anthropic-java, google-genai, LangChain4j and Spring AI are traced when they send requests through the JDK HttpClient or OkHttp. The agent does not wrap SDK clients. The existing wrappers keep working and `doctor` reports them as `manual`:
@@ -72,21 +68,24 @@ new ai.traceai.langchain4j.TracedChatLanguageModel(model, tracer, "openai");
 new ai.traceai.spring.TracedChatModel(model, tracer, "openai");
 ```
 
+With `TraceAI.init(...)` and Future AGI keys beside `-javaagent`, the wrappers' own exporter sends each wrapper span once, and the agent does not trace the call inside it again.
+
 ## Privacy
 
-Every exported span, including forwarded application spans, passes one export-time privacy boundary based on the shared catalog (`privacy.json`, catalog version 3, checked byte for byte against `spec/auto-instrumentation`):
+Every span the agent exports passes one export-time privacy boundary based on the shared catalog (`privacy.json`, catalog version 3, checked byte for byte against `spec/auto-instrumentation`):
 
 * Credential-named headers, query parameters, JSON fields and attributes (`authorization`, `api_key`, `client_secret`, `x-amz-signature`, session ids and similar) become `<redacted>`. Usage and timing names such as `max_tokens` or `time_to_first_token` are metrics, not credentials, unless they also carry a credential marker.
+* The session id you set with `ContextAttributes.usingSession` is an identifier, not a credential: it is exported as set under `session.id` and `gen_ai.conversation.id`. Known secrets and credential-shaped values inside it are still redacted. Other session-like names keep their redaction.
 * Credential values are redacted wherever they appear, even without a name: provider API keys, AWS access keys, JWTs, `Bearer`/`Basic` values and private-key blocks.
 * Credentials sent on an instrumented request, configured FI keys and values of credential-named environment variables are remembered process-wide and scrubbed from every later export, including provider error messages. `TraceAIAuto.registerSecret(value)` adds others (eight characters or longer).
-* Inline media is omitted: base64 images and audio, data URIs, and payloads next to `audio/`, `image/` or `video/` MIME types. Declared usage counters such as `gen_ai.usage.input_tokens.audio` stay numbers.
+* Inline media is omitted: base64 images and audio, data URIs, payloads next to `audio/`, `image/` or `video/` MIME types, and payloads of parts declared as images or video by type (`image`, `input_image`, `image_url`, `video`, `input_video`) or modality. Declared usage counters such as `gen_ai.usage.input_tokens.audio` stay numbers.
 * If sanitizing fails or a bound is exceeded, the span is exported with identity and timing only.
 
 Content capture is on by default. Use the hide controls below to restrict it.
 
 ## Configuration
 
-Precedence: code arguments, then environment, then `futureagi.toml`, then the fi profile, then defaults. `FI_API_KEY` and `FI_SECRET_KEY` must come as a complete pair from one source; an incomplete source is ignored with one warning. Named fi profiles (`FI_PROFILE`, default `default`) are read from the nearest `.fi/config.toml`, then `$XDG_CONFIG_HOME/fi/config.toml` or `~/.config/fi/config.toml`. Initialization happens once per process; later `init(options)` calls return the existing provider.
+Precedence: code arguments, then environment, then `futureagi.toml`, then the fi profile, then defaults. `FI_API_KEY` and `FI_SECRET_KEY` must come as a complete pair from one source; an incomplete source is ignored with one warning. Named fi profiles (`FI_PROFILE`, default `default`) are read from the nearest `.fi/config.toml`, then `$XDG_CONFIG_HOME/fi/config.toml` or `~/.config/fi/config.toml`. Initialization happens once per process: once the agent has started, later `init(options)` calls return the existing provider. A start without keys does not count, so a later `init` with keys can still start the agent.
 
 | Variable | Default / behavior |
 |---|---|
@@ -130,17 +129,18 @@ java -javaagent:traceai-javaagent-$VERSION.jar -jar traceai-javaagent-$VERSION.j
 
 In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses are `instrumented`, `pending`, `not_installed`, `missing_instrumentor`, `disabled`, `manual` and `failed`.
 
-`TraceAIAuto.flush()` and `shutdown()` wait up to five seconds by default (overloads take a `Duration`). A shutdown hook drains spans on normal exit. An application SDK's `forceFlush()` does not flush the agent's forwarding queue; call `TraceAIAuto.flush()` after it when you need both.
+`TraceAIAuto.flush()` and `shutdown()` wait up to five seconds by default (overloads take a `Duration`). A shutdown hook drains spans on normal exit. The agent's export queue is separate from your SDK's: your SDK's `forceFlush()` does not flush it, so call `TraceAIAuto.flush()` as well when you need both.
 
 ## Limitations
 
-* Only the JDK HttpClient and OkHttp are covered. Apache HttpClient, Reactor Netty (Spring WebClient), the AWS SDK v2 default clients, gRPC, WebSockets and native clients are not. OkHttp is tested with 3.14.9; 4.x and 5.x are not yet verified.
+* This release traces AI calls made through the JDK HttpClient and OkHttp 3.x. Apache HttpClient, Reactor Netty (Spring WebClient), the AWS SDK v2 clients and gRPC clients are not covered yet, nor are WebSockets and native clients. OkHttp is tested with 3.14.9; 4.x and 5.x are not yet verified.
+* OkHttp is traced when it is loaded by the system class loader, as with `java -cp` or a plain `-jar` application. When OkHttp sits in a nested or child class loader (Spring Boot executable jars with `BOOT-INF/lib`, WAR files in an application server, Quarkus), OkHttp calls may not be traced; the JDK HttpClient is unaffected. This has not been tested yet.
 * No server spans for servlet or Spring MVC yet, and no automatic wrapping of SDK clients.
 * The agent needs FI keys to start. It does not yet export to an application-owned OpenTelemetry destination without them.
 * `FI_HIDE_ERROR_DETAILS` is not yet honored by the agent.
-* Export is OTLP/HTTP JSON in bounded batches, without disk spooling. It has been tested against a local mock collector.
+* Export is OTLP/HTTP JSON in bounded batches, without disk spooling. It has been tested against a local mock collector only.
 * Binary Bedrock event streams record request information and status only.
-* Interoperability with the OpenTelemetry Java agent is not yet supported. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
+* The agent stays off, with one warning, when the OpenTelemetry Java agent runs in the same JVM; the application runs unchanged. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
 * Credentials that an application transforms before sending (re-encoded, split, numeric) are not matched by value; register them with `TraceAIAuto.registerSecret` or use the hide controls.
 
 ## Tests
@@ -149,4 +149,4 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify
 ```
 
-This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers. No real provider or Future AGI request is made.
+This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers, beside the existing wrappers' own exporter and beside the OpenTelemetry Java agent. No real provider or Future AGI request is made. The Java SDK's full-reactor runs skip the child-JVM tests with `-Dtraceai.javaagent.skipITs=true`; they run in the agent's own workflow.

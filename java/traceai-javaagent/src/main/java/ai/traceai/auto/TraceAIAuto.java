@@ -68,7 +68,20 @@ public final class TraceAIAuto {
     private static final Map<String, String> STATUS = new java.util.concurrent.ConcurrentHashMap<>();
 
     // Object keeps the public descriptor identical before and after shading the private SDK.
+    /**
+     * Starts the agent from code. Without -javaagent it attaches itself to this JVM. On JDK 21 and
+     * later the JVM prints its own warning for a dynamically loaded agent unless the application
+     * starts with -XX:+EnableDynamicAgentLoading, and later JDKs are expected to refuse it by default,
+     * so prefer -javaagent in production.
+     * @return the agent's tracer provider, or null when the agent stays off
+     */
     public static Object init() { return init(Map.of()); }
+    /**
+     * Like {@link #init()}, with options that take precedence over the environment and config files.
+     * After a -javaagent start without keys, a call that supplies api_key and secret_key starts the agent.
+     * @param options configuration such as api_key, secret_key or project_name
+     * @return the agent's tracer provider, or null when the agent stays off
+     */
     public static Object init(Map<String, ?> options) {
         try { start(options, null); } catch (Throwable ignored) { warn("Initialization failed; application runs without auto-instrumentation"); }
         RuntimeState state = RUNTIME.get(); return state == null ? null : state.provider();

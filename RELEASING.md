@@ -52,6 +52,8 @@ Two manifests are tracked but intentionally **never published**:
 
 Java publishing refuses legacy `ai.traceai` coordinates and SNAPSHOT versions. Merge the Java namespace/release-profile PR before expecting Central delivery. The release workflow will not claim that a legacy-coordinate build is a Central release.
 
+A Java reactor module listed under `hold_artifacts` in `.github/release/config.json` is built and tested by the Java release but not deployed: its own `release` profile sets `skipPublishing` for the Central plugin, and the release plan leaves it out of the Central check. The zero-code agent, `com.futureagi:traceai-javaagent`, is held this way until its first release is approved. To publish it, remove its `hold_artifacts` entry and the `release` profile in `java/traceai-javaagent/pom.xml`.
+
 ## One-time maintainer setup
 
 This is a checklist, not something the workflow changes for you. Never paste secret values into issues, PRs, logs or this file.
