@@ -101,7 +101,7 @@ def _trace_config(file_values: Mapping[str, Any], path: Optional[Path], environ:
     Environment variables keep precedence over the file: TraceConfig reads them itself, exactly
     as it does without the agent.
     """
-    from fi_instrumentation.instrumentation.config import TraceConfig
+    from fi_instrumentation.instrumentation.config import TraceConfig, _parse_switch
 
     kwargs: Dict[str, Any] = {}
     for f in fields(TraceConfig):
@@ -111,8 +111,12 @@ def _trace_config(file_values: Mapping[str, Any], path: Optional[Path], environ:
             sources[key] = f"env {env}"
         elif key in file_values:
             value = file_values[key]
-            if get_args(f.type)[:1] == (bool,) and isinstance(value, str) and value.strip().lower() in _TRUE + _FALSE:
-                value = _as_bool(value, False)
+            if get_args(f.type)[:1] == (bool,) and isinstance(value, str):
+                # The same rule as the environment: an unrecognised value hides, and an
+                # empty one is unset.
+                value = _parse_switch(value, f"{key} in {path}", None)
+                if value is None:
+                    continue
             kwargs[key] = value
             sources[key] = f"file {path}"
     try:
