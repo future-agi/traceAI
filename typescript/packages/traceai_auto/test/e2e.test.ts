@@ -120,10 +120,13 @@ test("missing credentials fails open with exactly one warning", async () => {
   expect(output.stderr.split("\n").filter(Boolean)).toHaveLength(1);
   expect(output.stderr).toContain("auto-instrumentation is disabled");
 });
-test.each(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"])("deduplicates active FI-wrapped %s library spans", async kind => {
-  // The application's own model span stays with its own provider.
-  await child("context.cjs", ["--import", "@traceai/auto/register"], { KIND: kind });
-  expect(wireSpans()).toHaveLength(0); expect(allSpans()).toHaveLength(0); expect(requests).toBe(1);
+test.each(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"])("an application's own active FI-wrapped %s span does not hide the call from Future AGI", async kind => {
+  // The application's model span stays with its own provider, so the wire layer
+  // does not yield to it: Future AGI receives the call once, as a wire span.
+  const output = await child("context.cjs", ["--import", "@traceai/auto/register"], { KIND: kind });
+  const parent = JSON.parse(output.stdout.trim());
+  expect(wireSpans()).toHaveLength(1); expect(allSpans()).toHaveLength(1); expect(requests).toBe(1);
+  expect(wireSpans()[0].parentSpanId).toBe(parent.spanId);
 });
 test("CHAIN spans parent wire calls, including context attributes and explicit timing", async () => {
   const output = await child("context.cjs");
