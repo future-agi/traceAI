@@ -132,6 +132,11 @@ sample_rate = 0.25
 debug = false
 ```
 
+A config file that exists but cannot be read, or that is not valid UTF-8, is
+not used: none of its settings apply (hide settings included), and one warning
+names the file and what failed, never its content; a file that does not exist
+prints nothing.
+
 ## Doctor and lifecycle
 
 ```sh
