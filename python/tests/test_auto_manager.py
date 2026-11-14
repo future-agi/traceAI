@@ -1480,6 +1480,22 @@ def test_a_value_cut_by_the_attribute_length_limit_keeps_no_base64_run_at_future
     assert span.attributes["input.value"] == prefix + "<omitted: 27 base64 chars>"
 
 
+def test_a_provider_whose_length_limits_cannot_be_read_is_named_in_one_debug_line(caplog):
+    from opentelemetry.sdk.trace import SpanLimits
+
+    class _NoLimits:
+        """A provider that does not show the SDK's span limits."""
+
+    with caplog.at_level(logging.DEBUG, logger="fi_instrumentation.auto"):
+        # The cut rule stays off for it, as for a provider with no limit.
+        assert _manager._value_limits(_NoLimits()) == (None, None)
+        readable = TracerProvider(span_limits=SpanLimits(max_span_attribute_length=8))
+        assert _manager._value_limits(readable)[0] == 8
+    lines = [record.getMessage() for record in caplog.records if "length limits" in record.getMessage()]
+    assert len(lines) == 1, lines
+    assert "_NoLimits" in lines[0] and "not checked as cut text" in lines[0]
+
+
 def test_an_integration_span_keeps_its_own_session_id_at_future_agi(fresh_state):
     app_provider, _ = _application_provider()
     fi_exporter = InMemorySpanExporter()

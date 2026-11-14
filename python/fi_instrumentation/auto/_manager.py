@@ -543,14 +543,26 @@ def _scope_name(span: ReadableSpan) -> str:
 def _value_limits(provider: Any) -> Tuple[Optional[int], Optional[int]]:
     """A provider's attribute value length limits: for span attributes, then for event and link
     attributes (OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT and OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT, or its
-    SpanLimits). None where it has no limit, or does not show one."""
+    SpanLimits). None where it has no limit, or does not show one; a provider that does not show
+    them is named in one debug line, since a value it cuts is then not checked as cut text."""
     limits = getattr(provider, "_span_limits", None)
+    missing = object()
+    unread: List[str] = []
 
     def limit(name: str) -> Optional[int]:
-        value = getattr(limits, name, None)
-        return value if type(value) is int and value >= 0 else None
+        # A field that is missing, or neither a length nor None (no limit), is not read.
+        value = getattr(limits, name, missing)
+        if type(value) is int and value >= 0:
+            return value
+        if value is not None:
+            unread.append(name)
+        return None
 
-    return limit("max_span_attribute_length"), limit("max_attribute_length")
+    found = limit("max_span_attribute_length"), limit("max_attribute_length")
+    if unread:
+        logger.debug("traceAI: the attribute value length limits of this %s could not be read, so values it "
+                     "cuts are not checked as cut text for Future AGI", type(provider).__name__)
+    return found
 
 
 def _shown_exporter(processor: Any) -> Any:
