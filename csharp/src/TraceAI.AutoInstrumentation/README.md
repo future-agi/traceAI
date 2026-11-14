@@ -12,6 +12,12 @@ application needs only its own runtime.
 
 ### Option 1: install the NuGet package
 
+The package is first available on NuGet with the first NuGet release, which waits for
+the gated release process. Until it is published, `dotnet add package` cannot find it:
+use Option 2. The package is versioned together with FIInstrumentation (the
+`fi-instrumentation-otel` package): the hook embeds the SDK sources, so both are
+released at one version number.
+
 Add the package to the application project (or to any scratch project, to only fill
 the NuGet cache):
 
@@ -94,8 +100,10 @@ compiles the unchanged shared FI SDK sources for .NET 8 against its own pinned
 OpenTelemetry, so the SDK project's OpenTelemetry version matrix never changes the
 hook.
 
-The alternative **in-process** code entry point is (choose one entry point so
-lifecycle/diagnostic APIs run in the context that owns the agent):
+The alternative **in-process** code entry point needs a project reference to the
+source (`AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj`); `TraceAIAuto.Init()`
+is not available from the NuGet package, which carries no compile asset. Choose one
+entry point so lifecycle/diagnostic APIs run in the context that owns the agent:
 
 ```csharp
 using TraceAI.AutoInstrumentation;
