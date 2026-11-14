@@ -306,6 +306,13 @@ export function init(options: Options = {}): TracerProvider | undefined {
     if (route && !forwarding && config.propagateOutgoingAdapters === true && outgoingPolicy.valid && outgoingPolicy.mode !== "none") observeApplicationSpans(agent, options.provider);
     if (config.wireCapture && enabled("wire", config)) agent.removeObservation = observeTransports();
     agent.removeLibraries = enableLibraries(config, options, instrumentationProvider, agent.statuses, warn, processor);
+    // Genkit creates its spans with the global tracer provider. On the AI-only route
+    // the agent's provider is never global, so those spans stay with the application.
+    const genkit = route && !forwarding ? agent.statuses.find(status => status.name === "genkit") : undefined;
+    if (genkit?.status === "instrumented") {
+      genkit.status = "manual";
+      genkit.reason = "Genkit spans use the global tracer provider; set FI_FORWARD_APP_SPANS=true, or pass your provider to init() without an FI route, to send them";
+    }
     // Stay outside the installed mapping adapters: Genkit can shorten an SDK-
     // truncated value when it scrubs a local path or identity. Inspect the native
     // span first so that its detached export copy cannot erase that loss signal.
