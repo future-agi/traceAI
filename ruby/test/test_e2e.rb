@@ -341,6 +341,124 @@ class EndToEndTest < Minitest::Test
     assert_equal spans.find { |s| s.name == 'app-parent' }.span_id, wire.parent_span_id
   end
 
+  # Only an AI request (one the wire catalog matches) or an explicit init
+  # starts the agent. A request that is not an AI request, such as a secrets
+  # fetch or a health check at boot, starts nothing, so a later explicit
+  # init(provider:) is not refused and gets the wire spans.
+  def test_non_ai_request_at_boot_does_not_use_up_the_start
+    code = <<~RUBY
+      require 'net/http'
+      Net::HTTP.get(URI('#{@provider.url}/health'))
+      abort 'a request that is not an AI request started the agent' if TraceAI::Auto.provider || TraceAI::Auto.active?
+      require 'opentelemetry/sdk'
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      host = OpenTelemetry::SDK::Trace::TracerProvider.new
+      host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
+      abort 'supplied provider not used' unless TraceAI::Auto.init(provider: host, fi_export: true).equal?(host)
+      #{plain_code}
+      abort 'wire span missing from the supplied provider' unless memory.finished_spans.count { |s| s.attributes['traceai.capture.layer'] == 'wire' } == 1
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    refute_includes stderr, 'already initialized'
+    assert_chat_span(export_spans)
+  end
+
+  # The context helpers record their attributes without starting the agent. A
+  # helper call alone starts nothing, a later explicit init applies its
+  # settings, and a helper around an AI request still tags its wire span.
+  def test_context_helpers_alone_start_nothing
+    code = <<~RUBY
+      result = TraceAI::Auto.using_session('s1') do
+        TraceAI::Auto.using_user('u1') do
+          TraceAI::Auto.using_metadata({'tier' => 'gold'}) { TraceAI::Auto.with_attributes({'tag.tenant' => 'acme'}) { :block_result } }
+        end
+      end
+      abort 'helper changed the block result' unless result == :block_result
+      abort 'a context helper started the agent' if TraceAI::Auto.provider || TraceAI::Auto.active?
+      started = TraceAI::Auto.init(project_name: 'after-helpers')
+      abort 'init did not start the agent' unless TraceAI::Auto.active? && started.equal?(TraceAI::Auto.provider)
+      TraceAI::Auto.using_session('s2') do
+        #{plain_code}
+      end
+    RUBY
+    stdout, stderr, status = app(code, {'FI_PROJECT_NAME' => 'environment-project'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    refute_includes stderr, 'already initialized'
+    spans = export_spans
+    assert_equal 1, spans.length
+    span, resource = spans.first
+    assert_equal 'after-helpers', resource['project_name']
+    assert_equal 's2', attrs(span.attributes)['session.id']
+  end
+
+  # A helper that wraps the very first AI request does not start the agent
+  # itself; the request does, and its wire span still carries the context.
+  def test_context_helpers_around_the_first_ai_request_tag_its_wire_span
+    code = <<~RUBY
+      TraceAI::Auto.using_session('first-session') do
+        TraceAI::Auto.using_user('first-user') do
+          TraceAI::Auto.using_metadata({'tier' => 'gold'}) do
+            abort 'a context helper started the agent' if TraceAI::Auto.active?
+            #{plain_code}
+          end
+        end
+      end
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    a = assert_chat_span(export_spans)
+    assert_equal 'first-session', a['session.id']
+    assert_equal 'first-user', a['user.id']
+    assert_equal({'tier' => 'gold'}, JSON.parse(a['metadata']))
+  end
+
+  # The usual order in a web application: its initializer configures the
+  # OpenTelemetry SDK, which is when the agent attaches, and only then calls
+  # TraceAI::Auto.init. Before the first AI request that init still applies its
+  # settings and its supplied exporter.
+  def test_explicit_init_after_the_application_set_its_provider_applies_its_settings
+    code = <<~RUBY
+      require 'opentelemetry/sdk'
+      own = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      OpenTelemetry::SDK.configure { |c| c.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(own)) }
+      abort 'agent did not attach to the application provider' unless TraceAI::Auto.provider.equal?(OpenTelemetry.tracer_provider)
+      supplied = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      result = TraceAI::Auto.init(exporter: supplied, project_name: 'explicit-project', fi_export: true)
+      abort 'init left the application provider' unless result.equal?(OpenTelemetry.tracer_provider)
+      #{plain_code}
+      abort 'flush failed' unless TraceAI::Auto.flush
+      abort 'wire span missing from the supplied exporter' unless supplied.finished_spans.count { |s| s.attributes['traceai.capture.layer'] == 'wire' } == 1
+      abort 'wire span missing from the application exporter' unless own.finished_spans.count { |s| s.attributes['traceai.capture.layer'] == 'wire' } == 1
+    RUBY
+    stdout, stderr, status = app(code, {'FI_PROJECT_NAME' => 'environment-project'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    refute_includes stderr, 'already initialized'
+    spans = export_spans
+    assert_equal 1, spans.length
+    span, resource = spans.first
+    assert_equal 'chat gpt-4o-mini', span.name
+    assert_equal 'explicit-project', resource['project_name']
+  end
+
+  # A credential sent on a request made before the agent started is still
+  # learned, so a later AI span cannot echo it.
+  def test_credentials_on_a_request_made_before_the_agent_started_are_still_learned
+    key = 'test-earlier-request-credential-12345678'
+    reply = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini', choices: [{index: 0, message: {role: 'assistant', content: "echo #{key}"}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5})
+    @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, reply] }
+    code = <<~RUBY
+      require 'net/http'
+      health = Net::HTTP::Get.new('/health'); health['x-vault-token'] = '#{key}'
+      Net::HTTP.start('127.0.0.1', #{@provider.port}) { |http| http.request(health) }
+      abort 'a request that is not an AI request started the agent' if TraceAI::Auto.active?
+    RUBY
+    stdout, stderr, status = app(code + plain_code)
+    assert status.success?, stderr; assert_equal reply, stdout
+    a = assert_chat_span(export_spans)
+    assert_equal 'echo <redacted>', a['output.value']
+  end
+
   # Future AGI receives only AI spans. An application span without
   # gen_ai.span.kind, such as a database query, stays with the application.
   def test_application_span_with_db_statement_never_reaches_future_agi
