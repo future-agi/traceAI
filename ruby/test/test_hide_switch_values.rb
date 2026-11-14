@@ -135,7 +135,7 @@ class HideSwitchValuesTest < Minitest::Test
      "'off'" => [false, 0], 'off' => [false, 0], 'No' => [false, 0], "''" => [false, 0],
      "'maybe'" => [true, 1], 'maybe' => [true, 1], 'ture' => [true, 1],
      # So is a value the file reader cannot decode.
-     '"""on"""' => [true, 1], '"on' => [true, 1]}.each do |value, (hidden, warnings)|
+     '"on' => [true, 1]}.each do |value, (hidden, warnings)|
       File.write(file, "hide_inputs = #{value}\n")
       config, stderr = read('FI_CONFIG_FILE' => file)
       assert_equal hidden, hides?(config, 'hide_inputs'), value
@@ -181,12 +181,57 @@ class HideSwitchValuesTest < Minitest::Test
     assert_equal 1, config.warnings.length
     # The file is read as before: a line that is valid UTF-8 applies, the others are skipped.
     assert hides?(config, 'hide_outputs'), 'the line that is valid UTF-8'
-    refute hides?(config, 'hide_inputs'), 'the line that is not valid UTF-8'
+    # A hide line is kept even when a comment on it is damaged: the switch someone set still hides.
+    assert hides?(config, 'hide_inputs'), 'a hide line whose comment is not valid UTF-8'
     # Every read gives the same text, which is how the agent prints it once per process.
     again, = read('FI_CONFIG_FILE' => file)
     assert_equal config.warnings, again.warnings
   ensure
     File.unlink(file) if file && File.exist?(file)
+  end
+  def test_hide_line_with_a_damaged_byte_in_its_value_hides_and_warns_by_variable
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-bad-value-#{Process.pid}.toml")
+    File.binwrite(file, "hide_inputs = \"on\xE9\"\n".b)
+    config, stderr = read('FI_CONFIG_FILE' => file)
+    assert hides?(config, 'hide_inputs')
+    assert_includes stderr, 'FI_HIDE_INPUTS'
+    assert_includes stderr, file
+    assert_equal 2, stderr.lines.length, stderr
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  def test_quoted_keys_in_the_config_file_are_hide_switches
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-quoted-key-#{Process.pid}.toml")
+    ['"hide_inputs" = true', "'hide_inputs' = true", '"hide_inputs" = "on"', "'hide_inputs' = off"].each do |line|
+      File.write(file, line + "\n")
+      config, stderr = read('FI_CONFIG_FILE' => file)
+      assert_equal !line.end_with?('off'), hides?(config, 'hide_inputs'), line
+      assert_empty stderr, line
+    end
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  def test_triple_quotes_arrays_and_floats_in_the_config_file
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-forms-#{Process.pid}.toml")
+    {'"""off"""' => [false, 0], '"""on"""' => [true, 0], '["off"]' => [false, 0], '["on"]' => [true, 0],
+     '1.0' => [true, 1], '0.0' => [true, 1]}.each do |value, (hidden, warnings)|
+      File.write(file, "hide_inputs = #{value}\n")
+      config, stderr = read('FI_CONFIG_FILE' => file)
+      assert_equal hidden, hides?(config, 'hide_inputs'), value
+      assert_equal warnings, stderr.lines.length, "#{value}: #{stderr}"
+    end
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  # Reports show a hide switch by its resolved state, never by its raw text.
+  def test_masked_report_shows_hide_switches_by_state
+    config, = read('FI_HIDE_INPUTS' => 'maybe', 'FI_HIDE_OUTPUTS' => 'off', 'FI_HIDE_INPUT_TEXT' => 'ON')
+    masked = config.masked
+    assert_equal 'hide', masked['hide_inputs']
+    assert_equal 'show', masked['hide_outputs']
+    assert_equal 'hide', masked['hide_input_text']
+    assert_equal 'unset', masked['hide_error_details']
+    refute_includes masked.inspect, 'maybe'
   end
   def test_config_file_over_the_size_limit_warns_once_by_path_and_never_by_content
     file = File.join(ROOT, '.bundle/tmp', "hide-switch-too-large-#{Process.pid}.toml")

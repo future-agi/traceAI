@@ -669,6 +669,70 @@ class EndToEndTest < Minitest::Test
     assert_equal 'checkout-session-42', a['session.id']
     refute_includes a['input.value'], 'checkout-session-42'
   end
+  # The same id may travel to the provider in a header or a query parameter.
+  # It is still exported as set, also after the scheme word of Authorization.
+  def test_session_id_repeated_in_a_header_or_query_is_still_exported_as_set
+    {"req['X-Session-Id'] = 'checkout-session-42'" => '', "req['Authorization'] = 'Bearer checkout-session-42'" => '',
+     '' => '?session_id=checkout-session-42'}.each do |header, query|
+      @collector.requests.clear
+      code = <<~RUBY
+        require 'net/http'; require 'json'
+        uri = URI('#{@provider.url}/v1/chat/completions#{query}')
+        req = Net::HTTP::Post.new(uri); req['Content-Type'] = 'application/json'
+        #{header}
+        req.body = JSON.generate(model: 'gpt-4o-mini', messages: [{role: 'user', content: 'hi'}])
+        TraceAI::Auto.using_session('checkout-session-42') do
+          STDOUT.write(Net::HTTP.start(uri.host, uri.port) { |http| http.request(req).body })
+        end
+      RUBY
+      stdout, stderr, status = app(code)
+      assert status.success?, stderr; assert_equal CHAT, stdout
+      assert_equal 'checkout-session-42', assert_chat_span(export_spans)['session.id'], header + query
+    end
+  end
+  # The FI_AUTO_DEBUG startup report names a hide switch by its state.
+  def test_startup_report_shows_hide_switches_by_state_not_text
+    stdout, stderr, status = app(plain_code, {'FI_HIDE_INPUTS' => 'maybe', 'FI_AUTO_DEBUG' => 'true'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_match(/"hide_inputs":\s*"hide"/, stderr)
+    refute_includes stderr, 'maybe'
+  end
+  # A line of futureagi.toml with a byte that is not valid UTF-8 in a comment
+  # still hides.
+  def test_hide_line_with_a_damaged_comment_still_hides_in_the_exported_span
+    file = File.join(ROOT, '.bundle/tmp', "hide-damaged-#{Process.pid}.toml")
+    File.binwrite(file, "hide_inputs = true # caf\xE9\n".b)
+    stdout, stderr, status = app(plain_code, {'FI_CONFIG_FILE' => file})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_equal '__REDACTED__', attrs(export_spans.first.first.attributes)['input.value']
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  # An explicit init replaces a provisional start while the first AI request is
+  # in flight in another thread. The request is traced, never dropped.
+  def test_explicit_init_racing_the_first_ai_request_does_not_drop_its_span
+    code = <<~RUBY
+      require 'net/http'; require 'json'
+      TraceAI::Auto.report
+      abort 'not started' unless TraceAI::Auto.active?
+      $retired = Queue.new; $resume = Queue.new
+      TraceAI::Auto.singleton_class.prepend(Module.new do
+        def retire_provisional_start
+          super
+          $retired.push(1)
+          $resume.pop(timeout: 5)
+        end
+      end)
+      init = Thread.new { TraceAI::Auto.init }
+      $retired.pop
+      Thread.new { sleep 0.5; $resume.push(1) }
+      #{plain_code}
+      init.join
+    RUBY
+    stdout, stderr, status = app(code, {}, chdir: File.dirname(ROOT))
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    assert_chat_span(export_spans)
+  end
   def test_coexists_with_existing_provider
     # Preload manual agent API only; app sets its provider before one-line init.
     code = <<~RUBY

@@ -297,6 +297,26 @@ class EndToEndTest
     assert_chat_span(export_spans)
   end
 
+  # (e) The OpenTelemetry SDK is loaded and the application sets no provider. An
+  # AI request starts the agent on its own provider, which leaves one targeted
+  # hook on the provider setter. It ends with the window too, whatever the
+  # application defines afterwards.
+  def test_startup_hooks_end_with_the_window_after_a_start_on_the_agents_own_provider
+    code = <<~RUBY
+      require 'opentelemetry/sdk'; require 'net/http'
+      #{plain_code}
+      puts
+      #{END_STARTUP_WINDOW}
+      #{plain_code}
+      puts
+      puts 'FINAL=' + #{ENABLED_TRACE_HOOKS}.to_s
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    assert_equal 0, hook_counts(stdout).fetch('FINAL'), stdout
+    assert_equal 2, export_spans.length
+  end
+
   # In a directory with a Gemfile the agent waits for Bundler.setup. If the
   # application never calls it, the agent says so once at exit instead of
   # staying silent. A Gemfile in a parent directory does not make it wait.
