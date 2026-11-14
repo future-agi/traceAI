@@ -33,6 +33,9 @@ public final class OkHttpVersionApp {
             @Override public void writeTo(okio.BufferedSink sink) throws IOException { sink.write(outgoing); }
         };
         OkHttpClient client = new OkHttpClient.Builder().build();
+        // How many interceptors the zero-code agent added to this client, read through OkHttp's own API.
+        System.out.println("AGENT_INTERCEPTORS=" + java.util.stream.Stream.concat(client.interceptors().stream(), client.networkInterceptors().stream())
+            .filter(interceptor -> interceptor.getClass().getName().startsWith("ai.traceai.auto.")).count());
         try {
             Request request = new Request.Builder().url(args[1]).post(body).build();
             byte[] received;

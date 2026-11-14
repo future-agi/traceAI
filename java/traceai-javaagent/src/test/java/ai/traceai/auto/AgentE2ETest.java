@@ -206,14 +206,17 @@ class AgentE2ETest {
         String log = run(client, "late_keys", Map.of(), false);
         assertSpan(); assertEquals(1, log.lines().filter(l -> l.contains("FI_API_KEY and FI_SECRET_KEY are required")).count(), log);
     }
-    @ParameterizedTest @ValueSource(strings = {"first", "second"})
-    void openTelemetryJavaAgentBesideThisOneKeepsItOffWithOneWarning(String order) throws Exception {
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"first,jdk", "second,jdk", "first,okhttp", "second,okhttp"})
+    void openTelemetryJavaAgentBesideThisOneKeepsItOffWithOneWarning(String order, String client) throws Exception {
         assertTrue(Files.isRegularFile(Path.of("target", "otel-javaagent", "opentelemetry-javaagent.jar")), "the build copies the OpenTelemetry Java agent");
-        String log = run("jdk", "basic", Map.of("TRACEAI_TEST_OTEL_AGENT", order, "OTEL_TRACES_EXPORTER", "none", "OTEL_METRICS_EXPORTER", "none", "OTEL_LOGS_EXPORTER", "none"), true);
+        // The OkHttp application builds its own client on the build's OkHttp and reports the interceptors this agent added to it.
+        String log = run(client, client.equals("okhttp") ? "okhttp_version" : "basic", Map.of("TRACEAI_TEST_OTEL_AGENT", order, "OTEL_TRACES_EXPORTER", "none", "OTEL_METRICS_EXPORTER", "none", "OTEL_LOGS_EXPORTER", "none"), true);
         // The application runs unchanged (run() compares its request and response), and this agent exports nothing.
         assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty());
         var warnings = log.lines().filter(l -> l.contains("[traceai-auto]")).toList();
         assertEquals(1, warnings.size(), log); assertTrue(warnings.get(0).contains("OpenTelemetry Java agent"), log);
+        // Seeing no span is not enough for OkHttp: the client itself must be left without this agent's interceptors.
+        if (client.equals("okhttp")) assertEquals("0", line(log, "AGENT_INTERCEPTORS="), log);
     }
     @Test void packagedJarHoldsOnlyTheAgentsOwnPackagesAndMetadata() throws Exception {
         // Everything bundled is relocated under ai/traceai/auto/, so nothing can clash with the application's classpath.
