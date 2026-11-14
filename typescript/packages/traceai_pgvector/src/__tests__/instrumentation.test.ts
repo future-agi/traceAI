@@ -579,6 +579,38 @@ describe("PgVector vector-only mode", () => {
     expect(mockSpan.end).toHaveBeenCalledTimes(2);
   });
 
+  it("runs full-text, PostGIS and trigram queries without a span", () => {
+    const result = { rows: [], rowCount: 0 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    for (const text of [
+      "SELECT id FROM docs WHERE to_tsvector('english', body) @@ plainto_tsquery($1)",
+      "SELECT id FROM docs WHERE array_to_tsvector(tags) @@ to_tsquery($1)",
+      "SELECT id FROM docs WHERE body_tsv @@ $1::tsquery AND body_tsv = $2::tsvector",
+      "SELECT name FROM places ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) LIMIT 5",
+      "SELECT name FROM places ORDER BY geom <#> $1::geometry LIMIT 5",
+      "SELECT name FROM users ORDER BY name <-> 'jon' LIMIT 3",
+      "SELECT name, similarity(name, $1) FROM users ORDER BY name <-> $1 LIMIT 3",
+    ]) {
+      expect(mockModule.Client.prototype.query.call({}, text, ["value"])).toBe(result);
+    }
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("traces pgvector distance queries with an untyped parameter or a vector literal", async () => {
+    const query = (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 });
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding <-> $1 LIMIT 5", ["[0.1,0.2]"]);
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding <#> '[0.1,0.2]' LIMIT 5");
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding::halfvec(2) <+> $1::halfvec(2) LIMIT 5", ["[0.1,0.2]"]);
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(3);
+  });
+
   it("traces every query when the option is off", async () => {
     const mod = require("../instrumentation");
     instrumentation.disable();
