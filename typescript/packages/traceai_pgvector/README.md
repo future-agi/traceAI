@@ -68,8 +68,9 @@ interface PgVectorInstrumentationConfig {
   // Capture query parameters
   captureParameters?: boolean;
 
-  // Trace only vector queries (vector operators or casts); other queries run
-  // without a span. @traceai/auto turns this on when it enables pgvector.
+  // Trace only vector queries (pgvector operators or vector casts); full-text,
+  // PostGIS, trigram and other queries run without a span. @traceai/auto turns
+  // this on when it enables pgvector.
   vectorOnly?: boolean;
 }
 
