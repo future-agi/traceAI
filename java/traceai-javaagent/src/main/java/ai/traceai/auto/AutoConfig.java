@@ -9,6 +9,13 @@ import java.util.*;
 public final class AutoConfig {
     final Map<String, String> values;
     final TraceConfig masking;
+    /** The hide switches this agent reads. */
+    private static final List<String> HIDE_SWITCHES = List.of("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES",
+        "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS");
+    /** Hide switches already reported in this JVM: one warning per variable, however often the configuration is resolved. */
+    private static final Set<String> HIDE_WARNED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** The hide switches that are on. */
+    private final Set<String> hidden;
     final double sampleRate;
     final int maxBodyBytes;
     // Even ignored/incomplete FI credentials remain private; never expose this list in diagnostics.
@@ -37,12 +44,14 @@ public final class AutoConfig {
             }
         } catch (Exception ignored) { }
         Map<String, String> file = new LinkedHashMap<>(result), explicit = new LinkedHashMap<>();
-        environment.forEach((k, v) -> { if (k.startsWith("FI_") || k.equals("OTEL_SDK_DISABLED") || k.equals("OTEL_SERVICE_NAME") || k.equals("OTEL_RESOURCE_ATTRIBUTES") || k.equals("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT") || k.equals("OTEL_ATTRIBUTE_COUNT_LIMIT")) result.put(k, v); });
+        // A blank hide switch is not set, so it does not replace the value of a lower source.
+        environment.forEach((k, v) -> { if (blankHide(k, v)) return; if (k.startsWith("FI_") || k.equals("OTEL_SDK_DISABLED") || k.equals("OTEL_SERVICE_NAME") || k.equals("OTEL_RESOURCE_ATTRIBUTES") || k.equals("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT") || k.equals("OTEL_ATTRIBUTE_COUNT_LIMIT")) result.put(k, v); });
         overrides.forEach((k, v) -> {
             if (v == null) return;
             String key = envKey(k);
             boolean names = key.equals("FI_INSTRUMENTATIONS") || key.equals("FI_DISABLED_INSTRUMENTATIONS");
-            explicit.put(key, names && v instanceof Collection ? String.join(",", ((Collection<?>)v).stream().map(String::valueOf).toList()) : v instanceof Map || v instanceof Collection ? WireCore.dump(v) : String.valueOf(v));
+            String text = names && v instanceof Collection ? String.join(",", ((Collection<?>)v).stream().map(String::valueOf).toList()) : v instanceof Map || v instanceof Collection ? WireCore.dump(v) : String.valueOf(v);
+            if (!blankHide(key, text)) explicit.put(key, text);
         });
         result.putAll(explicit);
         String profile = result.getOrDefault("FI_PROFILE", "default");
@@ -128,9 +137,30 @@ public final class AutoConfig {
         sampleRate = rate; maxBodyBytes = limit;
         normalized.put("FI_SAMPLE_RATE", Double.toString(rate)); normalized.put("FI_WIRE_MAX_BODY_BYTES", Integer.toString(limit));
         if (!Set.of("observe", "experiment").contains(get("FI_PROJECT_TYPE"))) normalized.put("FI_PROJECT_TYPE", "observe");
-        masking = TraceConfig.builder().hideInputs(flag("FI_HIDE_INPUTS")).hideOutputs(flag("FI_HIDE_OUTPUTS"))
-            .hideInputMessages(flag("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(flag("FI_HIDE_OUTPUT_MESSAGES")).build();
+        Set<String> on = new HashSet<>();
+        for (String key : HIDE_SWITCHES) if (hideValue(key, get(key))) on.add(key);
+        hidden = Set.copyOf(on);
+        // Every value is passed explicitly, so the core builder never falls back to its own reading of the environment.
+        masking = TraceConfig.builder().hideInputs(hides("FI_HIDE_INPUTS")).hideOutputs(hides("FI_HIDE_OUTPUTS"))
+            .hideInputMessages(hides("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(hides("FI_HIDE_OUTPUT_MESSAGES")).build();
     }
+    private static boolean blankHide(String key, String value) { return key.startsWith("FI_HIDE_") && (value == null || value.isBlank()); }
+    /**
+     * Reads one hide switch, ignoring case and surrounding spaces: true, 1, yes and on hide; false, 0, no and off show;
+     * a blank or missing value is not set. Any other value hides, because a hide switch someone set must never silently
+     * do nothing. It is reported once per variable in this JVM, by name and never by value.
+     */
+    private static boolean hideValue(String key, String value) {
+        switch (value == null ? "" : value.strip().toLowerCase(Locale.ROOT)) {
+            case "", "false", "0", "no", "off": return false;
+            case "true", "1", "yes", "on": return true;
+            default:
+                if (HIDE_WARNED.add(key)) System.err.println("[traceai-auto] " + key + " has a value that is not recognised, so this content is hidden; use true, 1, yes or on to hide it, or false, 0, no or off to show it");
+                return true;
+        }
+    }
+    /** True when the named hide switch (FI_HIDE_*) hides its content. Other switches are read with {@link #flag}. */
+    boolean hides(String key) { return hidden.contains(key); }
     static String envKey(String key) { return key.startsWith("FI_") || key.startsWith("OTEL_") ? key : key.equals("debug") ? "FI_AUTO_DEBUG" : "FI_" + key.toUpperCase(Locale.ROOT); }
     static String stripComment(String line) {
         char quote = 0; boolean escaped = false;

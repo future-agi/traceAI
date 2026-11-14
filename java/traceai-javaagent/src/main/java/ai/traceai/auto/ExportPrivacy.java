@@ -5,7 +5,7 @@ import java.util.*;
 
 /** The sole authoritative privacy boundary, used immediately before OTLP serialization. */
 final class ExportPrivacy {
-    static WirePrivacy privacy(AutoConfig config) { return new WirePrivacy(KnownSecrets.PROCESS.snapshot(), config.flag("FI_HIDE_INPUT_IMAGES")); }
+    static WirePrivacy privacy(AutoConfig config) { return new WirePrivacy(KnownSecrets.PROCESS.snapshot(), config.hides("FI_HIDE_INPUT_IMAGES")); }
     static Attributes attributes(Attributes source, WirePrivacy privacy, AutoConfig config, boolean event, String operation) {
         return attributes(source, privacy, config, event, operation, false);
     }

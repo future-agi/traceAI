@@ -22,7 +22,7 @@ final class WirePrivacy {
         KnownSecrets.observe(headers, null);
         if (config != null) config.credentialValues.forEach(KnownSecrets.PROCESS::register);
         secrets = KnownSecrets.PROCESS.snapshot();
-        hideImages = config != null && config.flag("FI_HIDE_INPUT_IMAGES");
+        hideImages = config != null && config.hides("FI_HIDE_INPUT_IMAGES");
     }
     WirePrivacy(KnownSecrets.Snapshot secrets, boolean hideImages) { this.secrets = secrets; this.hideImages = hideImages; }
     /** The session id set through ContextAttributes.usingSession, as written on the agent's own spans. */

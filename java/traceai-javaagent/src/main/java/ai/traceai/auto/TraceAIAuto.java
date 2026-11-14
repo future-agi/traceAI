@@ -296,10 +296,10 @@ public final class TraceAIAuto {
     }
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }
     static boolean hidden(String key, WireCore.Match match, AutoConfig config) {
-        if (config.flag("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
-        if (config.flag("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
+        if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
+        if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
-        boolean inputText = input || config.flag("FI_HIDE_INPUT_TEXT"), outputText = output || config.flag("FI_HIDE_OUTPUT_TEXT");
+        boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
         if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || key.startsWith("gen_ai.tool.") || key.equals("gen_ai.request.parameters")
             || key.equals("cohere.preamble") || key.equals("embedding.input_text") || key.startsWith("embedding.input_text.") || key.equals("gen_ai.reranker.query"))) return true;
@@ -310,7 +310,7 @@ public final class TraceAIAuto {
     }
     static boolean hidesContent(AutoConfig config) {
         return config.masking.isHideInputs() || config.masking.isHideOutputs() || config.masking.isHideInputMessages() || config.masking.isHideOutputMessages()
-            || config.flag("FI_HIDE_INPUT_TEXT") || config.flag("FI_HIDE_OUTPUT_TEXT") || config.flag("FI_HIDE_INPUT_IMAGES") || config.flag("FI_HIDE_LLM_INVOCATION_PARAMETERS");
+            || config.hides("FI_HIDE_INPUT_TEXT") || config.hides("FI_HIDE_OUTPUT_TEXT") || config.hides("FI_HIDE_INPUT_IMAGES") || config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS");
     }
     private static String bounded(String value) { return value == null || value.length() <= 32000 ? value : value.substring(0, 31986) + "...[truncated]"; }
     static Object scrub(Object value) { return new WirePrivacy(Map.of(), config).clean(value); }
