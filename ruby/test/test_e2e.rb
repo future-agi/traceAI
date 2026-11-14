@@ -67,6 +67,40 @@ class EndToEndTest < Minitest::Test
   ensure
     File.unlink(config) if config && File.exist?(config)
   end
+  POSIX_LOCALE = {'LANG' => 'C', 'LC_ALL' => 'C', 'LC_CTYPE' => nil, 'LANGUAGE' => nil}.freeze
+  # Under LANG=C a credential-named environment value with non-ASCII bytes is
+  # tagged US-ASCII. It must still be removed from exported text.
+  def test_posix_locale_redacts_a_non_ascii_environment_credential_echoed_by_the_provider
+    secret = "sch\u{f6}n-pa\u{df}wort-12345678"
+    reply = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini', choices: [{index: 0, message: {role: 'assistant', content: "echo #{secret}"}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5})
+    @provider.stop; @provider = MockHTTP.new { |_r| [200, {'Content-Type' => 'application/json'}, reply] }
+    stdout, stderr, status = app(plain_code, POSIX_LOCALE.merge('TEST_UPSTREAM_PASSWORD' => secret))
+    assert status.success?, stderr.b
+    assert_equal reply.b, stdout.b
+    spans = export_spans
+    assert_equal 1, spans.length
+    span = spans.first.first
+    values = attrs(span.attributes)
+    assert_equal 'echo <redacted>', values['output.value']
+    # Compare bytes: inspect output escapes non-ASCII text under LANG=C.
+    leaked = values.select { |_, value| value.is_a?(String) && value.b.include?(secret.b) }.keys
+    assert_empty leaked
+  end
+  # The application's own SDK resource holds environment values as the SDK read
+  # them. Under LANG=C a non-ASCII service name must not cost the wire span its
+  # content or its resource.
+  def test_posix_locale_keeps_span_content_with_a_non_ascii_service_name_on_the_application_provider
+    service = "caf\u{e9}-service"
+    stdout, stderr, status = app(app_sdk + plain_code, POSIX_LOCALE.merge('OTEL_SERVICE_NAME' => service))
+    assert status.success?, stderr.b
+    assert_equal CHAT, stdout
+    spans = export_spans
+    assert_equal 1, spans.length
+    span, resource = spans.first
+    assert_equal 'Hello from Ruby', attrs(span.attributes)['output.value']
+    assert_equal 'ruby-e2e', resource['project_name']
+    assert_equal service, resource['service.name']
+  end
   def test_bundle_exec_with_rubyopt
     stdout, stderr, status = app(plain_code, {}, bundled: true)
     assert status.success?, stderr; assert_equal CHAT, stdout; assert_chat_span(export_spans)

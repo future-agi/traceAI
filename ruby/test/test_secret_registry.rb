@@ -20,6 +20,21 @@ class SecretRegistryTest < Minitest::Test
     refute_includes registry.inspect, '12345678'
   end
 
+  # Under LANG=C, Ruby tags environment names and values as US-ASCII even when
+  # they hold UTF-8. The registry reads both as UTF-8, so the value can match
+  # exported text and an unusual name cannot stop every export.
+  def test_registry_reads_locale_tagged_environment_names_and_values_as_utf8
+    registry = A::SecretRegistry.new
+    value = "sch\u{f6}n-pa\u{df}wort-12345678"
+    env = {"R\u{c9}GION_PASSWORD".b.force_encoding(Encoding::US_ASCII) => value.b.force_encoding(Encoding::US_ASCII),
+           "ORDINARY_\u{c9}".b.force_encoding(Encoding::US_ASCII) => 'not-a-credential-12345678'}
+    registry.seed(A::Config.new({}, env: {}), env)
+    assert_equal [value], registry.snapshot
+    assert_equal Encoding::UTF_8, registry.snapshot.first.encoding
+    assert registry.register(value.b)
+    assert_equal [value], registry.snapshot
+  end
+
   def test_registry_is_bounded_lru_and_caches_longest_first_immutable_snapshots
     registry = A::SecretRegistry.new
     values = 1024.times.map { |i| format('bounded-%04d-value', i) }
