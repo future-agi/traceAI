@@ -36,6 +36,27 @@ it("the processor's converted spans keep session and user ids at the Future AGI 
   } finally { await provider.shutdown(); }
 });
 
+it("the processor marks only Genkit spans: an application span's session id keeps the credential name rule", async () => {
+  // Genkit's manual setup attaches the processor to the provider the application uses, so
+  // the application's own spans reach it too. Only Genkit spans are first-party copies.
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({
+    resource: resourceFromAttributes({ project_name: "unit-project", project_type: "observe" }),
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
+  });
+  try {
+    const processor = new FIGenkitSpanProcessor({ tracerProvider: provider });
+    const span = { ...v1Span({ name: "application work", attributes: {}, spanId: "8888888888888888" }), instrumentationLibrary: { name: "my-application", version: "1" } };
+    processor.onStart(span, setSession(ROOT_CONTEXT, { sessionId: "application-session-0099" }));
+    processor.onEnd(span);
+    await processor.forceFlush();
+    const finished = exporter.getFinishedSpans();
+    expect(finished).toHaveLength(1);
+    const clean = privacyFilter().span(finished[0]);
+    expect(clean.attributes["session.id"]).not.toBe("application-session-0099");
+  } finally { await provider.shutdown(); }
+});
+
 it("the zero-code mapping's converted spans keep session and user ids at the Future AGI export boundary", () => {
   const ended: object[] = [];
   const target: GenkitAutoSpanProcessor = { onStart() { /* The export branch's own start hook. */ }, onEnd(span) { ended.push(span); } };
