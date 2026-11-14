@@ -16,6 +16,7 @@ from opentelemetry.util._once import Once
 from auto_mock_server import MockServer, decode_spans
 from fi_instrumentation.auto import _manager, _registry
 from fi_instrumentation.auto._registry import Integration
+from fi_instrumentation.otel import HTTPSpanExporter
 
 # A stand-in AI library and its traceAI package, written to a temporary directory per test.
 FAKE_LIBRARY = '''
@@ -161,8 +162,40 @@ def _copy_span(span, **changes):
 ''',
 }
 
+# A stand-in for a manual integration's exporter wrapper: the app passes it to register() around a
+# Future AGI exporter, and it converts its library's spans before handing them on.
+FAKE_WRAPPER = '''
+from opentelemetry.sdk.trace.export import SpanExporter
+
+
+class WrappedSpanExporter(SpanExporter):
+    def __init__(self, exporter):
+        self.exporter = exporter
+
+    def export(self, spans):
+        return self.exporter.export(spans)
+
+    def shutdown(self):
+        self.exporter.shutdown()
+'''
+
 # Spans under a traceAI instrumentation scope are AI spans, so the Future AGI route carries them.
 AI_SCOPE = "traceai_test_app"
+
+
+class FutureAGIExporter(HTTPSpanExporter):
+    """A Future AGI exporter, of the type register() creates, that keeps what it gets in memory."""
+
+    def __init__(self):
+        super().__init__(endpoint="http://127.0.0.1:9/v1/traces")
+        self._memory = InMemorySpanExporter()
+
+    def export(self, spans):
+        return self._memory.export(spans)
+
+    def get_finished_spans(self):
+        return self._memory.get_finished_spans()
+
 
 _ENVIRONMENT = (
     "FI_API_KEY", "FI_SECRET_KEY", "FI_INSTRUMENTATIONS", "FI_DISABLED_INSTRUMENTATIONS",
@@ -172,7 +205,7 @@ _ENVIRONMENT = (
 
 # Stand-ins that single tests write; removed from sys.modules around every test.
 _STAND_INS = ("fakeweblib", "fakewebinstr", "traceai_livekit", "latelib", "traceai_latelib",
-              "partiallib", "traceai_partiallib")
+              "partiallib", "traceai_partiallib", "traceai_wrapped")
 
 
 def _instrumentor(target, fail):
@@ -435,7 +468,7 @@ def test_sample_rate_on_an_application_provider_thins_only_the_future_agi_route(
 def test_init_reuses_a_registered_future_agi_provider(fresh_state):
     from fi_instrumentation import register
 
-    exporter = InMemorySpanExporter()
+    exporter = FutureAGIExporter()
     registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
                           set_global_tracer_provider=True)
     assert _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER") is registered
@@ -677,7 +710,7 @@ def test_a_registered_future_agi_provider_gets_the_same_route(fresh_state, monke
     from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 
     _web_stand_ins(fresh_state, monkeypatch)
-    exporter = InMemorySpanExporter()
+    exporter = FutureAGIExporter()
     registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
                           set_global_tracer_provider=True)
     assert _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER",
@@ -702,7 +735,7 @@ def test_a_registered_future_agi_provider_gets_the_same_route(fresh_state, monke
 def test_agent_shutdown_leaves_a_registered_provider_exporting(fresh_state):
     from fi_instrumentation import register
 
-    exporter = InMemorySpanExporter()
+    exporter = FutureAGIExporter()
     registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
                           set_global_tracer_provider=True)
     _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER")
@@ -717,7 +750,8 @@ def _replaced_export_processor(exporter):
     from fi_instrumentation import TracerProvider as FiTracerProvider
 
     provider = FiTracerProvider(verbose=False)
-    # The application replaced the provider's Future AGI processor with one of its own.
+    # The application replaced the provider's Future AGI processor with one of its own, around a
+    # Future AGI exporter.
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace_api.set_tracer_provider(provider)
     return provider, {}
@@ -735,7 +769,7 @@ def _agent_exporter_too(exporter):
 @pytest.mark.parametrize("setup", [_replaced_export_processor, _agent_exporter_too])
 def test_web_servers_stay_off_on_a_registered_provider_without_a_route(fresh_state, monkeypatch, caplog, setup):
     _web_stand_ins(fresh_state, monkeypatch)
-    exporter = InMemorySpanExporter()
+    exporter = FutureAGIExporter()
     provider, options = setup(exporter)
     with caplog.at_level(logging.WARNING):
         assert _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER",
@@ -754,31 +788,147 @@ def test_web_servers_stay_off_on_a_registered_provider_without_a_route(fresh_sta
     assert [s.name for s in exporter.get_finished_spans()] == ["chat fake"]
 
 
-@pytest.mark.parametrize("registered", [True, False])
-def test_a_manual_integration_on_a_registered_provider_keeps_its_library_spans(fresh_state, monkeypatch, registered):
+@pytest.mark.parametrize("routable", [True, False])
+def test_auto_instrument_on_a_registered_provider_filters_it_as_init_does(fresh_state, monkeypatch, caplog, routable):
+    from fi_instrumentation import register
+
+    _web_stand_ins(fresh_state, monkeypatch)
+    exporter = FutureAGIExporter()
+    if routable:
+        register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
+                 set_global_tracer_provider=True)
+    else:
+        _replaced_export_processor(exporter)
+    # Called on its own, without init(): it traces with the global provider.
+    with caplog.at_level(logging.WARNING):
+        statuses = _manager.auto_instrument(lazy=False)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    import fakeweblib
+
+    assert fakeweblib.handle("/chat") == "pong"
+    assert fakeweblib.handle("/health") == "ok"
+    names = [s.name for s in exporter.get_finished_spans()]
+    if routable:
+        assert statuses == {"fakeweb": _manager.INSTRUMENTED, "fake": _manager.INSTRUMENTED}
+        assert not [w for w in warnings if "web server" in w]
+        # /health and the internal web spans are not exported; the AI request's root is.
+        assert names == ["chat fake", "GET /chat"]
+    else:
+        assert statuses == {"fakeweb": _manager.DISABLED, "fake": _manager.INSTRUMENTED}
+        assert len(warnings) == 1, warnings
+        assert "web server" in warnings[0]
+        assert names == ["chat fake"]
+
+
+def test_a_registered_provider_exporting_elsewhere_keeps_its_exporter(fresh_state, monkeypatch):
+    import io
+
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter
+
+    from fi_instrumentation import register
+
+    _web_stand_ins(fresh_state, monkeypatch)
+    printed = io.StringIO()
+    # The application sends its register() provider's spans to the console, not to Future AGI.
+    registered = register(project_name="mine", span_exporter=ConsoleSpanExporter(out=printed), batch=False,
+                          verbose=False, set_global_tracer_provider=True)
+    (app_processor,) = registered._active_span_processor._span_processors
+    with MockServer() as server:
+        assert _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER",
+                             base_url=server.url, lazy=False) is registered
+        # That processor stays first and as it was; the agent's Future AGI route is added next to it.
+        processors = registered._active_span_processor._span_processors
+        assert len(processors) == 2
+        assert processors[0] is app_processor
+        assert {s.name: s.status for s in _manager.report()} == {
+            "fakeweb": _manager.INSTRUMENTED, "fake": _manager.INSTRUMENTED}
+        import fakeweblib
+
+        assert fakeweblib.handle("/chat") == "pong"
+        assert fakeweblib.handle("/health") == "ok"
+        assert registered.force_flush()
+        exported = decode_spans(server.collected)
+    # The console still prints every span, unfiltered.
+    for name in ("GET /chat", "GET /health", "http send", "chat fake"):
+        assert f'"{name}"' in printed.getvalue()
+    # Future AGI receives the AI span and its request root only.
+    assert sorted(s["name"] for s in exported) == ["GET /chat", "chat fake"]
+
+
+def test_other_processors_on_a_registered_provider_still_see_every_span(fresh_state, monkeypatch):
+    from fi_instrumentation import register
+
+    _web_stand_ins(fresh_state, monkeypatch)
+    exporter, app_exporter = FutureAGIExporter(), InMemorySpanExporter()
+    registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
+                          set_global_tracer_provider=True)
+    # A processor the application added for its own backend.
+    registered.add_span_processor(SimpleSpanProcessor(app_exporter))
+    _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER", lazy=False)
+    import fakeweblib
+
+    fakeweblib.handle("/chat?token=sk-test-PLACEHOLDER")
+    fakeweblib.handle("/health")
+    _credential_bearing_span(registered.get_tracer("checkout.http"))
+    app_spans = app_exporter.get_finished_spans()
+    assert sorted(s.name for s in app_spans) == [
+        "GET /chat", "GET /health", "GET /v1/orders", "chat fake", "http send", "http send"]
+    # It gets the original spans, unchanged.
+    (app_root,) = [s for s in app_spans if s.name == "GET /chat"]
+    assert app_root.attributes["http.target"] == "/chat?token=sk-test-PLACEHOLDER"
+    assert [s.name for s in exporter.get_finished_spans()] == ["chat fake", "GET /chat"]
+
+
+def test_ai_spans_still_open_when_a_registered_provider_shuts_down_are_exported(fresh_state):
+    from fi_instrumentation import register
+
+    exporter = FutureAGIExporter()
+    registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
+                          set_global_tracer_provider=True)
+    _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER")
+    # A long agent span and a span of the application's own, both still open at exit.
+    registered.get_tracer(AI_SCOPE).start_span("long agent")
+    request = registered.get_tracer("checkout.http").start_span("GET /orders")
+    registered.shutdown()
+    # The provider's Future AGI export ends the open AI span and exports it, marked as leaked.
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "long agent"
+    assert span.attributes["gen_ai.span.leaked"] is True
+    # The application's own span is not ended for it.
+    assert request.is_recording()
+    request.end()
+
+
+@pytest.mark.parametrize("setup", ["package exporter", "plain exporter", "agent"])
+def test_a_manual_integration_on_a_registered_provider_keeps_its_library_spans(fresh_state, monkeypatch, setup):
     from fi_instrumentation import register
 
     # An integration whose package converts its library's spans in an exporter wrapper: the app passes
     # that exporter to register() and then calls init(), as the integration's setup line says.
-    _write_packages(fresh_state, {"wrappedlib": ""})
+    _write_packages(fresh_state, {"wrappedlib": "", "traceai_wrapped": FAKE_WRAPPER})
     wrapped = Integration("wrapped", ("wrappedlib",), "traceai-wrapped", "traceai_wrapped", kind=_registry.MANUAL,
                           category="framework", note="pass WrappedSpanExporter to register()",
                           scopes=("wrappedlib.telemetry",))
     monkeypatch.setattr(_registry, "ALL", (wrapped,))
-    exporter = InMemorySpanExporter()
-    if registered:
-        provider = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
-                            set_global_tracer_provider=True)
-        _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER")
-    else:
+    exporter = FutureAGIExporter()
+    if setup == "agent":
         # Started by the agent, the integration is not set up, so its raw library spans stay out.
         provider = _manager.init(span_exporter=exporter, batch=False)
+    else:
+        from traceai_wrapped import WrappedSpanExporter
+
+        # Without the package's exporter, nothing converts the library's raw spans, so they stay out.
+        chosen = WrappedSpanExporter(exporter) if setup == "package exporter" else exporter
+        provider = register(project_name="mine", span_exporter=chosen, batch=False, verbose=False,
+                            set_global_tracer_provider=True)
+        _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER")
     assert {s.name: s.status for s in _manager.report()} == {"wrapped": _manager.STATUS_MANUAL}
     with provider.get_tracer("wrappedlib.telemetry").start_as_current_span("invoke_agent"):
         pass
     with provider.get_tracer("checkout.http").start_as_current_span("GET /orders"):
         pass
-    assert [s.name for s in exporter.get_finished_spans()] == (["invoke_agent"] if registered else [])
+    assert [s.name for s in exporter.get_finished_spans()] == (
+        ["invoke_agent"] if setup == "package exporter" else [])
 
 
 def test_the_wrapper_based_integration_names_its_library_scope():
@@ -818,6 +968,26 @@ def test_spans_marked_with_an_ai_span_kind_reach_future_agi(fresh_state, app_pro
     assert spans[1].attributes["input.value"] == REDACTED_VALUE
 
 
+def test_a_span_marked_with_an_ai_span_kind_lets_its_request_root_through(fresh_state, monkeypatch):
+    from fi_instrumentation import FITracer
+    from fi_instrumentation.fi_types import FiSpanKindValues
+
+    _web_stand_ins(fresh_state, monkeypatch)
+    app_provider, _ = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False, lazy=False)
+    web = app_provider.get_tracer(WEB_SCOPE)
+    # The only AI span in the request is the application's own, under its own module scope.
+    agent = FITracer(app_provider.get_tracer("checkout.agent"))
+    with web.start_as_current_span("POST /support", kind=trace_api.SpanKind.SERVER):
+        with agent.start_as_current_span("support agent", fi_span_kind=FiSpanKindValues.AGENT):
+            pass
+    with web.start_as_current_span("GET /health", kind=trace_api.SpanKind.SERVER):
+        with app_provider.get_tracer("checkout.agent").start_as_current_span("check"):
+            pass
+    assert [s.name for s in fi_exporter.get_finished_spans()] == ["support agent", "POST /support"]
+
+
 def test_future_agi_copy_masks_events_links_and_error_details(fresh_state, monkeypatch):
     from fi_instrumentation import TraceConfig
     from fi_instrumentation.instrumentation.config import REDACTED_VALUE
@@ -849,6 +1019,25 @@ def test_future_agi_copy_masks_events_links_and_error_details(fresh_state, monke
     assert root.status.description is None
     assert "a prompt" not in _future_agi_text(fi_exporter)
     assert "a linked prompt" not in _future_agi_text(fi_exporter)
+
+
+def test_a_kept_error_description_is_redacted_for_future_agi(fresh_state):
+    from fi_instrumentation import TraceConfig
+
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False,
+                  config=TraceConfig(pii_redaction=True, hide_error_details=False))
+    with pytest.raises(ValueError):
+        with app_provider.get_tracer(AI_SCOPE).start_as_current_span("call"):
+            raise ValueError("refused for jane.doe@example.com")
+    assert "jane.doe@example.com" in app_exporter.get_finished_spans()[0].status.description
+    (span,) = fi_exporter.get_finished_spans()
+    # Error details are kept, with the same PII redaction as attribute values.
+    assert span.status.status_code == trace_api.StatusCode.ERROR
+    assert "refused for" in span.status.description
+    assert "<EMAIL_ADDRESS>" in span.status.description
+    assert "jane.doe@example.com" not in span.status.description
 
 
 def test_request_roots_of_a_web_server_the_app_instrumented_reach_future_agi(fresh_state, monkeypatch):
