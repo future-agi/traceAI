@@ -243,7 +243,15 @@ public final class TraceAIAuto {
     static void debug(String text) { if (config != null && config.flag("FI_AUTO_DEBUG")) System.err.println("[traceai-auto] " + text); }
     static boolean transportEnabled(String name) { return config != null && config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains(name); }
     static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
-    static void integrationFailed(String name) { STATUS.put(name, "failed"); warn("An integration could not be enabled; application requests are unaffected"); }
+    static void integrationFailed(String name) {
+        STATUS.put(name, "failed");
+        // An OpenTelemetry Java agent listed after this one rewrites the same classes once its own
+        // premain runs, which can make an integration fail before the first HTTP call. Name that
+        // agent in the one warning and stay off. This check does not latch, so the recheck at the
+        // first HTTP call still runs if that agent has not started yet.
+        try { if (OtelJavaAgent.present()) { offBesideOtelJavaAgent(); return; } } catch (Throwable ignored) { }
+        warn("An integration could not be enabled; application requests are unaffected");
+    }
     static AutoConfig config() { return config; }
     static RuntimeState currentRuntime() { return active ? RUNTIME.get() : null; }
     static WireCapture begin(String method, String url, Map<String, String> headers) { return begin(method, url, headers, null); }
