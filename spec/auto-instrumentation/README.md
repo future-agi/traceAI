@@ -44,6 +44,12 @@ It runs on the HTTP clients each runtime uses for AI calls:
 1. A wire span is **not** created when the active span at request time was created by the
    library layer, meaning its `gen_ai.span.kind` is one of `LLM`, `EMBEDDING`, `RERANKER`,
    `GUARDRAIL`. The dedicated instrumentor already records that call with richer data.
+   In Node without an application context manager, the active span is the one in the
+   agent's private context. Inside an SDK call the agent scopes, that is the model span
+   the integration started in that call; after the call returns, and beside it, it is not.
+   An integration the agent cannot scope (one that replaces SDK methods itself, or one
+   turned on through its own enable entry) can therefore send its own request twice, as
+   its span and as a wire span. A request beside a call is never skipped.
 2. A wire span is not created when OpenTelemetry instrumentation is suppressed in the
    current context (Python `_SUPPRESS_INSTRUMENTATION_KEY`, JS `suppressTracing`, and so on).
    Exporters run suppressed, so the SDK never traces its own export traffic.
@@ -811,7 +817,8 @@ the same hide controls on every route.
   provider whose only processor is the FI route, binds every instrumentor and the wire layer
   to it, and never attaches the FI route to the application's provider. AI spans still parent
   under the application's active span, read through the application's context manager; with
-  none, the agent keeps parent links between its own spans privately. Future AGI receives
+  none, the agent keeps parent links between its own spans in a private context that is
+  active only inside the callback or SDK call that set it. Future AGI receives
   only spans from agent-bound tracers (wire and traceAI integration spans). The forwarding
   switch (`FI_FORWARD_APP_SPANS=true`; Node `forwardApplicationSpans: true`) also attaches the
   FI route to the application's provider, as releases before 0.1.5 did; `FI_HIDE_*` then also hides

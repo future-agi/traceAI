@@ -131,8 +131,10 @@ call sends (for example a custom `fetch` that first asks another model) gets no 
 span. Without an application context manager, a model span that an integration starts
 inside an SDK call it patches through the instrumentation's wrap method is active only
 inside that call (see [Existing OTel SDKs](#existing-otel-sdks)). Groq, Mistral and Portkey replace SDK
-methods directly, so a request the caller sends beside one of their calls, until the
-call ends, is skipped too. Outgoing credential observation is never skipped by these rules: fetch reads
+methods directly, so the agent has no scope around their calls: without an application
+context manager their model span is not active for the SDK's own request, which can then
+also be captured as a wire span. A request the caller sends beside one of their calls is
+captured, never skipped. Outgoing credential observation is never skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span
@@ -289,18 +291,28 @@ normally and keeps its sampler, context manager, propagator, processors and expo
 The FI route is never attached to the application's provider, and Future AGI receives
 only spans from agent-bound tracers. AI spans read the active context through the
 OpenTelemetry API, so they parent under the application's active span when it has a
-context manager. Without one, the agent's tracers keep parent links between the agent's
-own spans with a private `AsyncLocalStorage` that is never registered globally. Each
-patched SDK call of an integration the agent loads, when that integration patches
-through the instrumentation's wrap method, runs in its own scope of that store
-(`store.run`). A span the integration starts in that call is the parent of the call's own work,
-such as the SDK's provider request, and the scope ends when the call returns. So, as
-with an application context manager, the caller's next work, such as a plain `fetch`
-beside the call in the same tick or while it reads a stream, does not run under that
-span. Groq, Mistral and Portkey replace SDK methods directly, so the agent cannot
-scope their calls: their span stays the parent of the work the caller starts next,
-until it ends, and spans started together from the same synchronous code may nest.
-The same holds for a span an agent tracer starts outside a scoped call.
+context manager. Without one, the agent reads and sets context in fi-core's private
+context (`activeFIContext` and `runInFIContext`), the one `FITracer.startActiveSpan`
+uses. It is never registered globally, and a context set there is active for a callback
+and the work it starts, never for the caller after the callback returns. The agent keeps
+no context store of its own. Spans started with `startActiveSpan`, such as the Vercel AI
+SDK 5 and 6 spans, nest without a context manager. Each patched SDK call of an
+integration the agent sets up itself, when that integration patches through the
+instrumentation's wrap method, runs in its own scope of that context, with a cell of its
+own. Incoming HTTP requests from the agent's HTTP instrumentation get the same scope. A
+span the integration starts in that call is kept in the call's cell: it is the parent of
+the rest of the call's own work, such as the SDK's provider request, which the wire layer
+then skips, and spans started in the call nest under it. A context set later inside the
+call, with `runInFIContext` or `startActiveSpan`, takes precedence while it lasts, and a
+span that has ended is no longer active. The cell ends with the call. So, as with an
+application context manager, the caller's next work, such as a plain `fetch` beside the
+call in the same tick or while it reads a stream, does not run under that span. Outside
+such a call, starting a span makes nothing active. Groq, Mistral and Portkey replace SDK
+methods directly, and the Vercel AI SDK and Genkit integrations are turned on through
+their own enable entry, so the agent cannot scope their calls. Without an application
+context manager, a model span they start outside `startActiveSpan` is not the parent of
+the SDK's own request, which can then also arrive as a wire span. A request beside their
+calls is never lost.
 
 With the forwarding switch (`FI_FORWARD_APP_SPANS=true` or `forwardApplicationSpans`),
 the application's provider keeps its processors and the FI processor is added beside
