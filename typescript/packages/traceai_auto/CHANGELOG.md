@@ -15,7 +15,22 @@
 - AI spans keep their parent from your app's active span. A span is active only inside its own SDK call, so a request your app sends beside a call is captured as its own wire span.
 
 ### Known limitations
-- In an app with no OpenTelemetry of its own, a call's own request can also arrive as a wire span, beside the call's AI span, for BeeAI, the OpenAI Agents SDK, the Vercel AI SDK 7 and Genkit. Nothing is lost.
+- Without an application context manager, a call's own request can also
+  arrive as a wire span beside its AI span for BeeAI, the OpenAI Agents
+  SDK, the Vercel AI SDK 7, Genkit and ElevenLabs. BeeAI and the OpenAI
+  Agents SDK start spans in the SDK's own event handlers or trace
+  processor, so the agent cannot tie the SDK's request to its span
+  without guessing. The Vercel AI SDK 7 and Genkit are turned on through
+  their own enable entry, outside the agent's call scope. ElevenLabs
+  patches namespace getters without the agent's scope and starts its
+  span outside a call cell. The duplicate-wire-span fix needs
+  `@traceai/groq` 0.1.2 or later, `@traceai/mistral` 0.1.2 or later and
+  `@traceai/portkey` 0.1.3 or later; with older versions of these packages,
+  the call's own request can still arrive twice. Portkey's Responses API
+  delegates to the `openai` package: when the agent's OpenAI integration
+  is also on and the app has no context manager, OpenAI starts its own
+  span too. The request produces two nested AI spans and no wire span.
+  These are duplicate-span limitations, not lost calls.
 - LangChain is not traced by the agent yet. Its model requests are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans.
 
 ## [0.1.4] - pending release

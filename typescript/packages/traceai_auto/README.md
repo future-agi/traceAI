@@ -157,7 +157,16 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 
 Dedicated instrumentors other than OpenAI are not installed implicitly. The bundled server-build adapters are inactive until you add their plugin to your build configuration. Genkit and Vercel versions without an enable entry report `manual`. Mastra is manual-only in this release. LangChain is not traced by the agent yet, in ES-module and CommonJS apps alike: the integration stays `pending`, and the model requests LangChain sends are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans. See each integration's README for supported methods and versions, and use doctor to inspect the version actually installed in your app.
 
-Without an application context manager, calls from BeeAI and the OpenAI Agents SDK (spans recorded from SDK events or a trace processor), and from the Vercel AI SDK 7 and Genkit (setup through their own enable entry), can also produce a wire span for the call's own request. The agent cannot tie these requests to their integration spans without guessing; neither the call nor a request beside it is dropped. See [Limits to plan for](#limits-to-plan-for).
+Without an application context manager, calls from BeeAI, the OpenAI
+Agents SDK, the Vercel AI SDK 7, Genkit and ElevenLabs can also produce a
+wire span for the call's own request. BeeAI and the OpenAI Agents SDK
+start spans in the SDK's own event handlers or trace processor, so the
+agent cannot tie the SDK's request to the span without guessing. The
+Vercel AI SDK 7 and Genkit are turned on through their own enable entry,
+outside the agent's call scope. ElevenLabs patches namespace getters
+without the agent's scope and starts its span outside a call cell.
+Neither the call nor a request beside it is dropped.
+See [Limits to plan for](#limits-to-plan-for).
 
 ### HTTP protocol coverage
 
@@ -361,7 +370,32 @@ npx --no-install traceai-auto doctor --no-check
 - **An AI request inside two or more of your own recorded spans:** when your code wraps the provider request in two or more recorded spans of its own in a row (for example a custom `fetch` that starts a request span and then an attempt span), Future AGI receives that call twice. It arrives as the integration's AI span and as a wire span whose parent is your inner span, which Future AGI does not receive. None of your spans is sent. One recorded span of yours around the request does not cause this, and neither does a span from an app that has a context manager but no tracer provider.
 - **An AI request inside a span your sampler did not record:** in a trace your sampler did not sample (with an always-off, trace-id-ratio or parent-based sampler), a span your code starts around the provider request (for example in a custom `fetch`) gets an id of its own and no parent id, so the agent cannot connect it to the AI span. Future AGI then receives that call twice: as the integration's AI span and as a wire span whose parent is your span, which Future AGI does not receive. None of your spans is sent. The agent does not guess from the trace id: a separate AI request that your code sends with plain `fetch` in the same trace looks just the same, and a guess would drop it. In this case the call arrives twice rather than being dropped.
 - **A different model request made inside an AI call:** while an integration's AI call runs, wire capture takes every model API request made inside that call to be the call's own, which the AI span already records. If code that runs inside the call sends a different request to a model API (for example a custom `fetch` you give the SDK that first asks another model), that request gets no span of its own.
-- **BeeAI, the OpenAI Agents SDK, the Vercel AI SDK 7 and Genkit calls in an app with no OpenTelemetry of its own can arrive twice:** BeeAI and the OpenAI Agents SDK record their spans from the SDK's own events or trace processor, so the agent cannot tie the SDK's request to the span without guessing. The Vercel AI SDK 7 and Genkit integrations are turned on through their own enable entry, outside the agent's call scope. Without an application context manager, the call's own request can also arrive in Future AGI as a wire span beside its AI span. Nothing is lost: a request your code sends beside the call, in the same tick or while it reads a stream, arrives as a wire span of its own. With your own OpenTelemetry SDK (a context manager) the call arrives once. Groq, Mistral and Portkey now keep their AI span to the SDK call through a per-instance hook, even without an application context manager: their own request arrives once, and a request beside it still arrives as its own wire span. OpenAI and other integrations using OpenTelemetry's instrumentation wrapper also keep their AI span to the call. With the Vercel AI SDK 5 and 6, the AI SDK's spans nest without a context manager.
+- **Calls outside the agent's scope can arrive twice without an
+  application context manager:** BeeAI and the OpenAI Agents SDK start
+  spans in the SDK's own event handlers or trace processor, so the agent
+  cannot tie the SDK's request to the span without guessing. The Vercel
+  AI SDK 7 and Genkit are turned on through their own enable entry,
+  outside the agent's call scope. ElevenLabs patches namespace getters
+  without the agent's scope and starts its span outside a call cell.
+  For these five integrations, the call's own request can also arrive
+  in Future AGI as a wire span beside its AI span. Nothing is lost: a
+  request your code sends beside the call, in the same tick or while it
+  reads a stream, arrives as a wire span of its own. With an application
+  context manager, these calls arrive once. With the Vercel AI SDK 5 and
+  6, the AI SDK's spans nest without a context manager.
+- **Groq, Mistral and Portkey need updated integrations:** the fix needs
+  `@traceai/groq` 0.1.2 or later, `@traceai/mistral` 0.1.2 or later and
+  `@traceai/portkey` 0.1.3 or later. They keep their AI span to the SDK
+  call through a per-instance hook, even without an application context
+  manager: the SDK's own request no longer also arrives as a wire span,
+  and a request beside it still arrives as its own wire span. With older
+  versions of these packages, the call's own request can still arrive
+  twice. OpenAI and other integrations using OpenTelemetry's
+  instrumentation wrapper also keep their AI span to the call.
+  **Portkey Responses API limitation:** it delegates to the `openai`
+  package. When the agent's OpenAI integration is also on and the app
+  has no context manager, OpenAI starts its own span too. The request
+  produces two nested AI spans and no wire span; the call is not lost.
 - **LangChain is not traced by the agent yet:** in ES-module and CommonJS apps alike, the LangChain integration stays `pending` and records no LangChain spans. The model requests LangChain sends are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans, so the calls themselves are not lost. Use `@traceai/langchain`'s own API until a later release adds it.
 
 [Architecture, complete capture limits and redistribution notices](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md)
