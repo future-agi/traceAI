@@ -538,6 +538,28 @@ test("under a parent-based application sampler, a plain fetch AI request beside 
   // None of the application's spans reaches Future AGI, by span id or by name.
   expect(allSpans().filter(span => span.spanId === app.request.spanId || span.name === "app-request").map(span => span.name)).toEqual([]);
 });
+test.each([
+  ["in the same tick as an OpenAI SDK call", "same-tick"],
+  ["while the application reads an OpenAI SDK stream", "stream"],
+])("in an application with no OpenTelemetry of its own, a plain fetch AI request sent %s is not lost", async (_when, mode) => {
+  // No context manager: the application loads no OpenTelemetry. It starts one OpenAI call
+  // and one plain fetch to the same chat route, the plain fetch while the call is still open.
+  // The plain fetch has no AI integration, so its wire span is its only record.
+  const output = await child("beside-ai-call-no-otel.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", ...(mode === "stream" ? { MODE: "stream" } : {}) });
+  expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ mode });
+  expect(requests).toBe(2);
+  // Future AGI receives the OpenAI call once, as its AI span, and the plain fetch as a wire span.
+  const wire = wireSpans();
+  expect(wire).toHaveLength(1);
+  expect(allSpans()).toHaveLength(2);
+  const ai = allSpans().find(span => attrs(span)["traceai.capture.layer"] !== "wire");
+  expect(attrs(ai)["gen_ai.span.kind"] ?? attrs(ai)["fi.span.kind"]).toBe("LLM");
+  // The wire span is the plain fetch's own request, not the SDK's request sent a second
+  // time: it carries the plain fetch's message, and it is not inside the AI call.
+  expect(JSON.stringify(wire[0])).toContain("a plain fetch beside the call");
+  expect(JSON.stringify(ai)).not.toContain("a plain fetch beside the call");
+  expect(wire[0].parentSpanId).not.toBe(ai.spanId);
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
