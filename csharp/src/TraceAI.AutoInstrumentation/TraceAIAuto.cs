@@ -507,19 +507,26 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     internal AutoProcessor(AutoConfig config,Func<bool>? enabled=null)
     {
         _config=config; _enabled=enabled??(()=>true); KnownSecrets.Seed(config);
-        bool inputs=config.Bool("HIDE_INPUTS"),outputs=config.Bool("HIDE_OUTPUTS"),
-            inputMessages=config.Bool("HIDE_INPUT_MESSAGES"),outputMessages=config.Bool("HIDE_OUTPUT_MESSAGES"),
-            inputText=config.Bool("HIDE_INPUT_TEXT"),outputText=config.Bool("HIDE_OUTPUT_TEXT");
-        _mask=config.Options.TraceConfig??new TraceConfig {
+        // A TraceConfig supplied in code is used as given; the hide switches are read, and an
+        // unrecognised value reported, only when they decide what is hidden.
+        _mask=config.Options.TraceConfig??FromHideSwitches(config);
+    }
+    private static TraceConfig FromHideSwitches(AutoConfig config)
+    {
+        bool Hidden(string key)=>config.Hide(key)==true;
+        bool inputs=Hidden("HIDE_INPUTS"),outputs=Hidden("HIDE_OUTPUTS"),
+            inputMessages=Hidden("HIDE_INPUT_MESSAGES"),outputMessages=Hidden("HIDE_OUTPUT_MESSAGES"),
+            inputText=Hidden("HIDE_INPUT_TEXT"),outputText=Hidden("HIDE_OUTPUT_TEXT");
+        return new TraceConfig {
             HideInputs=inputs, HideOutputs=outputs,
             HideInputMessages=inputMessages, HideOutputMessages=outputMessages,
             HideInputText=inputText, HideOutputText=outputText,
-            HideInputImages=config.Bool("HIDE_INPUT_IMAGES"), HideEmbeddingVectors=config.Bool("HIDE_EMBEDDING_VECTORS"),
-            HideLlmInvocationParameters=config.Bool("HIDE_LLM_INVOCATION_PARAMETERS"),
-            // As in TraceConfig: a recognised FI_HIDE_ERROR_DETAILS value wins; when it is unset or
-            // unrecognised, any content hide flag also hides error text, because provider errors
-            // can echo the prompt.
-            HideErrorDetails=config.OptionalBool("HIDE_ERROR_DETAILS")??(inputs||outputs||inputMessages||outputMessages||inputText||outputText),
+            HideInputImages=Hidden("HIDE_INPUT_IMAGES"), HideEmbeddingVectors=Hidden("HIDE_EMBEDDING_VECTORS"),
+            HideLlmInvocationParameters=Hidden("HIDE_LLM_INVOCATION_PARAMETERS"),
+            // As in TraceConfig: a recognised FI_HIDE_ERROR_DETAILS value wins, and an unrecognised
+            // one hides. When it is not set, any content hide switch also hides error text,
+            // because provider errors can echo the prompt.
+            HideErrorDetails=config.Hide("HIDE_ERROR_DETAILS")??(inputs||outputs||inputMessages||outputMessages||inputText||outputText),
             Base64ImageMaxLength=int.TryParse(config.Get("BASE64_IMAGE_MAX_LENGTH"),out var max)?Math.Max(0,max):32000
         };
     }

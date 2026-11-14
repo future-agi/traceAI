@@ -53,7 +53,13 @@ internal sealed class AutoConfig
         Values = ReadFile(options.ConfigFile ?? Environment.GetEnvironmentVariable("FI_CONFIG_FILE") ?? Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
         var fileApi=Values.GetValueOrDefault("FI_API_KEY"); var fileSecret=Values.GetValueOrDefault("FI_SECRET_KEY");
         foreach (System.Collections.DictionaryEntry pair in Environment.GetEnvironmentVariables())
-            if (pair.Key is string key && (key.StartsWith("FI_") || key == "OTEL_SDK_DISABLED")) Values[key] = pair.Value?.ToString() ?? "";
+            if (pair.Key is string key && (key.StartsWith("FI_") || key == "OTEL_SDK_DISABLED"))
+            {
+                var value = pair.Value?.ToString() ?? "";
+                // A blank hide switch is not set, so it does not replace the file's value.
+                if (key.StartsWith("FI_HIDE_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value)) continue;
+                Values[key] = value;
+            }
         Set("CONFIG_FILE",options.ConfigFile); Values.TryAdd("FI_CONFIG_FILE",Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
         // Resolve each source's credential pair atomically; never combine halves.
         Values.Remove("FI_API_KEY"); Values.Remove("FI_SECRET_KEY");
@@ -103,25 +109,25 @@ internal sealed class AutoConfig
     }
     private void Set(string key,string? value) { if(value!=null) Values["FI_"+key]=value; }
     internal string Get(string key) => Values.GetValueOrDefault("FI_"+key)??"";
-    /// <summary>Environment and file values are trimmed and compared case-insensitively, as
-    /// TraceConfig reads FI_HIDE_ERROR_DETAILS: true, 1 or yes is true; false, 0 or no is
-    /// false; anything else is unset.</summary>
-    private bool? ParseBool(string key) => Get(key).Trim().ToLowerInvariant() switch
+    /// <summary>Switches other than the hide switches (FI_WIRE_CAPTURE, FI_AUTO_DEBUG): true,
+    /// 1 or yes is on, trimmed and case-insensitive; anything else is off.</summary>
+    internal bool Bool(string key) => Get(key).Trim().ToLowerInvariant() is "true" or "1" or "yes";
+    /// <summary>A hide switch, from FI_HIDE_* or its file setting, trimmed and case-insensitive:
+    /// true, 1, yes or on hides; false, 0, no or off shows. Null when it is not set or blank, so
+    /// the caller's default applies. Any other value hides, because a hide switch someone set
+    /// must never silently do nothing; it is reported with one warning that names the variable,
+    /// never the value.</summary>
+    internal bool? Hide(string key)
     {
-        "true" or "1" or "yes" => true,
-        "false" or "0" or "no" => false,
-        _ => null,
-    };
-    internal bool Bool(string key) => ParseBool(key) == true;
-    /// <summary>Null when neither the environment nor the file sets the key to a recognised
-    /// value, so the caller's derived default applies. An unrecognised value is ignored with
-    /// one warning that names the variable, never the value.</summary>
-    internal bool? OptionalBool(string key)
-    {
-        var value = ParseBool(key);
-        if (value == null && !string.IsNullOrWhiteSpace(Get(key)))
-            TraceAIAuto.Warn("unrecognised-" + key, "Ignoring FI_" + key + "; use true, false, 1, 0, yes or no.");
-        return value;
+        switch (Get(key).Trim().ToLowerInvariant())
+        {
+            case "": return null;
+            case "true" or "1" or "yes" or "on": return true;
+            case "false" or "0" or "no" or "off": return false;
+            default:
+                TraceAIAuto.Warn("hide-switch-" + key, "FI_" + key + " has a value that is not recognised, so this content is hidden. Use true, 1, yes or on to hide it, or false, 0, no or off to show it.");
+                return true;
+        }
     }
     internal bool Disabled => Values.GetValueOrDefault("OTEL_SDK_DISABLED")?.ToLowerInvariant() == "true";
     internal bool HasCredentials => !string.IsNullOrWhiteSpace(Get("API_KEY")) && !string.IsNullOrWhiteSpace(Get("SECRET_KEY"));
