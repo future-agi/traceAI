@@ -409,4 +409,65 @@ class EndToEndTest
       end
     end
   end
+
+  # Media bookkeeping runs inside the application's own span calls. Only spans
+  # that can reach Future AGI need it: AI-marked spans and server spans. A
+  # database or queue span must not pay for it.
+  def test_media_bookkeeping_skips_application_spans_that_cannot_reach_future_agi
+    code = app_sdk + <<~RUBY
+      abort 'agent not active' unless TraceAI::Auto.active?
+      calls = Hash.new(0)
+      phase = :setup
+      counter = Module.new do
+        define_method(:media_admission) do |*arguments, **options|
+          calls[phase] += 1
+          super(*arguments, **options)
+        end
+      end
+      TraceAI::Auto::Privacy.singleton_class.prepend(counter)
+      tracer = OpenTelemetry.tracer_provider.tracer('app')
+      phase = :database
+      tracer.in_span('db-query', attributes: {'db.statement' => 'SELECT 1'}) do |span|
+        span.set_attribute('db.rows', 1)
+        span.add_event('fetched', attributes: {'rows' => 1})
+      end
+      phase = :ai
+      tracer.in_span('framework', attributes: {'gen_ai.span.kind' => 'CHAIN'}) { |span| span.set_attribute('note', 'ordinary') }
+      phase = :server
+      tracer.in_span('GET /health', kind: :server) { |span| span.set_attribute('http.route', '/health') }
+      phase = :done
+      abort 'bookkeeping ran on a database span: ' + calls.inspect unless calls[:database].zero?
+      abort 'bookkeeping skipped an AI or server span: ' + calls.inspect unless calls[:ai].positive? && calls[:server].positive?
+      puts 'APPLICATION_RAN'
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    assert_equal "APPLICATION_RAN\n", stdout
+    assert_equal ['framework'], export_spans.map { |span, _| span.name }
+  end
+
+  # A span can get its AI marker after other calls. What was recorded before
+  # the marker was not observed, so its export treats the span as lossy and
+  # omits anything that may be media.
+  def test_ai_marker_added_after_other_span_calls_still_omits_media
+    code = app_sdk + <<~RUBY
+      abort 'agent not active' unless TraceAI::Auto.active?
+      host = OpenTelemetry.tracer_provider
+      host.span_limits = OpenTelemetry::SDK::Trace::SpanLimits.new(attribute_count_limit: 32, event_attribute_count_limit: 32, link_attribute_count_limit: 32)
+      values = 40.times.to_h { |i| ['ordinary.' + i.to_s, 'safe sentence'] }.merge('blob.data' => #{MediaAdmissionTest::PAYLOAD.inspect})
+      span = host.tracer('app').start_span('late-marker')
+      span.add_event('media', attributes: values.dup)
+      span.set_attribute('gen_ai.span.kind', 'CHAIN')
+      span.finish
+      abort 'application event changed' unless span.to_span_data.events.first.attributes['blob.data'] == #{MediaAdmissionTest::PAYLOAD.inspect}
+      puts 'APPLICATION_RAN'
+    RUBY
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    assert_equal "APPLICATION_RAN\n", stdout
+    spans = export_spans.map(&:first)
+    assert_equal ['late-marker'], spans.map(&:name)
+    assert_equal 1, spans.first.events.length
+    refute_includes attrs(spans.first.events.first.attributes).to_s, MediaAdmissionTest::PAYLOAD
+  end
 end
