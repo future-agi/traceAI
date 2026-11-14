@@ -694,6 +694,16 @@ class EndToEndTest < Minitest::Test
     assert_equal '__REDACTED__', a['input.value']; assert_equal '__REDACTED__', a['output.value']
     refute_includes JSON.generate(a), 'Hello from Ruby'
   end
+  # A hide switch with a value the agent does not recognise hides that content
+  # and says so once per process, by name and never by value.
+  def test_unrecognised_hide_switch_hides_content_and_warns_once
+    stdout, stderr, status = app(plain_code, {'FI_HIDE_INPUTS' => 'maybe'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    s = export_spans.map(&:first).first; a = attrs(s.attributes)
+    assert_equal '__REDACTED__', a['input.value']; assert_equal 'Hello from Ruby', a['output.value']
+    assert_equal 1, stderr.scan('FI_HIDE_INPUTS').length, stderr
+    refute_includes stderr, 'maybe'
+  end
   def test_sigterm_flush_preserves_signal_exit
     code = "STDOUT.sync = true\n" + plain_code + "\nputs 'READY'; loop { sleep 1 }"
     stdin, stdout, stderr, waiter = Open3.popen3(child_env, RbConfig.ruby, '-e', code, chdir: ROOT)
