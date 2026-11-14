@@ -277,7 +277,9 @@ the application's provider keeps its processors and the FI processor is added be
 them, as earlier releases did; AI spans are then created on that provider. OTel JS 2.x
 has no public late-add-processor API, so this uses the live MultiSpanProcessor list;
 the public 1.x API is also recognized. A provider registered after the preload is joined
-when the first agent span starts. FI project resource attributes are enriched
+on the next tick or when the next agent span starts. AI spans then stay on the agent's
+own provider, so the application's exporters do not receive them, and application spans
+that ended before the join are not forwarded. FI project resource attributes are enriched
 only on the FI export copy. If a custom provider does not expose either supported
 attachment mechanism, the agent warns and keeps AI spans on its own provider. This is a
 degraded fallback, not a promise of processor attachment to arbitrary OTel implementations.

@@ -751,9 +751,9 @@ remains authoritative even for projected identity/metadata.
 | `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL. |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, else the working directory's name, else `DEFAULT_PROJECT_NAME` | FI routing project, recorded separately as `project_name`; never assigns or replaces the application's `service.name` or resource identity (A6). |
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment` for the zero-code path. |
-| `FI_AUTO_INSTRUMENT` | unset | Python only: `true` instruments every interpreter in the environment, with no command change. |
+| `FI_AUTO_INSTRUMENT` | unset | Python only: `true` instruments every interpreter in the environment, with no command change. Node does not read it; use the `--require`/`--import` preload. |
 | `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of integration names. Incoming HTTP (`http`) is the exception: it is on only when this list names it. |
-| `FI_FORWARD_APP_SPANS` | `false` | `true` also sends the application's own spans to Future AGI, as before this rule (Node: `forwardApplicationSpans`). Off by default: Future AGI receives only AI spans. |
+| `FI_FORWARD_APP_SPANS` | `false` | Node only. `true` also sends the application's own spans to Future AGI, as releases before 0.1.5 did (code option `forwardApplicationSpans`). Off by default: Future AGI receives only AI spans. |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist. `wire` disables the wire layer. |
 | `FI_WIRE_CAPTURE` | `true` | `false` disables the wire layer. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Body buffering limit. |
@@ -796,7 +796,8 @@ the same hide controls on every route.
   the existing SIGTERM handler: it flushes (bounded, 5 s), then runs the previous handler, or
   restores the default action and re-raises, so the exit code is unchanged. It holds a
   SIGTERM only while the FI route has spans to send, and not after the collector has failed.
-- **Coexists with OpenTelemetry.** The agent never registers a global tracer provider,
+- **Coexists with OpenTelemetry.** (Implemented by the Node agent; the other runtimes
+  still follow their own sections until they adopt it.) The agent never registers a global tracer provider,
   context manager or propagator, so an application SDK started before or after it registers
   normally and its exporters receive its own spans. The agent keeps its own isolated
   provider whose only processor is the FI route, binds every instrumentor and the wire layer
@@ -805,7 +806,7 @@ the same hide controls on every route.
   none, the agent keeps parent links between its own spans privately. Future AGI receives
   only spans from agent-bound tracers (wire and traceAI integration spans). The forwarding
   switch (`FI_FORWARD_APP_SPANS=true`; Node `forwardApplicationSpans: true`) also attaches the
-  FI route to the application's provider, as before this rule; `FI_HIDE_*` then also hides
+  FI route to the application's provider, as releases before 0.1.5 did; `FI_HIDE_*` then also hides
   other AI tracers' content keys (`ai.prompt*`, `ai.response.*`, `ai.toolCall.*`,
   `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input/output`,
   `llm.input_messages.*`, `llm.output_messages.*` and the Vercel AI SDK content keys such as
@@ -822,7 +823,7 @@ the same hide controls on every route.
   (and existing project-type/version metadata). Add routing on the FI-owned export snapshot
   when the provider is host-owned; do not mutate its resource or other exporters' view.
   Resource preservation does not bypass S1 credential/media scrubbing of the FI export view.
-- **Transactions.** Incoming HTTP instrumentation is off by default. Only an explicit
+- **Transactions.** (Implemented by the Node agent.) Incoming HTTP instrumentation is off by default. Only an explicit
   allowlist entry turns it on (`FI_INSTRUMENTATIONS` including `http`). Even then, a `SERVER`
   span is sent to Future AGI only when an AI span was seen in the same trace, so requests
   with no AI call, such as health checks, are never sent. AI calls inside the application's
