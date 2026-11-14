@@ -12,12 +12,14 @@ import static org.junit.jupiter.api.Assertions.*;
 class SessionIdExportTest {
     static Map<String, Object> exported(String scope, Map<String, String> attributes) {
         var memory = InMemorySpanExporter.create();
+        SpanData data;
+        // Read the finished span while the provider is open: closing it shuts the in-memory exporter down, which empties it.
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(memory)).build()) {
             var span = provider.get(scope).spanBuilder("chat test-model").startSpan();
             attributes.forEach(span::setAttribute);
             span.end();
+            data = memory.getFinishedSpanItems().get(0);
         }
-        SpanData data = memory.getFinishedSpanItems().get(0);
         Object json = new OtlpJsonExporter(AutoConfig.resolve(Map.of(), Map.of())).serialize(data);
         Object span = WireCore.first(WireCore.get(WireCore.first(WireCore.get(json, "scopeSpans")), "spans"));
         Map<String, Object> result = new LinkedHashMap<>();
