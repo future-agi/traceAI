@@ -36,6 +36,14 @@ function globals() {
     console.log(JSON.stringify({ active: auto.report().active, fetchUnchanged: globalThis.fetch === fetchBefore, emitUnchanged: process.emit === emitBefore, sigterm: process.listenerCount('SIGTERM'), globals: globals() }));
     return;
   }
+  if (mode === 'ignored-provider') {
+    const { BasicTracerProvider } = require('@opentelemetry/sdk-trace-base');
+    const auto = require('@traceai/auto'), supplied = new BasicTracerProvider();
+    const returned = auto.init({ provider: supplied });
+    console.log(JSON.stringify({ returnedSupplied: returned === supplied, active: auto.report().active }));
+    await auto.shutdown();
+    return;
+  }
   if (mode === 'integration-status') {
     const status = require('@traceai/auto').report().integrations.find(integration => integration.name === process.env.STATUS_OF);
     console.log(JSON.stringify({ status: status?.status ?? null, reason: status?.reason ?? null }));

@@ -433,6 +433,12 @@ test("with incoming http and outgoing propagation switched on, the agent still r
   expect(JSON.parse(output.stdout.trim())).toEqual({ active: true, globals: { trace: "NoopTracerProvider", context: "NoopContextManager", propagation: "NoopTextMapPropagator" } });
   expect(wireSpans()).toHaveLength(1);
 });
+test("init() given a provider beside an FI route warns once that AI spans stay on the agent's own provider", async () => {
+  const output = await child("own-provider.cjs", [], { MODE: "ignored-provider" });
+  expect(JSON.parse(output.stdout.trim())).toEqual({ returnedSupplied: false, active: true });
+  const warnings = output.stderr.split("\n").filter(line => line.includes("[traceai:auto]"));
+  expect(warnings).toHaveLength(1); expect(warnings[0]).toContain("forwardApplicationSpans");
+});
 test("Genkit is reported as manual on the AI-only route, and as instrumented with the forwarding switch", async () => {
   const route = { MODE: "integration-status", STATUS_OF: "genkit", FI_INSTRUMENTATIONS: "genkit" };
   const aiOnly = JSON.parse((await child("own-provider.cjs", ["--import", "@traceai/auto/register"], route)).stdout.trim());
