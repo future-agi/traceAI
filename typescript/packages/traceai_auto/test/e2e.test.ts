@@ -626,6 +626,30 @@ test("in an application with no OpenTelemetry of its own, a plain fetch AI reque
   const plain = wireSpans().filter(span => JSON.stringify(span).includes("a plain fetch beside the agent run"));
   expect({ got, plainFetchWireSpan: plain.length > 0 }).toEqual({ got, plainFetchWireSpan: true });
 }, 60000);
+test.each([
+  ["an AI call from an integration the agent does not scope", "unscoped", "unscoped model call"],
+  ["fi-core's startActiveSpan, whose callback returns before its span ends", "active-span-left-open", "span left open"],
+])("in an application with no OpenTelemetry of its own and incoming http listed, a plain fetch AI request a request handler sends after %s is not lost, and both nest under the SERVER span", async (_what, mode, name) => {
+  // No context manager. Inside a request handler, the application starts an AI span with an
+  // agent-bound tracer outside any patched SDK call, as Groq, BeeAI or the AI SDK 7 telemetry
+  // do, and then sends a plain fetch to the chat route while that span still records
+  // (test/apps/unscoped-in-request-no-otel.cjs).
+  const output = await child("unscoped-in-request-no-otel.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", MODE: mode });
+  expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ mode, answer: "hello world" });
+  expect(requests).toBe(1);
+  // What Future AGI received, shown when a check below fails.
+  const got = allSpans().map(span => `${span.name} (kind ${span.kind}, ${attrs(span)["traceai.capture.layer"]})`);
+  const server = allSpans().filter(span => span.kind === 2);
+  const ai = allSpans().filter(span => span.name === name);
+  expect({ got, server: server.length, ai: ai.length }).toEqual({ got, server: 1, ai: 1 });
+  // The AI call keeps its span, a child of the request's SERVER span.
+  expect(ai[0].parentSpanId).toBe(server[0].spanId);
+  // The plain fetch arrives as its own wire span, also a child of the SERVER span, not of the AI span.
+  const plain = wireSpans().filter(span => JSON.stringify(span).includes("a plain fetch after the AI call"));
+  expect({ got, plainFetchWireSpan: plain.length }).toEqual({ got, plainFetchWireSpan: 1 });
+  expect(plain[0].parentSpanId).toBe(server[0].spanId);
+  expect(JSON.stringify(ai[0])).not.toContain("a plain fetch after the AI call");
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
