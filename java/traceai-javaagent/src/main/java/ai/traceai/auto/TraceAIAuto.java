@@ -26,6 +26,8 @@ public final class TraceAIAuto {
     private static volatile boolean active, initialized;
     private static volatile Instrumentation AGENT_INSTRUMENTATION;
     private static final AtomicBoolean REPEATED = new AtomicBoolean();
+    private static final Object OTEL_RECHECK = new Object();
+    private static volatile boolean otelRechecked, besideOtel;
     private static volatile AutoConfig config;
     static final class RuntimeState {
         private final AutoConfig config;
@@ -100,11 +102,7 @@ public final class TraceAIAuto {
             KnownSecrets.PROCESS.seed(config, System.getenv());
             reportLibraries();
             if (config.flag("OTEL_SDK_DISABLED")) { STATUS.put("wire", "disabled"); return; }
-            if (OtelJavaAgent.present()) {
-                STATUS.put("wire", "disabled (OpenTelemetry Java agent detected)");
-                warn("The OpenTelemetry Java agent is also running; the Future AGI agent stays off and the application runs unchanged");
-                return;
-            }
+            if (OtelJavaAgent.present()) { offBesideOtelJavaAgent(); return; }
             if (!config.credentials()) {
                 // Nothing was installed, so a later init() that supplies keys can still start.
                 initialized = false;
@@ -134,6 +132,28 @@ public final class TraceAIAuto {
             STATUS.put("wire", "failed"); warn("Initialization failed; application runs without auto-instrumentation");
         }
         finally { if (config != null && config.flag("FI_AUTO_DEBUG")) System.err.println(doctor()); }
+    }
+    private static void offBesideOtelJavaAgent() {
+        active = false;
+        STATUS.put("wire", "disabled (OpenTelemetry Java agent detected)");
+        warn("The OpenTelemetry Java agent is also running; the Future AGI agent stays off and the application runs unchanged");
+    }
+    /**
+     * An OpenTelemetry Java agent listed after this one on the command line runs its premain after this
+     * agent has started, so the startup check cannot see it. Every premain has run before the
+     * application's first HTTP call, so look once more there, and turn off before tracing anything.
+     */
+    static boolean besideOtelJavaAgent() {
+        if (!otelRechecked) {
+            synchronized (OTEL_RECHECK) {
+                if (!otelRechecked) {
+                    try { if (OtelJavaAgent.present()) { besideOtel = true; offBesideOtelJavaAgent(); } }
+                    catch (Throwable ignored) { }
+                    finally { otelRechecked = true; }
+                }
+            }
+        }
+        return besideOtel;
     }
     public static String doctor() {
         try {
@@ -229,7 +249,7 @@ public final class TraceAIAuto {
     static WireCapture begin(String method, String url, Map<String, String> headers) { return begin(method, url, headers, null); }
     static WireCapture begin(String method, String url, Map<String, String> headers, OtelBridge.Snapshot requestContext) {
         try {
-            if (!active) return null;
+            if (!active || besideOtelJavaAgent()) return null;
             KnownSecrets.observe(headers, url);
             OtelBridge.Snapshot context = requestContext == null ? OtelBridge.snapshot() : requestContext;
             if (IN_FLIGHT.get()) return null;
@@ -338,7 +358,7 @@ public final class TraceAIAuto {
         try { if (active) OkHttpTransport.requestContext(call); } catch (Throwable ignored) { }
     }
     public static void installOkHttp(Object builder) {
-        try { if (transportEnabled("okhttp")) OkHttpTransport.install(builder); } catch (Throwable ignored) { integrationFailed("okhttp"); }
+        try { if (transportEnabled("okhttp") && !besideOtelJavaAgent()) OkHttpTransport.install(builder); } catch (Throwable ignored) { integrationFailed("okhttp"); }
     }
     private TraceAIAuto() {}
 }

@@ -140,7 +140,7 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 * `FI_HIDE_ERROR_DETAILS` is not yet honored by the agent.
 * Export is OTLP/HTTP JSON in bounded batches, without disk spooling. It has been tested against a local mock collector only.
 * Binary Bedrock event streams record request information and status only.
-* The agent stays off, with one warning, when the OpenTelemetry Java agent runs in the same JVM; the application runs unchanged. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
+* The agent stays off, with one warning, when the OpenTelemetry Java agent runs in the same JVM, whichever `-javaagent` comes first; the application runs unchanged. When the OpenTelemetry Java agent is listed after this one, the warning appears at the application's first HTTP call, before anything is traced. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
 * Credentials that an application transforms before sending (re-encoded, split, numeric) are not matched by value; register them with `TraceAIAuto.registerSecret` or use the hide controls.
 
 ## Tests
