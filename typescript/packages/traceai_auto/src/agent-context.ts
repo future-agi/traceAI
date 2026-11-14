@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { context, ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
+import { suppressTracing } from "@opentelemetry/core";
+import { getAttributesFromContext, setMetadata, setSession, setUser } from "@traceai/fi-core";
 import { HTTP_SCOPE, incomingParent } from "./incoming-parent";
 
 /**
@@ -9,12 +11,25 @@ import { HTTP_SCOPE, incomingParent } from "./incoming-parent";
  * active span. When it has none, a private AsyncLocalStorage keeps parent links
  * between the spans that agent-bound tracers start. It is never registered with
  * the API, so the application's own OpenTelemetry setup is not affected.
+ *
+ * The state is shared by every loaded copy of the agent (the preload bundle and
+ * the package an application imports), so the public helpers reach the agent.
  */
-const store = new AsyncLocalStorage<Context>();
-// The context each entered span started in, so later work steps out of it once it ends.
-const parents = new WeakMap<object, Context>();
-// Spans made by agent-bound tracers, including wire spans.
-const agentSpans = new WeakSet<object>();
+const REGISTRY = Symbol.for("traceai.auto.context.v1");
+interface ContextRegistry {
+  version: 1;
+  store: AsyncLocalStorage<Context>;
+  // The context each entered span started in, so later work steps out of it once it ends.
+  parents: WeakMap<object, Context>;
+  // Spans made by agent-bound tracers, including wire spans.
+  agentSpans: WeakSet<object>;
+}
+const registryHost = globalThis as typeof globalThis & { [REGISTRY]?: ContextRegistry };
+const sharedRegistry = registryHost[REGISTRY];
+const registry: ContextRegistry = sharedRegistry?.version === 1 ? sharedRegistry
+  : { version: 1, store: new AsyncLocalStorage<Context>(), parents: new WeakMap<object, Context>(), agentSpans: new WeakSet<object>() };
+if (!sharedRegistry) Object.defineProperty(registryHost, REGISTRY, { value: Object.freeze(registry) });
+const { store, parents, agentSpans } = registry;
 
 /** True when anyone, normally the application, registered an OpenTelemetry context manager. */
 export function applicationContextManager(): boolean {
@@ -49,6 +64,42 @@ export function withContext<T>(ctx: Context, fn: () => T): T {
   return applicationContextManager() ? context.with(ctx, fn) : store.run(ctx, fn);
 }
 
+/**
+ * Public helpers. They run fn with a context for AI spans: in the agent's private
+ * context, and through the API's context.with, which reaches the application's
+ * context manager when it has one. They register nothing globally.
+ */
+export function runInContext<T>(ctx: Context, fn: () => T): T {
+  return store.run(ctx, () => context.with(ctx, fn));
+}
+/** AI spans started inside fn carry this session id. Helpers nest. */
+export function runWithSession<T>(sessionId: string, fn: () => T): T {
+  return runInContext(setSession(activeContext(), { sessionId }), fn);
+}
+/** AI spans started inside fn carry this user id. */
+export function runWithUser<T>(userId: string, fn: () => T): T {
+  return runInContext(setUser(activeContext(), { userId }), fn);
+}
+/** AI spans started inside fn carry this metadata. */
+export function runWithMetadata<T>(metadata: Record<string, unknown>, fn: () => T): T {
+  return runInContext(setMetadata(activeContext(), metadata), fn);
+}
+/** No AI span is started inside fn, and OpenTelemetry instrumentations see the suppression too. */
+export function runWithTracingSuppressed<T>(fn: () => T): T {
+  return runInContext(suppressTracing(activeContext()), fn);
+}
+
+// Without an application context manager, FI tracers read the API's empty context.
+// Spans parented through the private context also take its context attributes
+// (session, user, metadata, tags), unless the caller already set them.
+function withContextAttributes(options: SpanOptions | undefined, parent: Context): SpanOptions | undefined {
+  try {
+    const inherited = getAttributesFromContext(parent);
+    if (!Object.keys(inherited).length) return options;
+    return { ...options, attributes: { ...inherited, ...options?.attributes } };
+  } catch { return options; }
+}
+
 export function markAgentSpan(span: object): void { agentSpans.add(span); }
 export function isAgentSpan(span: object): boolean { return agentSpans.has(span); }
 
@@ -70,7 +121,7 @@ function startSpan(tracer: Tracer, name: string, options?: SpanOptions, ctx?: Co
     return span;
   }
   const parent = ctx === undefined || ctx === ROOT_CONTEXT ? activeContext() : ctx;
-  const span = tracer.startSpan(name, options, parent);
+  const span = tracer.startSpan(name, parent !== ctx ? withContextAttributes(options, parent) : options, parent);
   markAgentSpan(span);
   enter(parent, span);
   return span;
@@ -88,7 +139,7 @@ function startActiveSpan(tracer: Tracer, args: unknown[]): unknown {
     return context.with(trace.setSpan(parent, span), fn, undefined, span);
   }
   const parent = ctx === undefined || ctx === ROOT_CONTEXT ? activeContext() : ctx;
-  const span = tracer.startSpan(name, options, parent);
+  const span = tracer.startSpan(name, parent !== ctx ? withContextAttributes(options, parent) : options, parent);
   markAgentSpan(span);
   try { if (span.isRecording()) parents.set(span, parent); } catch { /* Best effort. */ }
   return store.run(trace.setSpan(parent, span), () => fn(span));

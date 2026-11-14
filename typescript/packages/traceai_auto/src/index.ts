@@ -22,6 +22,9 @@ import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";
 import { idempotentExporter } from "./idempotent-export";
 export { registerSecret } from "@traceai/fi-core";
+// Context for AI spans, also in applications without their own context manager.
+export { runInContext as withContext, runWithSession as withSession, runWithUser as withUser,
+  runWithMetadata as withMetadata, runWithTracingSuppressed as withTracingSuppressed } from "./agent-context";
 
 export type { Options } from "./config";
 interface AgentState {

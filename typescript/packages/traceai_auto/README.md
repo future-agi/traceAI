@@ -199,6 +199,26 @@ The most-used settings are below. Set them **before** loading the agent; later `
 
 [Full configuration reference](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md) covers every `init()` option, environment setting, config/profile precedence, privacy flag and CLI command.
 
+### Session, user and metadata for AI spans
+
+The agent registers no context manager. If your application has its own OpenTelemetry
+SDK, fi-core's context helpers used with `context.with` (for example
+`context.with(setSession(context.active(), { sessionId }), fn)`) reach AI spans as usual.
+Without one, `context.with` does nothing, so use the agent's helpers. They work in both
+cases and register nothing globally:
+
+```js
+const { withSession, withUser, withMetadata, withContext, withTracingSuppressed } = require('@traceai/auto');
+
+await withSession('session-42', () => withUser('user-7', () => withMetadata({ plan: 'pro' }, () => answer(question))));
+await withTracingSuppressed(() => healthCheckCall()); // no AI span, and other OpenTelemetry instrumentations see the suppression
+await withContext(myContext, () => answer(question)); // runs with exactly this context
+```
+
+`withSession`, `withUser`, `withMetadata` and `withTracingSuppressed` add to the current
+context and nest. `withContext(ctx, fn)` runs `fn` with `ctx` both in the agent's own
+context and through `context.with`.
+
 ### Outgoing W3C propagation (HTTP/HTTPS only)
 
 Experimental propagation for **`node:http` and `node:https` only** is **off by default**.

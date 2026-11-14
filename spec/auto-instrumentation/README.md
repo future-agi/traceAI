@@ -739,7 +739,9 @@ remains authoritative even for projected identity/metadata.
 - Every attribute goes through the SDK's `TraceConfig` masking (`FI_HIDE_INPUTS`,
   `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, ...), the same as library-layer spans.
 - Context attributes (`using_session`, `using_user`, `using_metadata`, ...) are added to wire
-  spans the same way library instrumentors add them.
+  spans the same way library instrumentors add them. Node registers no context manager:
+  applications without their own use the agent's `withSession`, `withUser`, `withMetadata`,
+  `withContext` and `withTracingSuppressed` helpers.
 
 ## Environment variables (all SDKs)
 
