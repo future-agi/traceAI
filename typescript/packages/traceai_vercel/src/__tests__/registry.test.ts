@@ -41,7 +41,7 @@ afterAll(async () => {
 });
 beforeEach(() => { collected = []; requests = 0; });
 
-async function child(major: number, method: string, traced: boolean): Promise<any> {
+async function child(major: number, method: string, traced: boolean, forward = false): Promise<any> {
   const scratch = mkdtempSync(join(root, ".traceai-vercel-s5-"));
   try {
     const modules = join(scratch, "node_modules");
@@ -64,6 +64,8 @@ async function child(major: number, method: string, traced: boolean): Promise<an
     Object.assign(env, { NODE_OPTIONS: "", FI_API_KEY: "synthetic-fi-api-private-key", FI_SECRET_KEY: "synthetic-fi-private-secret",
       FI_BASE_URL: url, FI_INSTRUMENTATIONS: "vercel,wire", FI_PROJECT_NAME: "vercel-s5-test",
       MOCK_URL: url, OTEL_SDK_DISABLED: "false" });
+    // The switch that also sends the application's own spans to Future AGI.
+    if (forward) env.FI_FORWARD_APP_SPANS = "true";
     const args = ["--no-deprecation", "-r", join(__dirname, "registry-preload.cjs"), ...(traced ? ["-r", auto] : []), app, String(major), method, traced ? "traced" : "baseline"];
     // Serial child runtimes stay inside the suite's heavy.sh process-tree budget;
     // acquiring a second heavy slot here could deadlock concurrent guarded suites.
@@ -85,21 +87,64 @@ async function child(major: number, method: string, traced: boolean): Promise<an
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
+// Spans the application creates on its own provider: one enclosing each AI call, one
+// unrelated span after it, and one inside the second call's provider transport.
+const APPLICATION_SPANS = ["enclosing application", "later unrelated application", "sdk-native client"];
+const names = (spans: any[]): string[] => spans.map(span => span.name).sort();
+
+// Runs the application without and then with the agent. On every route the application
+// behaves as without the agent, the provider sees each call once, and nothing Future AGI
+// receives holds the provider credential or the Future AGI keys.
+async function run(major: number, method: string, forward: boolean): Promise<{ baseline: any; actual: any; spans: any[] }> {
+  const baseline = await child(major, method, false);
+  expect(collected).toHaveLength(0);
+  const actual = await child(major, method, true, forward);
+  expect(actual.application).toEqual(baseline.application);
+  expect(actual.live).toBe(0);
+  expect(requests).toBe(4); // Once each, direct and intermediate-native, baseline and agent.
+  const output = JSON.stringify(collected);
+  for (const result of actual.application) {
+    expect(output).not.toContain(result.secret);
+    expect(output).not.toContain(encodeURIComponent(result.secret));
+  }
+  expect(output).not.toContain("synthetic-fi-api-private-key");
+  expect(output).not.toContain("synthetic-fi-private-secret");
+  return { baseline, actual, spans: exportedSpans() };
+}
+
+// The AI SDK's model spans: one per call, failed, with the input captured. The wire
+// layer does not send the same call a second time.
+function expectModelSpans(spans: any[]): void {
+  expect(spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire").map(span => span.name)).toEqual([]);
+  const models = spans.filter(span => attrs(span)["gen_ai.span.kind"] === "LLM");
+  expect(models).toHaveLength(2);
+  models.forEach(span => expect(span.status.code).toBe(2));
+  // Capture is ON by default. Passing by dropping all telemetry is not enough.
+  expect(models.every(span => JSON.stringify(span.attributes).includes("ordinary visible input"))).toBe(true);
+}
+
 describe.each([5, 6, 7])("zero-code S5 AI SDK v%i", major => {
-  test.each(["generateText", "streamText"])("%s provider 401 scrubs covered, enclosing and unrelated spans through the real exporter", async method => {
-    const baseline = await child(major, method, false);
-    expect(collected).toHaveLength(0);
-    const actual = await child(major, method, true);
-    expect(actual.application).toEqual(baseline.application);
-    expect(actual.live).toBe(0);
-    expect(requests).toBe(4); // Once each, direct and intermediate-native, baseline and agent.
-    const spans = exportedSpans();
+  test.each(["generateText", "streamText"])("%s provider 401 scrubs the covered AI spans; enclosing and unrelated application spans stay with the application", async method => {
+    const { baseline, actual, spans } = await run(major, method, false);
+    // Future AGI receives only AI spans. None of the application's own spans reach it:
+    // not the span enclosing the call, the unrelated one after it, or the one the
+    // application creates inside the call.
+    const application = new Set(actual.raw.map((span: any) => span.id));
+    expect(spans.filter(span => application.has(span.spanId)).map(span => span.name)).toEqual([]);
+    expect(names(spans).filter(name => APPLICATION_SPANS.includes(name))).toEqual([]);
+    // They stay with the application's own exporter, as without the agent.
+    expect(names(actual.raw)).toEqual(names(baseline.raw));
+    expect(actual.raw.filter((span: any) => span.name === "enclosing application")).toHaveLength(2);
+    expect(actual.raw.filter((span: any) => span.name === "later unrelated application")).toHaveLength(2);
+    expectModelSpans(spans);
+  }, 45000);
+
+  test.each(["generateText", "streamText"])("%s with FI_FORWARD_APP_SPANS on, provider 401 scrubs covered, enclosing and unrelated spans through the real exporter", async method => {
+    const { actual, spans } = await run(major, method, true);
+    // The switch sends every span the application's provider ends, AI and application alike.
     expect(spans).toHaveLength(actual.raw.length);
     expect(new Set(spans.map(span => span.spanId))).toEqual(new Set(actual.raw.map((span: any) => span.id)));
-    expect(spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire")).toHaveLength(0);
-    const models = spans.filter(span => attrs(span)["gen_ai.span.kind"] === "LLM");
-    expect(models).toHaveLength(2);
-    models.forEach(span => expect(span.status.code).toBe(2));
+    expectModelSpans(spans);
     const parents = spans.filter(span => span.name === "enclosing application");
     const unrelated = spans.filter(span => span.name === "later unrelated application");
     expect(parents).toHaveLength(2);
@@ -112,14 +157,5 @@ describe.each([5, 6, 7])("zero-code S5 AI SDK v%i", major => {
       expect(span.links).toHaveLength(1);
     });
     unrelated.forEach(span => expect(attrs(span).safe).toBe("ordinary visible input"));
-    // Capture is ON by default. Passing by dropping all telemetry is not enough.
-    expect(models.every(span => JSON.stringify(span.attributes).includes("ordinary visible input"))).toBe(true);
-    const output = JSON.stringify(collected);
-    for (const result of actual.application) {
-      expect(output).not.toContain(result.secret);
-      expect(output).not.toContain(encodeURIComponent(result.secret));
-    }
-    expect(output).not.toContain("synthetic-fi-api-private-key");
-    expect(output).not.toContain("synthetic-fi-private-secret");
   }, 45000);
 });
