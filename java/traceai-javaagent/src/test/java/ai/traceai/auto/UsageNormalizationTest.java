@@ -6,7 +6,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundSixUsageTest {
+class UsageNormalizationTest {
     @TestFactory Stream<DynamicTest> everySharedUsageProjection() throws Exception {
         List<Path> paths;
         try (var walk = Files.walk(WireFixturesTest.SPEC.resolve("fixtures"))) { paths = walk.filter(p -> p.toString().endsWith(".json")).sorted().toList(); }

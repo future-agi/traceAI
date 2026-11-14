@@ -8,7 +8,7 @@ import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import java.util.*;
 
 /** Runs against the shaded agent while using only application-owned, unshaded APIs. */
-public final class VerifierApp {
+public final class WrapperPrivacyApp {
     static void run(String[] args) throws Exception {
         if (args[2].equals("verify_parent")) {
             var parent = SpanContext.createFromRemoteParent("12345678901234567890123456789012", "1234567890123456", TraceFlags.getSampled(), TraceState.builder().put("vendor", "state").build());

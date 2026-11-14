@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundThreeRegressionTest {
+class StreamAndExportRegressionTest {
     @Test void truncatedAndMalformedJsonFailClosedAtEveryExportSurface() throws Exception {
         String privateJson = "{\"password\":\"WRAPPER_PRIVATE_PASSWORD\",\"prompt\":\"" + "x".repeat(40000) + "\"}";
         String truncated = privateJson.substring(0, 32000) + "…";

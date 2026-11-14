@@ -519,8 +519,8 @@ class AgentE2ETest {
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
     void processRegistryProtectsUnrelatedThreadsAfterSuppressedAsyncCalls(String client) throws Exception {
-        String baseline = run(client, "registry", Map.of("TRACEAI_TEST_NO_AGENT", "true", "ROUND5_AUTH_TOKEN", RegistryApp.ENV), true); assertTrue(spans.isEmpty());
-        String observed = run(client, "registry", Map.of("ROUND5_AUTH_TOKEN", RegistryApp.ENV), true);
+        String baseline = run(client, "registry", Map.of("TRACEAI_TEST_NO_AGENT", "true", RegistryApp.ENV_NAME, RegistryApp.ENV), true); assertTrue(spans.isEmpty());
+        String observed = run(client, "registry", Map.of(RegistryApp.ENV_NAME, RegistryApp.ENV), true);
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=")).toList());
         assertOnlyWireSpans(1, observed);
         String exported = WireCore.dump(collectorPayloads);
@@ -535,7 +535,7 @@ class AgentE2ETest {
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
     void proxyCredentialsAreObservedUnderSuppressionAndProtectLaterSpansWithBaselineParity(String client) throws Exception {
-        var options = Map.of("ROUND5_AUTH_TOKEN", RegistryApp.ENV, "TRACEAI_TEST_PROXY_PORT", Integer.toString(server.getAddress().getPort()));
+        var options = Map.of(RegistryApp.ENV_NAME, RegistryApp.ENV, "TRACEAI_TEST_PROXY_PORT", Integer.toString(server.getAddress().getPort()));
         var baselineOptions = new HashMap<>(options); baselineOptions.put("TRACEAI_TEST_NO_AGENT", "true");
         String baseline = run(client, "registry_proxy", baselineOptions, true); assertTrue(spans.isEmpty());
         assertEquals(RegistryApp.PROXY, receivedHeaders.get("proxy-authorization"));
@@ -598,7 +598,7 @@ class AgentE2ETest {
     @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,true", "okhttp,true", "jdk,false", "okhttp,false"})
     void applicationMessageSpansNeverReachFutureAgiWithOrWithoutImageHiding(String client, boolean hide) throws Exception {
         String baseline = run(client, "registry_media", Map.of("TRACEAI_TEST_NO_AGENT", "true"), true); assertTrue(spans.isEmpty());
-        String observed = run(client, "registry_media", Map.of("FI_HIDE_INPUT_IMAGES", Boolean.toString(hide), "ROUND5_AUTH_TOKEN", RegistryApp.ENV), true);
+        String observed = run(client, "registry_media", Map.of("FI_HIDE_INPUT_IMAGES", Boolean.toString(hide), RegistryApp.ENV_NAME, RegistryApp.ENV), true);
         assertEquals(baseline.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("MEDIA_UNCHANGED=")).toList(), observed.lines().filter(line -> line.startsWith("BODY=") || line.startsWith("REQUEST_WRITES=") || line.startsWith("MEDIA_UNCHANGED=")).toList());
         assertOnlyWireSpans(1, observed); assertEquals(2, uploads.get());
         String exported = WireCore.dump(collectorPayloads);

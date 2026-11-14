@@ -13,10 +13,12 @@ import okhttp3.*;
 
 /** A real shaded-agent probe: suppressed transport credentials must protect an unrelated thread. */
 public final class RegistryApp {
-    static final String HEADER = "ROUND5_TRANSPORT_ONLY_HEADER", QUERY = "ROUND5_TRANSPORT_ONLY_QUERY", API = "ROUND5_PUBLIC_REGISTRATION", ENV = "ROUND5_ENVIRONMENT_CREDENTIAL";
+    static final String HEADER = "SYNTHETIC_TRANSPORT_ONLY_HEADER", QUERY = "SYNTHETIC_TRANSPORT_ONLY_QUERY", API = "SYNTHETIC_PUBLIC_REGISTRATION", ENV = "SYNTHETIC_ENVIRONMENT_CREDENTIAL";
+    /** A credential-named environment variable, whose value the agent registers at startup. */
+    static final String ENV_NAME = "SYNTHETIC_AUTH_TOKEN";
     static final String PROXY_PAYLOAD = Base64.getEncoder().encodeToString("probe:proxy-secret-802701xx".getBytes(StandardCharsets.UTF_8));
     static final String PROXY = "Basic " + PROXY_PAYLOAD;
-    static final String SESSION = "ROUND5_AWS_SESSION_TOKEN_81973264", BODY_SECRET = "ROUND5_TRAILING_PASSWORD_81973264";
+    static final String SESSION = "SYNTHETIC_AWS_SESSION_TOKEN_81973264", BODY_SECRET = "SYNTHETIC_TRAILING_PASSWORD_81973264";
     static final String IMAGE = "https://image.example/PRIVATE_IMAGE";
     static final String MESSAGES = "[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"PUBLIC_MESSAGE_TEXT\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"" + IMAGE + "\"}},{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"QUJD\",\"format\":\"wav\"}}]}]";
     static void run(String[] args) throws Exception {

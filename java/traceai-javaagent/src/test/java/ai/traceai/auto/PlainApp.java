@@ -20,7 +20,7 @@ public final class PlainApp {
         if (args[2].startsWith("coexist")) { CoexistApp.run(args); return; }
         if (args[2].startsWith("verify_headers")) { HeaderPrivacyApp.run(args); return; }
         if (args[2].equals("legacy_okhttp")) { legacyOkhttp(args); return; }
-        if (args[2].equals("verify_wrapper") || args[2].equals("verify_parent") || args[2].equals("verify_cohere")) { VerifierApp.run(args); return; }
+        if (args[2].equals("verify_wrapper") || args[2].equals("verify_parent") || args[2].equals("verify_cohere")) { WrapperPrivacyApp.run(args); return; }
         if (args[2].startsWith("dedup") || args[2].startsWith("framework")) { ContextApp.run(args); return; }
         if (args[2].equals("wrapper_init")) { WrapperInitApp.run(args); return; }
         if (args[2].equals("late_keys")) { LateKeysApp.run(args); return; }

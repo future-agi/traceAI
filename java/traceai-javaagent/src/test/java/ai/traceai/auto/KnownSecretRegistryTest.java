@@ -12,7 +12,7 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundFiveRegressionTest {
+class KnownSecretRegistryTest {
     @Test void registryEvictsLeastRecentlyObservedValueAndReusesImmutableSnapshots() {
         var registry = new KnownSecrets();
         registry.register("short"); registry.register(null);
@@ -51,7 +51,7 @@ class RoundFiveRegressionTest {
         } finally { pool.shutdownNow(); }
     }
     @Test void everyExportSurfaceUsesSecretsRegisteredAfterSpanCreationWithoutMutation() throws Exception {
-        assertAllSurfacesScrubbed("ROUND5_LATE_REGISTERED_SECRET", () -> TraceAIAuto.registerSecret("ROUND5_LATE_REGISTERED_SECRET"));
+        assertAllSurfacesScrubbed("SYNTHETIC_LATE_REGISTERED_SECRET", () -> TraceAIAuto.registerSecret("SYNTHETIC_LATE_REGISTERED_SECRET"));
     }
     @Test void proxyAuthorizationRegistersFullHeaderAndSchemePayloadForEveryExportSurface() throws Exception {
         String payload = Base64.getEncoder().encodeToString("probe:proxy-secret-802701xx".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -66,7 +66,7 @@ class RoundFiveRegressionTest {
         assertEquals("<redacted>", ExportPrivacy.privacy(AutoConfig.resolve(Map.of(), Map.of())).text("Basic abc"), "Register the full value even when the scheme payload is shorter than eight characters");
     }
     @Test void awsSessionTokenHeadersRegisterAndScrubAllExportSurfacesAndCredentialFields() throws Exception {
-        String secret = "ROUND5_AWS_SESSION_CREDENTIAL";
+        String secret = "SYNTHETIC_AWS_SESSION_CREDENTIAL";
         assertAllSurfacesScrubbed(secret, () -> KnownSecrets.observe(Map.of("x-AmZ-SeCuRiTy-ToKeN", secret), null));
         var privacy = ExportPrivacy.privacy(AutoConfig.resolve(Map.of(), Map.of()));
         for (String name : List.of("X-Amz-Security-Token", "X_AMZ_SECURITY_TOKEN", "http.request.header.x-amz-security-token")) {
@@ -79,11 +79,11 @@ class RoundFiveRegressionTest {
         for (int padding : List.of(0, 8187, 8188, 8200)) {
             var registry = new KnownSecrets(); Map<String, Object> body = new LinkedHashMap<>();
             body.put("model", "test-model"); body.put("messages", List.of());
-            body.put("padding", Collections.nCopies(padding, 0)); body.put("password", "ROUND5_TRAILING_BODY_CREDENTIAL");
+            body.put("padding", Collections.nCopies(padding, 0)); body.put("password", "SYNTHETIC_TRAILING_BODY_CREDENTIAL");
             registry.observeBody(WireCore.parse(WireCore.dump(body)));
             assertEquals(padding > 8187, registry.snapshot().unavailable(), "padding=" + padding);
             var privacy = new WirePrivacy(registry.snapshot(), false);
-            assertEquals("<redacted>", privacy.text("ROUND5_TRAILING_BODY_CREDENTIAL"));
+            assertEquals("<redacted>", privacy.text("SYNTHETIC_TRAILING_BODY_CREDENTIAL"));
             assertEquals(padding > 8187, privacy.failed, "exhaustion must fail closed, not merely scrub fields already seen");
         }
     }
@@ -121,14 +121,14 @@ class RoundFiveRegressionTest {
         }
     }
     @Test void outgoingQueryHeadersAndParsedBodyCredentialsScrubUnrelatedLaterContent() {
-        KnownSecrets.observe(Map.of("Authorization", "Bearer ROUND5_HEADER_SECRET", "X-Api-Key", "ROUND5_SECOND_HEADER"), "http://127.0.0.1/?API%5FKEY=ROUND5_QUERY_SECRET&sig=ROUND5_SIGNED_SECRET");
+        KnownSecrets.observe(Map.of("Authorization", "Bearer SYNTHETIC_HEADER_SECRET", "X-Api-Key", "SYNTHETIC_SECOND_HEADER"), "http://127.0.0.1/?API%5FKEY=SYNTHETIC_QUERY_SECRET&sig=SYNTHETIC_SIGNED_SECRET");
         var req = new WireCore.Request("POST", "http://127.0.0.1/v1/chat/completions");
         req.headers = Map.of("content-type", "application/json");
-        req.body = WireCore.dump(Map.of("messages", List.of(), "nested", Map.of("authorization_token", "ROUND5_BODY_SECRET"))).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        req.body = WireCore.dump(Map.of("messages", List.of(), "nested", Map.of("authorization_token", "SYNTHETIC_BODY_SECRET"))).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         var resp = new WireCore.Response(); resp.status = 200; resp.headers = Map.of("content-type", "application/json"); resp.body = "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         assertNotNull(WireCore.build(WireCore.match(req.method, req.url), req, resp));
         var privacy = ExportPrivacy.privacy(AutoConfig.resolve(Map.of(), Map.of()));
-        for (String secret : List.of("ROUND5_HEADER_SECRET", "ROUND5_SECOND_HEADER", "ROUND5_QUERY_SECRET", "ROUND5_SIGNED_SECRET", "ROUND5_BODY_SECRET")) assertEquals("echo <redacted>", privacy.text("echo " + secret));
+        for (String secret : List.of("SYNTHETIC_HEADER_SECRET", "SYNTHETIC_SECOND_HEADER", "SYNTHETIC_QUERY_SECRET", "SYNTHETIC_SIGNED_SECRET", "SYNTHETIC_BODY_SECRET")) assertEquals("echo <redacted>", privacy.text("echo " + secret));
     }
     @Test void invocationParametersNeverContainProviderContentEvenInsideAllowedContainers() throws Exception {
         var image = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_RGB); var bytes = new java.io.ByteArrayOutputStream();
@@ -166,7 +166,7 @@ class RoundFiveRegressionTest {
             assertEquals("QUJD", privacy.clean("request.inlineData.data", "QUJD"));
             var scope = privacy.scope(Map.of("request.inlineData.mimeType", "image/png"), "", WirePrivacy.Scope.EMPTY);
             assertEquals("<omitted: 4 base64 chars>", privacy.clean("request.inlineData.data", "QUJD", scope, true));
-            assertFalse(privacy.text("error {\"password\":\"ROUND5_TRUNCATED_SECRET").contains("ROUND5_TRUNCATED_SECRET"));
+            assertFalse(privacy.text("error {\"password\":\"SYNTHETIC_TRUNCATED_SECRET").contains("SYNTHETIC_TRUNCATED_SECRET"));
         });
     }
     @Test void hiddenImagesInsideMessageJsonHonorFlagAcrossProvidersArraysAndExportSurfacesWithoutMutation() throws Exception {

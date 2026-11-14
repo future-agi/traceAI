@@ -15,7 +15,7 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundTwoRegressionTest {
+class WireProtocolRegressionTest {
     @Test void falseMultipartDelimitersRemainFilePayloadAtEveryChunkBoundary() {
         for (String suffix : List.of("X", "\rX", "-X", "\r\r\n")) {
             String file = "audio\r\n--b" + suffix + "\r\nContent-Disposition: form-data; name=prompt\r\n\r\nFILE_PAYLOAD_SHOULD_NOT_BE_RECORDED";

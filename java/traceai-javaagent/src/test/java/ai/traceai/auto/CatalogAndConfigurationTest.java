@@ -13,7 +13,7 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundSixRegressionTest {
+class CatalogAndConfigurationTest {
     @Test void catalogNamesAndExclusionsAgreeAcrossObservationBodyAndExport() throws Exception {
         Map<String, Object> catalog;
         try (var in = WirePrivacy.class.getResourceAsStream("privacy.json")) { catalog = WireCore.map(WireCore.parse(new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8))); }

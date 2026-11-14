@@ -13,7 +13,7 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundFourPrivacyTest {
+class ExportSurfacePrivacyTest {
     static SpanData original() {
         var memory = InMemorySpanExporter.create();
         var extras = Attributes.of(AttributeKey.doubleKey("metric"), Double.NaN, AttributeKey.stringKey("password"), "PRIVATE_SECRET");
@@ -31,7 +31,7 @@ class RoundFourPrivacyTest {
             span.addEvent("event-PRIVATE_CONFIG_KEY", extras); span.end();
             SpanData finished = memory.getFinishedSpanItems().get(0);
             var scope = io.opentelemetry.sdk.common.InstrumentationScopeInfo.builder("scope-PRIVATE_CONFIG_KEY").setVersion("version-PRIVATE_CONFIG_KEY").setAttributes(extras).build();
-            return (SpanData)Proxy.newProxyInstance(RoundFourPrivacyTest.class.getClassLoader(), new Class<?>[]{SpanData.class}, (proxy, method, args) -> method.getName().equals("getInstrumentationScopeInfo") ? scope : method.invoke(finished, args));
+            return (SpanData)Proxy.newProxyInstance(ExportSurfacePrivacyTest.class.getClassLoader(), new Class<?>[]{SpanData.class}, (proxy, method, args) -> method.getName().equals("getInstrumentationScopeInfo") ? scope : method.invoke(finished, args));
         }
     }
     @Test void allSpanSurfacesAreSanitizedAndNonFiniteNumbersRemainSerializable() throws Exception {

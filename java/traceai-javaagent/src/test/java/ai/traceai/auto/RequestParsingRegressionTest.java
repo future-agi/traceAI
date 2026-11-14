@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-class VerifierRegressionTest {
+class RequestParsingRegressionTest {
     @Test void multipartUnquotedAndCaseInsensitiveFilenamesNeverRetainFiles() {
         for (String parameter : List.of("filename=voice.wav", "FILENAME=voice.wav", "FILENAME = \"voice.wav\"", "filename=\"\"", "filename*=UTF-8''voice.wav", "")) {
             String body = "--b\r\nContent-Disposition: form-data; NAME=model\r\n\r\nwhisper-1\r\n--b\r\nContent-Disposition: form-data; name=\"file\"; " + parameter + "\r\nContent-Type: audio/wav\r\n\r\nWAV_PRIVATE_FILE_CONTENT\r\n--b--\r\n";

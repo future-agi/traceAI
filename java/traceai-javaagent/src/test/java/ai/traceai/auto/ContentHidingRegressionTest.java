@@ -12,7 +12,7 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
-class RoundFourRegressionTest {
+class ContentHidingRegressionTest {
     @Test void legacyWrapperInputNamespacesAreHiddenAtBothExportBoundaries() throws Exception {
         var memory = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(memory)).build()) {
