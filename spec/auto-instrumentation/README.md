@@ -770,7 +770,7 @@ remains authoritative even for projected identity/metadata.
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment` for the zero-code path. |
 | `FI_AUTO_INSTRUMENT` | unset | Python only: `true` instruments every interpreter in the environment, with no command change. Node does not read it; use the `--require`/`--import` preload. |
 | `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of integration names. Incoming HTTP (`http`) is the exception: it is on only when this list names it. |
-| `FI_FORWARD_APP_SPANS` | `false` | Node only. `true` also sends the application's own spans to Future AGI, as releases before 0.1.5 did (code option `forwardApplicationSpans`). Off by default: Future AGI receives only AI spans. |
+| `FI_FORWARD_APP_SPANS` | `false` | Node only. `true` also sends the application's own spans to Future AGI, as releases before 0.2.0 did (code option `forwardApplicationSpans`). Off by default: Future AGI receives only AI spans. |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist. `wire` disables the wire layer. |
 | `FI_WIRE_CAPTURE` | `true` | `false` disables the wire layer. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Body buffering limit. |
@@ -823,7 +823,7 @@ the same hide controls on every route.
   active only inside the callback or SDK call that set it. Future AGI receives
   only spans from agent-bound tracers (wire and traceAI integration spans). The forwarding
   switch (`FI_FORWARD_APP_SPANS=true`; Node `forwardApplicationSpans: true`) also attaches the
-  FI route to the application's provider, as releases before 0.1.5 did; `FI_HIDE_*` then also hides
+  FI route to the application's provider, as releases before 0.2.0 did; `FI_HIDE_*` then also hides
   other AI tracers' content keys (`ai.prompt*`, `ai.response.*`, `ai.toolCall.*`,
   `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input/output`,
   `llm.input_messages.*`, `llm.output_messages.*` and the Vercel AI SDK content keys such as
