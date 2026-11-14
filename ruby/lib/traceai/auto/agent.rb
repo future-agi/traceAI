@@ -351,8 +351,12 @@ module TraceAI
           end
           waiting = @pending
           @initialized = true; @initializing = true; @initializing_thread = Thread.current; @pending = false
-          @provisional = %i[attached report].include?(how)
+          # While a replacing start builds its setup, the start stays provisional,
+          # so an AI request that arrives now waits in finalize_start for the
+          # mutex and then runs on the new setup.
+          @provisional = retired || %i[attached report].include?(how)
           result = initialize_once(arguments)
+          @provisional = %i[attached report].include?(how)
           clear_retired_start if retired && !(@active && result.equal?(@provider))
           # A report that finds nothing to start leaves the agent waiting, as
           # it was, for the application's provider or the first AI request.
