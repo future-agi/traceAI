@@ -760,7 +760,7 @@ remains authoritative even for projected identity/metadata.
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Body buffering limit. |
 | `FI_AUTO_DEBUG` | `false` | Log the per-integration report at startup. |
 
-| `FI_SAMPLE_RATE` | `1.0` | Head sampling ratio, parent-based. Node: by trace id alone, so the application's sampling decision does not drop AI spans. |
+| `FI_SAMPLE_RATE` | `1.0` | Head sampling ratio, parent-based. Node: by trace id, so the application's sampling decision does not drop AI spans. With no parent or a sampled parent, an admitted AI span is sampled; under an unsampled parent it is recorded with the sampled flag off and still exported, so the application's spans inside the AI call keep the application's decision. |
 | `FI_CONFIG_FILE` | `./futureagi.toml` | Agent config file, see below. |
 
 `OTEL_SDK_DISABLED=true` turns everything off, as in upstream OpenTelemetry.
