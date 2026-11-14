@@ -6,9 +6,10 @@ import type { AddressInfo } from "node:net";
 
 // An application with no OpenTelemetry of its own starts one Groq call and, in the same
 // tick, one plain fetch to an OpenAI-compatible chat route. Groq's integration patches the
-// SDK itself, so the agent has no call scope around it. The plain fetch has no AI
-// integration of its own, so its wire span is its only record. This test passes only when
-// Future AGI receives both: the Groq call's model span, and the plain fetch.
+// SDK itself and must scope its own request without affecting the plain fetch. The plain
+// fetch has no AI integration of its own, so its wire span is its only record. This test
+// passes only when Future AGI receives each request once: the Groq call's model span,
+// with no duplicate wire span, and the plain fetch's wire span.
 const root = resolve(__dirname, "../..");
 const auto = resolve(root, "../traceai_auto/src/register.ts");
 // The question each request carries. Neither text contains the other.
@@ -97,7 +98,7 @@ async function child(traced: boolean): Promise<any> {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
-test("in an application with no OpenTelemetry of its own, a plain fetch AI request sent in the same tick as a Groq call is not lost, and the call keeps its model span", async () => {
+test("in an application with no OpenTelemetry of its own, a Groq call and a plain fetch sent in the same tick are each captured exactly once", async () => {
   // First the application without the agent: both of its requests reach the provider
   // and both answers come back. A failure up to here is in the fixture, not a lost span.
   const baseline = await child(false);
@@ -118,17 +119,20 @@ test("in an application with no OpenTelemetry of its own, a plain fetch AI reque
   expect({ active: actual.active, groq: actual.groq, contextManager: actual.contextManager })
     .toEqual({ active: true, groq: expect.stringMatching(/^(?:instrumented|manual)$/), contextManager: "NoopContextManager" });
 
-  // What Future AGI received, shown when one of the two checks below fails.
+  // What Future AGI received, shown when one of the three counts below fails.
   const spans = exportedSpans();
   const kind = (span: any) => attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"];
   const got = spans.map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kind(span)})`);
   const carries = (span: any, text: string) => JSON.stringify(span).includes(text);
-  // The Groq call arrives as its model span: an LLM span from the integration, not from
-  // wire capture, with the question the application gave the SDK.
+  // The Groq call arrives exactly once as its model span: an LLM span from the integration,
+  // not from wire capture, with the question the application gave the SDK.
   const model = spans.filter(span => attrs(span)["traceai.capture.layer"] !== "wire" && kind(span) === "LLM" && carries(span, SDK_PROMPT));
-  expect({ got, modelSpan: model.length > 0 }).toEqual({ got, modelSpan: true });
-  // The plain fetch arrives as a wire span with its own question. It is found by that
-  // text, so the SDK's own request, if it also arrives as a wire span, cannot stand in for it.
+  expect({ got, modelSpans: model.length }).toEqual({ got, modelSpans: 1 });
+  // The SDK's own provider request must not also arrive as a wire span.
+  const sdkWire = spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire" && carries(span, SDK_PROMPT));
+  expect({ got, sdkWireSpans: sdkWire.length }).toEqual({ got, sdkWireSpans: 0 });
+  // The plain fetch arrives exactly once as a wire span with its own question. It is found
+  // by that text, so the SDK's own request cannot stand in for it.
   const plain = spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire" && carries(span, PLAIN_PROMPT));
-  expect({ got, plainFetchWireSpan: plain.length > 0 }).toEqual({ got, plainFetchWireSpan: true });
+  expect({ got, plainFetchWireSpans: plain.length }).toEqual({ got, plainFetchWireSpans: 1 });
 }, 60000);

@@ -1,9 +1,21 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import { InstrumentationBase, type InstrumentationConfig } from "@opentelemetry/instrumentation";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { FITracer, runInFIContext } from "@traceai/fi-core";
 import { activeContext, applicationContextManager, contextBoundProvider, runIntegrationCall } from "../src/agent-context";
+import type { Config } from "../src/config";
+import { enableLibraries, type IntegrationStatus } from "../src/libraries";
+
+jest.mock("node:module", () => {
+  const actual = jest.requireActual<typeof import("node:module")>("node:module");
+  return { ...actual, createRequire: jest.fn(actual.createRequire) };
+});
+jest.mock("../src/integrations.json", () => [{
+  name: "fixture", package: "integration-fixture", targets: [], modules: [], className: "Instrumentation",
+}]);
 
 // An application with no OpenTelemetry context manager. An integration the agent loads
 // starts its model span with FITracer.startSpan on an agent-bound tracer, and the agent
@@ -150,6 +162,129 @@ test("the launcher keeps no context store of its own and never enters a context 
   const source = readFileSync(resolve(__dirname, "../src/agent-context.ts"), "utf8");
   expect(source).not.toContain("enterWith");
   expect(source).not.toContain("AsyncLocalStorage");
+});
+
+describe("the launcher's per-instance integration call hook", () => {
+  const key = Symbol.for("traceai.auto.integration-call.v1");
+  class FixtureInstrumentation extends InstrumentationBase {
+    constructor(config: InstrumentationConfig) { super("integration-fixture", "1.0.0", config); }
+    protected init() { return []; }
+  }
+  let instance: FixtureInstrumentation;
+  let disable: () => void = () => {};
+  function hook(): <T>(fn: () => T) => T {
+    const scope = (instance as unknown as Record<symbol, unknown>)[key];
+    expect(typeof scope).toBe("function");
+    return scope as <T>(fn: () => T) => T;
+  }
+  beforeEach(() => {
+    const Instrumentor = jest.fn(({ instrumentationConfig }: { instrumentationConfig: InstrumentationConfig }) => {
+      const result = new FixtureInstrumentation(instrumentationConfig);
+      jest.spyOn(result, "enable");
+      return result;
+    });
+    // No SDK modules or loader are needed: use the real registration lifecycle
+    // with an instrumentor whose patching does not go through the launcher's _wrap.
+    const load = Object.assign(() => ({ Instrumentation: Instrumentor }), { resolve: () => "integration-fixture" });
+    jest.mocked(createRequire).mockReturnValue(load as unknown as ReturnType<typeof createRequire>);
+    const config: Config = {
+      forwardApplicationSpans: false, propagateOutgoingAdapters: false, propagateOutgoing: "none",
+      baseUrl: "http://localhost", projectName: "integration-fixture", projectType: "observe",
+      instrumentations: ["fixture"], disabledInstrumentations: [], wireCapture: true, wireMaxBodyBytes: 1024,
+      sampleRate: 1, debug: false, configFile: "", sdkDisabled: false, traceConfig: {}, mastraSpanProducer: "exporter",
+    };
+    const statuses: IntegrationStatus[] = [{ name: "fixture", status: "pending" }];
+    const warn = jest.fn();
+    disable = enableLibraries(config, {}, contextBoundProvider(provider), statuses, warn);
+    expect(warn).not.toHaveBeenCalled();
+    expect(Instrumentor).toHaveBeenCalledTimes(1);
+    instance = Instrumentor.mock.results[0].value;
+    expect(instance.enable).toHaveBeenCalledTimes(1);
+  });
+  afterEach(() => {
+    disable();
+    jest.restoreAllMocks();
+    jest.mocked(createRequire).mockImplementation(jest.requireActual<typeof import("node:module")>("node:module").createRequire);
+  });
+
+  test("an enabled instrumentor has a non-enumerable, configurable call hook only on that instance", () => {
+    expect(Object.getOwnPropertyDescriptor(instance, key)).toMatchObject({
+      value: hook(), enumerable: false, configurable: true,
+    });
+    const standalone = new FixtureInstrumentation({ enabled: false });
+    expect((standalone as unknown as Record<symbol, unknown>)[key]).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(globalThis, key)).toBeUndefined();
+  });
+
+  test("without an application context manager, the hook parents work inside the call but not work after it returns", async () => {
+    expect(applicationContextManager()).toBe(false);
+    const scope = hook(), open: { end(): void }[] = [];
+    let inside: string | undefined, afterAwait: string | undefined;
+    const call = scope(async () => {
+      open.push(integration.startSpan("hook-model"));
+      inside = activeSpanId();
+      integration.startSpan("hook-child").end();
+      await tick();
+      afterAwait = activeSpanId();
+      integration.startSpan("hook-child-after-await").end();
+    });
+    const afterReturn = activeSpanId();
+    integration.startSpan("hook-beside").end();
+    await call;
+    const afterCall = activeSpanId();
+    integration.startSpan("hook-after").end();
+    // Keep the model span open until after the caller has started its next work.
+    for (const span of open) span.end();
+    const model = idOf("hook-model");
+    expect(parentOf("hook-model")).toBeUndefined();
+    expect({ inside, afterAwait }).toEqual({ inside: model, afterAwait: model });
+    expect(parentOf("hook-child")).toBe(model);
+    expect(parentOf("hook-child-after-await")).toBe(model);
+    expect({ afterReturn, afterCall }).toEqual({ afterReturn: undefined, afterCall: undefined });
+    expect(parentOf("hook-beside")).toBeUndefined();
+    expect(parentOf("hook-after")).toBeUndefined();
+    expect(applicationContextManager()).toBe(false);
+  });
+
+  test("a retained hook runs the callback without a call scope after disable", () => {
+    const scope = hook(), open: { end(): void }[] = [];
+    const value = {};
+    disable();
+    expect(hook()).toBe(scope);
+    let inside: string | undefined;
+    const fn = jest.fn(() => {
+      open.push(integration.startSpan("disabled-model"));
+      inside = activeSpanId();
+      integration.startSpan("disabled-child").end();
+      return value;
+    });
+    expect(scope(fn)).toBe(value);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(inside).toBeUndefined();
+    expect(activeSpanId()).toBeUndefined();
+    for (const span of open) span.end();
+    expect(parentOf("disabled-child")).toBeUndefined();
+  });
+
+  test.each(["enabled", "disabled"])("the %s hook preserves values, promise and stream identity, and synchronous throws", state => {
+    const scope = hook();
+    if (state === "disabled") disable();
+    const value = {}, promise = Object.assign(Promise.resolve(value), { withResponse: jest.fn() });
+    const stream = { [Symbol.asyncIterator]: jest.fn() };
+    for (const result of [value, promise, stream, undefined, 42]) {
+      const fn = jest.fn(() => result);
+      expect(scope(fn)).toBe(result);
+      expect(fn).toHaveBeenCalledTimes(1);
+    }
+    expect(promise.withResponse).not.toHaveBeenCalled();
+    expect(stream[Symbol.asyncIterator]).not.toHaveBeenCalled();
+    const error = new Error("callback failed"), fn = jest.fn(() => { throw error; });
+    let caught: unknown;
+    try { scope(fn); } catch (cause) { caught = cause; }
+    expect(caught).toBe(error);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(activeSpanId()).toBeUndefined();
+  });
 });
 
 // Last in this file: on code that still enters the span for the caller's flow, this
