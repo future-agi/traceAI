@@ -20,6 +20,9 @@ exclude = [
 # site-packages. It does nothing unless that variable is set.
 include = [
     { path = "fi_instrumentation_auto.pth", format = ["sdist", "wheel"] },
+    # The shared privacy catalog the agent applies to everything it sends to Future AGI. It is a
+    # byte-identical copy of spec/auto-instrumentation/privacy.json; the directory is not a module.
+    { path = "fi_instrumentation/auto/wire/privacy.json", format = ["sdist", "wheel"] },
 ]
 license = "Apache-2.0"
 keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm"]
