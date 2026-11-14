@@ -14,8 +14,14 @@ class EndToEndTest
 
   # An application that only talks to a local http model server never loads
   # OpenSSL itself. Export to the default https collector must still work.
+  # The child stops if anything loaded OpenSSL before its request, so the test
+  # cannot pass just because another library happened to load it first.
+  NO_TLS_BEFORE_THE_REQUEST = <<~RUBY
+    require 'net/http'; require 'json'
+    abort 'OpenSSL was loaded before the request' if $LOADED_FEATURES.any? { |path| File.basename(path, '.*') == 'openssl' }
+  RUBY
   def test_https_export_works_when_the_application_never_loaded_openssl
-    assert_https_export('')
+    assert_https_export(NO_TLS_BEFORE_THE_REQUEST)
   end
 
   def assert_https_export(prefix)
