@@ -112,6 +112,8 @@ module TraceAI
         require_relative 'privacy'
         masked = @values.to_h { |k, v| [k, Privacy.credential?(k) ? (v.to_s.empty? ? '(unset)' : '<redacted>') : v] }
         secrets = (Auto.secret_values + Privacy.secrets({}, @credential_values)).uniq.sort_by { |value| -value.length }
+        # A hide switch is reported by its resolved state, never by the text set.
+        HIDE_SWITCHES.each { |key| masked[key] = {true => 'hide', false => 'show'}.fetch(@hidden[key], 'unset') }
         Privacy.scrub(masked, secrets)
       rescue StandardError
         {}
