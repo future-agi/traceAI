@@ -224,6 +224,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // application's provider is used only when init() is given one without an FI
     // route, or, with the forwarding switch, to send its spans as before.
     const host = !route ? options.provider : forwarding ? options.provider ?? existingProvider() : undefined;
+    if (route && !forwarding && options.provider) warn("provider", "init() was given a provider, but AI spans go to the Future AGI route on the agent's own provider; set forwardApplicationSpans: true to create them on yours.");
     if (host) {
       agent.detach = attach(host, processor);
       if (agent.detach || !route) agent.provider = host;
