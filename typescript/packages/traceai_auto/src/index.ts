@@ -16,7 +16,7 @@ import { contextBoundProvider, isAgentSpan, markAgentSpan } from "./agent-contex
 import { HTTP_SCOPE } from "./incoming-parent";
 import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
 
-const VERSION = "0.1.4"; // x-release-please-version
+const VERSION = "0.2.0"; // x-release-please-version
 import { chainSigterm } from "./signals";
 import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";

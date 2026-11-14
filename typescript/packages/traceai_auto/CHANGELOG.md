@@ -1,3 +1,19 @@
+## [0.2.0] - pending release
+
+### If you upgrade from 0.1.x
+- **The agent no longer takes over your app's OpenTelemetry.** It registers no global tracer provider, context manager or propagator, and an OpenTelemetry SDK your app starts registers normally. If your code created spans through OpenTelemetry's global API without starting an SDK of its own, those spans now go nowhere: start an SDK (for example `NodeSDK`) in your app.
+- **Only AI spans are sent to Future AGI.** Your app's HTTP, database, cache and custom spans stay with your own provider. To send them to Future AGI as well, set `FI_FORWARD_APP_SPANS=true`; this needs an OpenTelemetry SDK in your app. Incoming HTTP spans are sent only when `FI_INSTRUMENTATIONS` lists `http`, and only for a request that made an AI call.
+- **A privacy switch with an unrecognised value now hides.** `FI_HIDE_*` and `FI_PII_REDACTION` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, in any case. Any other non-empty value hides that content with one warning; before, only `true` hid. `FI_HIDE_ERROR_DETAILS` set to `off`, `no` or `0` now shows error details, as `false` did. To keep content visible, use one of the accepted values.
+- **`FI_SAMPLE_RATE` now decides by trace id for every AI span,** and your app's own sampler no longer drops AI spans. In 0.1.x a provider your app owned kept its sampler for them. There is no switch back. If your app samples with a trace-id ratio sampler, set `FI_SAMPLE_RATE` to the same ratio and the same traces are kept.
+
+### Changed
+- `@traceai/auto` depends on exactly the `@traceai/fi-core` version it is built with, 1.3.0.
+- AI spans keep their parent from your app's active span. A span is active only inside its own SDK call, so a request your app sends beside a call is captured as its own wire span.
+
+### Known limitations
+- In an app with no OpenTelemetry of its own, a Groq, Mistral or Portkey call's own request can also arrive as a wire span, beside the call's AI span. Nothing is lost.
+- LangChain is not traced by the agent yet. Its model requests are still captured as wire spans.
+
 ## [0.1.4] - pending release
 
 ### Added
