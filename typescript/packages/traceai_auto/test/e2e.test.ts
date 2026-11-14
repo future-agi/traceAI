@@ -583,6 +583,21 @@ test("in an application with no OpenTelemetry of its own, an OpenAI call's own r
   expect([undefined, ""]).toContain(after.parentSpanId);
   expect(after.traceId).not.toBe(outer.traceId);
 });
+test("in an application with no OpenTelemetry of its own, two OpenAI SDK calls started in the same tick each keep their own AI span, and neither SDK request is sent again as a wire span", async () => {
+  // No context manager: the application loads no OpenTelemetry. It starts two OpenAI calls
+  // in the same tick, each with its own question (test/apps/two-calls-no-otel.cjs).
+  const first = "first question started in the same tick", second = "second question started in the same tick";
+  const output = await child("two-calls-no-otel.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire" });
+  expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ calls: 2 });
+  expect(requests).toBe(2);
+  // Each SDK request runs under its own call's AI span, so wire capture records neither.
+  expect(wireSpans().map(span => span.name)).toEqual([]);
+  // Future AGI receives two AI spans: one carries only the first question, the other only the second.
+  const ai = allSpans().filter(span => attrs(span)["traceai.capture.layer"] !== "wire" && (attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"]) === "LLM");
+  const questions = ai.map(span => ({ first: JSON.stringify(span).includes(first), second: JSON.stringify(span).includes(second) }));
+  expect(questions).toHaveLength(2);
+  expect(questions).toEqual(expect.arrayContaining([{ first: true, second: false }, { first: false, second: true }]));
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
