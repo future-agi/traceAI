@@ -370,6 +370,27 @@ class EndToEndTest < Minitest::Test
       end
     end
   end
+  # The executable finds the agent next to itself. It needs neither RUBYLIB nor
+  # a traceai-auto entry in the application's Gemfile, so it also works as an
+  # installed command in an application whose bundle does not list the gem.
+  def test_doctor_executable_loads_its_own_agent_without_rubylib_or_a_gemfile_entry
+    standalone = ENV.keys.grep(/\ABUNDL/).to_h { |key| [key, nil] }.merge('RUBYOPT' => nil, 'RUBYLIB' => nil)
+    Dir.mktmpdir('doctor-executable', File.join(ROOT, '.bundle/tmp')) do |directory|
+      plain = File.join(directory, 'plain'); bundled = File.join(directory, 'bundled')
+      [plain, bundled].each { |path| Dir.mkdir(path) }
+      File.write(File.join(bundled, 'Gemfile'), "source 'https://rubygems.org'\n")
+      [plain, bundled].each do |chdir|
+        stdout, stderr, status = Timeout.timeout(15) do
+          Open3.capture3(child_env(standalone), RbConfig.ruby, File.join(ROOT, 'bin/traceai-auto'), 'doctor', chdir: chdir)
+        end
+        assert status.success?, stderr
+        report = JSON.parse(stdout)
+        assert_equal true, report['active'], chdir
+        assert_equal 'accepted', report['collector'], chdir
+        assert_equal ['traceai-auto doctor'], export_spans.map { |span, _| span.name }, chdir
+      end
+    end
+  end
   # Rack server spans are installed only after the application's own
   # OpenTelemetry configuration and once Rack is loaded. Until then the report
   # says pending, never failed. (The Rack instrumentation gem is not in this
