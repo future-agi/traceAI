@@ -3,6 +3,7 @@
 # especially when the agent is disabled or lacks credentials.
 require_relative 'config'
 require_relative 'secrets'
+require_relative 'codec'
 module TraceAI
   module Auto
     VERSION = '0.1.0'
@@ -39,7 +40,7 @@ module TraceAI
       # RUBYOPT precedes Bundler. Do not require even default gems here: JSON,
       # URI, net-http, etc. may all be pinned by the application's bundle.
       def preload
-        return init if @initialized
+        return @provider || self if @initialized
         @config ||= Config.new(announce: false)
         announce_warnings(@config)
         return self if @config.truthy?('sdk_disabled')
@@ -162,7 +163,12 @@ module TraceAI
         false
       end
       def bundle_ready?
-        @bundle_ready || $LOADED_FEATURES.any? { |path| path.end_with?('/bundler/setup.rb') }
+        return true if @bundle_ready
+        # The lazy wrappers ask on every request while the agent waits: skip the
+        # feature scan when Bundler is not loaded, and remember a positive answer.
+        return false unless Object.const_defined?(:Bundler, false)
+        @bundle_ready = true if $LOADED_FEATURES.any? { |path| path.end_with?('/bundler/setup.rb') }
+        !!@bundle_ready
       end
       def target(name) = (@targets ||= {})[name]
       def named_instance?(value, name)
@@ -202,13 +208,16 @@ module TraceAI
           adopt_host_provider
           install_transports
         elsif @pending && !waiting_for_bundle?
-          # Start at once only when the application has its own SDK provider, or
-          # when the bundle has no OpenTelemetry SDK, so that the dependency-free
-          # exporter cannot take over anything. Otherwise wait for the
-          # application's provider, an explicit init or the first AI request.
-          if sdk_host_provider || (bundle_ready? && @config.credentials? && !Gem.loaded_specs.key?('opentelemetry-sdk'))
-            init
-          elsif bundle_ready? && !Gem.loaded_specs.key?('opentelemetry-sdk')
+          # Only an AI request or an explicit init starts the agent for good.
+          # When the application has its own SDK provider, the agent attaches
+          # to it at once, so that the application's AI spans and the spans
+          # around the first AI request reach Future AGI too. That start is
+          # provisional: until the first AI request an explicit init still
+          # applies its settings. Otherwise wait for the application's
+          # provider, an explicit init or the first AI request.
+          if sdk_host_provider
+            start({}, :attached)
+          elsif bundle_ready? && !@config.credentials? && !Gem.loaded_specs.key?('opentelemetry-sdk')
             # Nothing can become a destination: there is no FI key pair, and an
             # application destination needs the OpenTelemetry SDK, which this
             # bundle does not include. Stop watching; the exit warning remains.
@@ -225,29 +234,120 @@ module TraceAI
         debug(e)
       end
       def pending? = !!@pending
-      def start_on_request
-        return false unless @pending && !waiting_for_bundle?
-        init
+      # Whether a start could succeed now: a Future AGI key pair is configured,
+      # or the application has its own SDK provider. Without either, the lazy
+      # wrappers and the context helpers do no work at all.
+      def startable? = !!(@config&.credentials? || sdk_host_provider)
+      def lazy_ready? = !!@pending && !waiting_for_bundle? && startable?
+      # The lazy wrappers call this for every outgoing request while the agent
+      # waits. Only an AI request, one the wire catalog matches, starts the
+      # agent. Any other request (a secrets fetch, a metadata service call, a
+      # webhook) starts nothing and leaves a later explicit init free to apply
+      # its settings. Its credential headers are still learned, so that a later
+      # AI span cannot echo them.
+      def start_on_request(method, url, headers = nil)
+        return false unless lazy_ready?
+        require_relative 'wire'
+        url = url.to_s
+        begin
+          Privacy.observe_request(headers, url) if headers.instance_of?(Hash)
+        rescue StandardError => e
+          debug(e)
+        end
+        return false unless Wire.match(method.to_s, url)
+        start({}, :request)
         active?
       rescue LoadError, SyntaxError, StandardError => e
         debug(e); false
       end
-      def init(**arguments)
+      def start_on_net_http(http, request)
+        return false unless lazy_ready?
+        address = http.address
+        host = address.include?(':') ? "[#{address}]" : address
+        path = request.path
+        url = path.start_with?('http://', 'https://') ? path : "#{http.use_ssl? ? 'https' : 'http'}://#{host}:#{http.port}#{path}"
+        start_on_request(request.method, url, request.each_header.to_h)
+      rescue StandardError => e
+        debug(e); false
+      end
+      def start_on_sdk_request(request)
+        return false unless lazy_ready? && request.instance_of?(Hash)
+        start_on_request(request[:method], request[:url], request[:headers])
+      rescue StandardError => e
+        debug(e); false
+      end
+      # Every request of an HTTPX batch has its headers observed; the first AI
+      # request among them starts the agent.
+      def start_on_httpx(requests)
+        return false unless lazy_ready?
+        started = false
+        requests.each do |request|
+          break if started
+          started = start_on_request(request.verb, request.uri, request.headers.to_h)
+        end
+        started
+      rescue StandardError => e
+        debug(e); false
+      end
+      def init(**arguments) = start(arguments, :explicit)
+      # `how` says what asked for the start:
+      #   :explicit  TraceAI::Auto.init or auto_instrument
+      #   :request   the first AI request
+      #   :attached  the application set its own SDK provider
+      #   :report    a report or doctor call
+      # The first two start the agent for good. The last two are provisional:
+      # until the first AI request, an explicit init replaces them and applies
+      # its own destinations and settings. Only a refused explicit init warns.
+      def start(arguments, how)
         return @provider || self if @initializing && @initializing_thread.equal?(Thread.current)
         INIT_MUTEX.synchronize do
           if @initialized
-            unless @repeat_logged
-              @repeat_logged = true
-              warn 'traceai-auto: already initialized; existing provider retained'
+            unless how == :explicit && @provisional
+              if how == :explicit && !@repeat_logged
+                @repeat_logged = true
+                warn 'traceai-auto: already initialized; existing provider retained'
+              end
+              return @provider || self
             end
-            return @provider || self
+            retire_provisional_start
           end
+          waiting = @pending
           @initialized = true; @initializing = true; @initializing_thread = Thread.current; @pending = false
-          initialize_once(arguments)
+          @provisional = %i[attached report].include?(how)
+          result = initialize_once(arguments)
+          # A report that finds nothing to start leaves the agent waiting, as
+          # it was, for the application's provider or the first AI request.
+          if how == :report && !@active && waiting
+            @initialized = false; @provisional = false; @pending = true
+          end
+          result
         ensure
           @initializing = false; @initializing_thread = nil
           sync_hooks
         end
+      end
+      # The first AI request closes the provisional window (see start).
+      def finalize_start
+        @provisional = false
+      end
+      # An explicit init replaces a provisional start. Processors cannot be
+      # removed from an SDK provider, so the agent switches its own off in
+      # place. Spans still queued for Future AGI are dropped, not sent with
+      # settings the application has just replaced.
+      def retire_provisional_start
+        (@attached_processors || []).each { |processor| processor.retire if processor.respond_to?(:retire) }
+        (@owned_exporters || []).each(&:retire)
+        (@owned_processors || []).each do |processor|
+          processor.shutdown(timeout: 0.5)
+        rescue StandardError => e
+          debug(e)
+        end
+        @active = false
+        @provider = @own_provider = @tracer = @processor = @exporter = nil
+        @owned_processors = []; @borrowed_flush_targets = []; @attached_processors = []; @owned_exporters = []
+        @snapshots_every_span = false
+      rescue StandardError => e
+        debug(e)
       end
       def sdk_host_provider
         return unless defined?(OpenTelemetry::SDK::Trace::TracerProvider)
@@ -287,10 +387,12 @@ module TraceAI
           require 'opentelemetry/sdk'
           @sdk = true
         end
-        @owned_processors = []; @borrowed_flush_targets = []; @attached_processors = []
+        @owned_processors = []; @borrowed_flush_targets = []; @attached_processors = []; @owned_exporters = []
         if @sdk
-          @capture_key = OpenTelemetry::Context.create_key('traceai.wire.capture')
-          @attributes_key = OpenTelemetry::Context.create_key('traceai.context.attributes')
+          # Created once: contexts made before an explicit init replaced a
+          # provisional start must keep their capture marks and attributes.
+          @sdk_keys ||= [OpenTelemetry::Context.create_key('traceai.wire.capture'), OpenTelemetry::Context.create_key('traceai.context.attributes')]
+          @capture_key, @attributes_key = @sdk_keys
           resource = OpenTelemetry::SDK::Resources::Resource.create(resource_attributes)
           if candidate
             raise ArgumentError unless candidate.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
@@ -320,7 +422,11 @@ module TraceAI
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
-          attach_processor(CoveredAncestry.new)
+          # A provider the agent attached to before (a provisional start that
+          # an explicit init replaced) keeps its marker processor; never add a
+          # second one.
+          ancestry = attached.find { |item| item.instance_of?(CoveredAncestry) }
+          ancestry ? @attached_processors << ancestry : attach_processor(CoveredAncestry.new)
           @tracer = @provider.tracer('traceai-auto', VERSION)
         elsif fi_route && !neutral
           @capture_key = :capture; @attributes_key = :attributes
@@ -328,7 +434,7 @@ module TraceAI
           @provider = LocalProvider.new(resource)
           @exporter = ResourceExporter.new(WireExporter.new, resource)
           @processor = LocalProcessor.new(@exporter)
-          @owned_processors << @processor
+          @owned_processors << @processor; @owned_exporters << @exporter
         else
           warn_once('application destinations require an application-selected OpenTelemetry SDK; application left running')
           return self
@@ -359,7 +465,7 @@ module TraceAI
         attach_processor(ai_only ? AISpanFilter.new(processor) : processor)
         # A supplied exporter receives a sanitized copy of every span.
         @snapshots_every_span = true unless ai_only
-        @owned_processors << processor
+        @owned_processors << processor; @owned_exporters << destination
         @processor = processor; @exporter = destination
       end
       # An AI span: one that carries gen_ai.span.kind or traceai.capture.layer,
@@ -403,6 +509,8 @@ module TraceAI
       end
       def auto_instrument(instrumentations: nil)
         init unless @initialized
+        # An explicit call: what it adds must not be undone by a later init.
+        @provisional = false
         return @provider || self unless active?
         names = instrumentations || %w[wire rack]
         names = names.split(',').map(&:strip) if names.is_a?(String)
@@ -453,12 +561,32 @@ module TraceAI
       rescue StandardError => e
         debug(e)
       end
+      # The context helpers never start the agent. While it waits, they only
+      # remember their attributes for the current Fiber; the first AI request
+      # made inside the block starts the agent and picks them up.
+      def early_context? = !@active && !!@pending && startable?
       def with_attributes(attributes)
-        init if @pending && !waiting_for_bundle?
+        if early_context? && attributes.instance_of?(Hash)
+          previous = Thread.current[:traceai_early_attributes]
+          begin
+            Thread.current[:traceai_early_attributes] = (previous || {}).merge(attributes)
+            return yield
+          ensure
+            Thread.current[:traceai_early_attributes] = previous
+          end
+        end
         return yield unless active? && @attributes_key
         ctx = current_context
         current = ctx.value(@attributes_key) || {}
         with_context(ctx.set_value(@attributes_key, current.merge(attributes))) { yield }
+      end
+      # The context a request starts in: the current context plus anything a
+      # context helper remembered for this Fiber before the agent had started.
+      def request_context
+        context = current_context
+        early = Thread.current[:traceai_early_attributes]
+        return context unless early && context && @attributes_key
+        context.set_value(@attributes_key, early.merge(context.value(@attributes_key) || {}))
       end
       def projection_limit
         return @provider.span_limits.attribute_count_limit if @sdk
@@ -507,8 +635,7 @@ module TraceAI
       def using_session(id, &block) = with_attributes({'session.id' => id}, &block)
       def using_user(id, &block) = with_attributes({'user.id' => id}, &block)
       def using_metadata(value)
-        init if @pending && !waiting_for_bundle?
-        return yield unless active? && @attributes_key
+        return yield unless early_context? || (active? && @attributes_key)
         begin
           encoded = Codec.generate(value)
         rescue StandardError => e
@@ -617,7 +744,9 @@ module TraceAI
         @rack_status = 'failed'; debug(e)
       end
       def report(test_export: false)
-        init if @pending && !waiting_for_bundle?
+        # A report needs a running agent to show and to test, but its start is
+        # provisional: a later explicit init still applies its settings.
+        start({}, :report) if @pending && !waiting_for_bundle?
         install_server_instrumentation if active?
         integrations = {}
         {'wire' => nil, 'net_http' => 'net-http', 'httpx' => 'httpx', 'openai' => 'openai', 'ruby-openai' => 'ruby-openai',
@@ -666,49 +795,71 @@ module TraceAI
          projection_zero_limit_spans: defined?(AttributeProjection) ? AttributeProjection.zero_limit_spans : 0}
       end
     end
-    # No requires and no inspection of application request/body objects here.
-    # Redispatch only when initialization installed the real wrapper above us;
-    # otherwise super preserves the native API, including block absence.
+    # While the agent waits, these wrappers look only at what a request already
+    # holds (method, URL and headers, never a body) and ask whether it is an AI
+    # request. Only then does the agent start, and the call is redispatched to
+    # the real wrapper that the start installed above this one. For any other
+    # request super preserves the native API, including block absence.
     module LazyNetHTTP
-      # An explicit #start can send authenticated CONNECT before #request exists.
-      # Initialize without requiring dependencies, then redispatch to its observer.
-      def connect(...)
-        return connect(...) if Auto.start_on_request
-        super
-      end
-      private :connect
-      def request(...)
+      def request(req, body = nil, &block)
         return super unless Auto.pending?
         timing = [Time.now, Process.clock_gettime(Process::CLOCK_MONOTONIC)]
         previous = Thread.current[:traceai_lazy_timing]
         Thread.current[:traceai_lazy_timing] = timing
-        return request(...) if Auto.start_on_request
+        return request(req, body, &block) if Auto.start_on_net_http(self, req)
         super
       ensure
         Thread.current[:traceai_lazy_timing] = previous if timing
       end
     end
     module LazySDKRequest
-      def execute(...)
-        return execute(...) if Auto.start_on_request
+      def execute(request, ...)
+        return execute(request, ...) if Auto.start_on_sdk_request(request)
         super
       end
     end
     module LazyHTTPX
-      def request(...)
-        Auto.start_on_request
+      private
+      # The real wrapper (HTTPXSession) keeps one batch of captures per
+      # send_requests call and closes it when that call ends. When the agent
+      # starts inside a call that is already running, this frame does the same
+      # for it. The start can come at once, from an AI request among
+      # `requests`, or later from one a plugin creates below this call: a
+      # redirect to an AI route.
+      def send_requests(*requests)
+        return super unless Auto.pending?
+        outer = Thread.current[:traceai_lazy_httpx]
+        frame = Thread.current[:traceai_lazy_httpx] = []
+        begin
+          frame.replace(HTTPXSession.open_batch) if Auto.start_on_httpx(requests) && defined?(HTTPXSession)
+          super
+        rescue StandardError => e
+          HTTPXSession.fail_batch(frame.first, e) unless frame.empty?
+          raise
+        ensure
+          Thread.current[:traceai_lazy_httpx] = outer
+          HTTPXSession.close_batch(*frame) unless frame.empty?
+        end
+      end
+      def send_request(request, ...)
+        frame = Thread.current[:traceai_lazy_httpx]
+        if frame && frame.empty? && Auto.start_on_httpx([request]) && defined?(HTTPXSession)
+          frame.replace(HTTPXSession.open_batch)
+          # Redispatch to the real wrapper that the start installed above.
+          return send_request(request, ...)
+        end
         super
       end
     end
     module LazyHTTPXStream
       def each(&block)
         return super unless block
-        return each(&block) if Auto.start_on_request
+        return each(&block) if Auto.start_on_httpx([@request])
         super
       end
       private
       def response(...)
-        return response(...) if Auto.start_on_request
+        return response(...) if Auto.start_on_httpx([@request])
         super
       end
     end
@@ -741,8 +892,16 @@ module TraceAI
         @traces = {}
         @mutex = Mutex.new
       end
-      def on_start(span, parent_context) = @delegate.on_start(span, parent_context)
+      # Switched off in place when an explicit init replaces a provisional
+      # start: an SDK provider offers no way to remove a processor.
+      def retire
+        @retired = true
+      end
+      def on_start(span, parent_context)
+        @delegate.on_start(span, parent_context) unless @retired
+      end
       def on_finish(span)
+        return if @retired
         trace_id = span.context.trace_id
         if ai_span?(span)
           remember(trace_id)
@@ -780,7 +939,13 @@ module TraceAI
       def initialize(delegate, resource, sdk_records: false)
         @delegate, @resource, @sdk_records = delegate, resource, sdk_records
       end
+      # A retired exporter (see Auto.retire_provisional_start) reports success
+      # and sends nothing.
+      def retire
+        @retired = true
+      end
       def export(spans, timeout: nil)
+        return 0 if @retired
         copies = spans.map do |span|
           copy = Privacy.snapshot(span, @resource, Auto.config)
           if @sdk_records

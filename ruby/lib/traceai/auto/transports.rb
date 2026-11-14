@@ -9,7 +9,11 @@ module TraceAI
       attr_accessor :upload_reader, :net_request, :native_arrival
       def initialize(method, url, headers, body, metadata = {}, started: Time.now, clock: Process.clock_gettime(Process::CLOCK_MONOTONIC))
         @started, @clock = started, clock
-        @parent = Auto.current_context
+        # A capture exists only for an AI request (a wire catalog match). The
+        # first one ends the time in which an explicit init can still replace a
+        # provisional start.
+        Auto.finalize_start
+        @parent = Auto.request_context
         @limit = Auto.config['wire_max_body_bytes']
         reset_request!(method, url, headers, body, metadata)
       end
@@ -368,7 +372,9 @@ module TraceAI
       def execute(...)
         previous = Thread.current.thread_variable_get(:traceai_sdk_context)
         begin
-          Thread.current.thread_variable_set(:traceai_sdk_context, [Fiber.current, OpenTelemetry::Context.current])
+          # request_context also carries what a context helper remembered for
+          # the caller's Fiber before the agent had started.
+          Thread.current.thread_variable_set(:traceai_sdk_context, [Fiber.current, Auto.request_context])
         rescue StandardError => e
           Auto.debug(e)
         end
@@ -410,7 +416,7 @@ module TraceAI
     module HTTPXStreamContext
       def each(&block)
         return super unless block
-        context = @traceai_context || Auto.current_context
+        context = @traceai_context || Auto.request_context
         Auto.with_context(context) do
           begin
             super do |chunk|
@@ -430,7 +436,7 @@ module TraceAI
       end
       private
       def response(...)
-        @traceai_context ||= Auto.current_context
+        @traceai_context ||= Auto.request_context
         super
       end
     end
@@ -458,36 +464,55 @@ module TraceAI
     HTTPXBatch = Struct.new(:enabled, :captures, :registrations, :token)
     HTTPXRegistration = Struct.new(:request, :started, :response, :idle, :body, :stream)
     module HTTPXSession
+      # A batch spans one send_requests call. These three steps are also used
+      # by the lazy wrapper (LazyHTTPX), which opens a batch when the agent
+      # starts on an AI request created below a send_requests call that was
+      # already running: a redirect to an AI route.
+      def self.open_batch
+        previous = Thread.current[:traceai_httpx_batch]
+        batch = HTTPXBatch.new(nil, {}.compare_by_identity, {}.compare_by_identity, nil)
+        Thread.current[:traceai_httpx_batch] = batch
+        [batch, previous]
+      end
+      def self.fail_batch(batch, error)
+        batch.captures.each_value { |capture| capture.error(error) }
+      end
+      def self.close_batch(batch, previous)
+        batch.captures.each_value(&:finish)
+        batch.registrations.each_value do |registration|
+          begin
+            req = registration.request
+            req.send(:callbacks, :idle).delete(registration.idle)
+            req.send(:callbacks, :response_started).delete(registration.started)
+            req.send(:callbacks, :response).delete(registration.response)
+            clear_body(registration.body)
+            stream = registration.stream
+            stream.remove_instance_variable(:@traceai_capture) if stream&.instance_variable_defined?(:@traceai_capture)
+          rescue StandardError => e
+            Auto.debug(e)
+          end
+        end
+        Auto.detach_context(batch.token)
+        Thread.current[:traceai_httpx_batch] = previous
+      end
+      def self.clear_body(body)
+        return unless body
+        body.remove_instance_variable(:@traceai_capture) if body.instance_variable_defined?(:@traceai_capture)
+        body.remove_instance_variable(:@traceai_stream) if body.instance_variable_defined?(:@traceai_stream)
+      end
       private
       # The batch owns cleanup; send_request observes actual outbound requests,
       # including ones created below send_requests by follow_redirects. State is
       # Fiber-local, never shared on a Session used by concurrent callers.
       def send_requests(*requests)
-        previous = Thread.current[:traceai_httpx_batch]
-        batch = HTTPXBatch.new(nil, {}.compare_by_identity, {}.compare_by_identity, nil)
-        Thread.current[:traceai_httpx_batch] = batch
+        batch, previous = HTTPXSession.open_batch
         begin
           super
         rescue StandardError => e
-          batch.captures.each_value { |capture| capture.error(e) }
+          HTTPXSession.fail_batch(batch, e)
           raise
         ensure
-          batch.captures.each_value(&:finish)
-          batch.registrations.each_value do |registration|
-            begin
-              req = registration.request
-              req.send(:callbacks, :idle).delete(registration.idle)
-              req.send(:callbacks, :response_started).delete(registration.started)
-              req.send(:callbacks, :response).delete(registration.response)
-              clear_traceai_httpx_body(registration.body)
-              stream = registration.stream
-              stream.remove_instance_variable(:@traceai_capture) if stream&.instance_variable_defined?(:@traceai_capture)
-            rescue StandardError => e
-              Auto.debug(e)
-            end
-          end
-          Auto.detach_context(batch.token)
-          Thread.current[:traceai_httpx_batch] = previous
+          HTTPXSession.close_batch(batch, previous)
         end
       end
       def send_request(req, ...)
@@ -528,11 +553,7 @@ module TraceAI
         end
         super
       end
-      def clear_traceai_httpx_body(body)
-        return unless body
-        body.remove_instance_variable(:@traceai_capture) if body.instance_variable_defined?(:@traceai_capture)
-        body.remove_instance_variable(:@traceai_stream) if body.instance_variable_defined?(:@traceai_stream)
-      end
+      def clear_traceai_httpx_body(body) = HTTPXSession.clear_body(body)
       def register_traceai_httpx(req, root, capture, batch)
         registration = HTTPXRegistration.new(req)
         batch.registrations[req] = registration

@@ -55,17 +55,23 @@ What happens at startup:
 
 - In a Bundler project the agent waits for your application's own
   `require 'bundler/setup'` (or `Bundler.setup`) before it activates anything.
-- If the bundle includes `opentelemetry-sdk`, the agent then waits for the first
-  of three things: your application setting its own SDK tracer provider (for
-  example with `OpenTelemetry::SDK.configure` in a Rails initializer), an
-  explicit `TraceAI::Auto.init`, or the first AI request. It attaches to your
-  provider, so wire spans appear under your own spans and also reach your own
-  exporters. It never makes a provider of its own global. If an AI request comes
-  before your configuration, those first wire spans use a private provider, and
-  the agent moves to your provider as soon as you set one.
+- Only the first AI request or an explicit `TraceAI::Auto.init` starts the
+  agent. An AI request is one the wire catalog recognizes. Any other outgoing
+  request (a secrets fetch, a metadata service call, a webhook) starts nothing,
+  and neither do the context helpers: what a helper sets is remembered and used
+  by the first AI request made inside its block.
+- If your application sets its own OpenTelemetry SDK tracer provider (for
+  example with `OpenTelemetry::SDK.configure` in a Rails initializer), the agent
+  attaches to that provider at once, so wire spans appear under your own spans
+  and also reach your own exporters, and your own AI spans reach Future AGI. It
+  never makes a provider of its own global. Attaching does not use up `init`:
+  until the first AI request, an explicit `TraceAI::Auto.init` still applies its
+  destinations and settings.
+- If an AI request comes before your OpenTelemetry configuration, those first
+  wire spans use a private provider, and the agent moves to your provider as
+  soon as you set one.
 - Without `opentelemetry-sdk` in the bundle, or in a standalone script, the agent
-  uses a dependency-free pipeline that starts after `Bundler.setup` or on the
-  first client request.
+  uses a dependency-free pipeline that starts on the first AI request.
 - Export to Future AGI always uses the agent's built-in exporter, which sends
   OTLP/HTTP protobuf to `${FI_BASE_URL}/tracer/v1/traces` (default base
   `https://api.futureagi.com`). It loads OpenSSL itself when your application has
@@ -90,8 +96,12 @@ TraceAI::Auto.init(provider: my_tracer_provider)
 # or exporter: my_exporter, or processor: my_span_processor
 ```
 
-Call `init` before the first AI request: once the agent has started, later
-`init` calls return the provider in use and change nothing.
+Call `init` before the first AI request. Until then it applies its destinations
+and settings, also when the agent has already attached to your provider or
+answered a `doctor` report; AI spans the agent had queued for Future AGI before
+that call are dropped rather than sent with the settings you replaced. After the
+first AI request, or after an earlier `init`, further `init` calls return the
+provider in use, change nothing and print one warning.
 
 Without FI keys no Future AGI exporter is created. To export to Future AGI as
 well as to explicit destinations, pass `fi_export: true` and a complete FI key
@@ -187,8 +197,9 @@ of `spec/auto-instrumentation/privacy.json`, version 3):
 - Credential-shaped values are redacted wherever they appear: long provider
   keys, AWS access keys, JWTs, `Bearer` and `Basic` values and private keys.
 - Credentials the process has seen (FI keys, credential-like environment values,
-  credential headers and query values on instrumented requests, and values passed
-  to `register_secret`) are removed from every exported string.
+  credential headers and query values on outgoing `Net::HTTP` and `HTTPX`
+  requests, including requests made before the first AI request, and values
+  passed to `register_secret`) are removed from every exported string.
 - Media is omitted: data URLs, base64 images and audio, and payloads next to a
   media MIME type.
 - The `session.id` you set with `TraceAI::Auto.using_session` (or
@@ -244,6 +255,10 @@ install anything.
 - The built-in exporter does not use HTTP proxies (`HTTPS_PROXY` is ignored).
   It loads OpenSSL itself only when that cannot conflict with a version your
   application pins.
+- Before the agent has started, request credentials are learned only when the
+  process has a Future AGI key pair or an OpenTelemetry SDK tracer provider, and
+  a proxy `CONNECT` is not observed: the proxy credentials of a connection
+  opened before the first AI request are learned from later connections only.
 - The agent watches class definitions only until every client class it can wrap
   has loaded, so a client gem required for the first time much later in the
   process may not be traced.
