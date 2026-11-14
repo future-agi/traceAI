@@ -217,20 +217,52 @@ keeps ordinary logprob tokens, still checks them against known secrets and
 credential shapes, and masks a choice's whole logprobs block when its message
 text had to be masked.
 
-Hide controls replace content with `__REDACTED__`: `FI_HIDE_INPUTS`,
-`FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`,
-`FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES`,
-`FI_HIDE_EMBEDDING_VECTORS`, `FI_HIDE_LLM_INVOCATION_PARAMETERS` and
-`FI_HIDE_ERROR_DETAILS`. Other exporters in your application keep their original
-data; only the copy exported by the agent is changed.
+Hide controls replace content with `__REDACTED__`. Other exporters in your
+application keep their original data; only the copy exported by the agent is
+changed. Each control can be set as an environment variable, as an `init` option
+or as a `futureagi.toml` key. The option and the file key are the variable's
+name in lower case without `FI_`:
 
-A hide control, its `init` option or its `futureagi.toml` setting reads `true`,
-`1`, `yes` or `on` as hide and `false`, `0`, `no` or `off` as show, ignoring
-case and surrounding spaces; a blank value counts as not set. Any other value
-hides that content and prints one warning that names the variable, so a mistyped
-control never leaves content visible. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG` and
-`OTEL_SDK_DISABLED` are not hide controls: they are on only for `true`, in any
-letter case.
+| Variable | `init` option and `futureagi.toml` key |
+| --- | --- |
+| `FI_HIDE_INPUTS` | `hide_inputs` |
+| `FI_HIDE_OUTPUTS` | `hide_outputs` |
+| `FI_HIDE_INPUT_MESSAGES` | `hide_input_messages` |
+| `FI_HIDE_OUTPUT_MESSAGES` | `hide_output_messages` |
+| `FI_HIDE_INPUT_TEXT` | `hide_input_text` |
+| `FI_HIDE_OUTPUT_TEXT` | `hide_output_text` |
+| `FI_HIDE_INPUT_IMAGES` | `hide_input_images` |
+| `FI_HIDE_EMBEDDING_VECTORS` | `hide_embedding_vectors` |
+| `FI_HIDE_LLM_INVOCATION_PARAMETERS` | `hide_llm_invocation_parameters` |
+| `FI_HIDE_ERROR_DETAILS` | `hide_error_details` |
+
+```toml
+# futureagi.toml
+hide_inputs = true
+hide_output_text = "on"
+```
+
+Write the file key exactly as in the table. A file line that uses the variable
+name instead (`FI_HIDE_INPUTS = true`) is not a hide control and is ignored.
+
+A hide control reads `true`, `1`, `yes` or `on` as hide and `false`, `0`, `no`
+or `off` as show, ignoring case and surrounding spaces; a blank value counts as
+not set. Any other value hides that content and prints one warning that names
+the variable and the accepted values, never the value, so a mistyped control
+never leaves content visible. The warning names the variable also when the
+value came from the `init` option or the file key. In `futureagi.toml` a hide
+value may be a boolean, a number, a string in double or single quotes, or a bare
+word (`hide_inputs = on`); a hide line whose value cannot be read is kept as
+written, so it hides with that warning instead of being skipped.
+
+With `RUBYOPT=-rtraceai/auto` the agent reads the environment and the config
+file when it loads, before your code runs, and prints the warning then. An
+`init` option for the same control still decides (`init(hide_inputs: false)`
+shows the content), which is why the warning says the content is hidden "unless
+an init option sets it".
+
+`FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG` and `OTEL_SDK_DISABLED` are not hide
+controls: they are on only for `true`, in any letter case.
 
 ## Doctor and bootstrap
 
