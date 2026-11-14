@@ -67,6 +67,25 @@ export function parseConfigFile(text: string, profile?: string): Record<string, 
 function bool(v: unknown, fallback: boolean): boolean {
   return v === undefined ? fallback : typeof v === "boolean" ? v : String(v).toLowerCase() === "true";
 }
+const SWITCH_ON = ["true", "1", "yes", "on"], SWITCH_OFF = ["false", "0", "no", "off"];
+const warnedSwitches = new Set<string>();
+/**
+ * A privacy switch someone set must never silently do nothing: true, 1, yes and on turn it on,
+ * false, 0, no and off turn it off (any case, surrounding spaces ignored), and an empty value is
+ * unset. Any other value turns it on, with one warning per switch that never repeats the value.
+ */
+function hideSwitch(v: unknown, where: string): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  const normalized = String(v).trim().toLowerCase();
+  if (normalized === "") return undefined;
+  if (SWITCH_ON.includes(normalized)) return true;
+  if (SWITCH_OFF.includes(normalized)) return false;
+  if (!warnedSwitches.has(where)) {
+    warnedSwitches.add(where);
+    try { console.warn(`[traceai:auto] ${where} is not one of true, 1, yes, on, false, 0, no or off; treating it as on, so the content it controls is hidden.`); } catch { /* Diagnostics cannot change configuration. */ }
+  }
+  return true;
+}
 function names(v: unknown): string[] { return (Array.isArray(v) ? v : String(v ?? "").split(",")).map(x => String(x).trim().toLowerCase()).filter(Boolean); }
 function readProfile(path: string, profile: string): Record<string, unknown> {
   try { return parseConfigFile(readFileSync(path, "utf8"), profile); } catch { return {}; }
@@ -137,11 +156,13 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
     const raw = options.traceConfig?.[key] ?? env[`FI_${snake.toUpperCase()}`] ?? file[snake];
     if (raw !== undefined) {
       if (key === "base64ImageMaxLength") { const n = Number(raw); if (Number.isFinite(n)) traceConfig[key] = n; }
-      else if (key === "hideErrorDetails") {
-        // Optional boolean: empty/invalid values mean derive, not an explicit opt-out.
-        const normalized = String(raw).trim().toLowerCase();
-        if (normalized === "true" || normalized === "false") traceConfig[key] = normalized === "true";
-      } else traceConfig[key] = bool(raw, false);
+      else {
+        // A privacy switch: an empty value is unset (hideErrorDetails then follows the content
+        // switches); an unrecognised value hides, with one warning that names only the variable.
+        const where = options.traceConfig?.[key] !== undefined ? `traceConfig.${key}` : env[`FI_${snake.toUpperCase()}`] !== undefined ? `FI_${snake.toUpperCase()}` : `${snake} in the config file`;
+        const value = hideSwitch(raw, where);
+        if (value !== undefined) traceConfig[key] = value;
+      }
     }
   }
   const rawHosts = value("propagateHosts", "propagate_hosts", "TRACEAI_PROPAGATE_HOSTS");
