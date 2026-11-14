@@ -271,7 +271,7 @@ By default Future AGI receives only AI spans: wire spans and spans from traceAI 
 
 ### Incoming HTTP spans
 
-Incoming HTTP `SERVER` spans are off by default. Add `http` to `FI_INSTRUMENTATIONS` (for example `wire,http`) to turn them on; `@opentelemetry/instrumentation-http` must be installed. Even then, a request's `SERVER` span is sent only when an AI span was seen in the same trace, so routes without AI calls, such as health checks, are never sent. A remote parent from an incoming `traceparent` header is read through your application's propagator.
+Incoming HTTP `SERVER` spans are off by default. Add `http` to `FI_INSTRUMENTATIONS` (for example `wire,http`) to turn them on; `@opentelemetry/instrumentation-http` must be installed. Even then, a request's `SERVER` span is sent only when an AI span was seen in the same trace, so routes without AI calls, such as health checks, are never sent. A remote parent from an incoming `traceparent` header is read through your application's propagator; without one, the agent reads the W3C `traceparent` with its own propagator, which it never registers. When your application already has a tracer provider at startup and spans go to a Future AGI route without `FI_FORWARD_APP_SPANS`, the agent does not install its HTTP instrumentation beside yours: it prints one warning and `report()` shows `http` as disabled. A second HTTP instrumentation would replace yours or nest its spans under ones your backend never receives.
 
 ### Vector database integrations
 

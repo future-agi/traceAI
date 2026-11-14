@@ -308,7 +308,11 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // forwarding switch), its start hook already observes the application's spans.
     if (route && !forwarding && config.propagateOutgoingAdapters === true && outgoingPolicy.valid && outgoingPolicy.mode !== "none") observeApplicationSpans(agent, options.provider);
     if (config.wireCapture && enabled("wire", config)) agent.removeObservation = observeTransports();
-    agent.removeLibraries = enableLibraries(config, options, instrumentationProvider, agent.statuses, warn, processor);
+    // On the AI-only route the agent does not install its HTTP instrumentation beside
+    // an application provider, which normally has its own. With the forwarding switch
+    // (or no FI route) AI spans are on that provider, and the agent's HTTP spans too.
+    const httpBesideApplication = route && !forwarding && !!(options.provider ?? existingProvider());
+    agent.removeLibraries = enableLibraries(config, options, instrumentationProvider, agent.statuses, warn, processor, httpBesideApplication);
     // Genkit creates its spans with the global tracer provider. On the AI-only route
     // the agent's provider is never global, so those spans stay with the application.
     const genkit = route && !forwarding ? agent.statuses.find(status => status.name === "genkit") : undefined;

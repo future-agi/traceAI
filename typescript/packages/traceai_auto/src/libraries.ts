@@ -92,13 +92,14 @@ function patchSnapshot(root: object): () => boolean {
   visit(root, 0);
   return () => snapshots.some(([value, key, before]) => Object.getOwnPropertyDescriptor(value, key)?.value !== before);
 }
-export function enableLibraries(config: Config, options: Options, provider: TracerProvider, statuses: IntegrationStatus[], warn: (key: string, message: string) => void, spanProcessor?: SpanProcessor): () => void {
+/** httpBesideApplication: an application provider is present while AI spans stay off it. */
+export function enableLibraries(config: Config, options: Options, provider: TracerProvider, statuses: IntegrationStatus[], warn: (key: string, message: string) => void, spanProcessor?: SpanProcessor, httpBesideApplication = false): () => void {
   const removers: (() => void)[] = [];
   // Register before loading any instrumentation package: its own imports can load targets.
   let esm = true;
   try {
     const pending = integrations.filter(i => statuses.find(s => s.name === i.name)?.status === "pending");
-    const http = explicitlyEnabled("http", config) && resolvable("@opentelemetry/instrumentation-http");
+    const http = explicitlyEnabled("http", config) && !httpBesideApplication && resolvable("@opentelemetry/instrumentation-http");
     installLoader([...pending.flatMap(i => [...i.targets, ...i.modules]), ...(http ? ["http", "https", "node:http", "node:https"] : [])], [...pending.map(i => i.package), ...(http ? ["@opentelemetry/instrumentation-http"] : [])]);
   } catch { esm = false; warn("esm", "ESM loader could not be installed; CommonJS and fetch capture remain available."); }
   for (const entry of integrations) {
@@ -246,7 +247,12 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
   }
   // Incoming requests are application traffic: only an explicit allowlist entry
   // enables them, and the agent sends a SERVER span only for a trace with AI work.
-  if (explicitlyEnabled("http", config)) {
+  if (explicitlyEnabled("http", config) && httpBesideApplication) {
+    // A second HTTP instrumentation would replace the application's patch, or nest
+    // its SERVER spans under one the application's backend never receives.
+    statuses.push({ name: "http", status: "disabled", reason: "An application tracer provider is present; its own OpenTelemetry setup keeps incoming HTTP" });
+    warn("http", "Incoming HTTP spans are left to the application's OpenTelemetry setup; the agent's HTTP instrumentation is not installed beside an application tracer provider.");
+  } else if (explicitlyEnabled("http", config)) {
     try {
       const path = appRequire().resolve("@opentelemetry/instrumentation-http");
       const { HttpInstrumentation } = appRequire()(path);

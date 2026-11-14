@@ -826,7 +826,9 @@ the same hide controls on every route.
   span is sent to Future AGI only when an AI span was seen in the same trace, so requests
   with no AI call, such as health checks, are never sent. AI calls inside the application's
   own request spans parent under them through the application's context manager. Outgoing
-  non-AI HTTP calls are not traced.
+  non-AI HTTP calls are not traced. Node: beside an application tracer provider present at
+  startup, the agent leaves incoming HTTP to the application and warns once; without an
+  application propagator, it reads the W3C `traceparent` with a private propagator.
 - **Report.** At startup, with `FI_AUTO_DEBUG=true`, and on demand through a `doctor`
   command, the agent prints the status of every integration (see statuses above), the
   resolved configuration with secrets masked, and whether the collector accepted a test
