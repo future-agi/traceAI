@@ -754,6 +754,38 @@ def test_web_servers_stay_off_on_a_registered_provider_without_a_route(fresh_sta
     assert [s.name for s in exporter.get_finished_spans()] == ["chat fake"]
 
 
+@pytest.mark.parametrize("registered", [True, False])
+def test_a_manual_integration_on_a_registered_provider_keeps_its_library_spans(fresh_state, monkeypatch, registered):
+    from fi_instrumentation import register
+
+    # An integration whose package converts its library's spans in an exporter wrapper: the app passes
+    # that exporter to register() and then calls init(), as the integration's setup line says.
+    _write_packages(fresh_state, {"wrappedlib": ""})
+    wrapped = Integration("wrapped", ("wrappedlib",), "traceai-wrapped", "traceai_wrapped", kind=_registry.MANUAL,
+                          category="framework", note="pass WrappedSpanExporter to register()",
+                          scopes=("wrappedlib.telemetry",))
+    monkeypatch.setattr(_registry, "ALL", (wrapped,))
+    exporter = InMemorySpanExporter()
+    if registered:
+        provider = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
+                            set_global_tracer_provider=True)
+        _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER")
+    else:
+        # Started by the agent, the integration is not set up, so its raw library spans stay out.
+        provider = _manager.init(span_exporter=exporter, batch=False)
+    assert {s.name: s.status for s in _manager.report()} == {"wrapped": _manager.STATUS_MANUAL}
+    with provider.get_tracer("wrappedlib.telemetry").start_as_current_span("invoke_agent"):
+        pass
+    with provider.get_tracer("checkout.http").start_as_current_span("GET /orders"):
+        pass
+    assert [s.name for s in exporter.get_finished_spans()] == (["invoke_agent"] if registered else [])
+
+
+def test_the_wrapper_based_integration_names_its_library_scope():
+    # Its library's own spans carry the content; its exporter wrapper converts them.
+    assert _registry.find("strands").scopes == ("strands.telemetry.tracer",)
+
+
 @pytest.mark.parametrize("app_provider", [False, True])
 def test_spans_marked_with_an_ai_span_kind_reach_future_agi(fresh_state, app_provider):
     from fi_instrumentation import FITracer, TraceConfig
