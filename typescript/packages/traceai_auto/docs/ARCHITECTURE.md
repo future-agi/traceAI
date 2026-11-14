@@ -117,10 +117,17 @@ a model span the agent made does not hide that model span. A span that does not 
 but carries the model span's own span context, as the API's no-op tracer gives an
 application with a context manager and no tracer provider, is looked up by its own
 ids; a remote span context is not. A span the application's sampler did not record
-has a new span id and no parent id, so the walk stops there and the call is also
-captured as a wire span. That includes a parent-based sampler in a trace it did not
-sample, because the agent's model span is then unsampled too. Two or more application
-spans in a row are not followed, and the call is then also captured as a wire span. Outgoing credential observation is never skipped by these rules: fetch reads
+has a new span id and no parent id, and keeps only its trace id. That includes a
+parent-based sampler in a trace it did not sample, because the agent's model span is
+then unsampled too. Such a span is matched by trace id: when exactly one live model
+span the agent made is in its trace, the request is taken to be inside that span and
+no wire span is created, however many unrecorded spans wrap the request. With two or
+more live model spans in the trace nothing is assumed, and the call is also captured
+as a wire span. A separate AI request sent with plain `fetch` in that trace, while
+one model span is live, is taken to be part of that span's call and is not captured.
+Only a local span that never recorded and has the sampled flag off is matched this
+way, not a span that recorded and has ended. Two or more recorded application spans
+in a row are not followed, and the call is then also captured as a wire span. Outgoing credential observation is never skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span
