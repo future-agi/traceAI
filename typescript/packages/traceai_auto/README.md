@@ -356,6 +356,7 @@ npx --no-install traceai-auto doctor --no-check
 - **Provider error semantics:** an error inside an HTTP 200 stream can retain HTTP-derived OK status; inspect finish reasons as well.
 - **Best-effort delivery:** natural-exit/SIGTERM flushes are bounded. Hard termination, Lambda freezing and collector failures can lose spans. The agent never makes app success depend on export success.
 - **Spans your app creates inside an AI call:** Spans your application creates inside an AI call (for example its own HTTP span for the provider request, or a database span inside a tool) are parented to a span that only Future AGI receives, so your own tracing backend shows them without that parent. They keep the same trace id. Nothing of your application's is sent to Future AGI, and your provider and exporters are untouched.
+- **An AI request inside two or more of your own spans:** when your code wraps the provider request in two or more spans of its own in a row (for example a custom `fetch` that starts a request span and then an attempt span), Future AGI receives that call twice. It arrives as the integration's AI span and as a wire span whose parent is your inner span, which Future AGI does not receive. None of your spans is sent. One span of yours around the request does not cause this.
 
 [Architecture, complete capture limits and redistribution notices](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md)
 
