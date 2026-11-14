@@ -134,6 +134,10 @@ including an exit caused by SIGTERM or by your own SIGTERM handler calling
 
 Precedence: explicit `init` arguments, then environment variables, then the
 config file (`FI_CONFIG_FILE`, default `./futureagi.toml`), then defaults.
+A config file that is over 64 KiB or cannot be read is ignored as a whole, and
+a line in it that is not valid UTF-8 is skipped (a hide line included); each of
+these prints one warning that names the file and what failed, never its
+content, and a file that does not exist prints nothing.
 
 | Variable | Meaning |
 | --- | --- |
