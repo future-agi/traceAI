@@ -272,6 +272,15 @@
                                         <exclude>META-INF/versions/**/module-info.class</exclude>
                                     </excludes>
                                 </filter>
+                                <!-- ByteBuddy's Windows attach helpers are loaded only through JNA, which the
+                                     agent does not bundle; they would sit unrelocated at the jar root. -->
+                                <filter>
+                                    <artifact>net.bytebuddy:byte-buddy-agent</artifact>
+                                    <excludes>
+                                        <exclude>win32-x86/**</exclude>
+                                        <exclude>win32-x86-64/**</exclude>
+                                    </excludes>
+                                </filter>
                                 <!-- Only the two relocated core helpers enter the agent jar. Any other
                                      ai.traceai class would sit unrelocated on the system classpath
                                      beside the application's own traceai-java-core. -->
