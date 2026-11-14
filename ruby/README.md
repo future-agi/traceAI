@@ -249,6 +249,11 @@ install anything.
   process may not be traced.
 - If your application replaces its global tracer provider a second time, the
   agent stays on the first application provider it attached to.
+- Future AGI receives only AI spans, so a span it receives can name a parent
+  that it never receives: for example a wire span created under an HTTP client,
+  job or controller span that carries no AI marker. The span keeps its real
+  trace id and parent id, so it still lines up with the full trace in your own
+  backend, but the parent is missing from the trace in Future AGI.
 - Brotli and zstd bodies are not decoded. AWS Bedrock binary event streams keep
   request and status attributes only.
 - Privacy recognition is structural, not general PII detection. Use the hide
