@@ -98,9 +98,9 @@ public final class AutoConfig {
         result.putIfAbsent("FI_PROJECT_TYPE", "observe"); result.putIfAbsent("FI_WIRE_CAPTURE", "true");
         result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_SAMPLE_RATE", "1.0"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
         result.put("FI_CONFIG_FILE", path);
-        AutoConfig resolved = new AutoConfig(result, credentialValues);
-        if (unusable != null) resolved.reportUnusableFile(path, unusable);
-        return resolved;
+        AutoConfig built = new AutoConfig(result, credentialValues);
+        if (unusable != null) built.reportUnusableFile(path, unusable);
+        return built;
     }
     /**
      * Reports a config file that is there but cannot be used: once per file and cause in this JVM, by its path and never
