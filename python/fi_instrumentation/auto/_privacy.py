@@ -19,9 +19,12 @@ link attributes, resource and instrumentation scope attributes, and tracestate e
   wherever they appear.
 
 The application's own processors and exporters never see this copy. Work is bounded by the
-catalog's depth, node and text limits, and every scan is linear in the text it reads. Content that
-cannot be checked within those limits, or whose type is not plain data, is dropped without being
-turned into text; a span that cannot be checked at all keeps only its identity and timing.
+catalog's depth, node and text limits. A text scan reads each run of characters a bounded number of
+times: two of the catalog's value shapes, the provider key and the JWT, would make Python's
+backtracking engine walk a long run back from every start in it, so they are matched in an
+equivalent form whose failed starts never rescan their run. Content that cannot be checked within
+those limits, or whose type is not plain data, is dropped without being turned into text; a span
+that cannot be checked at all keeps only its identity and timing.
 """
 
 import base64
@@ -80,6 +83,21 @@ _QUOTE = re.compile(r"[\"']")
 _SPACE = re.compile(r"[ \t\r\n]*")
 _BARE = re.compile(r"[^,}\]\s]*")
 _STRUCTURE = re.compile(r"[\"'{}\[\]]")
+# The token run of the value shapes below: letters, digits, underscores and hyphens.
+_RUN = "[A-Za-z0-9_-]"
+# Catalog value shapes that Python's backtracking engine would retry from every start in a long
+# token run that cannot match: 'eyJ-' repeated makes the JWT shape quadratic in the run. Each is the
+# same language here, matched from the start of its run. A lookahead group is atomic in Python's
+# engine, so the first start in the run is found once, and a start that fails never rescans the run.
+# Every later start in a run reaches the same run end with less of it left, so it can only match
+# where the first one does: one attempt per run finds exactly the match the catalog's expression
+# finds. Group 1 is the part of the run before that start; the match keeps it.
+_BOUNDED_SHAPES = {
+    r"\bsk-[A-Za-z0-9_-]{20,}\b":
+        rf"(?<!{_RUN})(?=({_RUN}*?)\bsk-)\1sk-{_RUN}{{20,}}\b",
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b":
+        rf"(?<!{_RUN})(?=({_RUN}*?)\beyJ)\1eyJ(?=({_RUN}{{8,}}))\2\.(?=({_RUN}{{8,}}))\3\.{_RUN}{{8,}}\b",
+}
 # W3C tracestate members, as the OpenTelemetry API accepts them.
 _TRACESTATE_KEY = re.compile(r"[a-z][_0-9a-z\-*/]{0,255}|[a-z0-9][_0-9a-z\-*/]{0,240}@[a-z][_0-9a-z\-*/]{0,13}")
 _TRACESTATE_VALUE = re.compile(r"[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]")
@@ -114,8 +132,7 @@ class _Catalog:
             (re.compile(item["regex"]), tuple(by_id[name] for name in item.get("unless_contains_patterns", ())))
             for item in credentials["exclusions"])
         self.contextual = tuple(re.compile(item["path_regex"]) for item in credentials["contextual_exclusions"])
-        self.shapes = tuple(re.compile(item["regex"], re.I if "i" in item["flags"] else 0)
-                            for item in credentials["value_shapes"])
+        self.shapes = tuple(self._shape(item) for item in credentials["value_shapes"])
         self.signed = frozenset(self.normalize(name) for name in catalog["signed_url"]["parameters"])
         media = catalog["media"]
         self.prefix_bytes = media["base64_prefix_decoded_bytes"]
@@ -165,6 +182,14 @@ class _Catalog:
         self.max_nodes = limits["max_nodes"]
         self.max_text = limits["max_text_chars"]
         self._names: Dict[str, bool] = {}
+
+    def _shape(self, item: Mapping[str, Any]) -> Tuple["re.Pattern[str]", Any]:
+        """One value shape, and what replaces a match of it."""
+        bounded = None if item["flags"] else _BOUNDED_SHAPES.get(item["regex"])
+        if bounded is None:
+            return re.compile(item["regex"], re.I if "i" in item["flags"] else 0), self.redacted
+        redacted = self.redacted
+        return re.compile(bounded), lambda match: match.group(1) + redacted
 
     # Names -------------------------------------------------------------------------------------
 
@@ -491,8 +516,8 @@ class _Catalog:
         for secret in secrets:
             if secret in value:
                 value = self.redacted.join(part.replace(secret, self.redacted) for part in value.split(self.redacted))
-        for shape in self.shapes:
-            value = shape.sub(self.redacted, value)
+        for shape, replacement in self.shapes:
+            value = shape.sub(replacement, value)
         return value
 
     def members(self, text: str) -> str:
