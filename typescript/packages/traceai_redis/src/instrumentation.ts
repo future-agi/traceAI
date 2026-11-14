@@ -103,11 +103,15 @@ function vectorSchema(schema: unknown): boolean {
   });
 }
 
+// A KNN clause ("=>[KNN 10 @field $blob]", or with a $K parameter) or a VECTOR_RANGE
+// filter ("@field:[VECTOR_RANGE $radius $blob]"); the word knn alone is text.
+const VECTOR_QUERY = /\[\s*KNN\s+(?:\d+|\$\w+)\s+@|@[\w.-]+\s*:\s*\[\s*VECTOR_RANGE\b/i;
+
 function vectorOperation(operation: RedisVectorOperation, args: any[]): boolean {
   switch (operation) {
     case "ftSearch":
     case "ftAggregate":
-      return typeof args[1] === "string" && /\bKNN\b/i.test(args[1]);
+      return typeof args[1] === "string" && VECTOR_QUERY.test(args[1]);
     case "ftCreate":
       return vectorSchema(args[1]);
     default:
