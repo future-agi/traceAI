@@ -38,7 +38,11 @@ public final class AutoConfig {
         catch (java.nio.charset.CharacterCodingException error) { fileNotUsed(path, "it is not valid UTF-8 and could not be decoded"); }
         catch (Exception error) { fileNotUsed(path, "it could not be read"); }
         try {
+            boolean first = true;
             for (String line : lines) {
+                // Editors on Windows write a UTF-8 byte order mark first. It is not part of the first key.
+                if (first && line.startsWith("﻿")) line = line.substring(1);
+                first = false;
                 line = stripComment(line).trim();
                 if (line.isEmpty() || line.startsWith("[")) continue;
                 String[] pair = line.split("=", 2); if (pair.length != 2) continue;
