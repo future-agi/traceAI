@@ -111,6 +111,14 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_HIDE_INPUT_IMAGES` | `false`; omit image and file inputs while keeping text parts. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent. |
 
+A `FI_HIDE_*` switch, its `init` option or its `futureagi.toml` setting reads
+`true`, `1`, `yes` or `on` as hide and `false`, `0`, `no` or `off` as show,
+ignoring case and surrounding spaces; a blank value counts as not set. Any other
+value hides that content and prints one warning that names the variable, so a
+mistyped switch never leaves content visible. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG`
+and `OTEL_SDK_DISABLED` are not hide switches: they are on only for `true`, in
+any letter case.
+
 ```toml
 # futureagi.toml (a flat subset: strings, booleans, numbers, one-line string arrays)
 project_name = "checkout-agent"
