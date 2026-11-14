@@ -41,10 +41,13 @@ export interface MongoDBInstrumentationConfig extends InstrumentationConfig {
   vectorOnly?: boolean;
 }
 
-function vectorStage(pipeline: unknown): boolean {
-  return Array.isArray(pipeline) && pipeline.some((stage) => {
-    const vector = stage?.$vectorSearch ?? stage?.$search?.knnBeta;
-    return !!vector && typeof vector === "object";
+// A vector search stage, including one in a $unionWith or $lookup sub-pipeline and
+// the $search knnBeta and vectorSearch operators.
+function vectorStage(pipeline: unknown, depth = 0): boolean {
+  return depth < 4 && Array.isArray(pipeline) && pipeline.some((stage) => {
+    const vector = stage?.$vectorSearch ?? stage?.$search?.knnBeta ?? stage?.$search?.vectorSearch;
+    if (!!vector && typeof vector === "object") return true;
+    return vectorStage(stage?.$unionWith?.pipeline, depth + 1) || vectorStage(stage?.$lookup?.pipeline, depth + 1);
   });
 }
 
