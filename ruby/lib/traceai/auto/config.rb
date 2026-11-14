@@ -31,6 +31,8 @@ module TraceAI
       # announce: false leaves printing the warnings to the caller (the agent
       # prints each one once per process, however often it reads its config).
       def initialize(arguments = {}, env: ENV, cwd: Dir.pwd, announce: true)
+        # Reading the config file can already add a warning (see read_file).
+        @warnings = []
         file = arguments[:config_file] || arguments['config_file'] || env['FI_CONFIG_FILE'] || File.join(cwd, 'futureagi.toml')
         file_values = read_file(file)
         environment = env.each_with_object({}) do |(k, v), out|
@@ -42,7 +44,6 @@ module TraceAI
         set = ->(source) { source.reject { |key, value| HIDE_SWITCHES.include?(key) && Config.blank?(value) } }
         @values = DEFAULTS.merge(file_values).merge(set.call(environment)).merge(set.call(explicit))
         # Credentials are one atomic pair per source, never independently merged.
-        @warnings = []
         @credential_values = [explicit, environment, file_values].flat_map do |source|
           %w[api_key secret_key].filter_map { |key| Config.utf8(source[key]).dup.freeze if source[key].instance_of?(String) }
         end.freeze
@@ -175,13 +176,28 @@ module TraceAI
         raise ArgumentError unless number.match?(/\A[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\z/)
         number.match?(/[.eE]/) ? Float(number) : Integer(number, 10)
       end
+      # A config file that is there but cannot be used is never passed over
+      # without a word, because the hide settings in it then do nothing. One
+      # warning names its path and what failed (its size, the read or the
+      # decoding) and never its content. What the file sets is unchanged: a file
+      # over 64 KiB or one that cannot be read sets nothing, and a line that is
+      # not valid UTF-8 is skipped. A file that is not there is not reported.
       def read_file(path)
-        return {} unless File.file?(path) && File.size(path) <= 65_536
+        present = File.file?(path)
+        return {} unless present
+        if File.size(path) > 65_536
+          file_warning(path, 'is over the size limit of 64 KiB, so it is not read and none of its settings apply')
+          return {}
+        end
         # TOML is UTF-8. Never decode it in the locale encoding (US-ASCII under
         # LANG=C); a line that is not valid UTF-8 is skipped like a malformed one.
         text = File.binread(path).force_encoding(Encoding::UTF_8).delete_prefix([0xFEFF].pack('U'))
-        text.each_line.each_with_object({}) do |line, out|
-          next unless line.valid_encoding?
+        undecodable = false
+        values = text.each_line.each_with_object({}) do |line, out|
+          unless line.valid_encoding?
+            undecodable = true
+            next
+          end
           # Remove comments outside quoted strings, respecting JSON/TOML escapes.
           quote = false; escape = false; clean = +''
           line.each_char do |c|
@@ -207,8 +223,20 @@ module TraceAI
             out[key] = raw.length >= 2 && raw.start_with?("'") && raw.end_with?("'") ? raw[1...-1] : raw
           end
         end
+        if undecodable
+          file_warning(path, 'has lines that are not valid UTF-8 and cannot be decoded, so those lines are skipped and their settings do not apply')
+        end
+        values
       rescue StandardError
+        file_warning(path, 'could not be read, so none of its settings apply') if present
         {}
+      end
+      # The text is the same for every read of the same file, so the agent
+      # prints it once per process. It holds the path and never the content.
+      def file_warning(path, problem)
+        @warnings << "config file #{Config.utf8(path.to_s)} #{problem}"
+      rescue StandardError
+        nil
       end
     end
   end
