@@ -147,13 +147,16 @@ debug = false
 
 All `FI_HIDE_*` switches from `FIInstrumentation.TraceConfig` are honored in this
 path, including flattened message attributes and audio transcript text. Their
-lower-case file equivalents work too (`hide_inputs = true`, etc.). As in
+lower-case file equivalents work too (`hide_inputs = true`, etc.). A hide switch
+reads `true`, `1`, `yes` or `on` as hide and `false`, `0`, `no` or `off` as show;
+values are trimmed and case-insensitive, and a blank value counts as not set. Any
+other value hides that content and prints one warning that names the variable, so a
+mistyped switch never leaves content visible. `FI_WIRE_CAPTURE` and `FI_AUTO_DEBUG`
+are not hide switches: they read `true`, `1` or `yes` as on and anything else as
+off. As in
 `TraceConfig`, error details are hidden whenever any input or output content flag
 is set, because provider error text can repeat the prompt; an explicit
-`FI_HIDE_ERROR_DETAILS` of `true`, `1` or `yes` (hide) or `false`, `0` or `no` (show)
-overrides that. Values are trimmed and case-insensitive; any other value is ignored
-with a warning that names the variable, so error details then follow the content
-flags. Hidden error details keep
+`FI_HIDE_ERROR_DETAILS` that hides or shows overrides that. Hidden error details keep
 the status code and `error.type` but drop the status description, `error.message`,
 `exception.message`, `exception.stacktrace` and `otel.status_description` on every
 span, including the provider's error text on HTTP client spans. Agent-created
