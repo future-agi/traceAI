@@ -10,8 +10,9 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * A hide switch someone set must never silently do nothing. For every FI_HIDE_* variable, its init option and its
  * futureagi.toml setting: true, 1, yes and on hide; false, 0, no and off show; a blank value is not set; any other
- * value hides. The single warning for such a value is checked in a child JVM by AgentE2ETest. Other switches keep
- * their own parsing.
+ * value hides. A hide line in the file is never dropped, however its value is written. The warning is printed once
+ * per variable in a JVM, so these cases check only what is hidden; the warning, and its absence for a single-quoted
+ * value, are checked in a child JVM by AgentE2ETest. Other switches keep their own parsing.
  */
 class HideSwitchValuesTest {
     private static final String NO_FILE = "target/no-hide-switch-config.toml";
@@ -67,6 +68,35 @@ class HideSwitchValuesTest {
             for (String value : List.of("false", "\"off\"", "off", "0", "\"\"")) {
                 Files.writeString(file, "hide_inputs = " + value + "\n");
                 assertFalse(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+            // A single-quoted string is read as its text.
+            for (String value : List.of("'on'", "' Yes '", "'maybe'", "'on' # hide prompts")) {
+                Files.writeString(file, "hide_inputs = " + value + "\n");
+                assertTrue(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+            for (String value : List.of("'off'", "' No '", "''")) {
+                Files.writeString(file, "hide_inputs = " + value + "\n");
+                assertFalse(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+            // A hide line is never dropped: a value the file reader cannot decode is kept as written, and so hides.
+            for (String value : List.of("\"on", "\"\"\"on\"\"\"", "[on]", "[\"on\"")) {
+                Files.writeString(file, "hide_inputs = " + value + "\n");
+                assertTrue(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()).masking.isHideInputs(), value);
+            }
+        } finally { Files.deleteIfExists(file); }
+    }
+    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS"})
+    void everySwitchReadsItsConfigFileSettingHoweverTheValueIsWritten(String name) throws Exception {
+        String option = name.substring(3).toLowerCase(Locale.ROOT);
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-", ".toml");
+        try {
+            for (String value : List.of("'on'", "\"on\"", "yes", "\"on")) {
+                Files.writeString(file, option + " = " + value + "\n");
+                assertTrue(hides(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()), name), option + " = " + value);
+            }
+            for (String value : List.of("'off'", "\"off\"", "no")) {
+                Files.writeString(file, option + " = " + value + "\n");
+                assertFalse(hides(AutoConfig.resolve(Map.of("config_file", file.toString()), Map.of()), name), option + " = " + value);
             }
         } finally { Files.deleteIfExists(file); }
     }

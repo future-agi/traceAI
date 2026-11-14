@@ -297,6 +297,27 @@ class AgentE2ETest {
         List<String> warnings = log.lines().filter(line -> line.contains("FI_HIDE_INPUTS")).toList();
         assertEquals(1, warnings.size(), log); assertFalse(warnings.get(0).contains("maybe"), log);
         assertTrue(log.lines().noneMatch(line -> line.contains("[traceai-auto]") && line.contains("maybe")), log);
+        // The warning lists the values the switch accepts.
+        assertTrue(warnings.get(0).contains("true, 1, yes or on") && warnings.get(0).contains("false, 0, no or off"), log);
+    }
+    /** The configuration is resolved twice here, at a start without keys and again at init with keys; the warning is still printed once. */
+    @Test void unrecognisedHideSwitchWarnsOnceWhenTheConfigurationIsResolvedTwice() throws Exception {
+        String log = run("jdk", "late_keys", Map.of("FI_HIDE_INPUTS", "maybe"), false);
+        assertEquals(1, spans.size(), spans.toString()); assertFalse(attributes(spans.get(0)).containsKey("input.value"));
+        assertEquals(1, log.lines().filter(line -> line.contains("FI_HIDE_INPUTS")).count(), log);
+    }
+    /** A hide setting written as a single-quoted string in futureagi.toml is read as its text: 'on' hides and 'off' shows, with no warning. */
+    @ParameterizedTest @ValueSource(strings = {"on", "off"})
+    void singleQuotedHideSettingInTheConfigFileIsReadWithoutAWarning(String value) throws Exception {
+        Path file = Files.createTempFile(Path.of("target"), "hide-switch-e2e-", ".toml");
+        try {
+            Files.writeString(file, "hide_inputs = '" + value + "'\n");
+            String log = run("jdk", "basic", Map.of("FI_CONFIG_FILE", file.toAbsolutePath().toString()), true);
+            assertEquals(1, spans.size(), spans.toString()); Map<String,Object> attrs = attributes(spans.get(0));
+            assertEquals(value.equals("off"), attrs.containsKey("input.value"), attrs.toString());
+            assertEquals("Hello world", attrs.get("output.value"));
+            assertTrue(log.lines().noneMatch(line -> line.contains("FI_HIDE_INPUTS")), log);
+        } finally { Files.deleteIfExists(file); }
     }
     @Test void bodyLimitDoesNotClaimUnknownHostOrAffectApp() throws Exception { run("jdk", "basic", Map.of("FI_WIRE_MAX_BODY_BYTES", "10"), true); assertTrue(spans.isEmpty()); }
     @Test void legacyOkHttpRequestsMatchNoAgentBaseline() throws Exception {
