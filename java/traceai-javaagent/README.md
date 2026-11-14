@@ -101,7 +101,7 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_DISABLED_INSTRUMENTATIONS` | None. Denylist wins. `wire` turns HTTP tracing off; `okhttp` or `java.net.http` turns off one client. |
 | `FI_WIRE_CAPTURE` | `true`. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304`; per-direction body buffering bound. |
-| `FI_SAMPLE_RATE` | `1.0`; parent-based ratio sampler. |
+| `FI_SAMPLE_RATE` | `1.0`; the agent's spans are sampled by trace id at this rate. The application's own sampling decision does not drop them: a call under an application span that the application does not sample is still traced (the span keeps that span as its parent, but the application's span is not sent). `0` traces nothing. |
 | `FI_AUTO_DEBUG` | `false`; prints the masked configuration and integration statuses at startup. |
 | `FI_CONFIG_FILE` | `./futureagi.toml`. |
 | `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` | `false`; omit input or output values and messages. |
@@ -109,6 +109,7 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` | `false`; omit text, including transcripts and tool arguments. |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | `false`; omit invocation parameters. |
 | `FI_HIDE_INPUT_IMAGES` | `false`; omit image and file inputs while keeping text parts. |
+| `FI_HIDE_ERROR_DETAILS` | `false`; omit the provider's error text: the status description, `exception.message`, `exception.stacktrace`, `error.message`, `error.stack` and the output of a failed call. An input or output content switch hides the error text too. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent. |
 
 Each `FI_HIDE_*` switch in the table above, its `init` option or its
@@ -132,10 +133,12 @@ sample_rate = 0.25
 debug = false
 ```
 
-A config file that exists but cannot be read, or that is not valid UTF-8, is
-not used: none of its settings apply (hide settings included), and one warning
-names the file and what failed, never its content; a file that does not exist
-prints nothing.
+A UTF-8 byte order mark at the start of the file is read and ignored, so the
+first line counts like any other. A config file that exists but cannot be read,
+or that is not valid UTF-8, is not used: none of its settings apply (hide
+settings included), and one warning names the file, with its path masked as in
+`doctor`, and what failed, never its content; a file that does not exist prints
+nothing.
 
 ## Doctor and lifecycle
 
@@ -156,7 +159,6 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 * OkHttp is traced when it is loaded by the system class loader, as with `java -cp` or a plain `-jar` application. When OkHttp sits in a nested or child class loader (Spring Boot executable jars with `BOOT-INF/lib`, WAR files in an application server, Quarkus), OkHttp calls may not be traced; the JDK HttpClient is unaffected. This has not been tested yet.
 * No server spans for servlet or Spring MVC yet, and no automatic wrapping of SDK clients.
 * The agent needs FI keys to start. It does not yet export to an application-owned OpenTelemetry destination without them.
-* `FI_HIDE_ERROR_DETAILS` is not yet honored by the agent.
 * Export is OTLP/HTTP JSON in bounded batches, without disk spooling. It has been tested against a local mock collector only.
 * Binary Bedrock event streams record request information and status only.
 * The agent stays off, with one warning, when the OpenTelemetry Java agent runs in the same JVM, whichever `-javaagent` comes first; the application runs unchanged. When the OpenTelemetry Java agent is listed after this one, the warning appears at the latest when the application first sends a request through the JDK HttpClient or first builds an OkHttp client, before anything is traced; an OkHttp client built from then on gets none of this agent's interceptors. Android, native images, custom HttpClient implementations and isolated custom classloaders are not supported.
@@ -168,4 +170,4 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify
 ```
 
-This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers, on OkHttp 3.14.9, 4.12.0 and 5.0.0, beside the existing wrappers' own exporter and beside the OpenTelemetry Java agent. No real provider or Future AGI request is made. The Java SDK's full-reactor runs skip the child-JVM tests with `-Dtraceai.javaagent.skipITs=true`; they run in the agent's own workflow.
+This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers, on OkHttp 3.14.9, 4.12.0 and 5.0.0, beside the existing wrappers' own exporter and beside the OpenTelemetry Java agent. No real provider or Future AGI request is made. The Java SDK's full-reactor runs skip the child-JVM tests with `-Dtraceai.javaagent.skipITs=true`; they run in the agent's own workflow. A build with `-DskipTests`, `-Dmaven.test.skip=true` or `-Dtraceai.javaagent.skipITs=true`, such as the quickstart's, does not download the OkHttp 4 and 5 jars that those tests use.
