@@ -905,7 +905,7 @@ debug = false
 
 | SDK | No code change | One line |
 | --- | --- | --- |
-| Python | `fi-instrument python app.py`, or `FI_AUTO_INSTRUMENT=true python app.py`, or `opentelemetry-instrument python app.py` | `fi_instrumentation.init()` |
+| Python | `fi-instrument python app.py`, or `FI_AUTO_INSTRUMENT=true python app.py`, or `FI_AUTO_INSTRUMENT=true opentelemetry-instrument python app.py` | `fi_instrumentation.init()` |
 | TypeScript | `node --import @traceai/auto/register app.js` (also `NODE_OPTIONS`, `-r @traceai/auto/register` for CJS) | `import { init } from "@traceai/auto"; init()` |
 | Go | blank import `_ "github.com/future-agi/traceAI/go/auto"` | `auto.Init(ctx)` |
 | C# | `DOTNET_STARTUP_HOOKS=/path/TraceAI.AutoInstrumentation.dll` | `TraceAIAuto.Init()` |

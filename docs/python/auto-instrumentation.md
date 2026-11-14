@@ -149,7 +149,7 @@ Each integration reports one of these statuses:
 | `pgvector` | `pgvector` | `traceAI-pgvector` | Automatic |
 | `redis` | `redisvl` or `redis` search | `traceAI-redis` | Automatic |
 
-Web servers make each incoming request a root span, so the AI calls it causes are nested under it. They use the OpenTelemetry instrumentation packages: `fastapi`, `flask`, `django`, `falcon` and `tornado` turn on automatically when `opentelemetry-instrumentation-<name>` is installed, and `fi-instrument bootstrap --install --all` installs the ones your app needs, at the release of your installed `opentelemetry-instrumentation`. Future AGI receives a request's root span only when that request made an AI call; health checks, static files and other routes are not sent.
+Web servers make each incoming request a root span, so the AI calls it causes are nested under it. They use the OpenTelemetry instrumentation packages: `fastapi`, `flask`, `django`, `falcon` and `tornado` turn on automatically when `opentelemetry-instrumentation-<name>` is installed, and `fi-instrument bootstrap --install --all` installs the ones your app needs, at the release of your installed `opentelemetry-instrumentation`. Future AGI receives a request's root span only when that request made an AI call, without its query string and captured headers; health checks, static files and other routes are not sent. This also holds for a web server your app instrumented itself.
 
 </details>
 
@@ -176,7 +176,9 @@ The keys are read as **one pair from one source**: a key from the environment is
 
 ### futureagi.toml
 
-`fi-instrument init-config` writes a commented template in the current directory. The file is meant to be committed, so keep the keys in the environment. Every key matches an environment variable without its `FI_` prefix (`debug` is `FI_AUTO_DEBUG`). A `base_url` in the file is used only when the keys come from the same file; otherwise it is ignored with a warning, so a file that arrives with a checkout cannot send your keys to another collector. Set `FI_BASE_URL` instead.
+`fi-instrument init-config` writes a commented template in the current directory. The file is meant to be committed, so keep the keys in the environment. Every key matches an environment variable without its `FI_` prefix (`debug` is `FI_AUTO_DEBUG`).
+
+Set the collector with `FI_BASE_URL`. A `base_url` in a `futureagi.toml` found in the working directory is used only when the keys come from the same file, so a file that arrives with a checkout cannot send your keys or traces to a collector it names. When the keys come from elsewhere, export to Future AGI is **off**, with one warning; nothing goes to the default collector instead. A file you name with `FI_CONFIG_FILE` (or `config_file=` in `init()`, or `--config`) is trusted with its `base_url`.
 
 ```toml
 project_name = "checkout-agent"
@@ -190,9 +192,9 @@ The format is a flat subset of TOML: one `key = value` per line, with quoted str
 
 ## Privacy
 
-Future AGI receives **AI spans only**: spans from traceAI integrations, the library spans an enabled integration maps, and the root span of an incoming request that made an AI call. Other spans in your app, such as HTTP client, database or queue spans from other OpenTelemetry instrumentations, are never sent to Future AGI; your own exporters still receive them unchanged.
+Future AGI receives **AI spans only**: spans from traceAI integrations, spans your code marks with an AI span kind (`gen_ai.span.kind` or `fi.span.kind`, which `FITracer` sets), the library spans an enabled integration maps, and the root span of an incoming request that made an AI call. That request root is sent without the query string and fragment of its URL and without captured request or response headers. Other spans in your app, such as HTTP client, database or queue spans from other OpenTelemetry instrumentations, are never sent to Future AGI; your own exporters still receive them unchanged.
 
-Prompts, responses and tool content are **captured by default**, as with a manual traceAI setup. The usual settings hide them, as environment variables or as `futureagi.toml` keys, and apply to everything sent to Future AGI:
+Prompts, responses and tool content are **captured by default**, as with a manual traceAI setup. The usual settings hide them, as environment variables or as `futureagi.toml` keys. On every span the agent sends to Future AGI they apply to the attributes and to the attributes of its events and links; with `FI_HIDE_ERROR_DETAILS`, those spans also carry no exception events and no error description, and their status stays `ERROR`:
 
 | Environment variable | Config-file key | Hides |
 | --- | --- | --- |
@@ -210,7 +212,7 @@ In code, pass `config=TraceConfig(...)` to `init()`. `fi-instrument doctor` show
 
 ## Existing OpenTelemetry setup
 
-- **You call `register()` yourself and then `fi_instrumentation.init()`.** The agent reuses that provider and adds nothing.
+- **You call `register()` yourself and then `fi_instrumentation.init()`.** The agent reuses that provider and puts the same filter in front of its Future AGI export as on its own provider: Future AGI receives only AI spans, masked with the agent's privacy settings, and other processors you added still see every span. Spans your code creates on that provider without an AI span kind are no longer sent to Future AGI while the agent runs; mark them with `FITracer` and `fi_span_kind` to keep them. An exporter wrapper you pass to `register()` for a manual integration, such as `StrandsSpanExporter`, still receives its library's spans. Stopping the agent leaves your provider exporting. If the provider's first processor is not its Future AGI export, or you pass `span_exporter=` to `init()`, the agent cannot filter that export: it leaves web server integrations off and prints one warning.
 - **You call `register()` and `instrument()` yourself, and start with `fi-instrument` or `FI_AUTO_INSTRUMENT`.** The agent starts first: it registers its own provider and turns on the integrations, so your `register()` cannot become the global provider, your `instrument()` calls do nothing and your `project_name` is not used. Either remove those calls, or keep them, call `fi_instrumentation.init()` after them, and start the app normally.
 - **Your app configures its own OpenTelemetry provider.** Call `fi_instrumentation.init()` after that setup, or pass `tracer_provider=`, or start with `FI_AUTO_INSTRUMENT=true opentelemetry-instrument`. The agent keeps your sampler, processors and exporters, and adds one Future AGI export next to them for AI spans. Spans sent to Future AGI carry the project name; your other exporters see every span unchanged. `FI_SAMPLE_RATE` then thins only the Future AGI copy.
 - **`fi-instrument` and `FI_AUTO_INSTRUMENT` start before your code**, so the agent creates and registers the provider. OpenTelemetry allows only one global provider, so an app that sets its own should use `init()` as above instead. Processors you add to the agent's provider are flushed and closed when the agent shuts down.
@@ -251,8 +253,9 @@ auto.shutdown()   # stop the agent; it cannot be restarted in the same process
 | A library shows `failed` | The detail has the error, often an unsupported library version. The app keeps running. |
 | Nothing arrives in Future AGI | Run `fi-instrument validate` to check `FI_BASE_URL` and the keys, and let the app exit normally or call `auto.flush()`. |
 | `traceAI: tracing is off: ... cannot import fi_instrumentation` | The Python that runs your app does not have `fi-instrumentation-otel`, for example when `fi-instrument` comes from another environment. Install the package where the app runs. |
-| `ignoring base_url from futureagi.toml` | Set `FI_BASE_URL`, or put the keys in the same file. |
-| HTTP, database or other spans are missing in Future AGI | Only AI spans are sent there; your own exporters still receive the rest. |
+| `export to Future AGI is off: futureagi.toml sets base_url ...` | Set `FI_BASE_URL`, put the keys in the same file, or name the file with `FI_CONFIG_FILE`. |
+| `web server integrations are off: the agent cannot put its AI-only filter in front of ...` | Your registered provider's first processor is not its Future AGI export, or `init()` got a `span_exporter=`. See [Existing OpenTelemetry setup](#existing-opentelemetry-setup). |
+| HTTP, database or other spans are missing in Future AGI | Only AI spans are sent there; your own exporters still receive the rest. To send a span of your own, give it an AI span kind (`FITracer` with `fi_span_kind`). |
 | Spans move to another project after adding `fi-instrument` | Your manual `register()` setup no longer applies; see [Existing OpenTelemetry setup](#existing-opentelemetry-setup). |
 | Duplicate spans | Remove manual `instrument()` calls for the same library, or disable that integration with `FI_DISABLED_INSTRUMENTATIONS`. |
 
