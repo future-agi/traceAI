@@ -124,7 +124,7 @@ For streaming calls, finish consuming the stream before flushing or shutting dow
 
 Input/output recording is disabled above. Enable it only for data you are allowed to store.
 
-The processors also read Future AGI privacy settings when constructed. Set them before initializing tracing:
+The processors also read Future AGI privacy settings when constructed. Set them before initializing tracing. For every switch below, `true`, `1`, `yes` and `on` turn it on and `false`, `0`, `no` and `off` turn it off, in any case; an empty value counts as unset, and any other value turns the switch on, so the content is hidden, with one warning through the OpenTelemetry diagnostic logger that names the variable but not its value.
 
 - `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` remove input and output payloads, including native and normalized messages and tool data.
 - `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, and `FI_HIDE_INPUT_IMAGES` also remove the corresponding full serialized payloads. This deliberately removes more than the selected modality so another copy cannot expose it.
