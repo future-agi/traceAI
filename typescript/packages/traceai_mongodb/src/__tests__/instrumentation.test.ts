@@ -63,8 +63,7 @@ describe("MongoDB vector-only mode", () => {
   test("traces only aggregate commands with a vector search stage", async () => {
     const exporter = new InMemorySpanExporter();
     const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-    // The option is new in this release; older type declarations do not list it.
-    const instrumentation = new MongoDBInstrumentation({ instrumentationConfig: { vectorOnly: true } as any });
+    const instrumentation = new MongoDBInstrumentation({ instrumentationConfig: { vectorOnly: true } });
     instrumentation.setTracerProvider(provider);
     try {
       expect((instrumentation as any).vectorOnly).toBe(true);
@@ -77,6 +76,25 @@ describe("MongoDB vector-only mode", () => {
       const spans = exporter.getFinishedSpans();
       expect(spans.map((span) => span.name)).toEqual(["mongodb aggregate"]);
       expect(spans[0].attributes["db.operation.type"]).toBe("vector_search");
+    } finally {
+      instrumentation.disable();
+      await provider.shutdown();
+    }
+  });
+
+  test("traces vector search stages inside a $unionWith pipeline and the $search vectorSearch operator", async () => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    const instrumentation = new MongoDBInstrumentation({ instrumentationConfig: { vectorOnly: true } });
+    instrumentation.setTracerProvider(provider);
+    try {
+      const client = new Client();
+      instrumentation.instrumentClient(client as any);
+      const vector = { index: "vectors", path: "embedding", queryVector: [0.1, 0.2], numCandidates: 10, limit: 2 };
+      run(client, 1, "aggregate", { aggregate: "docs", pipeline: [{ $match: { active: true } }, { $unionWith: { coll: "archive", pipeline: [{ $vectorSearch: vector }] } }] });
+      run(client, 2, "aggregate", { aggregate: "docs", pipeline: [{ $search: { index: "search", vectorSearch: { path: "embedding", queryVector: [0.1, 0.2], limit: 2 } } }] });
+      run(client, 3, "aggregate", { aggregate: "docs", pipeline: [{ $unionWith: { coll: "archive", pipeline: [{ $match: { active: true } }] } }] });
+      expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual(["mongodb aggregate", "mongodb aggregate"]);
     } finally {
       instrumentation.disable();
       await provider.shutdown();
