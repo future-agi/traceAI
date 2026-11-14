@@ -112,9 +112,10 @@ flushes the host within the deadline, and never shuts down the host provider.
 
 Precedence is **code > environment > file > defaults**. The config file is
 `./futureagi.toml`, or `FI_CONFIG_FILE`/`AutoOptions.ConfigFile`. The supported flat
-TOML subset is strings, booleans, numbers and single-line arrays of strings.
-Comments outside strings and table-heading lines are ignored; this is not a full
-TOML parser. Malformed lines are ignored. Keep credentials out of committed files.
+TOML subset is double-quoted strings, booleans, numbers and single-line arrays of
+strings. Comments outside strings and table-heading lines are ignored; this is not a
+full TOML parser. Malformed lines are ignored, with one exception: a `hide_*` line
+is always read (see the hide switches below). Keep credentials out of committed files.
 `FI_API_KEY` and `FI_SECRET_KEY` resolve as one atomic pair: explicit arguments,
 then environment, then file. An incomplete or blank pair is ignored as a whole
 with one warning naming the source and missing half; halves never mix across sources.
@@ -151,7 +152,10 @@ lower-case file equivalents work too (`hide_inputs = true`, etc.). A hide switch
 reads `true`, `1`, `yes` or `on` as hide and `false`, `0`, `no` or `off` as show;
 values are trimmed and case-insensitive, and a blank value counts as not set. Any
 other value hides that content and prints one warning that names the variable, so a
-mistyped switch never leaves content visible. `FI_WIRE_CAPTURE` and `FI_AUTO_DEBUG`
+mistyped switch never leaves content visible. In the file, a hide value may also be
+a single-quoted string or a bare word (`hide_inputs = 'on'`, `hide_inputs = on`),
+and a value the file reader cannot decode is kept as written, so it hides with that
+warning instead of being skipped. `FI_WIRE_CAPTURE` and `FI_AUTO_DEBUG`
 are not hide switches: they read `true`, `1` or `yes` as on and anything else as
 off. As in
 `TraceConfig`, error details are hidden whenever any input or output content flag
@@ -176,7 +180,11 @@ attributes under the text-hide flags, on spans/events/links/resources/scopes.
 Image hiding includes Anthropic `type: image` blocks (including remote
 `source.url`), OpenAI image properties, and Gemini `fileData`/`file_data` image
 parts and file URIs, element-wise in string/object arrays. Code can provide
-`AutoOptions.TraceConfig` without changing existing SDK defaults.
+`AutoOptions.TraceConfig` without changing existing SDK defaults. A supplied
+`TraceConfig` is used as given, and the agent then reads no hide switch itself. A
+`TraceConfig` built with `TraceConfig.Builder()` reads `FI_HIDE_*` from the
+environment with the SDK's own parsing, not the rule above: only `true`, `1` or
+`yes` hide, `on` and unrecognised values do not, and no warning is printed.
 
 Credentials are used only for collector authentication. Provider authorization
 headers are never exported; known provider keys are redacted if echoed in a wire
