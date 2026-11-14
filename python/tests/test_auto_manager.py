@@ -1301,3 +1301,159 @@ def test_auto_instrument_cannot_rebind_enabled_instrumentor(fresh_state):
     _manager.auto_instrument(tracer_provider=first, lazy=False)
     _manager.auto_instrument(tracer_provider=second, lazy=False)
     assert traceai_fakeailib.CALLS[-1]["tracer_provider"] is first
+
+
+# A provider key shape: "sk-" and at least 20 more letters, digits, "-" or "_". Obviously fake.
+_PROVIDER_KEY = "sk-test-PLACEHOLDER-PLACEHOLDER"
+
+
+def test_a_credential_shaped_value_in_a_prompt_is_redacted_only_for_future_agi(fresh_state):
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    prompt = f"use {_PROVIDER_KEY} for the call"
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("call", attributes={"input.value": prompt}):
+        pass
+    # The application's own exporter gets the span as the code recorded it.
+    assert app_exporter.get_finished_spans()[0].attributes["input.value"] == prompt
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["input.value"] == "use <redacted> for the call"
+
+
+def test_an_application_attribute_named_like_a_credential_is_redacted_for_future_agi(fresh_state):
+    import json
+
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    attributes = {
+        "gen_ai.span.kind": "LLM",
+        "app.api_key": "PLACEHOLDER-app-value",
+        "llm.invocation_parameters": json.dumps({"max_tokens": 64, "api_key": "PLACEHOLDER-parameter"}),
+    }
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("call", attributes=attributes):
+        pass
+    assert dict(app_exporter.get_finished_spans()[0].attributes) == attributes
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["app.api_key"] == "<redacted>"
+    assert json.loads(span.attributes["llm.invocation_parameters"]) == {"max_tokens": 64, "api_key": "<redacted>"}
+    assert span.attributes["gen_ai.span.kind"] == "LLM"
+    assert "PLACEHOLDER" not in _future_agi_text(fi_exporter)
+
+
+def test_token_usage_counts_keep_their_numbers_at_future_agi(fresh_state):
+    app_provider, _ = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    usage = {
+        "gen_ai.span.kind": "LLM",
+        "llm.token_count.prompt": 12, "llm.token_count.completion": 3, "llm.token_count.total": 15,
+        "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 3, "gen_ai.usage.total_tokens": 15,
+        "gen_ai.usage.cache_read_tokens": 4, "gen_ai.usage.output_tokens.reasoning": 1,
+        "gen_ai.usage.input_tokens.audio": 2, "gen_ai.usage.output_tokens.audio": 5,
+        "gen_ai.request.max_tokens": 64,
+    }
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("chat", attributes=usage):
+        pass
+    (span,) = fi_exporter.get_finished_spans()
+    assert dict(span.attributes) == usage
+
+
+def test_a_session_id_from_the_context_helpers_reaches_future_agi_as_set(fresh_state):
+    from fi_instrumentation import FITracer, using_session
+    from fi_instrumentation.fi_types import FiSpanKindValues
+
+    app_provider, _ = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    import fakeailib
+
+    # A model call through a traceAI integration, under an agent span of the application's own.
+    agent = FITracer(app_provider.get_tracer("checkout.agent"))
+    with using_session("support-session-1"):
+        with agent.start_as_current_span("support agent", fi_span_kind=FiSpanKindValues.AGENT):
+            fakeailib.complete("ping")
+    spans = {s.name: s for s in fi_exporter.get_finished_spans()}
+    assert set(spans) == {"chat fake", "support agent"}
+    assert spans["chat fake"].attributes["session.id"] == "support-session-1"
+    assert spans["support agent"].attributes["session.id"] == "support-session-1"
+
+
+def test_a_session_id_the_context_helpers_did_not_set_is_redacted_on_an_application_span(fresh_state):
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    # Another library's span marked as an AI span, with a session value of its own.
+    attributes = {"fi.span.kind": "CHAIN", "session.id": "PLACEHOLDER-session-cookie"}
+    with app_provider.get_tracer("checkout.workflow").start_as_current_span("plan", attributes=attributes):
+        pass
+    assert app_exporter.get_finished_spans()[0].attributes["session.id"] == "PLACEHOLDER-session-cookie"
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["session.id"] == "<redacted>"
+    assert span.attributes["fi.span.kind"] == "CHAIN"
+
+
+def test_a_credential_shaped_session_id_is_still_redacted(fresh_state):
+    from fi_instrumentation import using_session
+
+    _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    import fakeailib
+
+    with using_session(_PROVIDER_KEY):
+        fakeailib.complete("ping")
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["session.id"] == "<redacted>"
+
+
+def test_a_registered_future_agi_provider_gets_the_privacy_catalog_too(fresh_state):
+    from fi_instrumentation import register
+
+    exporter = FutureAGIExporter()
+    registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
+                          set_global_tracer_provider=True)
+    _manager.init(api_key="fi-api-PLACEHOLDER", secret_key="fi-secret-PLACEHOLDER")
+    with registered.get_tracer(AI_SCOPE).start_as_current_span(
+            "raw", attributes={"app.client_secret": "PLACEHOLDER-registered", "input.value": "a prompt"}):
+        pass
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["app.client_secret"] == "<redacted>"
+    assert span.attributes["input.value"] == "a prompt"
+    assert span.resource.attributes["project_name"] == "mine"
+
+
+def test_known_keys_are_redacted_in_everything_future_agi_receives(fresh_state, monkeypatch):
+    from fi_instrumentation.auto import _privacy
+
+    # A registry of its own, so this test's keys do not stay registered for other tests.
+    monkeypatch.setattr(_privacy, "_KNOWN", _privacy._KnownSecrets())
+    monkeypatch.setenv("TRACEAI_TEST_PROVIDER_API_KEY", "provider-PLACEHOLDER-0001")
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(api_key="fi-api-PLACEHOLDER-0001", secret_key="fi-secret-PLACEHOLDER-0001",
+                  span_exporter=fi_exporter, batch=False)
+    text = "keys fi-secret-PLACEHOLDER-0001 and provider-PLACEHOLDER-0001"
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("echo", attributes={"output.value": text}):
+        pass
+    assert app_exporter.get_finished_spans()[0].attributes["output.value"] == text
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["output.value"] == "keys <redacted> and <redacted>"
+
+
+def test_future_agi_copy_applies_the_catalog_to_names_events_and_status(fresh_state):
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    url = "https://api.example.invalid/v1/chat?api_key=PLACEHOLDER-query&model=m"
+    with pytest.raises(ValueError):
+        with app_provider.get_tracer(AI_SCOPE).start_as_current_span("GET " + url) as span:
+            span.add_event("retry", {"url.full": url})
+            raise ValueError("request to " + url + " failed")
+    assert app_exporter.get_finished_spans()[0].name == "GET " + url
+    (fi_span,) = fi_exporter.get_finished_spans()
+    clean = "https://api.example.invalid/v1/chat?api_key=<redacted>&model=m"
+    assert fi_span.name == "GET " + clean
+    assert fi_span.events[0].attributes["url.full"] == clean
+    assert fi_span.status.description == "ValueError: request to " + clean + " failed"
+    assert "PLACEHOLDER-query" not in _future_agi_text(fi_exporter)
