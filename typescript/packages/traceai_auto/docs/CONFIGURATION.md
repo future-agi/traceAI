@@ -22,7 +22,7 @@ Unless noted, precedence is **code option → environment → `futureagi.toml` �
 | `TRACEAI_PROPAGATE_OUTGOING` | `propagateOutgoing` | `default`; destination policy (`default`, `all`, `none`), never adapter activation |
 | `TRACEAI_PROPAGATE_HOSTS` | `propagateHosts` | No explicit rules; host rules as environment CSV or a string array in code/file |
 | `FI_WIRE_MAX_BODY_BYTES` | `wireMaxBodyBytes` | `4194304` bytes; nonnegative finite values are rounded down, invalid values use the default. A capture cap, not an application payload-size limit |
-| `FI_SAMPLE_RATE` | `sampleRate` | `1`; finite values clamped to `[0,1]`, invalid values use `1`. Parent-based root sampling for agent-owned providers only |
+| `FI_SAMPLE_RATE` | `sampleRate` | `1`; finite values clamped to `[0,1]`, invalid values use `1`. Agent-owned providers only: AI spans are sampled by trace id at this ratio and keep the application's parent ids, but the application's sampling decision does not drop them |
 | `FI_FORWARD_APP_SPANS` | `forwardApplicationSpans` | `false`; `true` also sends the application's own spans to Future AGI. See [forwarding application spans](#forwarding-application-spans). File key: `forward_app_spans` |
 | `FI_AUTO_DEBUG` | `debug` | `false`; masked startup JSON report |
 | `FI_CONFIG_FILE` | `configFile` | `futureagi.toml`, resolved relative to the working directory |

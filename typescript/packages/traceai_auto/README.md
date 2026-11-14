@@ -192,7 +192,7 @@ The most-used settings are below. Set them **before** loading the agent; later `
 | `FI_INSTRUMENTATIONS` | All eligible integrations, except `http` | Comma-separated allowlist, e.g. `openai,wire`; incoming HTTP spans need `http` listed here |
 | `FI_DISABLED_INSTRUMENTATIONS` | Empty | Denylist; takes precedence over the allowlist |
 | `FI_WIRE_CAPTURE` | `true` | Enable global-fetch capture and transport credential observation |
-| `FI_SAMPLE_RATE` | `1` | Root sampling ratio of the agent's own provider |
+| `FI_SAMPLE_RATE` | `1` | Sampling ratio for AI spans, decided by trace id; the application's sampling decision does not drop them |
 | `FI_FORWARD_APP_SPANS` | `false` | Also send the application's own spans to Future AGI |
 | `FI_AUTO_DEBUG` | `false` | Print the masked startup report |
 | `OTEL_SDK_DISABLED` | `false` | Disable auto-instrumentation |

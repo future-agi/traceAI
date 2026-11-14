@@ -1,6 +1,6 @@
 import { trace, SpanKind, SpanStatusCode, Context, TracerProvider } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
-import { ParentBasedSampler, TraceIdRatioBasedSampler, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { TraceIdRatioBasedSampler, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
@@ -229,7 +229,9 @@ export function init(options: Options = {}): TracerProvider | undefined {
     if (!agent.provider) {
       agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
         setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor],
-        sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }) });
+        // AI spans are sampled by trace id at FI_SAMPLE_RATE alone. They keep the
+        // application's parent ids, but its sampling decision never drops them.
+        sampler: new TraceIdRatioBasedSampler(config.sampleRate) });
       agent.ownsProvider = true;
       if (forwarding && !host) forwardLater(agent, processor);
     }
