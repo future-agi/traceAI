@@ -9,8 +9,11 @@ if !ENV['BUNDLE_GEMFILE'].to_s.empty? || File.file?('Gemfile') || File.file?('ge
     warn "traceai-auto: could not load the application's bundle (#{e.class.name}); continuing without it"
   end
 end
-require 'traceai/auto'
-require 'traceai/auto/codec'
+# Load the agent that ships next to this file. After bundler/setup the load path
+# holds only the application's gems, and the application's Gemfile need not
+# list traceai-auto.
+require_relative '../lib/traceai/auto'
+require_relative '../lib/traceai/auto/codec'
 case ARGV.shift
 when 'doctor'
   puts TraceAI::Auto::Codec.generate(TraceAI::Auto.report(test_export: !ARGV.include?('--no-export')))

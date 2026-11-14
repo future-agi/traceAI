@@ -213,9 +213,10 @@ data; only the copy exported by the agent is changed.
 
 ## Doctor and bootstrap
 
-With `RUBYLIB` set as in the quick start, run these from your application's
-directory, where they load your application's bundle as your application does
-(prefixing `bundle exec` works too):
+Run these from your application's directory, where they load your
+application's bundle as your application does (prefixing `bundle exec` works
+too). The executable loads the agent that ships next to it, so it needs neither
+`RUBYLIB` nor a `traceai-auto` entry in your Gemfile:
 
 ```sh
 ruby /path/to/traceAI/ruby/bin/traceai-auto doctor              # report plus one test export
