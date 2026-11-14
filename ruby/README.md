@@ -37,8 +37,9 @@ an image, it turns the agent on in every Ruby process started there.
 
 In a directory with a `Gemfile` (or with `BUNDLE_GEMFILE` set), `ruby app.rb`
 without `bundle exec` is traced only if the script itself runs
-`require 'bundler/setup'`; otherwise the agent prints one warning at exit and
-traces nothing. In a directory without a `Gemfile`, `ruby app.rb` works as is.
+`require 'bundler/setup'`; otherwise nothing is traced, and the agent prints one
+warning at exit only when a Future AGI key pair is set (without keys it prints
+nothing about Bundler). In a directory without a `Gemfile`, `ruby app.rb` works as is.
 
 With Bundler you can also add the gem to the application's `Gemfile` and keep the
 same `RUBYOPT`. Use `require: false`, so that `RUBYOPT` stays the switch:
@@ -135,8 +136,8 @@ including an exit caused by SIGTERM or by your own SIGTERM handler calling
 Precedence: explicit `init` arguments, then environment variables, then the
 config file (`FI_CONFIG_FILE`, default `./futureagi.toml`), then defaults.
 A config file that is over 64 KiB or cannot be read is ignored as a whole, and
-a line in it that is not valid UTF-8 is skipped (a hide line included); each of
-these prints one warning that names the file and what failed, never its
+a line in it that is not valid UTF-8 is skipped, except a hide line, which is
+cleaned of the bad bytes and still read; each of these prints one warning that names the file and what failed, never its
 content, and a file that does not exist prints nothing.
 
 | Variable | Meaning |
@@ -209,7 +210,8 @@ of `spec/auto-instrumentation/privacy.json`, version 3):
   media MIME type.
 - The `session.id` you set with `TraceAI::Auto.using_session` (or
   `with_attributes`) is exported as set, so Future AGI can group a session's
-  traces, also when the same request sends that id to the provider in its body.
+  traces, also when the same request sends that id to the provider in its body,
+in a header such as `X-Session-Id`, in a query parameter, or after `Bearer`.
   A registered secret or credential-shaped value inside it is still redacted,
   and every other session-named field (`session_id`, session tokens, cookies) is
   replaced with `<redacted>`.
@@ -255,9 +257,14 @@ not set. Any other value hides that content and prints one warning that names
 the variable and the accepted values, never the value, so a mistyped control
 never leaves content visible. The warning names the variable also when the
 value came from the `init` option or the file key. In `futureagi.toml` a hide
-value may be a boolean, a number, a string in double or single quotes, or a bare
-word (`hide_inputs = on`); a hide line whose value cannot be read is kept as
-written, so it hides with that warning instead of being skipped.
+value may be a boolean, a number, a string in double or single quotes (one-line
+triple quotes too), a one-item array (`["off"]`; items are joined with a comma),
+or a bare word (`hide_inputs = on`), and the key may be quoted. A float such as
+`1.0` is not a recognised value, so it hides with the warning. A hide line whose
+value cannot be read (an unterminated string, for example) is kept as written, so
+it hides with that warning instead of being skipped; a hide line with bytes that
+are not valid UTF-8 is read after they are replaced, and hides with the warning
+when its value is no longer recognised.
 
 With `RUBYOPT=-rtraceai/auto` the agent reads the environment and the config
 file when it loads, before your code runs, and prints the warning then. An
@@ -318,6 +325,10 @@ install anything.
     process is not traced (one warning at exit when keys are set);
   - a tracer provider set later is used from the next AI request instead of at
     once.
+- When the first AI request starts the agent inside one of its lazy wrappers
+  (`Net::HTTP` or HTTPX), the call is passed through the method chain again from
+  the top, so a wrapper that another library added above it runs twice for that
+  one request. The network request is sent once.
 - If your application replaces its global tracer provider a second time, the
   agent stays on the first application provider it attached to.
 - Future AGI receives only AI spans, so a span it receives can name a parent
