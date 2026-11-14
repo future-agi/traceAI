@@ -236,9 +236,66 @@ def test_privacy_settings_come_from_the_config_file(tmp_path, monkeypatch):
     settings = resolve(environ={"FI_HIDE_INPUTS": "false"}, config_file=str(config))
     assert settings.trace_config.hide_inputs is False
     assert settings.masked()["hide_inputs"]["source"] == "env FI_HIDE_INPUTS"
+    # A number other than 1 or 0 is not a switch value, so it hides instead of stopping the start.
     config.write_text("hide_outputs = 3\n")
-    with pytest.raises(ConfigError, match="hide_outputs"):
-        resolve(environ={}, config_file=str(config))
+    assert resolve(environ={}, config_file=str(config)).trace_config.hide_outputs is True
+
+
+SWITCH_LOGGER = "fi_instrumentation.instrumentation.logging"
+
+
+@pytest.fixture
+def switch_warnings(caplog):
+    """The warnings the privacy switches log. Their logger does not pass records on to the root
+    logger, where caplog listens, so caplog's handler is attached to it for the test."""
+    from fi_instrumentation.instrumentation import config as config_module
+
+    logger = logging.getLogger(SWITCH_LOGGER)
+    logger.addHandler(caplog.handler)
+    config_module._warned_switches.clear()
+    try:
+        with caplog.at_level(logging.WARNING, logger=SWITCH_LOGGER):
+            yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+        config_module._warned_switches.clear()
+
+
+def test_config_file_switches_follow_the_privacy_switch_rule(tmp_path, monkeypatch, switch_warnings):
+    for key in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+        monkeypatch.delenv(key, raising=False)
+    config = tmp_path / "futureagi.toml"
+    # The numbers 1 and 0 turn a switch on and off, as true and false do.
+    config.write_text("hide_inputs = 1\nhide_outputs = 0\n")
+    settings = resolve(environ={}, config_file=str(config))
+    assert (settings.trace_config.hide_inputs, settings.trace_config.hide_outputs) == (True, False)
+    assert settings.masked()["hide_inputs"]["source"] == f"file {config}"
+    # A quoted empty value is unset.
+    config.write_text('hide_inputs = ""\n')
+    settings = resolve(environ={}, config_file=str(config))
+    assert settings.trace_config.hide_inputs is False
+    assert settings.masked()["hide_inputs"]["source"] == "default"
+    assert not [record for record in switch_warnings.records if record.name == SWITCH_LOGGER]
+    # Any other value hides, with one warning that names the key and the file, never the value.
+    config.write_text('hide_inputs = "maybe"\nhide_outputs = 3\n')
+    for _ in range(2):
+        settings = resolve(environ={}, config_file=str(config))
+        assert (settings.trace_config.hide_inputs, settings.trace_config.hide_outputs) == (True, True)
+    messages = [record.getMessage() for record in switch_warnings.records if record.name == SWITCH_LOGGER]
+    assert len([message for message in messages if f"hide_inputs in {config}" in message]) == 1
+    assert len([message for message in messages if f"hide_outputs in {config}" in message]) == 1
+    assert len(messages) == 2
+    assert all("maybe" not in message for message in messages)
+
+
+def test_a_blank_switch_variable_does_not_hide_the_config_file_value(tmp_path, monkeypatch):
+    config = tmp_path / "futureagi.toml"
+    config.write_text("hide_inputs = true\n")
+    # Spaces only: TraceConfig reads that as unset, so the file's value applies.
+    monkeypatch.setenv("FI_HIDE_INPUTS", "   ")
+    settings = resolve(environ={"FI_HIDE_INPUTS": "   "}, config_file=str(config))
+    assert settings.trace_config.hide_inputs is True
+    assert settings.masked()["hide_inputs"]["source"] == f"file {config}"
 
 
 def test_invalid_lower_precedence_settings_do_not_block_override(tmp_path):

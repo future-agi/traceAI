@@ -1457,3 +1457,66 @@ def test_future_agi_copy_applies_the_catalog_to_names_events_and_status(fresh_st
     assert fi_span.events[0].attributes["url.full"] == clean
     assert fi_span.status.description == "ValueError: request to " + clean + " failed"
     assert "PLACEHOLDER-query" not in _future_agi_text(fi_exporter)
+
+
+def test_a_value_cut_by_the_attribute_length_limit_keeps_no_base64_run_at_future_agi(fresh_state):
+    from opentelemetry.sdk.trace import SpanLimits
+
+    prefix = '{"note": "ok", "x": "'
+    body = prefix + 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldY", "more": "text past the limit"}'
+    limit = len(prefix) + 27
+    app_exporter = InMemorySpanExporter()
+    app_provider = TracerProvider(span_limits=SpanLimits(max_span_attribute_length=limit))
+    app_provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    trace_api.set_tracer_provider(app_provider)
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("call", attributes={"input.value": body}):
+        pass
+    # The provider cut the value at its limit, for the application's exporter too.
+    assert app_exporter.get_finished_spans()[0].attributes["input.value"] == body[:limit]
+    (span,) = fi_exporter.get_finished_spans()
+    # The base64 run the cut left has no signature and no media member, but a cut value is not trusted.
+    assert span.attributes["input.value"] == prefix + "<omitted: 27 base64 chars>"
+
+
+def test_an_integration_span_keeps_its_own_session_id_at_future_agi(fresh_state):
+    app_provider, _ = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    # A traceAI integration that records the session id itself, without the context helpers.
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("turn", attributes={"session.id": "voice-session-7"}):
+        pass
+    (span,) = fi_exporter.get_finished_spans()
+    assert span.attributes["session.id"] == "voice-session-7"
+
+
+def test_a_mime_sibling_marks_its_payload_as_media_at_future_agi(fresh_state):
+    app_provider, app_exporter = _application_provider()
+    fi_exporter = InMemorySpanExporter()
+    _manager.init(span_exporter=fi_exporter, batch=False)
+    attributes = {"gen_ai.span.kind": "LLM", "x.mime_type": "audio/wav", "x.data": "AAAAAAAA"}
+    with app_provider.get_tracer(AI_SCOPE).start_as_current_span("speech", attributes=attributes):
+        pass
+    assert dict(app_exporter.get_finished_spans()[0].attributes) == attributes
+    (span,) = fi_exporter.get_finished_spans()
+    assert dict(span.attributes) == {"gen_ai.span.kind": "LLM", "x.mime_type": "audio/wav",
+                                     "x.data": "<omitted: 8 base64 chars>"}
+
+
+def test_auto_instrument_alone_redacts_credential_named_environment_values(fresh_state, monkeypatch):
+    from fi_instrumentation import register
+    from fi_instrumentation.auto import _privacy
+
+    # A registry of its own, so this test's value does not stay registered for other tests.
+    monkeypatch.setattr(_privacy, "_KNOWN", _privacy._KnownSecrets())
+    monkeypatch.setenv("TRACEAI_TEST_PROVIDER_API_KEY", "provider-PLACEHOLDER-0002")
+    exporter = FutureAGIExporter()
+    registered = register(project_name="mine", span_exporter=exporter, batch=False, verbose=False,
+                          set_global_tracer_provider=True)
+    _manager.auto_instrument(tracer_provider=registered, lazy=False)
+    with registered.get_tracer(AI_SCOPE).start_as_current_span(
+            "echo", attributes={"output.value": "key provider-PLACEHOLDER-0002"}):
+        pass
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["output.value"] == "key <redacted>"
