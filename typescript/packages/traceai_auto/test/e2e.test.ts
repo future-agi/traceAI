@@ -560,6 +560,29 @@ test.each([
   expect(JSON.stringify(ai)).not.toContain("a plain fetch beside the call");
   expect(wire[0].parentSpanId).not.toBe(ai.spanId);
 });
+test("in an application with no OpenTelemetry of its own, an OpenAI call's own request is sent once, a call made inside it nests under it, and a call made after it does not", async () => {
+  // No context manager. The outer OpenAI call's transport makes a second OpenAI call before
+  // it sends its own request; after the outer call returns, the application makes a third.
+  const output = await child("inside-ai-call-no-otel.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire" });
+  expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ calls: 3 });
+  expect(requests).toBe(3);
+  // Each SDK request yields to its own model span: three model spans and no wire span.
+  expect(wireSpans()).toHaveLength(0);
+  expect(allSpans()).toHaveLength(3);
+  const span = (question: string) => {
+    const found = allSpans().filter(item => JSON.stringify(item).includes(question));
+    expect(found).toHaveLength(1);
+    expect(attrs(found[0])["gen_ai.span.kind"] ?? attrs(found[0])["fi.span.kind"]).toBe("LLM");
+    return found[0];
+  };
+  const outer = span("the outer call"), inside = span("a call inside the call"), after = span("a call after the call");
+  expect([undefined, ""]).toContain(outer.parentSpanId);
+  // The call made inside the outer call is its child, in its trace.
+  expect(inside.traceId).toBe(outer.traceId); expect(inside.parentSpanId).toBe(outer.spanId);
+  // The call made after the outer call returned has no parent from it.
+  expect([undefined, ""]).toContain(after.parentSpanId);
+  expect(after.traceId).not.toBe(outer.traceId);
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
