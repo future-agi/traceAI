@@ -136,6 +136,22 @@ test("CHAIN spans parent wire calls, including context attributes and explicit t
   expect(BigInt(wire.startTimeUnixNano)).toBeLessThan(BigInt(wire.endTimeUnixNano));
 });
 test("OTel suppression prevents wire capture", async () => { await child("context.cjs", undefined, { SUPPRESS: "true" }); expect(wireSpans()).toHaveLength(0); });
+test("without application OpenTelemetry, the agent's context helpers set session, user, metadata and tags on AI spans", async () => {
+  const output = await child("context-helpers.cjs");
+  expect(wireSpans()).toHaveLength(2);
+  const spans = wireSpans().map(attrs), scoped = spans.find(a => a["session.id"] !== undefined)!, tagged = spans.find(a => a !== scoped)!;
+  expect(scoped).toMatchObject({ "session.id": "session-test", "user.id": "user-test" });
+  expect(JSON.parse(scoped.metadata)).toMatchObject({ tenant: "tenant-test" });
+  expect(JSON.stringify(scoped)).not.toContain("tag-test");
+  expect(JSON.stringify(tagged)).toContain("tag-test");
+  expect(tagged["session.id"]).toBeUndefined();
+  // The helpers register no context manager.
+  expect(JSON.parse(output.stdout.trim())).toEqual({ context: "NoopContextManager" });
+});
+test("without application OpenTelemetry, the agent's suppression helper prevents wire capture", async () => {
+  await child("context-helpers.cjs", undefined, { SUPPRESS: "true" });
+  expect(wireSpans()).toHaveLength(0); expect(requests).toBe(1);
+});
 test.each([["openai.mjs", "--import"], ["openai.cjs", "-r"]])("real OpenAI SDK is patched through %s %s", async (app, flag) => {
   const output = await child(app, [flag, "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire" });
   expect(output.stdout).toContain("hello world");
