@@ -355,7 +355,7 @@ npx --no-install traceai-auto doctor --no-check
 - **Response-driven completion:** unread and never-ending responses do not produce completed wire spans. Flush does not consume them for you. Cancelling a clone can end the shared capture before another branch finishes.
 - **Provider error semantics:** an error inside an HTTP 200 stream can retain HTTP-derived OK status; inspect finish reasons as well.
 - **Best-effort delivery:** natural-exit/SIGTERM flushes are bounded. Hard termination, Lambda freezing and collector failures can lose spans. The agent never makes app success depend on export success.
-- **Spans your app creates inside an AI call:** with your own context manager, an AI span is the active span while its call runs. A span your application or its instrumentation creates during that call, such as your own HTTP client span for the provider request or a database span inside a tool, takes the AI span as its parent. Your backend receives that span, but not its AI-span parent, which only Future AGI receives.
+- **Spans your app creates inside an AI call:** Spans your application creates inside an AI call (for example its own HTTP span for the provider request, or a database span inside a tool) are parented to a span that only Future AGI receives, so your own tracing backend shows them without that parent. They keep the same trace id. Nothing of your application's is sent to Future AGI, and your provider and exporters are untouched.
 
 [Architecture, complete capture limits and redistribution notices](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md)
 
