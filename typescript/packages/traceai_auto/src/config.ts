@@ -153,15 +153,19 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
   const traceConfig: TraceConfigOptions = {};
   for (const key of ["hideInputs", "hideOutputs", "hideInputMessages", "hideOutputMessages", "hideInputImages", "hideInputText", "hideOutputText", "hideEmbeddingVectors", "hideLLMInvocationParameters", "base64ImageMaxLength", "piiRedaction", "hideErrorDetails"] as (keyof TraceConfigOptions)[]) {
     const snake = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/([A-Z])([A-Z][a-z])/g, "$1_$2").toLowerCase();
-    const raw = options.traceConfig?.[key] ?? env[`FI_${snake.toUpperCase()}`] ?? file[snake];
-    if (raw !== undefined) {
-      if (key === "base64ImageMaxLength") { const n = Number(raw); if (Number.isFinite(n)) traceConfig[key] = n; }
-      else {
-        // A privacy switch: an empty value is unset (hideErrorDetails then follows the content
-        // switches); an unrecognised value hides, with one warning that names only the variable.
-        // Named by the same order the value is read in: a null option or variable is not set.
-        const where = options.traceConfig?.[key] != null ? `traceConfig.${key}` : env[`FI_${snake.toUpperCase()}`] != null ? `FI_${snake.toUpperCase()}` : `${snake} in the config file`;
-        const value = hideSwitch(raw, where);
+    const envName = `FI_${snake.toUpperCase()}`;
+    if (key === "base64ImageMaxLength") {
+      const raw = options.traceConfig?.[key] ?? env[envName] ?? file[snake];
+      if (raw !== undefined) { const n = Number(raw); if (Number.isFinite(n)) traceConfig[key] = n; }
+    } else {
+      // A privacy switch. The first source that is set wins: the option in code, the variable,
+      // then the config file. A null, empty or blank value is not set, so an empty variable never
+      // masks the file's value. With none set the key is left out (hideErrorDetails then follows
+      // the content switches). An unrecognised value hides, with one warning naming its source.
+      const sources: [unknown, string][] = [[options.traceConfig?.[key], `traceConfig.${key}`], [env[envName], envName], [file[snake], `${snake} in the config file`]];
+      const source = sources.find(([raw]) => raw != null && String(raw).trim() !== "");
+      if (source) {
+        const value = hideSwitch(source[0], source[1]);
         if (value !== undefined) traceConfig[key] = value;
       }
     }
