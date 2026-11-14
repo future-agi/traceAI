@@ -111,7 +111,9 @@ public final class TraceAIAuto {
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
             Resource resource = resource(config);
-            SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(Sampler.parentBased(Sampler.traceIdRatioBased(config.sampleRate)))
+            // The agent's AI spans are sampled by trace id alone. The application's own sampling decision, which the
+            // parent's flags carry, does not drop them; the span still takes the application's span as its parent.
+            SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(Sampler.traceIdRatioBased(config.sampleRate))
                 .setSpanLimits(io.opentelemetry.sdk.trace.SpanLimits.builder().setMaxNumberOfAttributes(attributeLimit(config)).build())
                 .setResource(resource)
                 .addSpanProcessor(new WireResourceProcessor(processor)).build();
