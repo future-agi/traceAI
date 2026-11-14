@@ -263,6 +263,15 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       // HTTP CLIENT spans and must not be enabled by this incoming-only package.
       // The start hook reads a W3C parent privately when the application has no propagator.
       const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true, startIncomingSpanHook: readIncomingParent });
+      // Without an application context manager, the SERVER span is active for the work
+      // its request starts, and not for anything after it, as for an integration's call.
+      const wrapMethod = instance._wrap;
+      instance._wrap = function(target: any, name: string, wrapper: any) {
+        return wrapMethod.call(this, target, name, (original: any) => {
+          const instrumented = wrapper(original);
+          return function(this: unknown, ...args: unknown[]) { return runIntegrationCall(() => Reflect.apply(instrumented, this, args)); };
+        });
+      };
       removers.push(registerInstrumentations({ tracerProvider: provider, instrumentations: [instance] }));
       statuses.push({ name: "http", status: "instrumented", reason: esm ? "Incoming SERVER spans only" : "Incoming SERVER spans, CommonJS only; ESM loader unavailable" });
     } catch { statuses.push({ name: "http", status: "not_installed", reason: "Optional @opentelemetry/instrumentation-http" }); }
