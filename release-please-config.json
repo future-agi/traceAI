@@ -8,6 +8,16 @@
   "include-v-in-tag": true,
   "tag-separator": "-",
   "pull-request-title-pattern": "chore${scope}: release${component} ${version}",
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "csharp-sdk-and-startup-hook",
+      "components": [
+        "nuget-fi-instrumentation-otel",
+        "nuget-TraceAI.AutoInstrumentation"
+      ]
+    }
+  ],
   "packages": {
     "python/frameworks/temporal": {
       "release-type": "python",
@@ -1046,7 +1056,7 @@
     },
     "csharp/src/TraceAI.AutoInstrumentation": {
       "release-type": "simple",
-      "component": "nuget-traceai-autoinstrumentation",
+      "component": "nuget-TraceAI.AutoInstrumentation",
       "package-name": "TraceAI.AutoInstrumentation",
       "extra-files": [
         {

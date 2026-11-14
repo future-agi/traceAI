@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <PackageId>TraceAI.AutoInstrumentation</PackageId>
-    <Version>0.1.0</Version>
+    <Version>1.0.1</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <Description>Fail-open startup hook and ActivitySource/HttpClient tracing for traceAI</Description>
