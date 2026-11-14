@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createServer, Server } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { AddressInfo } from "node:net";
 
 // An application with no OpenTelemetry of its own starts one Groq call and, in the same
@@ -61,7 +61,10 @@ async function child(traced: boolean): Promise<any> {
     const modules = join(scratch, "node_modules");
     mkdirSync(join(modules, "@traceai/groq"), { recursive: true });
     // Ordinary Node resolution, so the real instrumentation hooks see the name `groq-sdk`.
-    symlinkSync(dirname(realpathSync(require.resolve("groq-sdk/package.json"))), join(modules, "groq-sdk"), "dir");
+    // The package's export map does not list package.json, so find its folder from its entry.
+    let sdkDir = dirname(realpathSync(require.resolve("groq-sdk")));
+    while (basename(sdkDir) !== "groq-sdk" && dirname(sdkDir) !== sdkDir) sdkDir = dirname(sdkDir);
+    symlinkSync(sdkDir, join(modules, "groq-sdk"), "dir");
     // Only the source entry is redirected; no instrumentation or resolver is mocked.
     writeFileSync(join(modules, "@traceai/groq/package.json"), JSON.stringify({
       name: "@traceai/groq", main: join(root, "src/index.ts"),
