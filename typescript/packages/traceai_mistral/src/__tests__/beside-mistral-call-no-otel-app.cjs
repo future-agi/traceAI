@@ -17,9 +17,16 @@ const plainFetch = () => fetch(process.env.MOCK_URL + "/v1/chat/completions", {
   const client = new Mistral({
     apiKey: "sk-test-PLACEHOLDER",
     serverURL: process.env.MOCK_URL,
-    // Keep SDK request construction and response parsing real, and send its
-    // Request through the global fetch to the loopback provider.
-    httpClient: { request: request => globalThis.fetch(request) },
+    // Send materialized JSON so wire capture can inspect the SDK request.
+    // Keep SDK request construction, retries and response parsing real.
+    httpClient: {
+      request: async request => globalThis.fetch(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: await request.text(),
+        signal: request.signal,
+      }),
+    },
   });
   // The SDK call starts first; its span is still live when plainFetch starts.
   const [completion, plain] = await Promise.all([

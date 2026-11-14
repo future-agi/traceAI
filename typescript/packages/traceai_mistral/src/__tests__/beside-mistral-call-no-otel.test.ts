@@ -112,6 +112,13 @@ test("without application OpenTelemetry, a Mistral call is recorded once and a s
   const kind = (span: any) => attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"];
   const got = spans.map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kind(span)})`);
   const carries = (span: any, text: string) => JSON.stringify(span).includes(text);
+  // Wire spans expose the matched route, not the request URL.
+  // The provider accepts only /v1/chat/completions.
+  const chatWire = spans.filter(span =>
+    attrs(span)["traceai.capture.layer"] === "wire" &&
+    attrs(span)["traceai.wire.endpoint"] === "openai.chat_completions",
+  );
+  expect(chatWire).toHaveLength(1);
   const model = spans.filter(span => attrs(span)["traceai.capture.layer"] !== "wire" && kind(span) === "LLM" && carries(span, SDK_PROMPT));
   const sdkWire = spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire" && carries(span, SDK_PROMPT));
   const plain = spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire" && carries(span, PLAIN_PROMPT));
