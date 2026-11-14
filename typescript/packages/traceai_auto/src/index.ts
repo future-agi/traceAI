@@ -1,4 +1,4 @@
-import { trace, SpanKind, SpanStatusCode, Context, TracerProvider } from "@opentelemetry/api";
+import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { TraceIdRatioBasedSampler, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
@@ -328,7 +328,10 @@ export function init(options: Options = {}): TracerProvider | undefined {
     processor.onEnd = span => {
       if (gate && !gate.admit(span)) return;
       rememberSpanValueLimit(span);
-      if (!agent.processorIsObserver) agent.unsent++;
+      // Only sampled spans are exported; a span that is recorded but not sampled never is.
+      let sampled = false;
+      try { sampled = (span.spanContext().traceFlags & TraceFlags.SAMPLED) === TraceFlags.SAMPLED; } catch { /* Not counted. */ }
+      if (!agent.processorIsObserver && sampled) agent.unsent++;
       mappedEnd(span);
     };
     if (config.wireCapture && enabled("wire", config) && typeof globalThis.fetch === "function") {
