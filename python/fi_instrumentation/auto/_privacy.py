@@ -19,10 +19,13 @@ link attributes, resource and instrumentation scope attributes, and tracestate e
   wherever they appear.
 
 The application's own processors and exporters never see this copy. Work is bounded by the
-catalog's depth, node and text limits. A text scan reads each run of characters a bounded number of
-times: two of the catalog's value shapes, the provider key and the JWT, would make Python's
-backtracking engine walk a long run back from every start in it, so they are matched in an
-equivalent form whose failed starts never rescan their run. Content that cannot be checked within
+catalog's depth, node and text limits, and by a limit on the path of a value (its attribute key and
+the member names above it): the name checks at each value read its whole path, so a path longer
+than PATH_LIMIT characters or with more than PATH_PARTS components is not checked, and its
+attribute is left out. A text scan reads each run of characters a bounded number of times: two of
+the catalog's value shapes, the provider key and the JWT, would make Python's backtracking engine
+walk a long run back from every start in it, so they are matched in an equivalent form whose
+failed starts never rescan their run. Content that cannot be checked within
 those limits, or whose type is not plain data, is dropped without being turned into text; a span
 that cannot be checked at all keeps only its identity and timing.
 """
@@ -57,6 +60,11 @@ SESSION_ID = "session.id"
 #: each at least this long.
 SECRET_LIMIT = 1024
 SECRET_MIN_LENGTH = 8
+#: The longest path, in characters and in components, whose names are checked. The checks at each
+#: value read its whole path, so without this limit a long member name above many values would be
+#: read once per value. A value past it fails its attribute: the attribute is left out.
+PATH_LIMIT = 1024
+PATH_PARTS = 64
 
 _REDACTED = "<redacted>"
 # The name of a span whose content could not be checked.
@@ -191,6 +199,7 @@ class _Catalog:
         self.max_nodes = limits["max_nodes"]
         self.max_text = limits["max_text_chars"]
         self._names: Dict[str, bool] = {}
+        self._parts: Dict[str, Tuple[bool, bool]] = {}
 
     def _shape(self, item: Mapping[str, Any]) -> Tuple["re.Pattern[str]", Any]:
         """One value shape, and what replaces a match of it."""
@@ -228,15 +237,28 @@ class _Catalog:
                 self._names[name] = known
         return known
 
+    def _component(self, folded: str) -> Tuple[bool, bool]:
+        """(excluded, credential-like) for one folded path component, kept, as components repeat."""
+        known = self._parts.get(folded)
+        if known is None:
+            excluded = self.excluded(folded)
+            known = (excluded, not excluded and any(pattern in folded for pattern in self.patterns))
+            if len(folded) <= 256:
+                if len(self._parts) >= 8192:
+                    self._parts.clear()
+                self._parts[folded] = known
+        return known
+
     def _credential_name(self, name: str) -> bool:
         parts = [self.normalize(part) for part in self.components(name)]
         excluded = False
         # An exclusion covers its own component only, never another credential component.
         for index, folded in enumerate(parts):
-            context = ".".join(parts[:index + 1])
-            if self.excluded(folded) or any(regex.fullmatch(context) for regex in self.contextual):
+            part_excluded, credential = self._component(folded)
+            if part_excluded or (self.contextual and any(
+                    regex.fullmatch(".".join(parts[:index + 1])) for regex in self.contextual)):
                 excluded = True
-            elif any(pattern in folded for pattern in self.patterns):
+            elif credential:
                 return True
         if excluded:
             return False
@@ -666,6 +688,8 @@ class _Catalog:
         budget[0] -= 1
         if _depth > self.max_depth or budget[0] < 0:
             raise _Budget("privacy structure budget")
+        if len(path) > PATH_LIMIT or path.count(".") + path.count("[") >= PATH_PARTS:
+            raise _Budget("privacy path budget")
         if self.credential_name(path):
             return self.redacted
         # Hints are indexed once per object; context is recomputed in path order, so a metadata
