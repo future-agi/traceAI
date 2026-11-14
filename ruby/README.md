@@ -224,6 +224,14 @@ Hide controls replace content with `__REDACTED__`: `FI_HIDE_INPUTS`,
 `FI_HIDE_ERROR_DETAILS`. Other exporters in your application keep their original
 data; only the copy exported by the agent is changed.
 
+A hide control, its `init` option or its `futureagi.toml` setting reads `true`,
+`1`, `yes` or `on` as hide and `false`, `0`, `no` or `off` as show, ignoring
+case and surrounding spaces; a blank value counts as not set. Any other value
+hides that content and prints one warning that names the variable, so a mistyped
+control never leaves content visible. `FI_WIRE_CAPTURE`, `FI_AUTO_DEBUG` and
+`OTEL_SDK_DISABLED` are not hide controls: they are on only for `true`, in any
+letter case.
+
 ## Doctor and bootstrap
 
 Run these from your application's directory, where they load your
