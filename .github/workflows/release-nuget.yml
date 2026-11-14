@@ -29,6 +29,11 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.0.x'
+      # The startup hook package check also starts a .NET 8 application.
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        if: matrix.name == 'TraceAI.AutoInstrumentation'
+        with:
+          dotnet-version: '8.0.x'
       - name: Build and pack
         run: dotnet pack "$PROJECT" --configuration Release --output "$RUNNER_TEMP/dist"
       - name: Install the exact local nupkg in a clean consumer
@@ -38,17 +43,9 @@ jobs:
           dotnet add smoke package "$NAME" --version "$VERSION" --source "$RUNNER_TEMP/dist" --no-restore
           dotnet restore smoke --source "$RUNNER_TEMP/dist" --source https://api.nuget.org/v3/index.json
           dotnet build smoke --no-restore
-      - name: Check the startup hook payload and start a stock application with it
+      - name: Check the installed startup hook package
         if: matrix.name == 'TraceAI.AutoInstrumentation'
-        working-directory: ${{ runner.temp }}
-        run: |
-          unzip -q "dist/$NAME.$VERSION.nupkg" -d hook
-          test -f hook/tools/net8.0/any/TraceAI.AutoInstrumentation.dll
-          test -f hook/tools/net8.0/any/TraceAI.AutoInstrumentation.Runtime.dll
-          test -f hook/tools/net8.0/any/FIInstrumentation.dll
-          test -f hook/tools/net8.0/any/OpenTelemetry.dll
-          test ! -d hook/lib
-          DOTNET_STARTUP_HOOKS="$PWD/hook/tools/net8.0/any/TraceAI.AutoInstrumentation.dll" dotnet smoke/bin/Debug/net10.0/smoke.dll
+        run: bash .github/release/check_startup_hook_package.sh "$RUNNER_TEMP/dist" "$VERSION"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.tag }}

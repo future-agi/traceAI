@@ -8,12 +8,17 @@ on:
       # replays every shared wire fixture.
       - 'spec/auto-instrumentation/**'
       - '.github/workflows/csharp-ci.yml'
+      # The hook package check runs here and in the release build.
+      - '.github/release/check_startup_hook_package.sh'
+      - '.github/workflows/release-nuget.yml'
   push:
     branches: [dev, main]
     paths:
       - 'csharp/**'
       - 'spec/auto-instrumentation/**'
       - '.github/workflows/csharp-ci.yml'
+      - '.github/release/check_startup_hook_package.sh'
+      - '.github/workflows/release-nuget.yml'
   workflow_dispatch:
 
 permissions:
@@ -109,6 +114,12 @@ jobs:
         run: |
           dotnet test csharp/tests/TraceAI.AutoInstrumentation.Tests/TraceAI.AutoInstrumentation.Tests.csproj \
             --configuration Release --logger 'trx;LogFilePrefix=startup-hook' --results-directory TestResults
+      - name: Pack the startup hook
+        run: |
+          dotnet pack csharp/src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj \
+            --configuration Release --output "$RUNNER_TEMP/hook-feed"
+      - name: Check the installed startup hook package (.NET 8 and 10 applications, real span delivery)
+        run: bash .github/release/check_startup_hook_package.sh "$RUNNER_TEMP/hook-feed"
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
