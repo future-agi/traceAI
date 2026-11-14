@@ -1,4 +1,4 @@
-import { context, createTraceState, trace } from "@opentelemetry/api";
+import { context, createTraceState, ProxyTracerProvider, trace } from "@opentelemetry/api";
 import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { privacyFilter } from "../src/export-privacy";
@@ -177,6 +177,20 @@ test("S4 dedup steps over an application span its tracking never saw, directly u
   const unrelated = application.getTracer("app").startSpan("app-request", {}, context.active());
   expect(shouldSkip(trace.setSpan(context.active(), unrelated))).toBe(false);
   inside.end(); unrelated.end(); model.end();
+});
+test("wire capture steps over a span that does not record and carries a tracked model span's own span context", () => {
+  // An application with a context manager but no tracer provider gets the API's no-op
+  // tracer. Its span inside the model call does not record and reuses the model span's context.
+  const processor = new SimpleSpanProcessor({ export(_s, cb) { cb({ code: 0 }); }, async shutdown() {} }); processor.onStart = trackCoverage;
+  const agent = new BasicTracerProvider({ spanProcessors: [processor] });
+  const model = agent.getTracer("ai").startSpan("model", { attributes: { "gen_ai.span.kind": "LLM" } });
+  const inside = new ProxyTracerProvider().getTracer("app").startSpan("app-provider-request", {}, trace.setSpan(context.active(), model));
+  expect(inside.isRecording()).toBe(false);
+  expect(shouldSkip(trace.setSpan(context.active(), inside))).toBe(true);
+  // The same ids read from incoming headers, as a remote span context, are not followed.
+  const remote = trace.wrapSpanContext({ ...model.spanContext(), isRemote: true });
+  expect(shouldSkip(trace.setSpan(context.active(), remote))).toBe(false);
+  model.end();
 });
 test.each(["", "}", "}}", '\\n at app (app.js:1:1)'])("round3 truncated nested audio never leaks (%s)", suffix => {
   const text = '400 {"audio":{"source":{"bytes":"U0VDUkVULUFVRElP"}' + suffix;

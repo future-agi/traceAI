@@ -5,12 +5,15 @@
 const { trace, context, propagation, metrics } = require('@opentelemetry/api');
 const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-async-hooks');
 const { W3CTraceContextPropagator } = require('@opentelemetry/core');
-const { AlwaysOffSampler, BasicTracerProvider, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+const { AlwaysOffSampler, BasicTracerProvider, ParentBasedSampler, SimpleSpanProcessor, TraceIdRatioBasedSampler } = require('@opentelemetry/sdk-trace-base');
 const { resourceFromAttributes } = require('@opentelemetry/resources');
 const spans = [];
 const exporter = { export(batch, done) { spans.push(...batch); done({ code: 0 }); }, async shutdown() {} };
 // APP_SAMPLER=off: the application samples none of its own spans.
-const sampler = process.env.APP_SAMPLER === 'off' ? { sampler: new AlwaysOffSampler() } : {};
+// APP_SAMPLER=parentbased-zero: ParentBased(TraceIdRatioBased(0)). The application
+// samples no new trace, and each child span follows its parent's sampled flag.
+const sampler = process.env.APP_SAMPLER === 'off' ? { sampler: new AlwaysOffSampler() }
+  : process.env.APP_SAMPLER === 'parentbased-zero' ? { sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(0) }) } : {};
 const provider = new BasicTracerProvider({ resource: resourceFromAttributes({ 'service.name': 'own-app' }), ...sampler, spanProcessors: [new SimpleSpanProcessor(exporter)] });
 const registered = {
   // APP_TRACE=off: a context manager and propagator only, with no tracer provider.

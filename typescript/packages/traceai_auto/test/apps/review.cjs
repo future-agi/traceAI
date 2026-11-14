@@ -60,7 +60,7 @@ function installProvider() {
     release(); await closing;
     console.log(JSON.stringify({exported:exported.length,appSpans:appSpans.length,processorsDuringDrain,processorsAfter:provider._activeSpanProcessor._spanProcessors.length,output:exported[0]?.attributes['output.value']})); return;
   }
-  if (mode === 'sigterm-order' || mode === 'sigterm-idle' || mode === 'sigterm-failed' || mode === 'sigterm-record-only') {
+  if (mode === 'sigterm-order' || mode === 'sigterm-idle' || mode === 'sigterm-failed' || mode === 'sigterm-record-only' || mode === 'sigterm-unsampled-parent') {
     const keepalive = setInterval(() => {},1000);
     let signalled = false;
     process.once('SIGTERM', () => console.log('application-once'));
@@ -75,9 +75,11 @@ function installProvider() {
     const call = async () => { await (await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',body:'{"messages":[]}'})).text(); await new Promise(resolve => setImmediate(resolve)); };
     // The collector fails on the first flush.
     if (mode === 'sigterm-failed') { await call(); await auto.forceFlush(); }
+    // The AI request runs under a parent span that the application did not sample.
+    const unsampledParent = mode === 'sigterm-unsampled-parent' ? trace.setSpan(context.active(), trace.wrapSpanContext({traceId:'1'.repeat(32),spanId:'2'.repeat(16),traceFlags:0})) : undefined;
     // A span waits on the FI route, except in the idle case.
-    if (mode !== 'sigterm-idle') await call();
-    process.on('SIGTERM', () => { console.log('application-handler');clearInterval(keepalive);process.exit(0); });
+    if (mode !== 'sigterm-idle') await (unsampledParent ? auto.withContext(unsampledParent, call) : call());
+    process.on('SIGTERM', () => { console.log('application-handler');if (unsampledParent) console.log(`exported:${exported.length}`);clearInterval(keepalive);process.exit(0); });
     signalled = true; process.kill(process.pid,'SIGTERM'); return;
   }
   if (mode === 'owned-privacy') {

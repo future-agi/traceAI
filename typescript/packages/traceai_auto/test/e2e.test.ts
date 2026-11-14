@@ -410,6 +410,41 @@ test("an application span created inside an AI call keeps the AI trace id and ha
   expect(inside.traceId).toBe(ai.traceId); expect(inside.parentSpanId).toBe(ai.spanId);
   expect(app.map((span: any) => span.spanId)).not.toContain(inside.parentSpanId);
 });
+test("under a parent-based application sampler, a trace the application did not sample stays unsampled inside an AI call, and Future AGI still receives the AI span", async () => {
+  // ParentBased(TraceIdRatioBased(0)): the application samples no new trace, and its child
+  // spans follow their parent's sampled flag. The control runs without the preload.
+  const run = async (args: string[]) => JSON.parse((await child("inside-ai-call.cjs", args, { FI_INSTRUMENTATIONS: "openai", APP_SAMPLER: "parentbased-zero" })).stdout.trim().split("\n").at(-1)!);
+  const sampledFlag = (traceparent: string | null) => traceparent?.split("-")[3];
+  const control = await run([]);
+  expect(allSpans()).toHaveLength(0);
+  expect(control.appSpans).toEqual([]);
+  expect(sampledFlag(control.providerTraceparent)).toBe("00");
+  const app = await run(["--import", "@traceai/auto/register"]);
+  expect(requests).toBe(2);
+  // The application's backend receives what it receives without the agent: nothing for this trace.
+  expect(app.appSpans).toEqual(control.appSpans);
+  // Its own propagator gives the provider request the same sampled flag as without the agent.
+  expect(sampledFlag(app.providerTraceparent)).toBe(sampledFlag(control.providerTraceparent));
+  // Future AGI still receives the AI span, with the application's trace id and parent id.
+  expect(allSpans()).toHaveLength(1);
+  const ai = allSpans()[0], aiAttributes = attrs(ai);
+  expect(aiAttributes["gen_ai.span.kind"] ?? aiAttributes["fi.span.kind"]).toBe("LLM");
+  expect(ai.traceId).toBe(app.request.traceId); expect(ai.parentSpanId).toBe(app.request.spanId);
+});
+test("an AI call whose request runs inside a span from an application with no tracer provider reaches Future AGI once", async () => {
+  // APP_TRACE=off: a context manager and propagator, but no tracer provider. The span the
+  // application's fetch starts does not record and carries the AI span's own span context.
+  const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_TRACE: "off" });
+  const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(app.appSpans).toEqual([]);
+  expect(requests).toBe(1);
+  expect(wireSpans()).toHaveLength(0);
+  expect(allSpans()).toHaveLength(1);
+  const ai = allSpans()[0], aiAttributes = attrs(ai);
+  expect(aiAttributes["gen_ai.span.kind"] ?? aiAttributes["fi.span.kind"]).toBe("LLM");
+  // The application's span inside the call names the AI span in its traceparent.
+  expect(app.providerTraceparent.split("-")[1]).toBe(ai.traceId); expect(app.providerTraceparent.split("-")[2]).toBe(ai.spanId);
+});
 test("an AI call whose request runs inside an application span reaches Future AGI once, not again as a wire span", async () => {
   // The same application with wire capture on. Its own span sits between the AI span and
   // the provider request. The AI span reaches Future AGI, so the wire layer yields to it.
@@ -552,6 +587,10 @@ test("no FI keys with an application provider first gives one warning and leaves
 test.each(["sigterm-idle", "sigterm-failed", "sigterm-record-only"])("SIGTERM reaches the application at once when the FI route has nothing to send (%s)", async mode => {
   const output = await child("review.cjs", [], { MODE: mode });
   expect(output.stdout.trim().split("\n")).toEqual(["application-once", "application-handler"]);
+});
+test("SIGTERM waits to send an AI span made under a parent the application did not sample", async () => {
+  const output = await child("review.cjs", [], { MODE: "sigterm-unsampled-parent" });
+  expect(output.stdout.trim().split("\n")).toEqual(["flush-start", "flush-finished", "application-once", "application-handler", "exported:1"]);
 });
 test("shutdown removes the promise hook and gives back process.emit", async () => {
   const output = await child("review.cjs", [], { MODE: "promise-hooks" });

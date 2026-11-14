@@ -599,6 +599,41 @@ describe("PgVector vector-only mode", () => {
     expect(mockSpan.end).not.toHaveBeenCalled();
   });
 
+  it("runs trigram word-distance and PostGIS box-distance queries without a span", () => {
+    const result = { rows: [], rowCount: 0 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    for (const text of [
+      "SELECT name FROM users ORDER BY name <<-> $1 LIMIT 3",
+      "SELECT name FROM users ORDER BY name <->> $1 LIMIT 3",
+      "SELECT name FROM users ORDER BY name <<<-> $1 LIMIT 3",
+      "SELECT name FROM users ORDER BY name <->>> $1 LIMIT 3",
+      "SELECT name FROM places ORDER BY geom <<->> $1 LIMIT 5",
+      "SELECT name FROM places ORDER BY geom <<#>> $1 LIMIT 5",
+    ]) {
+      expect(mockModule.Client.prototype.query.call({}, text, ["value"])).toBe(result);
+    }
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("runs distance queries against a typed geometric literal without a span", () => {
+    const result = { rows: [], rowCount: 0 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    for (const text of [
+      "SELECT id FROM shops ORDER BY location <-> point '(1,2)' LIMIT 5",
+      "SELECT id FROM zones ORDER BY area <-> circle '<(0,0),1>' LIMIT 5",
+      "SELECT name FROM places ORDER BY geom <-> geometry 'SRID=4326;POINT(1 2)' LIMIT 5",
+    ]) {
+      expect(mockModule.Client.prototype.query.call({}, text)).toBe(result);
+    }
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
   it("traces pgvector distance queries with an untyped parameter or a vector literal", async () => {
     const query = (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 });
     const mockModule = { Client: { prototype: { query } } };
