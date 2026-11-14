@@ -35,7 +35,7 @@ import os
 import re
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 from urllib.parse import unquote, unquote_plus
 
 from opentelemetry import trace as trace_api
@@ -83,6 +83,15 @@ _QUOTE = re.compile(r"[\"']")
 _SPACE = re.compile(r"[ \t\r\n]*")
 _BARE = re.compile(r"[^,}\]\s]*")
 _STRUCTURE = re.compile(r"[\"'{}\[\]]")
+# Text a value length limit may have cut, read as Go's agent reads it (privacy_truncated.go):
+# replacement markers stay, a data: token becomes its replacement, and a base64 run of at least
+# _CUT_RUN characters is omitted. A run starts at a base64 character other than padding or a line
+# break, takes line breaks with it, and ends after at most two padding characters.
+_CUT = re.compile(
+    r"<redacted>|<omitted: (?:[0-9]{1,40} base64 chars|media|data URI)>"
+    r"|(?P<data>(?<![A-Za-z0-9+.\-_:])(?i:data:)[^ \t\r\n\v\f\"'<>\\]*(?:[\r\n]+[A-Za-z0-9+/=_\-]+)*)"
+    r"|(?P<run>[A-Za-z0-9+/_\-][A-Za-z0-9+/_\-\r\n]*={0,2})")
+_CUT_RUN = 8
 # The token run of the value shapes below: letters, digits, underscores and hyphens.
 _RUN = "[A-Za-z0-9_-]"
 # Catalog value shapes that Python's backtracking engine would retry from every start in a long
@@ -548,16 +557,110 @@ class _Catalog:
         out.append(text[last:])
         return "".join(out)
 
+    def quoted_media(self, text: str) -> str:
+        """Media in JSON-like text that does not parse, found in one pass over its quoted strings.
+
+        A body cut by a length limit, or the repr of a Python mapping, keeps its quoted strings and
+        member names but no structure to walk. A quoted base64 value there is omitted when it starts
+        with a catalog media signature, when it is longer than the catalog's threshold for
+        unrecognized base64, or when it is a payload by the catalog's names: the value of an audio
+        field; or of a MIME payload field, an audio payload field or an image payload field, in an
+        object that a MIME, type or modality value earlier in it, or an audio field above it, gave
+        that context. A hint written after its payload is not seen. Every other character is kept.
+        """
+        out: List[str] = []
+        last = 0
+        size = len(text)
+        # One frame per open object or array: its bracket, the member it is the value of, and its
+        # media, audio and image context. Brackets past the depth limit share the deepest frame.
+        frames: List[List[Any]] = [["{", "", False, False, False]]
+        deeper = 0
+        member = ""  # The member the next value in the innermost object belongs to.
+        match = _STRUCTURE.search(text)
+        while match is not None:
+            start = match.start()
+            char = text[start]
+            if char == "{" or char == "[":
+                parent = frames[-1]
+                owner = member if parent[0] == "{" else parent[1]
+                media, audio, image = parent[2], parent[3], parent[4]
+                if owner in self.audio_metadata:
+                    media = audio = False
+                    image = image and owner in self.image_payload_fields
+                audio = audio or owner in self.audio_fields
+                if len(frames) <= self.max_depth:
+                    frames.append([char, owner, media, audio, image])
+                else:
+                    deeper += 1
+                member = ""
+                match = _STRUCTURE.search(text, start + 1)
+                continue
+            if char == "}" or char == "]":
+                if deeper:
+                    deeper -= 1
+                elif len(frames) > 1:
+                    frames.pop()
+                member = ""
+                match = _STRUCTURE.search(text, start + 1)
+                continue
+            end = _quoted_end(text, start)
+            if end is not None:
+                colon = _SPACE.match(text, end).end()
+                if colon < size and text[colon] == ":":
+                    member = self.leaf(text[start + 1:end - 1])
+                    match = _STRUCTURE.search(text, end)
+                    continue
+            # A value; a string a cut left open runs to the end of the text.
+            stop = size if end is None else end - 1
+            frame = frames[-1]
+            name = member if frame[0] == "{" else frame[1]
+            value = _unescaped(text[start + 1:stop])
+            if frame[0] == "{" and (name in self.mime_names or name == "type" or name == "modality"):
+                found = self._hint(name, value)
+                frame[2], frame[3], frame[4] = frame[2] or found[0], frame[3] or found[1], frame[4] or found[2]
+            payload = (name in self.audio_fields or (frame[2] and name in self.mime_payload)
+                       or (frame[3] and name in self.audio_payload) or (frame[4] and name in self.image_payload_fields))
+            if (value and value != HIDDEN and _BASE64.fullmatch(value) is not None
+                    and (payload or len(value) > self.threshold or self.signature(value))):
+                out.append(text[last:start + 1])
+                out.append(self.omitted(value))
+                last = stop
+            if end is None:
+                break
+            match = _STRUCTURE.search(text, end)
+        if not out:
+            return text
+        out.append(text[last:])
+        return "".join(out)
+
+    def cut_text(self, text: str) -> str:
+        """Text that a value length limit may have cut, already checked as complete text.
+
+        A cut value no longer shows where media begins or ends, so, as Go's agent does, every base64
+        run of eight or more characters is omitted, words and numbers included, and a data: token
+        becomes its replacement even without its comma. Replacement markers stay.
+        """
+        def token(match: "re.Match[str]") -> str:
+            original = match.group(0)
+            if match.lastgroup == "data":
+                return self.data_uri(original) or self.data_marker
+            if match.lastgroup == "run" and len(original) >= _CUT_RUN:
+                return self.omitted(original)
+            return original
+
+        return _CUT.sub(token, text)
+
     # The walk ----------------------------------------------------------------------------------
 
     def scrub(self, value: Any, path: str = "", siblings: Optional[Mapping[str, Any]] = None,
               secrets: Tuple[str, ...] = (), _media: bool = False, _audio: bool = False, _depth: int = 0,
               _budget: Optional[List[int]] = None, _hints: Optional[Dict[str, Tuple[bool, bool, bool]]] = None,
-              framed: bool = True) -> Any:
+              framed: bool = True, _cut: bool = False) -> Any:
         """One plain-data value through the catalog, with ``path`` as its structural key.
 
-        ``secrets`` is ordered longest first. Raises _Budget past the catalog's limits, and
-        TypeError for a value that is not plain data; nothing is ever turned into text.
+        ``secrets`` is ordered longest first. ``_cut`` marks a value a value length limit may have
+        cut: each text in it then also goes through cut_text. Raises _Budget past the catalog's
+        limits, and TypeError for a value that is not plain data; nothing is ever turned into text.
         """
         budget = _budget if _budget is not None else [self.max_nodes, self.max_text]
         budget[0] -= 1
@@ -582,7 +685,7 @@ class _Catalog:
                 raise _Budget("privacy text budget")
             hints = self.index_hints(value.items(), path, hints)
             return {name: self.scrub(item, path + "." + name if path else name, None, secrets, _media, _audio,
-                                     _depth + 1, budget, hints)
+                                     _depth + 1, budget, hints, _cut=_cut)
                     for name, item in value.items()}
         media, audio, payload = self.context(path, _media, _audio, hints)
         if kind is list or kind is tuple:
@@ -598,7 +701,8 @@ class _Catalog:
                 if value and (_depth + 1 > self.max_depth or budget[0] < 0):
                     raise _Budget("privacy structure budget")
                 return list(value)
-            return [self.scrub(item, path + "." + str(index), None, secrets, _media, _audio, _depth + 1, budget, hints)
+            return [self.scrub(item, path + "." + str(index), None, secrets, _media, _audio, _depth + 1, budget, hints,
+                               _cut=_cut)
                     for index, item in enumerate(value)]
         if kind is not str:
             if kind not in _SCALARS:
@@ -609,19 +713,23 @@ class _Catalog:
         budget[1] -= len(value)
         if budget[1] < 0:
             raise _Budget("privacy text budget")
+        cut = _cut and value != HIDDEN
         replacement = self.media_string(value, path, _media, _audio, hints, framed)
         if replacement is not None:
             return replacement
         if value.lstrip().startswith(("{", "[")):
             parsed, duplicated = _parse_json(value)
             if parsed is _UNPARSED:
-                value = self.members(value)
+                # Cut JSON or a Python repr: its credential members, then the media in its strings.
+                value = self.quoted_media(self.members(value))
             else:
                 clean = self.scrub(parsed, "", None, secrets, media, audio, _depth + 1, budget)
                 # A duplicate member's discarded value was never checked: render the checked copy.
                 if duplicated or clean != parsed:
                     value = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
-        return self.text(value, secrets, framed=framed)
+        value = self.text(value, secrets, framed=framed)
+        # A cut value is checked as complete text first, then lexically, as the whole text it is now.
+        return self.cut_text(value) if cut else value
 
 
 def _quoted_end(text: str, start: int) -> Optional[int]:
@@ -641,6 +749,13 @@ def _quoted_end(text: str, start: int) -> Optional[int]:
         if slashes % 2 == 0:
             return close + 1
         index = close + 1
+
+
+def _unescaped(raw: str) -> str:
+    """A quoted token's text with the escapes that base64 or a MIME type can carry undone."""
+    if "\\" not in raw:
+        return raw
+    return raw.replace("\\/", "/").replace("\\n", "\n").replace("\\r", "\r")
 
 
 def _value_end(text: str, start: int) -> int:
@@ -789,13 +904,42 @@ def _catalog() -> _Catalog:
 
 
 def scrub(value: Any, path: str = "", siblings: Optional[Mapping[str, Any]] = None,
-          secrets: Iterable[str] = (), framed: bool = True) -> Any:
+          secrets: Iterable[str] = (), framed: bool = True, cut: bool = False) -> Any:
     """``value`` through the catalog, as the export sanitizer checks one attribute value.
 
     ``path`` is its key, ``siblings`` maps the other keys of its object to their values (MIME and
-    type hints), ``secrets`` are known secrets, and ``framed`` is False only for free text.
+    type hints), ``secrets`` are known secrets, ``framed`` is False only for free text, and ``cut``
+    is True for a value that a value length limit may have cut.
     """
-    return _catalog().scrub(value, path, siblings, _ordered(secrets), framed=framed)
+    return _catalog().scrub(value, path, siblings, _ordered(secrets), framed=framed, _cut=cut)
+
+
+class CutKeys(NamedTuple):
+    """The keys whose value a value length limit may have cut, per attribute object of one span."""
+
+    span: FrozenSet[str] = frozenset()
+    events: Tuple[FrozenSet[str], ...] = ()
+    links: Tuple[FrozenSet[str], ...] = ()
+
+
+def cut_keys(attributes: Optional[Mapping[str, Any]], limit: Optional[int]) -> FrozenSet[str]:
+    """The keys of an attribute object that a value length limit of ``limit`` may have cut.
+
+    The SDK cuts a text value, or each text in a sequence value, to exactly ``limit`` characters, so
+    a text at least that long may have been longer. Read without calling application code.
+    """
+    if limit is None or not attributes:
+        return frozenset()
+    found = set()
+    for key, value in attributes.items():
+        if type(key) is not str:
+            if not isinstance(key, str):
+                continue
+            key = str.__str__(key)
+        values = value if type(value) is list or type(value) is tuple else (value,)
+        if any(isinstance(item, str) and str.__len__(item) >= limit for item in values):
+            found.add(key)
+    return frozenset(found)
 
 
 # Spans -------------------------------------------------------------------------------------------
@@ -886,11 +1030,13 @@ class _Walker:
             raise TypeError("privacy: text became structure")
         return clean
 
-    def attributes(self, attributes: Optional[Mapping[str, Any]], session_id: Optional[str] = None) -> Dict[str, Any]:
+    def attributes(self, attributes: Optional[Mapping[str, Any]], session_id: Optional[str] = None,
+                   cut: FrozenSet[str] = frozenset()) -> Dict[str, Any]:
         """One attribute object: every value checked with its key as path and the others as siblings.
 
         An attribute that cannot be checked is dropped alone. ``session_id`` is the session.id value
-        that keeps its value: it skips only the name rule.
+        that keeps its value: it skips only the name rule. ``cut`` holds the keys whose value a value
+        length limit may have cut.
         """
         if not attributes:
             return {}
@@ -910,10 +1056,12 @@ class _Walker:
             try:
                 budget = self.budget()
                 name = catalog.scrub(key, "", None, self.secrets, _budget=budget)
+                was_cut = key in cut
                 if session_id is not None and key == SESSION_ID and item == session_id:
-                    clean = catalog.scrub(item, "", None, self.secrets, _budget=budget)
+                    clean = catalog.scrub(item, "", None, self.secrets, _budget=budget, _cut=was_cut)
                 else:
-                    clean = catalog.scrub(item, key, None, self.secrets, _depth=1, _budget=budget, _hints=hints)
+                    clean = catalog.scrub(item, key, None, self.secrets, _depth=1, _budget=budget, _hints=hints,
+                                          _cut=was_cut)
             except Exception as error:
                 logger.debug("traceAI: an attribute could not be checked for Future AGI and was not sent (%s)",
                              type(error).__name__)
@@ -978,16 +1126,23 @@ class _Walker:
             return InstrumentationScope(name, version, schema)
         return InstrumentationScope(name, version, schema, clean)
 
-    def span(self, span: ReadableSpan, session_id: Optional[str] = None) -> ReadableSpan:
+    def span(self, span: ReadableSpan, session_id: Optional[str] = None, cut: Optional[CutKeys] = None) -> ReadableSpan:
+        cut = cut or CutKeys()
+
+        def nth(keys: Tuple[FrozenSet[str], ...], index: int) -> FrozenSet[str]:
+            return keys[index] if index < len(keys) else frozenset()
+
         status = span.status
         if status.description is not None:
             status = Status(status.status_code, self.text(status.description))
         return ReadableSpan(
             name=self.text(span.name), context=self.context(span.context), parent=self.context(span.parent),
-            resource=self.resource(span.resource), attributes=self.attributes(span.attributes, session_id),
-            events=[Event(self.text(event.name), self.attributes(event.attributes), timestamp=event.timestamp)
-                    for event in span.events],
-            links=[Link(self.context(link.context), self.attributes(link.attributes)) for link in span.links],
+            resource=self.resource(span.resource), attributes=self.attributes(span.attributes, session_id, cut.span),
+            events=[Event(self.text(event.name), self.attributes(event.attributes, cut=nth(cut.events, index)),
+                          timestamp=event.timestamp)
+                    for index, event in enumerate(span.events)],
+            links=[Link(self.context(link.context), self.attributes(link.attributes, cut=nth(cut.links, index)))
+                   for index, link in enumerate(span.links)],
             kind=span.kind, status=status, start_time=span.start_time, end_time=span.end_time,
             instrumentation_scope=self.scope(span.instrumentation_scope),
         )
@@ -1017,14 +1172,16 @@ def _unchecked(span: ReadableSpan, walker: Optional[_Walker]) -> Optional[Readab
         return None
 
 
-def sanitize_span(span: ReadableSpan, session_id: Optional[str] = None) -> Optional[ReadableSpan]:
+def sanitize_span(span: ReadableSpan, session_id: Optional[str] = None,
+                  cut: Optional[CutKeys] = None) -> Optional[ReadableSpan]:
     """The copy of ``span`` that Future AGI receives, with the catalog applied.
 
     ``span`` is already the agent's detached copy, after the TraceConfig hide settings; it is not
     changed. ``session_id`` is the session.id value that keeps its value although its name is
-    credential-like; it is still checked for media, URLs, known secrets and credential shapes. When
-    the span cannot be checked, the copy keeps only its identity and timing; None when even that
-    cannot be built.
+    credential-like; it is still checked for media, URLs, known secrets and credential shapes.
+    ``cut`` holds the keys whose value the provider's value length limit may have cut. When the span
+    cannot be checked, the copy keeps only its identity and timing; None when even that cannot be
+    built.
     """
     try:
         walker = _Walker(_catalog(), _KNOWN.snapshot())
@@ -1032,7 +1189,7 @@ def sanitize_span(span: ReadableSpan, session_id: Optional[str] = None) -> Optio
         _warn()
         return _unchecked(span, None)
     try:
-        return walker.span(span, session_id)
+        return walker.span(span, session_id, cut)
     except Exception:
         _warn()
         return _unchecked(span, walker)

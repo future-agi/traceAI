@@ -540,6 +540,19 @@ def _scope_name(span: ReadableSpan) -> str:
     return (getattr(getattr(span, "instrumentation_scope", None), "name", None) or "").lower()
 
 
+def _value_limits(provider: Any) -> Tuple[Optional[int], Optional[int]]:
+    """A provider's attribute value length limits: for span attributes, then for event and link
+    attributes (OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT and OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT, or its
+    SpanLimits). None where it has no limit, or does not show one."""
+    limits = getattr(provider, "_span_limits", None)
+
+    def limit(name: str) -> Optional[int]:
+        value = getattr(limits, name, None)
+        return value if type(value) is int and value >= 0 else None
+
+    return limit("max_span_attribute_length"), limit("max_attribute_length")
+
+
 def _shown_exporter(processor: Any) -> Any:
     """The exporter a processor sends to, where integrations look for it.
 
@@ -574,12 +587,16 @@ class _ResourceOverlayProcessor(SpanProcessor):
     """
 
     def __init__(self, delegate: SpanProcessor, resource: Optional[Resource] = None,
-                 sample_rate: float = 1.0, config: Any = None) -> None:
+                 sample_rate: float = 1.0, config: Any = None,
+                 value_limits: Tuple[Optional[int], Optional[int]] = (None, None)) -> None:
         self._traceai_route = True
         self.borrowed = False
         self._delegate = delegate
         self._resource = resource
         self._config = config
+        # The provider's attribute value length limits: for span attributes, then for event and link
+        # attributes. A text the provider cut to its limit is checked as cut text.
+        self._value_limits = value_limits
         # Ratio sampling decides by trace id, so a trace is kept or dropped as a whole.
         self._ratio = TraceIdRatioBased(sample_rate) if sample_rate < 1.0 else None
         self.mappers: list = []
@@ -715,11 +732,18 @@ class _ResourceOverlayProcessor(SpanProcessor):
             attributes = _without_request_details(attributes)
         events, links, status = list(span.events), list(span.links), span.status
         config = self._config
+        if config is not None and config.hide_error_details:
+            # The status keeps its ERROR code; the exception events and the description go.
+            events = [event for event in events if event.name != _EXCEPTION_EVENT]
+        # Decided before the hide settings change a value's length: a text as long as the provider's
+        # value length limit may have been cut by it.
+        span_limit, other_limit = self._value_limits
+        cut = _privacy.CutKeys(_privacy.cut_keys(attributes, span_limit),
+                               tuple(_privacy.cut_keys(event.attributes, other_limit) for event in events),
+                               tuple(_privacy.cut_keys(link.attributes, other_limit) for link in links))
         if config is not None:
             attributes = _masked(attributes, config)
             if config.hide_error_details:
-                # The status keeps its ERROR code; the exception events and the description go.
-                events = [event for event in events if event.name != _EXCEPTION_EVENT]
                 if status.description is not None:
                     status = Status(status.status_code)
             elif status.description is not None:
@@ -743,7 +767,7 @@ class _ResourceOverlayProcessor(SpanProcessor):
         value = attributes.get(_privacy.SESSION_ID)
         exempt = value if type(value) is str and (
             _scope_name(span).startswith(self.scopes) or value == session) else None
-        return _privacy.sanitize_span(copy, session_id=exempt)
+        return _privacy.sanitize_span(copy, session_id=exempt, cut=cut)
 
     def on_end(self, span: ReadableSpan) -> None:
         session = self._ended_session(span)
@@ -902,7 +926,7 @@ def _route_registered_provider(provider: Any, config: Any) -> Optional[_Resource
         if (not processors or not isinstance(processors[0], (SimpleSpanProcessor, BatchSpanProcessor))
                 or not _is_future_agi_exporter(_shown_exporter(processors[0]))):
             return None
-        route = _ResourceOverlayProcessor(processors[0], config=config)
+        route = _ResourceOverlayProcessor(processors[0], config=config, value_limits=_value_limits(provider))
         route.borrowed = True
         active._span_processors = (route,) + processors[1:]
     _state.overlays[provider] = route
@@ -963,7 +987,8 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
         processor = (BatchSpanProcessor(span_exporter=selected, **options) if kwargs.get("batch", True)
                      else SimpleSpanProcessor(span_exporter=selected))
         overlay = _ResourceOverlayProcessor(processor, _fi_resource(settings, project_type, kwargs),
-                                            settings.sample_rate, config=settings.trace_config)
+                                            settings.sample_rate, config=settings.trace_config,
+                                            value_limits=_value_limits(existing))
         existing.add_span_processor(overlay)
         _state.overlays[existing] = overlay
         return existing, False
@@ -979,7 +1004,8 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     provider = register(**kwargs)
     active = provider._active_span_processor
     processors = tuple(active._span_processors)
-    overlay = _ResourceOverlayProcessor(processors[0], config=settings.trace_config)
+    overlay = _ResourceOverlayProcessor(processors[0], config=settings.trace_config,
+                                        value_limits=_value_limits(provider))
     active._span_processors = (overlay,) + processors[1:]
     _state.overlays[provider] = overlay
     # The agent flushes and closes its route at exit itself, bounded, and only once.
