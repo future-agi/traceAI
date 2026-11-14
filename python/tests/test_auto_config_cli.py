@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -244,44 +245,47 @@ def test_privacy_settings_come_from_the_config_file(tmp_path, monkeypatch):
 SWITCH_LOGGER = "fi_instrumentation.instrumentation.logging"
 
 
-@pytest.fixture
+@contextmanager
 def switch_warnings(caplog):
-    """The warnings the privacy switches log. Their logger does not pass records on to the root
-    logger, where caplog listens, so caplog's handler is attached to it for the test."""
-    from fi_instrumentation.instrumentation import config as config_module
-
+    """The warnings the privacy switches log, in caplog.records. Their logger does not pass records
+    on to the root logger, where caplog listens, so caplog's handler is attached to it while the
+    block runs. Used inside the test: caplog has a separate handler for each test phase, so one
+    attached by a fixture would be the setup phase's, not the one caplog.records reads."""
     logger = logging.getLogger(SWITCH_LOGGER)
-    logger.addHandler(caplog.handler)
-    config_module._warned_switches.clear()
+    handler = caplog.handler
+    logger.addHandler(handler)
     try:
         with caplog.at_level(logging.WARNING, logger=SWITCH_LOGGER):
             yield caplog
     finally:
-        logger.removeHandler(caplog.handler)
-        config_module._warned_switches.clear()
+        logger.removeHandler(handler)
 
 
-def test_config_file_switches_follow_the_privacy_switch_rule(tmp_path, monkeypatch, switch_warnings):
+def test_config_file_switches_follow_the_privacy_switch_rule(tmp_path, monkeypatch, caplog):
+    from fi_instrumentation.instrumentation import config as config_module
+
     for key in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(config_module, "_warned_switches", set())
     config = tmp_path / "futureagi.toml"
     # The numbers 1 and 0 turn a switch on and off, as true and false do.
     config.write_text("hide_inputs = 1\nhide_outputs = 0\n")
     settings = resolve(environ={}, config_file=str(config))
     assert (settings.trace_config.hide_inputs, settings.trace_config.hide_outputs) == (True, False)
     assert settings.masked()["hide_inputs"]["source"] == f"file {config}"
-    # A quoted empty value is unset.
-    config.write_text('hide_inputs = ""\n')
-    settings = resolve(environ={}, config_file=str(config))
-    assert settings.trace_config.hide_inputs is False
-    assert settings.masked()["hide_inputs"]["source"] == "default"
-    assert not [record for record in switch_warnings.records if record.name == SWITCH_LOGGER]
-    # Any other value hides, with one warning that names the key and the file, never the value.
-    config.write_text('hide_inputs = "maybe"\nhide_outputs = 3\n')
-    for _ in range(2):
+    # A quoted empty value is unset. Any other value hides, with one warning that names the key
+    # and the file, never the value.
+    with switch_warnings(caplog):
+        config.write_text('hide_inputs = ""\n')
         settings = resolve(environ={}, config_file=str(config))
-        assert (settings.trace_config.hide_inputs, settings.trace_config.hide_outputs) == (True, True)
-    messages = [record.getMessage() for record in switch_warnings.records if record.name == SWITCH_LOGGER]
+        assert settings.trace_config.hide_inputs is False
+        assert settings.masked()["hide_inputs"]["source"] == "default"
+        assert not [record for record in caplog.records if record.name == SWITCH_LOGGER]
+        config.write_text('hide_inputs = "maybe"\nhide_outputs = 3\n')
+        for _ in range(2):
+            settings = resolve(environ={}, config_file=str(config))
+            assert (settings.trace_config.hide_inputs, settings.trace_config.hide_outputs) == (True, True)
+    messages = [record.getMessage() for record in caplog.records if record.name == SWITCH_LOGGER]
     assert len([message for message in messages if f"hide_inputs in {config}" in message]) == 1
     assert len([message for message in messages if f"hide_outputs in {config}" in message]) == 1
     assert len(messages) == 2
