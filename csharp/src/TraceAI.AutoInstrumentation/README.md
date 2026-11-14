@@ -7,9 +7,36 @@ behaviors described below. It does not capture every possible AI call.
 
 ## Install and run without changing application code
 
-Build from the repository root with a .NET 10 SDK; the application needs only its
-own runtime, not a .NET 10 installation. One published directory serves both .NET 8
-and .NET 10 applications:
+One published directory serves both .NET 8 and .NET 10 applications. The
+application needs only its own runtime.
+
+### Option 1: install the NuGet package
+
+Add the package to the application project (or to any scratch project, to only fill
+the NuGet cache):
+
+```sh
+dotnet add package TraceAI.AutoInstrumentation
+```
+
+The package contains no library to reference. It holds the hook directory under
+`tools/net8.0/any/`, and NuGet unpacks it into its global packages folder, with the
+package id in lower case: `~/.nuget/packages/traceai.autoinstrumentation/<version>/`
+(on Windows, `%USERPROFILE%\.nuget\packages\...`; set `NUGET_PACKAGES` to move it).
+Point `DOTNET_STARTUP_HOOKS` at the hook DLL in that folder:
+
+```sh
+FI_API_KEY='...' FI_SECRET_KEY='...' \
+DOTNET_STARTUP_HOOKS="$HOME/.nuget/packages/traceai.autoinstrumentation/<version>/tools/net8.0/any/TraceAI.AutoInstrumentation.dll" \
+  dotnet /absolute/path/to/YourApplication.dll
+```
+
+Keep every file in `tools/net8.0/any/` together. Deploy that folder with the
+application, or restore the package where the application runs.
+
+### Option 2: build from source
+
+Build from the repository root with a .NET 10 SDK:
 
 ```sh
 dotnet publish csharp/src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj \
@@ -65,7 +92,7 @@ DLL. On Windows set the same environment variables in PowerShell. Multiple start
 hooks are separated by the OS path separator (`:` on Unix; `;` on Windows). The hook
 compiles the unchanged shared FI SDK sources for .NET 8 against its own pinned
 OpenTelemetry, so the SDK project's OpenTelemetry version matrix never changes the
-hook. NuGet packages for the agent are not published by this change.
+hook.
 
 The alternative **in-process** code entry point is (choose one entry point so
 lifecycle/diagnostic APIs run in the context that owns the agent):
