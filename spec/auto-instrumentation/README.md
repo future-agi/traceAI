@@ -739,11 +739,14 @@ remains authoritative even for projected identity/metadata.
   level and the call proceeds untouched.
 - Every attribute goes through the SDK's `TraceConfig` masking (`FI_HIDE_INPUTS`,
   `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, ...), the same as library-layer spans.
-- **Privacy switch values.** Every SDK reads `FI_HIDE_*` and `FI_PII_REDACTION` the same way:
-  `true`, `1`, `yes` and `on` turn a switch on, and `false`, `0`, `no` and `off` turn it off,
-  in any case and with surrounding spaces ignored. An empty value is unset. Any other value
-  turns the switch on, with one warning that names the variable and the accepted values and
-  never repeats the value: a privacy switch someone set never silently does nothing.
+- **Privacy switch values.** Every SDK's zero-code agent reads `FI_HIDE_*` and
+  `FI_PII_REDACTION` the same way: `true`, `1`, `yes` and `on` turn a switch on, and `false`,
+  `0`, `no` and `off` turn it off, in any case and with surrounding spaces ignored. An empty
+  value is unset. Any other value turns the switch on, with one warning that names the
+  variable and the accepted values and never repeats the value: a privacy switch someone set
+  never silently does nothing. In Node, the launcher, fi-core, `@traceai/vercel` and
+  `@traceai/genkit` read the switches this way. Other packages that read these variables
+  themselves still follow their own parsing until they are updated.
 - Context attributes (`using_session`, `using_user`, `using_metadata`, ...) are added to wire
   spans the same way library instrumentors add them. Node registers no context manager:
   applications without their own use the agent's `withSession`, `withUser`, `withMetadata`,
