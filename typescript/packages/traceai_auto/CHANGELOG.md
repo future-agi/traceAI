@@ -11,8 +11,8 @@
 - AI spans keep their parent from your app's active span. A span is active only inside its own SDK call, so a request your app sends beside a call is captured as its own wire span.
 
 ### Known limitations
-- In an app with no OpenTelemetry of its own, a Groq, Mistral or Portkey call's own request can also arrive as a wire span, beside the call's AI span. Nothing is lost.
-- LangChain is not traced by the agent yet. Its model requests are still captured as wire spans.
+- In an app with no OpenTelemetry of its own, a call's own request can also arrive as a wire span, beside the call's AI span, for Groq, Mistral, Portkey, BeeAI, the OpenAI Agents SDK, the Vercel AI SDK 7 and Genkit. Nothing is lost.
+- LangChain is not traced by the agent yet. Its model requests are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans.
 
 ## [0.1.4] - pending release
 

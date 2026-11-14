@@ -131,7 +131,8 @@ call sends (for example a custom `fetch` that first asks another model) gets no 
 span. Without an application context manager, a model span that an integration starts
 inside an SDK call it patches through the instrumentation's wrap method is active only
 inside that call (see [Existing OTel SDKs](#existing-otel-sdks)). Groq, Mistral and Portkey replace SDK
-methods directly, so the agent has no scope around their calls: without an application
+methods directly, and BeeAI and the OpenAI Agents SDK integration record spans from the
+SDK's own events or trace processor, so the agent has no scope around their calls: without an application
 context manager their model span is not active for the SDK's own request, which can then
 also be captured as a wire span. A request the caller sends beside one of their calls is
 captured, never skipped. Outgoing credential observation is never skipped by these rules: fetch reads
@@ -299,7 +300,8 @@ no context store of its own. Spans started with `startActiveSpan`, such as the V
 SDK 5 and 6 spans, nest without a context manager. Each patched SDK call of an
 integration the agent sets up itself, when that integration patches through the
 instrumentation's wrap method, runs in its own scope of that context, with a cell of its
-own. Incoming HTTP requests from the agent's HTTP instrumentation get the same scope. A
+own. Each incoming request from the agent's HTTP instrumentation gets the same scope,
+whose cell keeps only that request's SERVER span. A
 span the integration starts in that call is kept in the call's cell: it is the parent of
 the rest of the call's own work, such as the SDK's provider request, which the wire layer
 then skips, and spans started in the call nest under it. A context set later inside the
@@ -307,9 +309,11 @@ call, with `runInFIContext` or `startActiveSpan`, takes precedence while it last
 span that has ended is no longer active. The cell ends with the call. So, as with an
 application context manager, the caller's next work, such as a plain `fetch` beside the
 call in the same tick or while it reads a stream, does not run under that span. Outside
-such a call, starting a span makes nothing active. Groq, Mistral and Portkey replace SDK
-methods directly, and the Vercel AI SDK and Genkit integrations are turned on through
-their own enable entry, so the agent cannot scope their calls. Without an application
+such a call, starting a span makes nothing active, and so does starting any span but the
+SERVER span inside an incoming request. Groq, Mistral and Portkey replace SDK
+methods directly, BeeAI and the OpenAI Agents SDK integration record spans from the
+SDK's own events or trace processor, and the Vercel AI SDK and Genkit integrations are
+turned on through their own enable entry, so the agent cannot scope their calls. Without an application
 context manager, a model span they start outside `startActiveSpan` is not the parent of
 the SDK's own request, which can then also arrive as a wire span. A request beside their
 calls is never lost.
