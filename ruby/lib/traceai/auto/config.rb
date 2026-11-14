@@ -69,7 +69,8 @@ module TraceAI
           @warnings << 'config file base_url ignored: the key pair does not come from the same file'
         end
         # Hide switches are read once, here, from the merged values, so a value that
-        # a higher source replaces is never reported.
+        # a higher source replaces is never reported by this read. (A RUBYOPT
+        # preload reads without the init options; see read_hide.)
         @hidden = HIDE_SWITCHES.to_h { |key| [key, read_hide(key, @values[key])] }.freeze
         @warnings.freeze
         @warnings.each { |message| warn 'traceai-auto: ' + message } if announce
@@ -120,6 +121,9 @@ module TraceAI
       # and on hide; false, 0, no and off show; nil when the value is blank (not
       # set). Any other value hides, because a hide switch someone set must never
       # silently do nothing. The warning names the variable and never the value.
+      # Its text is the same for every read, so the agent prints it once. Under
+      # RUBYOPT the first read comes before the application can call init, and
+      # an init option that sets the switch then decides; the text allows for it.
       def read_hide(key, value)
         text = begin
           Config.utf8(value.to_s).strip.downcase
@@ -128,7 +132,7 @@ module TraceAI
         end
         return nil if text == ''
         return HIDE_VALUES[text] if HIDE_VALUES.key?(text)
-        @warnings << "FI_#{key.upcase} has a value that is not recognised, so this content is hidden; " \
+        @warnings << "FI_#{key.upcase} has a value that is not recognised, so this content is hidden unless an init option sets it; " \
                      'use true, 1, yes or on to hide it, or false, 0, no or off to show it'
         true
       end
@@ -194,8 +198,13 @@ module TraceAI
           begin
             out[key] = parse_value(found[2])
           rescue ArgumentError, RangeError, EncodingError
-            # Unsupported/malformed lines do not affect other settings.
-            next
+            # Unsupported/malformed lines do not affect other settings. A hide
+            # switch is the exception, because one someone set must never be
+            # dropped: its text is kept (a single-quoted string without its
+            # quotes, otherwise as written) and read_hide decides.
+            raw = found[2]
+            next unless HIDE_SWITCHES.include?(key) && !raw.empty?
+            out[key] = raw.length >= 2 && raw.start_with?("'") && raw.end_with?("'") ? raw[1...-1] : raw
           end
         end
       rescue StandardError
