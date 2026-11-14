@@ -807,8 +807,9 @@ the same hide controls on every route.
   switch (`FI_FORWARD_APP_SPANS=true`; Node `forwardApplicationSpans: true`) also attaches the
   FI route to the application's provider, as before this rule; `FI_HIDE_*` then also hides
   other AI tracers' content keys (`ai.prompt*`, `ai.response.*`, `ai.toolCall.*`,
-  `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input/output`)
-  on those spans. Vector database integrations enabled by the agent trace only vector
+  `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input/output`,
+  `llm.input_messages.*`, `llm.output_messages.*` and the Vercel AI SDK content keys such as
+  `ai.value`, `ai.documents`, `ai.schema`, `ai.decision.*` and `ai.ranking`) on those spans. Vector database integrations enabled by the agent trace only vector
   operations. Initialization is once per process (S2); repeated initialization cannot rewire
   ownership.
 - **Resource identity (A6, 2026-10-30).** Preserve every application resource attribute,
