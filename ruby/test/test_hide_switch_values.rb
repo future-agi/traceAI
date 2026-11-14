@@ -5,8 +5,9 @@ require_relative '../lib/traceai/auto/config'
 # A hide switch someone set must never silently do nothing. For every FI_HIDE_*
 # variable, its init option and its futureagi.toml setting: true, 1, yes and on
 # hide; false, 0, no and off show; a blank value is not set; any other value
-# hides, with one warning that names the variable and never prints the value.
-# Other switches keep their own parsing.
+# hides, with one warning that names the variable and the accepted values and
+# never prints the value. A hide line in the file is never dropped, however its
+# value is written. Other switches keep their own parsing.
 class HideSwitchValuesTest < Minitest::Test
   A = TraceAI::Auto
   P = TraceAI::Auto::Privacy
@@ -72,6 +73,13 @@ class HideSwitchValuesTest < Minitest::Test
       assert hides?(read({}, {switch.to_sym => 'on'}).first, switch), "#{switch}: 'on'"
       assert hides?(read({}, {switch.to_sym => true}).first, switch), "#{switch}: true"
       refute hides?(read({variable(switch) => 'on'}, {switch.to_sym => false}).first, switch), "#{switch}: false over the environment"
+      # Letter case and surrounding spaces do not matter in an init option either.
+      config, stderr = read({}, {switch.to_sym => ' ON '})
+      assert hides?(config, switch), "#{switch}: ' ON '"
+      assert_empty stderr
+      config, stderr = read({variable(switch) => 'on'}, {switch.to_sym => ' Off '})
+      refute hides?(config, switch), "#{switch}: ' Off ' over the environment"
+      assert_empty stderr
     end
   end
   def test_unrecognised_value_hides_with_one_warning_that_names_the_variable_and_not_the_value
@@ -83,6 +91,23 @@ class HideSwitchValuesTest < Minitest::Test
       refute_includes stderr, 'maybe'
       assert_equal 1, config.warnings.length
     end
+  end
+  def test_warning_lists_the_accepted_values
+    _, stderr = read('FI_HIDE_INPUTS' => 'maybe')
+    assert_equal 1, stderr.lines.length, stderr
+    assert_includes stderr, 'true, 1, yes or on'
+    assert_includes stderr, 'false, 0, no or off'
+  end
+  # With RUBYOPT the agent reads the environment when it loads, before the
+  # application can call init. The warning is printed then, so it must not
+  # promise more than is known: an init option that sets the switch decides.
+  def test_warning_says_that_an_init_option_still_decides
+    _, stderr = read('FI_HIDE_INPUTS' => 'maybe')
+    assert_equal 1, stderr.lines.length, stderr
+    assert_includes stderr, 'hidden unless an init option sets it'
+    config, stderr = read({'FI_HIDE_INPUTS' => 'maybe'}, {hide_inputs: false})
+    refute hides?(config, 'hide_inputs')
+    assert_empty stderr
   end
   def test_error_details_follow_the_content_switches_unless_set_to_a_recognised_value
     # A recognised value wins over the content switches.
@@ -100,13 +125,41 @@ class HideSwitchValuesTest < Minitest::Test
   end
   def test_config_file_values_follow_the_same_rule
     file = File.join(ROOT, '.bundle/tmp', "hide-switch-values-#{Process.pid}.toml")
-    {'true' => true, '"on"' => true, '" Yes "' => true, '1' => true, '"maybe"' => true, '2' => true,
-     'false' => false, '"off"' => false, '0' => false, '""' => false}.each do |value, hidden|
+    # The value as written in the file => [hidden, warnings].
+    {'true' => [true, 0], '"on"' => [true, 0], '" Yes "' => [true, 0], '1' => [true, 0], '"maybe"' => [true, 1], '2' => [true, 1],
+     'false' => [false, 0], '"off"' => [false, 0], '0' => [false, 0], '""' => [false, 0],
+     # A hide line is never dropped: a single-quoted string and a bare word are read as their text.
+     "'on'" => [true, 0], "' Yes '" => [true, 0], 'on' => [true, 0], 'True' => [true, 0], 'TRUE' => [true, 0],
+     'on # hide prompts' => [true, 0],
+     "'off'" => [false, 0], 'off' => [false, 0], 'No' => [false, 0], "''" => [false, 0],
+     "'maybe'" => [true, 1], 'maybe' => [true, 1], 'ture' => [true, 1],
+     # So is a value the file reader cannot decode.
+     '"""on"""' => [true, 1], '"on' => [true, 1]}.each do |value, (hidden, warnings)|
       File.write(file, "hide_inputs = #{value}\n")
       config, stderr = read('FI_CONFIG_FILE' => file)
       assert_equal hidden, hides?(config, 'hide_inputs'), value
-      assert_equal(['"maybe"', '2'].include?(value) ? 1 : 0, stderr.lines.length, "#{value}: #{stderr}")
+      assert_equal warnings, stderr.lines.length, "#{value}: #{stderr}"
       refute_includes stderr, 'maybe'
+    end
+  ensure
+    File.unlink(file) if file && File.exist?(file)
+  end
+  def test_every_switch_reads_its_config_file_setting
+    file = File.join(ROOT, '.bundle/tmp', "hide-switch-every-#{Process.pid}.toml")
+    SWITCHES.each_key do |switch|
+      # One value that hides and one that shows, as a double-quoted string, a
+      # single-quoted string and a bare word.
+      {'"on"' => true, "'on'" => true, 'yes' => true, '"off"' => false, "'off'" => false, 'no' => false}.each do |value, hidden|
+        File.write(file, "#{switch} = #{value}\n")
+        config, stderr = read('FI_CONFIG_FILE' => file)
+        assert_equal hidden, hides?(config, switch), "#{switch} = #{value}"
+        assert_empty stderr, "#{switch} = #{value}"
+      end
+      File.write(file, "#{switch} = ture\n")
+      config, stderr = read('FI_CONFIG_FILE' => file)
+      assert hides?(config, switch), "#{switch} = ture"
+      assert_equal 1, stderr.lines.length, stderr
+      assert_includes stderr, variable(switch)
     end
   ensure
     File.unlink(file) if file && File.exist?(file)

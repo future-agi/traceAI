@@ -709,6 +709,23 @@ class EndToEndTest < Minitest::Test
     assert_equal 1, stderr.scan('FI_HIDE_INPUTS').length, stderr
     refute_includes stderr, 'maybe'
   end
+  # With RUBYOPT the agent reads the environment when it loads and prints the
+  # warning then. An init option the application sets afterwards still decides,
+  # and the warning says so instead of promising that the content is hidden.
+  def test_init_option_decides_after_the_warning_for_an_unrecognised_hide_switch
+    stdout, stderr, status = app("TraceAI::Auto.init(hide_inputs: false)\n" + plain_code, {'FI_HIDE_INPUTS' => 'maybe'})
+    assert status.success?, stderr; assert_equal CHAT, stdout
+    spans = export_spans
+    assert_equal 1, spans.length
+    a = attrs(spans.first.first.attributes)
+    assert_kind_of String, a['input.value']
+    refute_equal '__REDACTED__', a['input.value']
+    assert_equal 'Hello from Ruby', a['output.value']
+    warnings = stderr.lines.select { |line| line.include?('FI_HIDE_INPUTS') }
+    assert_equal 1, warnings.length, stderr
+    assert_includes warnings.first, 'hidden unless an init option sets it'
+    refute_includes stderr, 'maybe'
+  end
   def test_sigterm_flush_preserves_signal_exit
     code = "STDOUT.sync = true\n" + plain_code + "\nputs 'READY'; loop { sleep 1 }"
     stdin, stdout, stderr, waiter = Open3.popen3(child_env, RbConfig.ruby, '-e', code, chdir: ROOT)
