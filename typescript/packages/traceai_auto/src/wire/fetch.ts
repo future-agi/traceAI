@@ -13,10 +13,43 @@ const DEDUP_KINDS = new Set(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"]);
 // Compatibility only for unrelated, unscoped instrumentations. Auto-owned scopes
 // carry their own flat Context authority and never depend on observer callbacks.
 const ancestors = new WeakMap<object, object>();
+// The same tracked spans while they are live, by trace and span id. On the AI-only
+// route the agent never sees the application's spans, so an application span made
+// inside an AI call has no ancestry entry. Its own parent id still names the agent's
+// span, so the walk steps over that one application span.
+const live = new Map<string, object>();
+const LIVE_LIMIT = 4096;
+function own(value: any, key: string): any {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+function liveKey(span: any): string | undefined {
+  try {
+    const { traceId, spanId } = span.spanContext();
+    return typeof traceId === "string" && typeof spanId === "string" ? `${traceId}-${spanId}` : undefined;
+  } catch { return undefined; }
+}
+function liveParent(span: any): object | undefined {
+  try {
+    // SDK 2.x keeps the parent's span context; 1.x keeps only its span id.
+    const spanId = own(span, "parentSpanContext")?.spanId ?? own(span, "parentSpanId");
+    const traceId = span.spanContext().traceId;
+    return typeof spanId === "string" && typeof traceId === "string" ? live.get(`${traceId}-${spanId}`) : undefined;
+  } catch { return undefined; }
+}
 export function trackCoverage(span: object, parent: Context): void {
   if (autoModelResponsibility(parent)) return;
   const active = trace.getSpan(parent);
   if (active) ancestors.set(span, active);
+  const key = liveKey(span);
+  if (!key) return;
+  live.set(key, span);
+  if (live.size > LIVE_LIMIT) live.delete(live.keys().next().value as string);
+}
+/** Called when a tracked span ends. */
+export function endCoverage(span: object): void {
+  const key = liveKey(span);
+  if (key && live.get(key) === span) live.delete(key);
 }
 // Which model spans wire capture yields to. On the AI-only route only spans the
 // agent made reach Future AGI, so a model span on the application's own provider
@@ -29,7 +62,7 @@ function wireAllowed(ctx: Context, phase: "guard" | "inspect" | "request"): bool
   // scope must never reacquire a MODEL above its boundary via this legacy cache.
   let span: any = trace.getSpan(ctx);
   const seen = new Set<object>();
-  for (let depth = 0; span && depth < 256 && !seen.has(span); depth++, span = span.span ?? ancestors.get(span)) {
+  for (let depth = 0; span && depth < 256 && !seen.has(span); depth++, span = span.span ?? ancestors.get(span) ?? liveParent(span)) {
     seen.add(span);
     const kind = span.attributes?.["gen_ai.span.kind"] ?? span.attributes?.["fi.span.kind"];
     if (kind !== undefined && kind !== null && !DEDUP_KINDS.has(kind)) break;

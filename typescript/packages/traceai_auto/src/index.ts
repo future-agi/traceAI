@@ -7,7 +7,7 @@ import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCre
 import { createOutgoingPrivacy, noteOutgoingSpanStart } from "./outgoing-privacy";
 import { installOutgoingPropagation } from "./outgoing-node";
 import { enableLibraries, IntegrationStatus, inventory } from "./libraries";
-import { FetchHook, patchFetch, trackCoverage } from "./wire/fetch";
+import { endCoverage, FetchHook, patchFetch, trackCoverage } from "./wire/fetch";
 import { removePromiseObservation } from "./wire/promise-node";
 import { captureSecrets, SpanResult } from "./wire/core";
 import { withDeadline } from "./deadline";
@@ -326,6 +326,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // span first so that its detached export copy cannot erase that loss signal.
     const mappedEnd = processor.onEnd.bind(processor);
     processor.onEnd = span => {
+      endCoverage(span);
       if (gate && !gate.admit(span)) return;
       rememberSpanValueLimit(span);
       // Only sampled spans are exported; a span that is recorded but not sampled never is.
