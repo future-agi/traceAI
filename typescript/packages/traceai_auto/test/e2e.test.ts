@@ -262,7 +262,8 @@ test("real OTel 1.30.1 provider exports parent/child through production OTLP wit
   expect(collected[0].resourceSpans[0].scopeSpans[0].scope).toMatchObject({ name: "legacy-app", version: "1.2.3" });
 });
 test.each(["--import", "-r"])("pure ESM incoming HTTP joins the remote parent through the application's propagator with only wire,http enabled (%s)", async flag => {
-  const output = await child("incoming.mjs", ["-r", resolve(apps, "app-otel.cjs"), flag, "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
+  // The application registers a context manager and propagator, but no tracer provider.
+  const output = await child("incoming.mjs", ["-r", resolve(apps, "app-otel.cjs"), flag, "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", APP_TRACE: "off", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
   expect(JSON.parse(output.stdout)).toMatchObject({ name: "http", status: "instrumented" });
   const incoming = allSpans().filter(span => span.kind === 2), wire = wireSpans()[0];
   expect(incoming).toHaveLength(1); expect(allSpans()).toHaveLength(2);
@@ -338,7 +339,8 @@ test("an application-installed propagator remains unchanged", async () => {
 });
 test("incoming HTTP joins the remote W3C parent through the application's propagator and keeps the trace for AI children", async () => {
   // The agent registers no propagator; the application's own one extracts the parent.
-  await child("incoming.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
+  // The application has no tracer provider: beside one, the agent leaves HTTP to it.
+  await child("incoming.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "wire,http", APP_TRACE: "off", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-01" });
   const serverSpan = allSpans().find(s => s.kind === 2), wire = wireSpans()[0];
   expect(serverSpan.traceId).toBe("11111111111111111111111111111111"); expect(serverSpan.parentSpanId).toBe("2222222222222222");
   expect(wire.traceId).toBe(serverSpan.traceId); expect(wire.parentSpanId).toBe(serverSpan.spanId);
@@ -386,6 +388,17 @@ test("with the application's provider first, Future AGI receives AI spans only: 
   const kinds = info.appSpans.map((span: any) => span.kind).sort();
   expect(kinds).toEqual([0, 1, 2]);
   expect(info.appSpans.some((span: any) => span.layer === "wire")).toBe(false);
+});
+test("beside an application provider with its own HTTP instrumentation, listing http keeps the application's SERVER spans and warns once", async () => {
+  const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true", FI_INSTRUMENTATIONS: "wire,http" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  // The application's exporter keeps its own SERVER, CLIENT and custom spans.
+  expect(info.appSpans.map((span: any) => span.kind).sort()).toEqual([0, 1, 2]);
+  // Future AGI receives the two AI spans and no SERVER span; the agent's HTTP instrumentation is not installed.
+  expect(allSpans()).toHaveLength(2); expect(wireSpans()).toHaveLength(2);
+  expect(info.http).toMatchObject({ name: "http", status: "disabled" });
+  expect(output.stderr.split("\n").filter(line => line.includes("[traceai:auto]"))).toHaveLength(1);
+  expect(output.stderr).toContain("HTTP");
 });
 test("the forwarding switch sends application spans again, and FI_HIDE_* hides other AI tracers' content keys", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"],

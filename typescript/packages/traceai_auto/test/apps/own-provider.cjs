@@ -78,6 +78,7 @@ function globals() {
       registered: app?.registered ?? null, work,
       appSpans: spans.map(span => ({ name: span.name, kind: span.kind, layer: span.attributes['traceai.capture.layer'] ?? null })),
       appContent: spans.some(span => span.attributes['ai.response.text'] === PRIVATE.answer),
+      http: require('@traceai/auto').report().integrations.find(integration => integration.name === 'http') ?? null,
     }));
   });
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -13,7 +13,8 @@ const exporter = { export(batch, done) { spans.push(...batch); done({ code: 0 })
 const sampler = process.env.APP_SAMPLER === 'off' ? { sampler: new AlwaysOffSampler() } : {};
 const provider = new BasicTracerProvider({ resource: resourceFromAttributes({ 'service.name': 'own-app' }), ...sampler, spanProcessors: [new SimpleSpanProcessor(exporter)] });
 const registered = {
-  trace: trace.setGlobalTracerProvider(provider),
+  // APP_TRACE=off: a context manager and propagator only, with no tracer provider.
+  trace: process.env.APP_TRACE === 'off' ? false : trace.setGlobalTracerProvider(provider),
   context: context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()),
   propagation: propagation.setGlobalPropagator(new W3CTraceContextPropagator()),
   // A complete no-op meter provider: instrumentations create their histograms on it.
