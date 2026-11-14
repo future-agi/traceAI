@@ -50,7 +50,7 @@ module TraceAI
           next unless Codec.type(name) == String && Codec.type(value) == String
           key = name.downcase
           next unless credential?(key)
-          bare = value.sub(/\A\S+\s+/, '')
+          bare = leaf(key).end_with?('authorization') ? value.sub(/\A\S+\s+/, '') : value
           next if session_id && (value == session_id || bare == session_id)
           Auto.register_secret(value)
           Auto.register_secret(bare) if leaf(key).end_with?('authorization')

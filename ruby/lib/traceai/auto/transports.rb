@@ -448,10 +448,11 @@ module TraceAI
       private
       def join_headers2(request, headers)
         return super unless Auto.active?
+        session_id = Auto.current_session_id
         observed = Enumerator.new do |output|
           headers.each do |name, value|
             begin
-              Privacy.observe_request({name => value}, '')
+              Privacy.observe_request({name => value}, '', session_id)
             rescue StandardError => e
               Auto.debug(e)
             end
