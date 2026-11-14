@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 # Dependency-free: this API is available before Bundler and before lazy init.
+require_relative 'config'
 module TraceAI
   module Auto
     class SecretRegistry
@@ -17,8 +18,10 @@ module TraceAI
       def register(value)
         return false unless Object.instance_method(:class).bind_call(value) == String
         # Copy native strings; never retain mutable application-owned storage or
-        # invoke a stringifier/getter on arbitrary application objects.
-        secret = String.new(value).encode('UTF-8', invalid: :replace, undef: :replace)
+        # invoke a stringifier/getter on arbitrary application objects. Read the
+        # copy as UTF-8 whatever the process locale tagged it (under LANG=C an
+        # environment value is US-ASCII), so that it matches exported UTF-8 text.
+        secret = Config.utf8(String.new(value))
         return false if secret.length < 8
         secret.freeze
         @mutex.synchronize do
@@ -39,7 +42,9 @@ module TraceAI
       end
 
       def seed(config, env = ENV)
-        env.each { |name, value| register(value) if ENV_NAME.match?(name) }
+        # A locale-tagged name with non-ASCII bytes is not a valid string for a
+        # regular expression until it is read as UTF-8.
+        env.each { |name, value| register(value) if ENV_NAME.match?(Config.utf8(name)) }
         # Resolution selects a pair for authentication, not for privacy. Every FI
         # value read from a recognized source remains a secret, including ignored
         # halves and complete lower-priority pairs. Config owns immutable copies.

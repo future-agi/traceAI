@@ -441,7 +441,18 @@ module TraceAI
         attributes = Codec.type(original) == ExportResource ? field(original, :attributes) : ivar(original, :@attributes)
         supplied = Codec.type(resource) == ExportResource ? field(resource, :attributes) : ivar(resource, :@attributes)
         raise Limit unless (attributes.nil? || Codec.type(attributes) == Hash) && (supplied.nil? || Codec.type(supplied) == Hash)
-        (attributes || {}).merge(supplied || {})
+        utf8_attributes((attributes || {}).merge(supplied || {}))
+      end
+      # An application's SDK resource holds environment values (service.name,
+      # OTEL_RESOURCE_ATTRIBUTES, the command line) as the SDK read them. Under
+      # LANG=C those are tagged US-ASCII even when they hold UTF-8, and no
+      # sanitizer check can read such a string. Read names and values as UTF-8
+      # first, as the agent does for its own configuration.
+      def utf8_attributes(attributes)
+        raise Limit if attributes.size > Budget::MAX_NODES
+        attributes.each_with_object({}) do |(key, value), result|
+          result[Config.utf8(key)] = Codec.type(value) == Array ? value.first(Budget::MAX_NODES + 1).map { |item| Config.utf8(item) } : Config.utf8(value)
+        end
       end
       # Failed span content must not erase independently safe service/custom
       # resource identity or the span name. Each recovery has its own bounded
