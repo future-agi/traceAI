@@ -370,6 +370,47 @@ class AgentE2ETest {
         assertEquals(value.equals("maybe") ? 1 : 0, warnings.size(), log);
         assertTrue(log.lines().noneMatch(line -> line.contains("[traceai-auto]") && line.contains("maybe")), log);
     }
+    /** A content switch alone, with no error switch, also keeps the provider's error text from the status description and the payload. */
+    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_INPUTS", "FI_HIDE_OUTPUT_TEXT"})
+    void aContentSwitchAloneWithholdsTheProviderErrorText(String name) throws Exception {
+        status = 401; payload = ("{\"error\":{\"message\":\"" + PRIVATE_ERROR + "\"}}").getBytes(StandardCharsets.UTF_8);
+        run("jdk", "basic", Map.of(name, "true"), true);
+        assertEquals(1, spans.size(), spans.toString()); Map<String,Object> span = spans.get(0);
+        assertEquals("401", attributes(span).get("error.type"));
+        assertEquals("", WireCore.get(span.get("status"), "message"), name + ": the status description is withheld");
+        assertFalse(WireCore.dump(collectorPayloads).contains(PRIVATE_ERROR), name + ": no part of the exported span carries the error text");
+    }
+    /**
+     * A stream that fails partway, with only FI_HIDE_ERROR_DETAILS on: output.value and output.mime_type of the failed call are
+     * dropped. The partial output messages stay under the output switches, so they are still sent.
+     */
+    @Test void errorDetailsSwitchDropsTheOutputValueOfAFailedCallButNotItsPartialMessages() throws Exception {
+        payload = (TransportSafetyTest.chunk("partial")).getBytes(StandardCharsets.UTF_8);
+        try (var socket = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            socket.setSoTimeout(15000); var worker = Executors.newSingleThreadExecutor();
+            try {
+                var served = worker.submit(() -> {
+                    try (var connection = socket.accept()) {
+                        connection.setSoTimeout(5000); var input = connection.getInputStream(); var head = new java.io.ByteArrayOutputStream(); int tail = 0;
+                        while (head.size() < 32768 && tail != 0x0d0a0d0a) { int b = input.read(); if (b < 0) throw new java.io.EOFException(); head.write(b); tail = tail << 8 | b; }
+                        var length = java.util.regex.Pattern.compile("(?im)^Content-Length: *([0-9]+)").matcher(head.toString(StandardCharsets.US_ASCII));
+                        if (!length.find()) throw new AssertionError("Missing request length");
+                        sentRequest = new String(input.readNBytes(Integer.parseInt(length.group(1))), StandardCharsets.UTF_8);
+                        var output = connection.getOutputStream(); output.write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " + (payload.length + 100) + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII)); output.write(payload); output.flush();
+                    }
+                    return true;
+                });
+                run("okhttp", "verify_transport", Map.of("FI_HIDE_ERROR_DETAILS", "true", "TRACEAI_TEST_PROXY_PORT", String.valueOf(socket.getLocalPort())), true);
+                assertTrue(served.get(2, TimeUnit.SECONDS)); assertEquals(1, spans.size());
+                var span = spans.get(0); Map<String,Object> attrs = attributes(span);
+                assertEquals(2, ((Number)WireCore.get(span.get("status"), "code")).intValue(), "the call failed");
+                assertFalse(attrs.containsKey("output.value"), attrs.toString());
+                assertFalse(attrs.containsKey("output.mime_type"), attrs.toString());
+                assertEquals("partial", attrs.get("gen_ai.output.messages.0.message.content"), "partial output messages stay under the output switches");
+                assertTrue(attrs.containsKey("input.value"), "the request is still captured");
+            } finally { worker.shutdownNow(); }
+        }
+    }
     @Test void errorDetailsSwitchOffLetsTheProviderErrorTextReachFutureAgi() throws Exception {
         status = 401; payload = ("{\"error\":{\"message\":\"" + PRIVATE_ERROR + "\"}}").getBytes(StandardCharsets.UTF_8);
         run("jdk", "basic", Map.of("FI_HIDE_ERROR_DETAILS", "false"), true);

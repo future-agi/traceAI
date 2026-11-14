@@ -178,6 +178,16 @@ class HideSwitchValuesTest {
         for (String key : ERROR_KEYS) assertTrue(TraceAIAuto.hidden(key, null, config), name + " " + key);
         assertFalse(config.masking.isHideErrorDetails(), "the content switch is not the error details switch");
     }
+    /** The status description is withheld by the error switch and by each of the eight content switches, and by nothing else. */
+    @ParameterizedTest @ValueSource(strings = {"FI_HIDE_ERROR_DETAILS", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES",
+        "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_INPUT_IMAGES", "FI_HIDE_LLM_INVOCATION_PARAMETERS"})
+    void everyContentSwitchAndTheErrorSwitchHideTheErrorText(String name) {
+        assertTrue(TraceAIAuto.hidesErrorText(env(name, "true")), name);
+    }
+    @Test void noSwitchLeavesTheErrorTextVisible() {
+        assertFalse(TraceAIAuto.hidesErrorText(env("FI_HIDE_ERROR_DETAILS", "false")));
+        assertFalse(TraceAIAuto.hidesErrorText(env("FI_SAMPLE_RATE", "1")));
+    }
     /**
      * The warning prints the file's path through the same masking as the doctor report: a credential the agent knows
      * is never printed, even inside a path.
