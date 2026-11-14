@@ -94,6 +94,14 @@ class AutoConfig:
         return out
 
 
+def _switch_variables() -> frozenset:
+    """The environment variables of the privacy switches, the TraceConfig settings that are on or off."""
+    from fi_instrumentation.instrumentation.config import TraceConfig
+
+    return frozenset(f.metadata["env_var"] for f in fields(TraceConfig)
+                     if f.metadata.get("env_var") and get_args(f.type)[:1] == (bool,))
+
+
 def _trace_config(file_values: Mapping[str, Any], path: Optional[Path], environ: Mapping[str, str],
                   sources: Dict[str, str]) -> Any:
     """A TraceConfig with the config file's privacy settings.
@@ -107,14 +115,18 @@ def _trace_config(file_values: Mapping[str, Any], path: Optional[Path], environ:
     for f in fields(TraceConfig):
         key = f.name.lstrip("_")
         env = f.metadata.get("env_var")
-        if env and environ.get(env) not in (None, ""):
+        switch = get_args(f.type)[:1] == (bool,)
+        raw = environ.get(env) if env else None
+        # A switch set to spaces only is unset, as TraceConfig reads it, so the file's value applies.
+        if raw not in (None, "") and not (switch and not raw.strip()):
             sources[key] = f"env {env}"
         elif key in file_values:
             value = file_values[key]
-            if get_args(f.type)[:1] == (bool,) and isinstance(value, str):
-                # The same rule as the environment: an unrecognised value hides, and an
-                # empty one is unset.
-                value = _parse_switch(value, f"{key} in {path}", None)
+            if switch and not isinstance(value, bool):
+                # The same rule as the environment: 1 and 0, as numbers too, turn it on and off, an
+                # empty value is unset, and any other value hides, with one warning that names the
+                # key and the file but not the value.
+                value = _parse_switch(value if isinstance(value, str) else str(value), f"{key} in {path}", None)
                 if value is None:
                     continue
             kwargs[key] = value
@@ -138,8 +150,11 @@ def resolve(overrides: Optional[Mapping[str, Any]] = None, environ: Optional[Map
     environ = os.environ if environ is None else environ
     overrides = {k: v for k, v in (overrides or {}).items() if v is not None}
     # File keys set by a higher-precedence source are not even read, so an invalid file
-    # value cannot block a valid argument or environment variable.
-    shadowed = set(overrides) | {key.lower()[3:] for key, value in environ.items() if key.startswith("FI_") and value}
+    # value cannot block a valid argument or environment variable. A privacy switch set to spaces
+    # only is unset, as TraceConfig reads it, so it does not hide the file's value.
+    switches = _switch_variables()
+    shadowed = set(overrides) | {key.lower()[3:] for key, value in environ.items()
+                                 if key.startswith("FI_") and value and (key not in switches or value.strip())}
     if trace_config is not None:
         shadowed.update(_privacy_keys(trace_config))
     # A partial higher-precedence pair shadows neither file key; a complete one shadows both.

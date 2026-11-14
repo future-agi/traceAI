@@ -208,7 +208,7 @@ Prompts, responses and tool content are **captured by default**, as with a manua
 | `FI_HIDE_ERROR_DETAILS` | `hide_error_details` | Error messages and stack traces |
 | `FI_PII_REDACTION` | `pii_redaction` | Pattern-based PII redaction (off by default) |
 
-Each switch takes `true`, `1`, `yes` or `on` to turn it on and `false`, `0`, `no` or `off` to turn it off, in any case. An empty value counts as unset. Any other value turns the switch on, so the content is hidden, and logs one warning that names the setting but not its value.
+Each switch takes `true`, `1`, `yes` or `on` to turn it on and `false`, `0`, `no` or `off` to turn it off, in any case, with surrounding spaces ignored. An empty value, or one of spaces only, counts as unset, so a variable left blank does not override `futureagi.toml`. Any other value turns the switch on, so the content is hidden, and logs one warning that names the setting (for `futureagi.toml`, the key and the file) but not its value. In `futureagi.toml`, write `true` or `false`, the number `1` or `0`, or a quoted value such as `"on"`; any other number also turns the switch on. A bare word such as `on` is not valid in the file, so the file cannot be read: with `fi-instrument` or `FI_AUTO_INSTRUMENT`, tracing stays off with one warning, and `fi_instrumentation.init()` raises `ConfigError`.
 
 In code, pass `config=TraceConfig(...)` to `init()`. `fi-instrument doctor` shows the value in effect for each setting and where it came from; of the keys it shows only the start of `FI_API_KEY` and whether `FI_SECRET_KEY` is set.
 
