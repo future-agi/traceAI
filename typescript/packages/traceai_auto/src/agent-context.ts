@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { context, ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
+import { context, createContextKey, ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
 import { suppressTracing } from "@opentelemetry/core";
 import { getAttributesFromContext, setMetadata, setSession, setUser } from "@traceai/fi-core";
 import { HTTP_SCOPE, incomingParent } from "./incoming-parent";
@@ -64,6 +64,27 @@ export function withContext<T>(ctx: Context, fn: () => T): T {
   return applicationContextManager() ? context.with(ctx, fn) : store.run(ctx, fn);
 }
 
+// Marks the context of one integration call. Each call gets a new context object:
+// AsyncLocalStorage.run, given the store that is already current, may skip the
+// restore when fn returns.
+const INTEGRATION_CALL = createContextKey("traceai.auto.integration_call");
+
+/**
+ * Run one patched SDK call of an integration in its own scope of the private context.
+ * Without an application context manager, a span the integration starts in the call is
+ * entered only inside this scope. The SDK's own request starts inside it, so it runs
+ * under that span, and the wire layer yields to it. When the call returns, the caller's
+ * context is back: a request the caller sends beside the call, in the same tick or while
+ * it reads a stream, starts outside the span and is captured. With an application
+ * context manager, the integration's own context.with already ends with the call.
+ */
+export function runIntegrationCall<T>(fn: () => T): T {
+  if (applicationContextManager()) return fn();
+  let scope: Context | undefined;
+  try { scope = (store.getStore() ?? ROOT_CONTEXT).setValue(INTEGRATION_CALL, true); } catch { /* The call runs as it is. */ }
+  return scope ? store.run(scope, fn) : fn();
+}
+
 /**
  * Public helpers. They run fn with a context for AI spans: in the agent's private
  * context, and through the API's context.with, which reaches the application's
@@ -109,7 +130,8 @@ function enter(parent: Context, span: Span): void {
     parents.set(span, parent);
     // Instrumentations call the API's context.with, which does nothing without
     // a context manager. Entering here makes this span the parent of the work
-    // its caller starts next, until the span ends.
+    // its caller starts next, until the span ends. Inside runIntegrationCall that
+    // is the SDK call's own work only: the scope ends when the call returns.
     store.enterWith(trace.setSpan(parent, span));
   } catch { /* Parent links are best effort and never change the application. */ }
 }

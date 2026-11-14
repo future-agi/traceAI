@@ -11,6 +11,7 @@ import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config, enabled, explicitlyEnabled, Options } from "./config";
 import { readIncomingParent } from "./incoming-parent";
+import { runIntegrationCall } from "./agent-context";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
 /** vectorOnly: the database integration traces only vector operations when the agent enables it. */
@@ -157,7 +158,9 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
           const instrumented = wrapper(original);
           return function(this: unknown, ...args: unknown[]) {
             if (!active) return Reflect.apply(original, this, args);
-            return Reflect.apply(instrumented, this, args);
+            // Without an application context manager, a span the integration starts
+            // here stays active only for this SDK call, not for the caller's next work.
+            return runIntegrationCall(() => Reflect.apply(instrumented, this, args));
           };
         });
         if (target[name] !== before) {
