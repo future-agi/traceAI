@@ -503,8 +503,8 @@ reported in the round-4/5 verdicts. `credentials.sources` and `seed_names` retai
 
 ### S1 boundary and S5 known secrets
 
-All agent-exported spans, including forwarded application/library spans, pass through a
-single sanitizer immediately before serialization on a detached snapshot. Apply catalog
+All agent-exported spans, including web request spans and any application spans the user
+opts to forward, pass through a single sanitizer immediately before serialization on a detached snapshot. Apply catalog
 recognition and hide flags to attributes/arrays, status, events, links, resource, scope and
 tracestate, not just wire content. Never invoke unknown-object stringifiers/getters; bound
 work and fail closed on errors, retaining identity/timing and dropping content. Other
@@ -728,7 +728,8 @@ remains authoritative even for projected identity/metadata.
   abort, not a transport failure. A response read to its end (EOF, or exactly its
   `Content-Length`) is complete, however the application closes it.
 - **Export-time privacy.** The S1 Privacy boundary and hide flags cover every span the agent
-  exports, including forwarded application/library spans: attributes, status, events, links,
+  exports, including web request spans and any application spans the user opts to forward:
+  attributes, status, events, links,
   resources, instrumentation scopes and tracestate, on detached snapshots.
 - **Bounded work.** Instrumentation never adds latency before the request is sent: a request
   body that cannot be copied without blocking (a stream, a pipe, a slow replay) is treated as
