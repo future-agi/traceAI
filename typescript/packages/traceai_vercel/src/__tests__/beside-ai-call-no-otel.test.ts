@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 // call is open, one plain fetch to the same chat route. The plain fetch has no AI
 // integration of its own, so its wire span is its only record. These tests pass only
 // when Future AGI receives both: the AI SDK call's model span, and the plain fetch.
+// The embedding calls are recorded as an embedding span instead of an LLM span.
 const root = resolve(__dirname, "../..");
 const auto = resolve(root, "../traceai_auto/src/register.ts");
 // The question each request carries. Neither text contains the other.
@@ -18,6 +19,7 @@ const sse = [
   { id: "chat-fixture", model: "fixture", choices: [{ index: 0, delta: { role: "assistant", content: "hello " }, finish_reason: null }] },
   { id: "chat-fixture", model: "fixture", choices: [{ index: 0, delta: { content: "world" }, finish_reason: "stop" }], usage: completion.usage },
 ].map(event => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
+const embedding = { object: "list", data: [{ object: "embedding", index: 0, embedding: [0.25, 0.5] }], model: "fixture-embedding", usage: { prompt_tokens: 4, total_tokens: 4 } };
 // What the provider received: the question of each chat request, in arrival order.
 let server: Server, url: string, collected: any[], received: string[];
 const attrs = (span: any): Record<string, any> => Object.fromEntries((span.attributes ?? []).map((item: any) => [
@@ -35,6 +37,12 @@ beforeAll(async () => {
       if (req.url === "/tracer/v1/traces") {
         collected.push(JSON.parse(body));
         res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); return;
+      }
+      if (req.url === "/v1/embeddings") {
+        // An embedding request: its question is the input text.
+        const data = JSON.parse(body);
+        received.push(String(Array.isArray(data.input) ? data.input[0] : data.input));
+        res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(embedding)); return;
       }
       if (req.url !== "/v1/chat/completions") {
         received.push(`unexpected ${req.method} ${req.url}`);
@@ -128,6 +136,49 @@ describe.each([5, 6, 7])("AI SDK v%i in an application with no OpenTelemetry of 
     // The AI SDK call arrives as its model span: an LLM span from the integration, not
     // from wire capture, with the question the application gave the SDK.
     const model = spans.filter(span => attrs(span)["traceai.capture.layer"] !== "wire" && attrs(span)["gen_ai.span.kind"] === "LLM" && carries(span, SDK_PROMPT));
+    expect({ got, modelSpan: model.length > 0 }).toEqual({ got, modelSpan: true });
+    // The plain fetch arrives as a wire span with its own question. It is found by that
+    // text, so the SDK's own request, sent a second time, could not stand in for it.
+    const plain = spans.filter(span => attrs(span)["traceai.capture.layer"] === "wire" && carries(span, PLAIN_PROMPT));
+    expect({ got, plainFetchWireSpan: plain.length > 0 }).toEqual({ got, plainFetchWireSpan: true });
+  }, 60000);
+
+  // The same shape for the AI SDK's embedding and object calls.
+  test.each([
+    ["in the same tick as an embed call", "embedding", "embed"],
+    ["in the same tick as an embedMany call", "embedding", "embedMany"],
+    ["in the same tick as a generateObject call", "model", "generateObject"],
+    ["while the application reads a streamObject stream", "model", "streamObject"],
+  ])("a plain fetch AI request sent %s is not lost, and the call keeps its %s span", async (_when, _span, method) => {
+    const embeds = method.startsWith("embed");
+    // First the application without the agent: both of its requests reach the provider
+    // and both answers come back. A failure up to here is in the fixture, not a lost span.
+    const baseline = await child(major, method, false);
+    expect(baseline.application).toEqual({ text: embeds ? "0.25 0.5" : "hello world", plain: "hello world", providerCalls: 1 });
+    expect([...received].sort()).toEqual(BOTH);
+    expect(collected).toHaveLength(0);
+    received = [];
+    // Then with the agent. The application behaves the same, and the provider gets both
+    // requests, each once.
+    const actual = await child(major, method, true);
+    expect(actual.application).toEqual(baseline.application);
+    expect([...received].sort()).toEqual(BOTH);
+    // The case under test: the agent is on with the AI SDK integration loaded, and the
+    // application still has no context manager.
+    expect({ active: actual.active, vercel: actual.vercel, contextManager: actual.contextManager })
+      .toEqual({ active: true, vercel: "instrumented", contextManager: "NoopContextManager" });
+
+    // What Future AGI received, shown when one of the two checks below fails.
+    const spans = exportedSpans();
+    const kindOf = (span: any) => attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"];
+    const got = spans.map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kindOf(span)})`);
+    const carries = (span: any, text: string) => JSON.stringify(span).includes(text);
+    // The AI SDK call arrives as its span from the integration, not from wire capture.
+    // An object call's LLM span carries the question the application gave the SDK. An
+    // embedding call's span is found by its kind alone: the plain fetch is a chat request
+    // that only wire capture records, so it cannot stand in for it.
+    const model = spans.filter(span => attrs(span)["traceai.capture.layer"] !== "wire"
+      && (embeds ? kindOf(span) === "EMBEDDING" : kindOf(span) === "LLM" && carries(span, SDK_PROMPT)));
     expect({ got, modelSpan: model.length > 0 }).toEqual({ got, modelSpan: true });
     // The plain fetch arrives as a wire span with its own question. It is found by that
     // text, so the SDK's own request, sent a second time, could not stand in for it.
