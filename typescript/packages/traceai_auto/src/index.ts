@@ -332,8 +332,10 @@ export function init(options: Options = {}): TracerProvider | undefined {
     };
     if (config.wireCapture && enabled("wire", config) && typeof globalThis.fetch === "function") {
       // A captured AI request marks its trace, so its SERVER span may pass the gate.
+      // On the AI-only route the wire layer yields only to model spans the agent made:
+      // an application's own model span never reaches Future AGI.
       agent.fetch = patchFetch(config.wireMaxBodyBytes, emit, [config.apiKey, config.secretKey].filter((v): v is string => !!v),
-        gate ? parent => gate.note(trace.getSpanContext(parent)?.traceId) : undefined);
+        gate ? parent => gate.note(trace.getSpanContext(parent)?.traceId) : undefined, route && !forwarding);
       agent.statuses.push({ name: "wire", status: "instrumented" });
     } else agent.statuses.push({ name: "wire", status: "disabled" });
     agent.active = true;

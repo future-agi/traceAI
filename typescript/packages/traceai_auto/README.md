@@ -72,7 +72,7 @@ The **Try it with OpenAI** example, as it appears in Future AGI (a real run with
 
 - **Model calls without per-call wrappers.** OpenAI instrumentation is included. Recognized AI requests through the process's global `fetch` are also captured, including compatible gateways.
 - **More context from installed integrations.** Dedicated packages can add framework, agent, tool, retrieval and database spans. They retain their own method/version limits; auto-registration does not expand their coverage.
-- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression.
+- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression. On the default route it yields only to model spans the agent made, since your own model spans stay with your provider.
 - **Your OpenTelemetry setup stays yours.** The agent registers no global tracer provider, context manager or propagator, and by default never adds a processor to your provider (the outgoing propagation opt-in below adds one that only observes span starts). An SDK you start before or after the preload registers normally and its exporters keep receiving your spans. AI spans still parent under your active span.
 - **Standard OpenTelemetry.** Send to Future AGI by default, or use an [application-owned provider/exporter](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#bring-your-own-opentelemetry-destination) without FI credentials.
 

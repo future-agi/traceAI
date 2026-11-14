@@ -108,7 +108,9 @@ partial output; consumer cancellation is OK with `traceai.wire.incomplete = true
 
 Wire **span creation** is skipped for OTel-suppressed contexts, nested captures, and
 LLM/EMBEDDING/RERANKER/GUARDRAIL ancestors, even through intermediate native SDK
-spans. Outgoing credential observation is never skipped by these rules: fetch reads
+spans. On the AI-only route only ancestors made by the agent's tracers count: a model
+span on the application's own provider never reaches Future AGI, so the call is
+captured as a wire span under it. Outgoing credential observation is never skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span

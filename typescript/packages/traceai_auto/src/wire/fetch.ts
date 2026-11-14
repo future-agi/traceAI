@@ -6,7 +6,7 @@ import { decodeNodeBody } from "./encoding-node";
 import { observePromise, preparePromiseObservation } from "./promise-node";
 import type { SpanResult } from "./core";
 import { observeOutgoing } from "./observe-node";
-import { activeContext, withContext } from "../agent-context";
+import { activeContext, isAgentSpan, withContext } from "../agent-context";
 export type { FetchHook } from "./fetch-runtime";
 const IN_FLIGHT = createContextKey("traceai.auto.wire.in_flight");
 const DEDUP_KINDS = new Set(["LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"]);
@@ -18,6 +18,10 @@ export function trackCoverage(span: object, parent: Context): void {
   const active = trace.getSpan(parent);
   if (active) ancestors.set(span, active);
 }
+// Which model spans wire capture yields to. On the AI-only route only spans the
+// agent made reach Future AGI, so a model span on the application's own provider
+// does not hide the call. Elsewhere every model span shares the destination.
+let yieldsTo: (span: any) => boolean = () => true;
 function wireAllowed(ctx: Context, phase: "guard" | "inspect" | "request"): boolean {
   const responsibility = autoModelResponsibility(ctx);
   if (responsibility) return autoModelWireAllowed(responsibility.operation, responsibility.independentCoverage, phase);
@@ -29,15 +33,17 @@ function wireAllowed(ctx: Context, phase: "guard" | "inspect" | "request"): bool
     seen.add(span);
     const kind = span.attributes?.["gen_ai.span.kind"] ?? span.attributes?.["fi.span.kind"];
     if (kind !== undefined && kind !== null && !DEDUP_KINDS.has(kind)) break;
-    if (hasAutoModelCoverage(span) || DEDUP_KINDS.has(kind)) return false;
+    if ((hasAutoModelCoverage(span) || DEDUP_KINDS.has(kind)) && yieldsTo(span)) return false;
   }
   return true;
 }
 export function shouldSkip(ctx: Context, consultOperation = true): boolean {
   return isTracingSuppressed(ctx) || !!ctx.getValue(IN_FLIGHT) || !wireAllowed(ctx, consultOperation ? "inspect" : "guard");
 }
-/** onCapture runs when a supported AI request is captured, with its parent context. */
-export function patchFetch(max: number, emit: (result: SpanResult, parent: Context, start: number, end: number) => void, secrets: string[] = [], onCapture?: (parent: Context) => void) {
+/** onCapture runs when a supported AI request is captured, with its parent context.
+ * agentSpansOnly: yield only to model spans made by agent-bound tracers. */
+export function patchFetch(max: number, emit: (result: SpanResult, parent: Context, start: number, end: number) => void, secrets: string[] = [], onCapture?: (parent: Context) => void, agentSpansOnly = false) {
+  yieldsTo = agentSpansOnly ? span => isAgentSpan(span) || (!!span?.span && typeof span.span === "object" && isAgentSpan(span.span)) : () => true;
   preparePromiseObservation();
   // The application's context manager when it has one, otherwise the agent's private context.
   return createFetchHook(max, emit, { active: () => activeContext(), skip: parent => shouldSkip(parent, false),
