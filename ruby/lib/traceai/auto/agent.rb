@@ -332,6 +332,7 @@ module TraceAI
       def start(arguments, how)
         return @provider || self if @initializing && @initializing_thread.equal?(Thread.current)
         INIT_MUTEX.synchronize do
+          retired = false
           if @initialized
             unless how == :explicit && @provisional
               if how == :explicit && !@repeat_logged
@@ -341,11 +342,13 @@ module TraceAI
               return @provider || self
             end
             retire_provisional_start
+            retired = true
           end
           waiting = @pending
           @initialized = true; @initializing = true; @initializing_thread = Thread.current; @pending = false
           @provisional = %i[attached report].include?(how)
           result = initialize_once(arguments)
+          clear_retired_start if retired && !(@active && result.equal?(@provider))
           # A report that finds nothing to start leaves the agent waiting, as
           # it was, for the application's provider or the first AI request.
           if how == :report && !@active && waiting
@@ -358,8 +361,12 @@ module TraceAI
         end
       end
       # The first AI request closes the provisional window (see start).
+      # Under INIT_MUTEX, so that an explicit init that is replacing the start
+      # finishes first, and one that has not begun finds the start final.
       def finalize_start
-        @provisional = false
+        return unless @provisional
+        return @provisional = false if @initializing_thread.equal?(Thread.current)
+        INIT_MUTEX.synchronize { @provisional = false }
       end
       # An explicit init replaces a provisional start. Processors cannot be
       # removed from an SDK provider, so the agent switches its own off in
@@ -373,12 +380,18 @@ module TraceAI
         rescue StandardError => e
           debug(e)
         end
+        # The old provider, tracer and processor stay in place until the new
+        # start assigns its own (see start): a request in flight never meets a
+        # gap with nothing to export to.
+      rescue StandardError => e
+        debug(e)
+      end
+      # A replacing start that did not become active leaves nothing behind.
+      def clear_retired_start
         @active = false
         @provider = @own_provider = @tracer = @processor = @exporter = nil
         @owned_processors = []; @borrowed_flush_targets = []; @attached_processors = []; @owned_exporters = []
         @snapshots_every_span = false
-      rescue StandardError => e
-        debug(e)
       end
       def sdk_host_provider
         return unless defined?(OpenTelemetry::SDK::Trace::TracerProvider)
@@ -425,6 +438,7 @@ module TraceAI
           @sdk_keys ||= [OpenTelemetry::Context.create_key('traceai.wire.capture'), OpenTelemetry::Context.create_key('traceai.context.attributes')]
           @capture_key, @attributes_key = @sdk_keys
           resource = OpenTelemetry::SDK::Resources::Resource.create(resource_attributes)
+          @own_provider = nil
           if candidate
             raise ArgumentError unless candidate.is_a?(OpenTelemetry::SDK::Trace::TracerProvider)
             @provider = candidate
