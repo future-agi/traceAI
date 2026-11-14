@@ -103,9 +103,26 @@ internal sealed class AutoConfig
     }
     private void Set(string key,string? value) { if(value!=null) Values["FI_"+key]=value; }
     internal string Get(string key) => Values.GetValueOrDefault("FI_"+key)??"";
-    internal bool Bool(string key) => Get(key).ToLowerInvariant() is "true" or "1" or "yes";
-    /// <summary>Null when neither the environment nor the file sets the key.</summary>
-    internal bool? OptionalBool(string key) => string.IsNullOrWhiteSpace(Get(key)) ? null : Bool(key);
+    /// <summary>Environment and file values are trimmed and compared case-insensitively, as
+    /// TraceConfig reads FI_HIDE_ERROR_DETAILS: true, 1 or yes is true; false, 0 or no is
+    /// false; anything else is unset.</summary>
+    private bool? ParseBool(string key) => Get(key).Trim().ToLowerInvariant() switch
+    {
+        "true" or "1" or "yes" => true,
+        "false" or "0" or "no" => false,
+        _ => null,
+    };
+    internal bool Bool(string key) => ParseBool(key) == true;
+    /// <summary>Null when neither the environment nor the file sets the key to a recognised
+    /// value, so the caller's derived default applies. An unrecognised value is ignored with
+    /// one warning that names the variable, never the value.</summary>
+    internal bool? OptionalBool(string key)
+    {
+        var value = ParseBool(key);
+        if (value == null && !string.IsNullOrWhiteSpace(Get(key)))
+            TraceAIAuto.Warn("unrecognised-" + key, "Ignoring FI_" + key + "; use true, false, 1, 0, yes or no.");
+        return value;
+    }
     internal bool Disabled => Values.GetValueOrDefault("OTEL_SDK_DISABLED")?.ToLowerInvariant() == "true";
     internal bool HasCredentials => !string.IsNullOrWhiteSpace(Get("API_KEY")) && !string.IsNullOrWhiteSpace(Get("SECRET_KEY"));
     internal int MaxBody => int.TryParse(Get("WIRE_MAX_BODY_BYTES"),out var n) && n >= 0 ? n : 4194304;

@@ -516,8 +516,9 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
             HideInputText=inputText, HideOutputText=outputText,
             HideInputImages=config.Bool("HIDE_INPUT_IMAGES"), HideEmbeddingVectors=config.Bool("HIDE_EMBEDDING_VECTORS"),
             HideLlmInvocationParameters=config.Bool("HIDE_LLM_INVOCATION_PARAMETERS"),
-            // As in TraceConfig: an explicit FI_HIDE_ERROR_DETAILS wins; otherwise any content
-            // hide flag also hides error text, because provider errors can echo the prompt.
+            // As in TraceConfig: a recognised FI_HIDE_ERROR_DETAILS value wins; when it is unset or
+            // unrecognised, any content hide flag also hides error text, because provider errors
+            // can echo the prompt.
             HideErrorDetails=config.OptionalBool("HIDE_ERROR_DETAILS")??(inputs||outputs||inputMessages||outputMessages||inputText||outputText),
             Base64ImageMaxLength=int.TryParse(config.Get("BASE64_IMAGE_MAX_LENGTH"),out var max)?Math.Max(0,max):32000
         };

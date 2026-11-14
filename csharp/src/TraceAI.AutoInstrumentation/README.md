@@ -30,9 +30,16 @@ Once on, every installed AI integration below is traced with content captured by
 default; the `FI_HIDE_*` switches hide it. Future AGI receives only the AI spans,
 masked by the shared privacy catalog, and the incoming web request spans of requests
 that made an AI call (set `FI_DISABLED_INSTRUMENTATIONS=aspnetcore` to send none).
-The application's own OpenTelemetry provider, its sampling and its other spans are
-left untouched. The hook does set these process-wide library switches when the
-matching integration is enabled, after it has started successfully:
+The application's own OpenTelemetry provider keeps its sampled flag, its exports and
+its downstream trace propagation unchanged, and the hook writes no tags to the
+application's activities. On sources the application also follows (the
+`Microsoft.AspNetCore` web request source, and AI sources it subscribes to), the
+hook votes record-only, so those activities are created with
+`IsAllDataRequested` set even when the application's sampler did not sample them:
+the application's processors and instrumentation callbacks then also run for those
+requests, while its exporters still skip them. The hook also sets these process-wide
+library switches when the matching integration is enabled, after it has started
+successfully:
 `OpenAI.Experimental.EnableOpenTelemetry`,
 `Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics`, and
 `Azure.Experimental.EnableActivitySource` (which turns on activity sources in every
@@ -143,7 +150,10 @@ path, including flattened message attributes and audio transcript text. Their
 lower-case file equivalents work too (`hide_inputs = true`, etc.). As in
 `TraceConfig`, error details are hidden whenever any input or output content flag
 is set, because provider error text can repeat the prompt; an explicit
-`FI_HIDE_ERROR_DETAILS=true` or `false` overrides that. Hidden error details keep
+`FI_HIDE_ERROR_DETAILS` of `true`, `1` or `yes` (hide) or `false`, `0` or `no` (show)
+overrides that. Values are trimmed and case-insensitive; any other value is ignored
+with a warning that names the variable, so error details then follow the content
+flags. Hidden error details keep
 the status code and `error.type` but drop the status description, `error.message`,
 `exception.message`, `exception.stacktrace` and `otel.status_description` on every
 span, including the provider's error text on HTTP client spans. Agent-created
@@ -316,7 +326,9 @@ only. No blanket outgoing HTTP instrumentation is installed: the wire layer list
 to the HTTP client's request, response and exception events, which create no
 Activity, so a request made without an ambient Activity gets no `traceparent` or
 `tracestate` header because of the agent. Inside an existing Activity the runtime
-sends those headers as it does without the agent. Framework AGENT/CHAIN/TOOL spans allow child
+sends those headers as it does without the agent. Calls made through AI libraries
+whose telemetry the agent enables run inside that library's span, so they carry that
+span's trace headers to the provider. Framework AGENT/CHAIN/TOOL spans allow child
 wire capture; model/embedding/reranker/guardrail spans suppress it through the
 entire ancestor chain, even with intermediate SDK-native client/retry spans. The
 agent marks covered model activities and passively tracks native descendants,
@@ -508,9 +520,14 @@ supplied destinations; neither mode disposes or replaces a host provider. Existi
 host exporters keep working; overlapping host source subscriptions may
 intentionally export the same activity to their own destinations. An activity takes
 the most permissive vote of all listeners, so the agent's own provider only ever
-asks for recording, never for the sampled flag: the application's sampler alone
-decides what the application records, exports and propagates downstream, and the
-application's exporters see the same sampled flags as without the agent. The
+votes record-only, never for the sampled flag: the application's sampler alone
+decides the sampled flag, what the application exports and what it propagates
+downstream, and the application's exporters see the same sampled flags as without
+the agent. Record-only is still a vote to record: on sources the application also
+follows, activities its sampler did not sample are created with `IsAllDataRequested`
+set, so the application's processors and instrumentation callbacks (such as `Filter`
+and `Enrich`) also run for them; its export processors skip them because they are
+not sampled. The
 agent's batch processor makes the Future AGI decision itself, the same for every span
 of a trace. With a supplied provider, the application's sampled flag also gates the
 agent's added destination.
