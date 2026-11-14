@@ -31,6 +31,21 @@ export interface PgVectorInstrumentationConfig extends InstrumentationConfig {
   vectorOnly?: boolean;
 }
 
+// pgvector-only distance operators: cosine, L1, Hamming and Jaccard.
+const PGVECTOR_OPERATOR = /<=>|<\+>|<~>|<%>/;
+// A cast to, or constructor of, a pgvector type. tsvector is full-text search.
+const PGVECTOR_TYPE = /::\s*(?:vector|halfvec|sparsevec)\b|\b(?:vector|halfvec|sparsevec)\s*\(/i;
+// L2 and inner-product distance share their operators with PostGIS and pg_trgm.
+const SHARED_OPERATOR = /<->|<#>/;
+const OTHER_DISTANCE = /\bst_\w+\s*\(|::\s*(?:geometry|geography|box2d|box3d|box|point|polygon|circle)\b|\b(?:strict_word_|word_)?similarity\s*\(|(?:<->|<#>)\s*'(?!\s*\[)/i;
+
+/** vectorOnly: a pgvector query, not full-text, PostGIS or trigram distance. */
+function vectorOnlyQuery(text: unknown): boolean {
+  if (typeof text !== "string" || !text) return false;
+  if (PGVECTOR_OPERATOR.test(text) || PGVECTOR_TYPE.test(text)) return true;
+  return SHARED_OPERATOR.test(text) && !OTHER_DISTANCE.test(text);
+}
+
 export class PgVectorInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
@@ -112,7 +127,7 @@ export class PgVectorInstrumentation extends InstrumentationBase {
       if (instrumentation.vectorOnly) {
         const queryText = typeof args[0] === "string" ? args[0] : args[0]?.text;
         // Non-vector queries keep the driver's own call and return value.
-        if (!instrumentation._isVectorSearchQuery(queryText)) return originalQuery.apply(this, args);
+        if (!vectorOnlyQuery(queryText)) return originalQuery.apply(this, args);
       }
       return instrumentation._wrapQuery(this, originalQuery, args);
     };
