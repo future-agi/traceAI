@@ -380,6 +380,36 @@ test("an application NodeSDK started after the preload registers its globals and
   // The AI span still parents under the application's active span.
   expect(wireSpans()[0].traceId).toBe(info.work.traceId); expect(wireSpans()[0].parentSpanId).toBe(info.work.spanId);
 });
+test("an application span created inside an AI call keeps the AI trace id and has a parent that only Future AGI receives", async () => {
+  // The application starts its own SDK, then makes one OpenAI call whose fetch creates
+  // a span of its own. The control runs the same application without the preload.
+  const run = async (args: string[]) => JSON.parse((await child("inside-ai-call.cjs", args, { FI_INSTRUMENTATIONS: "openai" })).stdout.trim().split("\n").at(-1)!).appSpans;
+  // Each span the application's backend received, by name, with its parent's name as that backend shows it.
+  const shape = (spans: any[]) => spans.map(span => ({ name: span.name, parent: span.parentSpanId === null ? null : spans.find(other => other.spanId === span.parentSpanId)?.name ?? "not received" }));
+  const outside = (spans: any[]) => shape(spans).filter(span => span.name !== "app-provider-request");
+  const control = await run([]);
+  expect(allSpans()).toHaveLength(0);
+  expect(shape(control)).toEqual([
+    { name: "app-before", parent: "app-request" }, { name: "app-provider-request", parent: "app-request" },
+    { name: "app-after", parent: "app-request" }, { name: "app-request", parent: null },
+  ]);
+  const app = await run(["--import", "@traceai/auto/register"]);
+  expect(requests).toBe(2);
+  // Spans created outside the AI call reach the application's backend as without the agent: same names, parents and count.
+  expect(app).toHaveLength(control.length);
+  expect(outside(app)).toEqual(outside(control));
+  // Future AGI receives the AI span and none of the application's spans.
+  expect(allSpans()).toHaveLength(1);
+  const ai = allSpans()[0], aiAttributes = attrs(ai);
+  expect(aiAttributes["gen_ai.span.kind"] ?? aiAttributes["fi.span.kind"]).toBe("LLM");
+  for (const span of app) { expect(ai.spanId).not.toBe(span.spanId); expect(ai.name).not.toBe(span.name); }
+  const request = app.find((span: any) => span.name === "app-request"), inside = app.find((span: any) => span.name === "app-provider-request");
+  expect(ai.traceId).toBe(request.traceId); expect(ai.parentSpanId).toBe(request.spanId);
+  // The span created inside the call keeps the AI span's trace id. Its parent is the AI span,
+  // which the application's backend never received.
+  expect(inside.traceId).toBe(ai.traceId); expect(inside.parentSpanId).toBe(ai.spanId);
+  expect(app.map((span: any) => span.spanId)).not.toContain(inside.parentSpanId);
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
