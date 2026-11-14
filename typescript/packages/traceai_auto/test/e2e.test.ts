@@ -410,6 +410,19 @@ test("an application span created inside an AI call keeps the AI trace id and ha
   expect(inside.traceId).toBe(ai.traceId); expect(inside.parentSpanId).toBe(ai.spanId);
   expect(app.map((span: any) => span.spanId)).not.toContain(inside.parentSpanId);
 });
+test("an AI call whose request runs inside an application span reaches Future AGI once, not again as a wire span", async () => {
+  // The same application with wire capture on. Its own span sits between the AI span and
+  // the provider request. The AI span reaches Future AGI, so the wire layer yields to it.
+  const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire" });
+  const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!).appSpans;
+  expect(requests).toBe(1);
+  expect(wireSpans()).toHaveLength(0);
+  expect(allSpans()).toHaveLength(1);
+  const ai = allSpans()[0], aiAttributes = attrs(ai);
+  expect(aiAttributes["gen_ai.span.kind"] ?? aiAttributes["fi.span.kind"]).toBe("LLM");
+  const inside = app.find((span: any) => span.name === "app-provider-request");
+  expect(inside.parentSpanId).toBe(ai.spanId);
+});
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);

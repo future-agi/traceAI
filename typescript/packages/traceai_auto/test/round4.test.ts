@@ -165,6 +165,19 @@ test.each([1, 5, 20])("S4 dedup traverses %i intermediate native spans, includin
   expect(shouldSkip(parent)).toBe(false); model.setAttribute("gen_ai.span.kind", "LLM"); expect(shouldSkip(parent)).toBe(true);
   model.end();
 });
+test("S4 dedup steps over an application span its tracking never saw, directly under a tracked model span", () => {
+  // The agent's processor tracks only the agent's provider. The application's span
+  // inside the model call is on the application's own provider.
+  const processor = new SimpleSpanProcessor({ export(_s, cb) { cb({ code: 0 }); }, async shutdown() {} }); processor.onStart = trackCoverage;
+  const agent = new BasicTracerProvider({ spanProcessors: [processor] }), application = new BasicTracerProvider();
+  const model = agent.getTracer("ai").startSpan("model", { attributes: { "gen_ai.span.kind": "LLM" } });
+  const inside = application.getTracer("app").startSpan("app-provider-request", {}, trace.setSpan(context.active(), model));
+  expect(shouldSkip(trace.setSpan(context.active(), inside))).toBe(true);
+  // A root application span is not under any tracked model span.
+  const unrelated = application.getTracer("app").startSpan("app-request", {}, context.active());
+  expect(shouldSkip(trace.setSpan(context.active(), unrelated))).toBe(false);
+  inside.end(); unrelated.end(); model.end();
+});
 test.each(["", "}", "}}", '\\n at app (app.js:1:1)'])("round3 truncated nested audio never leaks (%s)", suffix => {
   const text = '400 {"audio":{"source":{"bytes":"U0VDUkVULUFVRElP"}' + suffix;
   expect(scrubText(text)).not.toContain("U0VDUkVULUFVRElP");
