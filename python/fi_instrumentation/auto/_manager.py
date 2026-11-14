@@ -13,6 +13,7 @@ from functools import wraps
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import wrapt
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor
@@ -20,7 +21,7 @@ from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import Link, Status
 
-from fi_instrumentation.auto import _registry
+from fi_instrumentation.auto import _privacy, _registry
 from fi_instrumentation.auto._config import AutoConfig, resolve
 from fi_instrumentation.auto._registry import INSTRUMENTOR, MANUAL, PLUGIN, SERVICE, SETUP, Integration
 
@@ -433,6 +434,9 @@ def auto_instrument(
             _state.provider = tracer_provider or trace_api.get_tracer_provider()
             _state.trace_config = config if config is not None else settings.trace_config or TraceConfig()
             _state.settings = settings
+            # The Future AGI keys and credential-named environment values are redacted in
+            # everything sent to Future AGI. After init() they are registered already.
+            _privacy.seed_known_secrets(settings.api_key, settings.secret_key)
             # Called on its own, this filters a Future AGI provider the application registered as
             # init() does, before any web server is planned. After init() it finds the work done.
             _filter_registered_export(_state.provider, _state.trace_config)
@@ -558,7 +562,8 @@ class _ResourceOverlayProcessor(SpanProcessor):
     exporters only. The copy sent to Future AGI is mapped by the integrations' mappers, loses the
     query strings and captured headers of a web server span, has the agent's TraceConfig applied to
     its attributes, events and links (with hidden error details, it also loses its exception events
-    and error description) and, on a provider the application configured, is tagged with the
+    and error description), then the shared privacy catalog applied to everything it carries
+    (``_privacy``) and, on a provider the application configured, is tagged with the
     project resource Future AGI needs for routing. The application's
     processors see the original spans. On the provider the agent created, the route wraps that
     provider's exporter, and the agent closes it at shutdown. On a Future AGI provider the
@@ -583,6 +588,10 @@ class _ResourceOverlayProcessor(SpanProcessor):
         self.server_scopes: Tuple[str, ...] = ()
         self._ai_traces: "OrderedDict[int, None]" = OrderedDict()
         self._ai_traces_lock = threading.Lock()
+        # The session id traceAI's context helpers set where each open span started. Bounded like
+        # _ai_traces: a span that never ends must not hold memory.
+        self._sessions: "OrderedDict[Tuple[int, int], str]" = OrderedDict()
+        self._sessions_lock = threading.Lock()
         self._warned = False
         self.enabled = True
         self._operation = threading.Lock()
@@ -617,12 +626,41 @@ class _ResourceOverlayProcessor(SpanProcessor):
             self.scopes += tuple(scope for scope in scopes if scope not in self.scopes)
 
     def on_start(self, span: Any, parent_context: Any = None) -> None:
+        self._note_session(span, parent_context)
         # A route the agent closes does not pass this on: a processor that tracks open spans would
         # end the application's still-running spans when the agent shuts the route down. A borrowed
         # route closes only with its provider. Its delegate, the provider's own Future AGI export,
         # tracks the AI spans among them, and ends and exports those still open at that shutdown.
         if self.borrowed and self._is_ai_span(span):
             self._delegate.on_start(span, parent_context=parent_context)
+
+    def _note_session(self, span: Any, parent_context: Any) -> None:
+        """Remember the session id traceAI's context helpers set in the context the span starts in.
+
+        Never raises into the application's start_span.
+        """
+        try:
+            value = context_api.get_value(_privacy.SESSION_ID, parent_context)
+            if type(value) is not str or not value:
+                return
+            context = span.context
+            with self._sessions_lock:
+                self._sessions[(context.trace_id, context.span_id)] = value
+                while len(self._sessions) > _AI_TRACES_LIMIT:
+                    self._sessions.popitem(last=False)
+        except Exception:
+            logger.debug("traceAI: could not note the session of a span", exc_info=True)
+
+    def _ended_session(self, span: ReadableSpan) -> Optional[str]:
+        """The session id noted when the span started, if any; the note goes with the span."""
+        if not self._sessions:
+            return None
+        try:
+            context = span.context
+            with self._sessions_lock:
+                return self._sessions.pop((context.trace_id, context.span_id), None)
+        except Exception:
+            return None
 
     def _keeps(self, span: ReadableSpan) -> bool:
         if self._ratio is None:
@@ -664,7 +702,8 @@ class _ResourceOverlayProcessor(SpanProcessor):
             self._merged = (resource, merged)
         return merged
 
-    def _future_agi_copy(self, span: ReadableSpan) -> Optional[ReadableSpan]:
+    def _future_agi_copy(self, span: ReadableSpan, session: Optional[str] = None) -> Optional[ReadableSpan]:
+        """The detached copy Future AGI receives; ``session`` is the session id noted at its start."""
         for span_mapper in self.span_mappers:
             span = span_mapper(span)
             if span is None:
@@ -691,20 +730,29 @@ class _ResourceOverlayProcessor(SpanProcessor):
             links = [Link(link.context, _masked(link.attributes or {}, config)) for link in links]
         # A new span: the application's processors keep their own view of the original.
         resource = self._routed_resource(span.resource) if self._resource is not None else span.resource
-        return ReadableSpan(
+        copy = ReadableSpan(
             name=span.name, context=span.context, parent=span.parent, resource=resource,
             attributes=attributes, events=events, links=links, kind=span.kind, status=status,
             start_time=span.start_time, end_time=span.end_time,
             instrumentation_scope=span.instrumentation_scope,
         )
+        # session.id is credential-like by name, but it groups sessions. It keeps its value (still
+        # checked for media, URLs, known secrets and credential shapes) on spans from traceAI and
+        # integration scopes, and wherever it is the value the context helpers set when the span
+        # started. Anywhere else the name rule applies.
+        value = attributes.get(_privacy.SESSION_ID)
+        exempt = value if type(value) is str and (
+            _scope_name(span).startswith(self.scopes) or value == session) else None
+        return _privacy.sanitize_span(copy, session_id=exempt)
 
     def on_end(self, span: ReadableSpan) -> None:
+        session = self._ended_session(span)
         if not self.enabled or not self._keeps(span):
             return
         try:
             if not self._forwards(span):
                 return
-            routed = self._future_agi_copy(span)
+            routed = self._future_agi_copy(span, session)
         except Exception as error:
             # Never fail the application's span.end(); a copy that cannot be prepared is not sent.
             if not self._warned:
@@ -1090,6 +1138,8 @@ def init(
                 logger.warning("traceAI: FI_API_KEY and FI_SECRET_KEY are not set; tracing is off")
         _state.initialized = True
         return None
+    # Before any span can reach Future AGI: its keys and credential-named environment values.
+    _privacy.seed_known_secrets(settings.api_key, settings.secret_key)
     provider, owned = _build_provider(settings, register_kwargs, tracer_provider)
     _state.owned_provider = owned
     _state.initialized = True
@@ -1160,6 +1210,7 @@ def _after_fork() -> None:
         overlay._operation = threading.Lock()
         overlay._shutdown_operation = threading.Lock()
         overlay._ai_traces_lock = threading.Lock()
+        overlay._sessions_lock = threading.Lock()
         processor = overlay._delegate
         if hasattr(processor, "_shutdown_lock"):
             processor._shutdown_lock = threading.Lock()
