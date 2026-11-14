@@ -289,6 +289,15 @@ class AgentE2ETest {
     @Test void disabledSdkProducesNoSpan() throws Exception { run("jdk", "basic", Map.of("OTEL_SDK_DISABLED", "true"), true); assertTrue(spans.isEmpty()); }
     @Test void samplingZeroProducesNoSpan() throws Exception { run("jdk", "basic", Map.of("FI_SAMPLE_RATE", "0"), true); assertTrue(spans.isEmpty()); }
     @Test void hideContent() throws Exception { run("jdk", "basic", Map.of("FI_HIDE_INPUTS", "true", "FI_HIDE_OUTPUTS", "true"), true); assertEquals(1, spans.size()); Map<String,Object> attrs = attributes(spans.get(0)); assertFalse(attrs.containsKey("input.value")); assertFalse(attrs.containsKey("output.value")); assertFalse(attrs.containsKey("gen_ai.input.messages.0.message.content")); }
+    /** A hide switch with a value the agent does not recognise hides that content and says so once, by name and never by value. */
+    @Test void unrecognisedHideSwitchHidesContentAndWarnsOnce() throws Exception {
+        String log = run("jdk", "basic", Map.of("FI_HIDE_INPUTS", "maybe"), true);
+        assertEquals(1, spans.size(), spans.toString()); Map<String,Object> attrs = attributes(spans.get(0));
+        assertFalse(attrs.containsKey("input.value")); assertFalse(attrs.containsKey("gen_ai.input.messages.0.message.content")); assertEquals("Hello world", attrs.get("output.value"));
+        List<String> warnings = log.lines().filter(line -> line.contains("FI_HIDE_INPUTS")).toList();
+        assertEquals(1, warnings.size(), log); assertFalse(warnings.get(0).contains("maybe"), log);
+        assertTrue(log.lines().noneMatch(line -> line.contains("[traceai-auto]") && line.contains("maybe")), log);
+    }
     @Test void bodyLimitDoesNotClaimUnknownHostOrAffectApp() throws Exception { run("jdk", "basic", Map.of("FI_WIRE_MAX_BODY_BYTES", "10"), true); assertTrue(spans.isEmpty()); }
     @Test void legacyOkHttpRequestsMatchNoAgentBaseline() throws Exception {
         String baseline = run("okhttp", "legacy_okhttp", Map.of("TRACEAI_TEST_NO_AGENT", "true"), true); assertTrue(spans.isEmpty());
