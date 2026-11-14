@@ -11,7 +11,8 @@ instrumentation scope prefixes of spans an integration routes but does not creat
 library's own spans, which its traceAI package maps. For ``web`` entries they are the server
 instrumentation's scopes, and only request root spans of traces with an AI span are carried. For a
 ``manual`` entry they are carried only to the Future AGI export of a provider the application
-registered, where its setup line puts the package's exporter.
+registered, and only when that export is the package's own exporter (matched by module name), as
+its setup line puts it there.
 """
 
 from dataclasses import dataclass

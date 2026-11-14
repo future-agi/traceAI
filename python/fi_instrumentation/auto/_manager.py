@@ -395,7 +395,10 @@ def auto_instrument(
     import (``pending``), so unused libraries cost nothing.
 
     Args:
-        tracer_provider: Provider to trace with. Defaults to the global provider.
+        tracer_provider: Provider to trace with. Defaults to the global provider. On a Future AGI
+            provider the application registered, the same AI-only, masked filter is put in front
+            of its Future AGI export as ``init()`` puts there, and web servers stay off when that
+            export cannot be filtered.
         config: ``TraceConfig`` for masking. Defaults to one read from the environment
             and ``futureagi.toml``.
         instrumentations: Only enable these integrations (names from ``report()``).
@@ -430,6 +433,9 @@ def auto_instrument(
             _state.provider = tracer_provider or trace_api.get_tracer_provider()
             _state.trace_config = config if config is not None else settings.trace_config or TraceConfig()
             _state.settings = settings
+            # Called on its own, this filters a Future AGI provider the application registered as
+            # init() does, before any web server is planned. After init() it finds the work done.
+            _filter_registered_export(_state.provider, _state.trace_config)
         for integration in _registry.ALL:
             current = _state.statuses.get(integration.name)
             if current is not None and current.status in (INSTRUMENTED, PENDING):
@@ -437,10 +443,10 @@ def auto_instrument(
             status, action, installed = _plan(integration, settings, lazy)
             _state.statuses[integration.name] = status
             if status.status == STATUS_MANUAL and integration.scopes:
-                # The application sets this one up itself, with the package's exporter on the Future
-                # AGI provider it registered: its library spans must reach that exporter.
+                # The application sets this one up itself: its setup line passes the package's exporter
+                # to register(), and that exporter converts the library's spans. They go only to it.
                 for overlay in _state.overlays.values():
-                    if overlay.borrowed:
+                    if overlay.borrowed and _from_package(overlay.span_exporter, integration.module):
                         overlay.admit(integration)
             actions.append((integration, action, installed))
 
@@ -530,6 +536,18 @@ def _scope_name(span: ReadableSpan) -> str:
     return (getattr(getattr(span, "instrumentation_scope", None), "name", None) or "").lower()
 
 
+def _shown_exporter(processor: Any) -> Any:
+    """The exporter a processor sends to, where integrations look for it.
+
+    That is ``span_exporter``, or a batch processor's ``_batch_processor._exporter``; None when the
+    processor shows neither.
+    """
+    exporter = getattr(processor, "span_exporter", None)
+    if exporter is None:
+        exporter = getattr(getattr(processor, "_batch_processor", None), "_exporter", None)
+    return exporter
+
+
 class _ResourceOverlayProcessor(SpanProcessor):
     """The agent's Future AGI export route on a tracer provider.
 
@@ -545,7 +563,9 @@ class _ResourceOverlayProcessor(SpanProcessor):
     processors see the original spans. On the provider the agent created, the route wraps that
     provider's exporter, and the agent closes it at shutdown. On a Future AGI provider the
     application registered, it wraps that provider's Future AGI export processor in place
-    (``borrowed``): the agent never closes it, and the provider's own shutdown does.
+    (``borrowed``): the agent never closes it, and the provider's own shutdown does. A borrowed
+    route tells that processor when an AI span starts, so the processor can still end and export
+    the AI spans that are open when the provider shuts down.
     """
 
     def __init__(self, delegate: SpanProcessor, resource: Optional[Resource] = None,
@@ -578,10 +598,7 @@ class _ResourceOverlayProcessor(SpanProcessor):
         processor's ``_batch_processor._exporter``) to avoid adding a second one for the same
         destination, and some replace one with a mapping exporter.
         """
-        exporter = getattr(self._delegate, "span_exporter", None)
-        if exporter is None:
-            exporter = getattr(getattr(self._delegate, "_batch_processor", None), "_exporter", None)
-        return exporter
+        return _shown_exporter(self._delegate)
 
     @span_exporter.setter
     def span_exporter(self, exporter: Any) -> None:
@@ -600,21 +617,28 @@ class _ResourceOverlayProcessor(SpanProcessor):
             self.scopes += tuple(scope for scope in scopes if scope not in self.scopes)
 
     def on_start(self, span: Any, parent_context: Any = None) -> None:
-        # Deliberately not forwarded: a processor that tracks open spans would end the
-        # application's still-running spans when the agent shuts this route down.
-        pass
+        # A route the agent closes does not pass this on: a processor that tracks open spans would
+        # end the application's still-running spans when the agent shuts the route down. A borrowed
+        # route closes only with its provider. Its delegate, the provider's own Future AGI export,
+        # tracks the AI spans among them, and ends and exports those still open at that shutdown.
+        if self.borrowed and self._is_ai_span(span):
+            self._delegate.on_start(span, parent_context=parent_context)
 
     def _keeps(self, span: ReadableSpan) -> bool:
         if self._ratio is None:
             return True
         return self._ratio.should_sample(None, span.context.trace_id, span.name).decision.is_sampled()
 
+    def _is_ai_span(self, span: ReadableSpan) -> bool:
+        """A span from a traceAI or admitted scope, or one marked with an AI span kind."""
+        attributes = span.attributes or {}
+        return _scope_name(span).startswith(self.scopes) or any(key in attributes for key in AI_SPAN_KINDS)
+
     def _forwards(self, span: ReadableSpan) -> bool:
         """Whether a span is an AI span, or the request root of a trace that had one."""
         name = _scope_name(span)
         trace_id = span.context.trace_id
-        attributes = span.attributes or {}
-        if name.startswith(self.scopes) or any(key in attributes for key in AI_SPAN_KINDS):
+        if self._is_ai_span(span):
             with self._ai_traces_lock:
                 self._ai_traces[trace_id] = None
                 self._ai_traces.move_to_end(trace_id)
@@ -688,13 +712,17 @@ class _ResourceOverlayProcessor(SpanProcessor):
                 logger.warning("traceAI: a span could not be prepared for Future AGI and was not sent (%s)",
                                type(error).__name__)
             logger.debug("traceAI: Future AGI copy failed", exc_info=True)
-            return
+            routed = None
         if routed is not None:
             self._delegate.on_end(routed)
+        elif self.borrowed:
+            # The delegate may have tracked this AI span when it started; it will not see it end.
+            getattr(self._delegate, "_active_spans", {}).pop(span.context.span_id, None)
 
     def _detach_shutdown(self) -> Optional[Tuple[Any, Any]]:
         """Detach the one owned route; never shut down application processors."""
-        self.enabled = False
+        if not self.borrowed:
+            self.enabled = False
         if self._closed:
             return None
         self._closed = True
@@ -702,7 +730,12 @@ class _ResourceOverlayProcessor(SpanProcessor):
 
         def stop() -> None:
             with operation:
-                delegate.shutdown()
+                try:
+                    # A borrowed route closes with its provider. Its delegate ends the AI spans that
+                    # are still open, and they pass through this route on their way to it.
+                    delegate.shutdown()
+                finally:
+                    self.enabled = False
 
         return stop, self._shutdown_operation
 
@@ -763,17 +796,53 @@ _WEB_OFF = "off: the agent cannot filter the Future AGI export of the provider t
 
 def _keep_web_servers_off() -> None:
     """Every request would become a span that the application's Future AGI export sends unfiltered."""
+    if _state.web_off:
+        return
     _state.web_off = _WEB_OFF
     logger.warning("traceAI: web server integrations are off: the agent cannot put its AI-only filter in front of "
                    "the Future AGI export of the provider the application registered, so request spans would "
                    "reach Future AGI unfiltered")
 
 
-def _route_registered_provider(provider: Any, settings: AutoConfig) -> Optional[_ResourceOverlayProcessor]:
+def _from_package(exporter: Any, package: str) -> bool:
+    """Whether an exporter's class comes from ``package``, matched by module name."""
+    module = getattr(type(exporter), "__module__", None) or ""
+    return module == package or module.startswith(package + ".")
+
+
+def _is_future_agi_exporter(exporter: Any) -> bool:
+    """A fi_instrumentation HTTP or gRPC exporter, or a traceAI integration's wrapper around one.
+
+    An integration that converts its library's spans in an exporter wrapper, such as a manual one,
+    keeps the exporter it wraps as ``exporter``.
+    """
+    from fi_instrumentation.otel import GRPCSpanExporter, HTTPSpanExporter
+
+    future_agi = (HTTPSpanExporter, GRPCSpanExporter)
+    if isinstance(exporter, future_agi):
+        return True
+    return isinstance(getattr(exporter, "exporter", None), future_agi) and any(
+        _from_package(exporter, integration.module) for integration in _registry.ALL
+        if integration.module.startswith("traceai_"))
+
+
+def _exports_elsewhere(provider: Any) -> bool:
+    """Whether a provider's first processor sends to an exporter that is not a Future AGI exporter.
+
+    ``register(span_exporter=...)`` puts any exporter there, such as a console exporter or an OTLP
+    exporter for the application's own collector.
+    """
+    processors = tuple(getattr(getattr(provider, "_active_span_processor", None), "_span_processors", ()))
+    exporter = _shown_exporter(processors[0]) if processors else None
+    return exporter is not None and not _is_future_agi_exporter(exporter)
+
+
+def _route_registered_provider(provider: Any, config: Any) -> Optional[_ResourceOverlayProcessor]:
     """Put the route in front of the Future AGI export of a provider the application registered.
 
     That export is the first processor, the one ``register()`` adds or the provider's default, as
-    on the provider the agent creates. Returns None when the first processor is something else.
+    on the provider the agent creates. Returns None when the first processor is something else, or
+    does not send to a Future AGI exporter.
     """
     from fi_instrumentation.otel import BatchSpanProcessor, SimpleSpanProcessor
 
@@ -782,13 +851,31 @@ def _route_registered_provider(provider: Any, settings: AutoConfig) -> Optional[
         return None
     with getattr(active, "_lock", None) or threading.Lock():
         processors = tuple(getattr(active, "_span_processors", ()))
-        if not processors or not isinstance(processors[0], (SimpleSpanProcessor, BatchSpanProcessor)):
+        if (not processors or not isinstance(processors[0], (SimpleSpanProcessor, BatchSpanProcessor))
+                or not _is_future_agi_exporter(_shown_exporter(processors[0]))):
             return None
-        route = _ResourceOverlayProcessor(processors[0], config=settings.trace_config)
+        route = _ResourceOverlayProcessor(processors[0], config=config)
         route.borrowed = True
         active._span_processors = (route,) + processors[1:]
     _state.overlays[provider] = route
     return route
+
+
+def _filter_registered_export(provider: Any, config: Any) -> bool:
+    """Filter the Future AGI export of a Future AGI provider the application registered.
+
+    Puts the route in front of that export once; when it cannot, web server integrations stay off.
+    Returns False when there is no such export to filter: the provider is not a fi_instrumentation
+    provider, or its first processor sends to an exporter that is not a Future AGI exporter, which
+    the agent leaves as it is.
+    """
+    from fi_instrumentation.otel import TracerProvider as FiTracerProvider
+
+    if not isinstance(provider, FiTracerProvider) or _exports_elsewhere(provider):
+        return False
+    if provider not in _state.overlays and _route_registered_provider(provider, config) is None:
+        _keep_web_servers_off()
+    return True
 
 
 def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
@@ -802,12 +889,11 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     project_type = ProjectType.OBSERVE if settings.project_type == "observe" else ProjectType.EXPERIMENT
     kwargs = dict(register_kwargs)
     existing = supplied if supplied is not None else trace_api.get_tracer_provider()
-    if isinstance(existing, FiTracerProvider) and not kwargs.get("span_exporter"):
-        # A Future AGI provider already exports to Future AGI: put the same AI-only, masked route in
-        # front of that export instead of adding a second one.
+    if not kwargs.get("span_exporter") and _filter_registered_export(existing, settings.trace_config):
+        # A Future AGI provider already exports to Future AGI: the same AI-only, masked route is now
+        # in front of that export instead of a second export, or web servers stay off when it cannot
+        # be. One whose export goes elsewhere is handled below like any provider the app configured.
         logger.info("traceAI: using the Future AGI provider the application registered")
-        if _route_registered_provider(existing, settings) is None:
-            _keep_web_servers_off()
         return existing, False
     if supplied is not None and not isinstance(supplied, SdkTracerProvider):
         # Not an SDK provider, so there is no processor chain to join: trace with it as given.
@@ -818,7 +904,7 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     if isinstance(existing, SdkTracerProvider) and (supplied is not None or kwargs.get("set_global_tracer_provider", True)):
         # The application configured OpenTelemetry: keep its sampler and exporters, and add
         # one Future AGI route next to them.
-        if isinstance(existing, FiTracerProvider):
+        if isinstance(existing, FiTracerProvider) and not _exports_elsewhere(existing):
             # The agent exports through the exporter it was given; the provider's own Future AGI
             # export stays as the application set it up, without the filter.
             _keep_web_servers_off()
