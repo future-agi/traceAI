@@ -82,6 +82,53 @@ class SanitizerFallbackTest < Minitest::Test
     assert_equal '{partial model JSON', original.attributes['output.value']
   end
 
+  # On an application's own tracer provider the span's resource is the
+  # application's SDK resource, and the exporter adds the agent's resource to
+  # it. Under LANG=C the SDK holds OTEL_SERVICE_NAME as a binary or US-ASCII
+  # string with UTF-8 bytes. Future AGI must get it as UTF-8 text, whether the
+  # span content is sanitized or fails and only identity is recovered. A value
+  # that is not UTF-8 at all is replaced and never costs the other attributes.
+  def test_application_resource_keeps_a_locale_tagged_non_ascii_service_name
+    service = "caf\u{e9}-service"
+    routing = OpenTelemetry::SDK::Resources::Resource.create('project_name' => 'ruby-unit', 'semantic_convention' => 'fi')
+    config = A::Config.new({}, env: {})
+    [Encoding::ASCII_8BIT, Encoding::US_ASCII].each do |encoding|
+      host = OpenTelemetry::SDK::Resources::Resource.create(
+        'service.name' => service.b.force_encoding(encoding), 'service.namespace' => 'commerce',
+        'custom.identity' => "\xFF".b.force_encoding(encoding))
+      ['safe text', '{partial model JSON'].each do |text|
+        label = "#{encoding.name}: #{text}"
+        tracer = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: host).tracer('app')
+        span = tracer.start_span('chat', attributes: {'output.value' => text, 'gen_ai.usage.input_tokens' => 7})
+        span.finish
+        copies = nil
+        delegate = Object.new
+        delegate.define_singleton_method(:export) { |spans, timeout: nil| copies = spans; 0 }
+        exporter = A::ResourceExporter.new(delegate, routing)
+        A.stub(:config, config) { assert_equal 0, exporter.export([span.to_span_data]), label }
+        copy = copies.first
+        if text == 'safe text'
+          assert_equal text, copy.attributes['output.value'], label
+        else
+          refute copy.attributes.key?('output.value'), label
+        end
+        assert_equal 7, copy.attributes['gen_ai.usage.input_tokens'], label
+        resource = copy.resource.attributes
+        assert_equal service, resource['service.name'], label
+        assert_equal Encoding::UTF_8, resource['service.name'].encoding, label
+        assert resource['service.name'].valid_encoding?, label
+        assert_equal "\u{fffd}", resource['custom.identity'], label
+        assert_equal 'commerce', resource['service.namespace'], label
+        assert_equal 'ruby-unit', resource['project_name'], label
+        # The serializer sends the same text: the OTLP request decodes as UTF-8.
+        request = Opentelemetry::Proto::Collector::Trace::V1::ExportTraceServiceRequest.decode(A::Protobuf.encode(copies))
+        sent = request.resource_spans.first.resource.attributes.to_h { |kv| [kv.key, kv.value.string_value] }
+        assert_equal service, sent['service.name'], label
+        assert_equal 'ruby-unit', sent['project_name'], label
+      end
+    end
+  end
+
   def test_sanitizer_fallback_scrubs_known_credentials_in_protected_keys
     secrets = %w[wireObserved wireObserved783421 fixture-api-12345678]
     values = {'output.value' => '{partial JSON', 'gen_ai.usage.input_tokens' => 7,
