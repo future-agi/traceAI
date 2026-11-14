@@ -489,27 +489,54 @@ test("an AI call whose request runs inside two application spans in a row reache
   expect(wire[0].traceId).toBe(ai.traceId);
   expect(wire[0].parentSpanId).toBe(attempt.spanId);
 });
-test("under a parent-based application sampler, an AI call whose request runs inside an application span the sampler did not record reaches Future AGI once", async () => {
-  // ParentBased(TraceIdRatioBased(0)) with wire capture on. The application's span around
-  // the provider request is not recorded: it keeps the trace id, and has a span id of its
-  // own and no parent id.
+test("under a parent-based application sampler, an AI call whose request runs inside an application span the sampler did not record reaches Future AGI twice, and none of the application's spans reach it", async () => {
+  // A stated limit. ParentBased(TraceIdRatioBased(0)) with wire capture on. The application's
+  // span around the provider request is not recorded: it keeps the trace id, and has a span id
+  // of its own and no parent id, so nothing links it to the AI span. Matching it by trace id
+  // alone could drop a separate AI request in the same trace (next test), so the same request
+  // is also sent as a wire span.
   const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero" });
   const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
   expect(requests).toBe(1);
   // The application's backend receives nothing for this trace.
   expect(app.appSpans).toEqual([]);
-  // Future AGI receives the call once, as the AI span, and no wire span.
-  expect(wireSpans()).toHaveLength(0);
-  expect(allSpans()).toHaveLength(1);
-  const ai = allSpans()[0], aiAttributes = attrs(ai);
-  expect(aiAttributes["gen_ai.span.kind"] ?? aiAttributes["fi.span.kind"]).toBe("LLM");
+  // Future AGI receives the AI span and one wire span for the same request.
+  expect(allSpans()).toHaveLength(2);
+  const wire = wireSpans();
+  expect(wire).toHaveLength(1);
+  const ai = allSpans().find(span => attrs(span)["traceai.capture.layer"] !== "wire");
+  expect(attrs(ai)["gen_ai.span.kind"] ?? attrs(ai)["fi.span.kind"]).toBe("LLM");
   expect(ai.traceId).toBe(app.request.traceId); expect(ai.parentSpanId).toBe(app.request.spanId);
   // The application's span around the request is in the AI span's trace, with its own span id.
+  // It is the wire span's parent, and Future AGI never receives it.
   const [, insideTraceId, insideSpanId] = app.providerTraceparent.split("-");
   expect(insideTraceId).toBe(ai.traceId); expect(insideSpanId).not.toBe(ai.spanId);
+  expect(wire[0].traceId).toBe(ai.traceId); expect(wire[0].parentSpanId).toBe(insideSpanId);
   // None of the application's spans reaches Future AGI, by span id or by name.
   const appIds = new Set([app.request.spanId, insideSpanId]), appNames = new Set(["app-request", "app-before", "app-provider-request", "app-after"]);
   expect(allSpans().filter(span => appIds.has(span.spanId) || appNames.has(span.name)).map(span => span.name)).toEqual([]);
+});
+test("under a parent-based application sampler, a plain fetch AI request beside an AI SDK call in the same trace is not lost", async () => {
+  // ParentBased(TraceIdRatioBased(0)) with wire capture on. In one trace the application did
+  // not sample, it starts one OpenAI call and, in the same tick, one plain fetch to the same
+  // chat route. The plain fetch has no AI integration, so its wire span is its only record.
+  const output = await child("beside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero" });
+  const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(requests).toBe(2);
+  // The application's backend receives nothing for this trace.
+  expect(app.appSpans).toEqual([]);
+  // Future AGI receives the plain fetch as a wire span, and the OpenAI call once, as its AI span.
+  const wire = wireSpans();
+  expect(wire).toHaveLength(1);
+  expect(allSpans()).toHaveLength(2);
+  const ai = allSpans().find(span => attrs(span)["traceai.capture.layer"] !== "wire");
+  expect(attrs(ai)["gen_ai.span.kind"] ?? attrs(ai)["fi.span.kind"]).toBe("LLM");
+  expect(ai.traceId).toBe(app.request.traceId); expect(ai.parentSpanId).toBe(app.request.spanId);
+  // The wire span is the plain fetch's: it sits beside the AI span, under the application's
+  // request span, not inside the AI call.
+  expect(wire[0].traceId).toBe(app.request.traceId); expect(wire[0].parentSpanId).toBe(app.request.spanId);
+  // None of the application's spans reaches Future AGI, by span id or by name.
+  expect(allSpans().filter(span => span.spanId === app.request.spanId || span.name === "app-request").map(span => span.name)).toEqual([]);
 });
 test("with the application's provider first, Future AGI receives AI spans only: no HTTP server, client or custom spans", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "app-first", APP_HTTP: "true" });
