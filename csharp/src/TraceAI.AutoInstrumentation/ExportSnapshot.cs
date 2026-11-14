@@ -138,8 +138,8 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 // Hidden error details keep the status code but never its description.
                 copy.SetStatus(original.Status==ActivityStatusCode.Unset?ActivityStatusCode.Ok:original.Status,
                     hideErrorDetails||original.StatusDescription==null?null:budget.Text(original.StatusDescription,redact));
-                var context=original.GetCustomProperty(AutoProcessor.ContextProperty) as KeyValuePair<string,string>[];
-                foreach(var tag in Tags(WithContext(original.TagObjects,context),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
+                var startContext=original.GetCustomProperty(AutoProcessor.ContextProperty) as KeyValuePair<string,string>[];
+                foreach(var tag in Tags(WithContext(original.TagObjects,startContext),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
                 foreach(var item in original.Events)
                 {
                     budget.Node();
