@@ -128,10 +128,11 @@ recorded application spans in a row are not followed, and the call is then also
 captured as a wire span. A request under a covered model span is still skipped
 whether or not it is that call's own: a different model request that code inside the
 call sends (for example a custom `fetch` that first asks another model) gets no wire
-span. Without an application context manager, a covered model span is active only
-inside its SDK call (see [Existing OTel SDKs](#existing-otel-sdks)), except for Groq,
-Mistral and Portkey, which replace SDK methods directly: a request the caller sends
-beside one of their calls, until the call ends, is skipped too. Outgoing credential observation is never skipped by these rules: fetch reads
+span. Without an application context manager, the model span of an integration that
+patches through the instrumentation's wrap method is active only inside its SDK call
+(see [Existing OTel SDKs](#existing-otel-sdks)). Groq, Mistral and Portkey replace SDK
+methods directly, so a request the caller sends beside one of their calls, until the
+call ends, is skipped too. Outgoing credential observation is never skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span
