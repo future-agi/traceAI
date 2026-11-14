@@ -3,6 +3,7 @@
 // app-first  the application's SDK is preloaded first (-r app-otel.cjs)
 // forward    as app-first, with an application span that another AI tracer wrote
 // plain-request  as app-first, with a plain request to a non-AI URL next to the AI call
+// integration-status  print report() for the integration named by STATUS_OF
 // globals    an explicit start with no application SDK
 // keys-only  FI keys in the environment and the package loaded, but never started
 const { trace, context, propagation } = require('@opentelemetry/api');
@@ -33,6 +34,11 @@ function globals() {
     const auto = require('@traceai/auto'); require('@traceai/fi-core');
     await ai();
     console.log(JSON.stringify({ active: auto.report().active, fetchUnchanged: globalThis.fetch === fetchBefore, emitUnchanged: process.emit === emitBefore, sigterm: process.listenerCount('SIGTERM'), globals: globals() }));
+    return;
+  }
+  if (mode === 'integration-status') {
+    const status = require('@traceai/auto').report().integrations.find(integration => integration.name === process.env.STATUS_OF);
+    console.log(JSON.stringify({ status: status?.status ?? null, reason: status?.reason ?? null }));
     return;
   }
   if (mode === 'globals') {

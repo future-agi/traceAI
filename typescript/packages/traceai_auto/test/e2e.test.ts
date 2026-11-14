@@ -401,6 +401,14 @@ test("with incoming http and outgoing propagation switched on, the agent still r
   expect(JSON.parse(output.stdout.trim())).toEqual({ active: true, globals: { trace: "NoopTracerProvider", context: "NoopContextManager", propagation: "NoopTextMapPropagator" } });
   expect(wireSpans()).toHaveLength(1);
 });
+test("Genkit is reported as manual on the AI-only route, and as instrumented with the forwarding switch", async () => {
+  const route = { MODE: "integration-status", STATUS_OF: "genkit", FI_INSTRUMENTATIONS: "genkit" };
+  const aiOnly = JSON.parse((await child("own-provider.cjs", ["--import", "@traceai/auto/register"], route)).stdout.trim());
+  expect(aiOnly.status).toBe("manual");
+  expect(aiOnly.reason).toContain("FI_FORWARD_APP_SPANS");
+  const forwarding = JSON.parse((await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { ...route, FI_FORWARD_APP_SPANS: "true" })).stdout.trim());
+  expect(forwarding.status).toBe("instrumented");
+});
 test("by default the agent adds no trace headers to a plain application request to a non-AI URL, next to a captured AI call", async () => {
   const output = await child("own-provider.cjs", ["-r", resolve(apps, "app-otel.cjs"), "--import", "@traceai/auto/register"], { MODE: "plain-request" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
