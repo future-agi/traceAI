@@ -2,6 +2,7 @@ import type { Attributes } from "@opentelemetry/api";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { privacyFilter } from "../export-privacy";
+import * as publicApi from "../index";
 import { getRegisteredSecrets } from "../secrets";
 import { FITracer } from "../trace/trace-config/FITracer";
 
@@ -83,4 +84,31 @@ test("a copied span that carries no FI span context keeps the credential name ru
   const clean = privacyFilter().span(snapshot({ "session.id": "scope-copied-session", "control.label": "scope-public-control" }));
   expect(clean.attributes["session.id"]).toBe("<redacted>");
   expect(clean.attributes["control.label"]).toBe("scope-public-control");
+});
+
+test("a session id seen first on a span from another tracer is not registered as a secret, so an FI span with the same id keeps it", async () => {
+  const foreign = privacyFilter().span(await finished(false, "shared"));
+  expect(foreign.attributes["session.id"]).toBe("<redacted>");
+  expect(JSON.parse(String(foreign.attributes.metadata)).session_id).toBe("<redacted>");
+  for (const value of ["scope-session-shared", "scope-user-shared"]) expect(getRegisteredSecrets()).not.toContain(value);
+  const clean = privacyFilter().span(await finished(true, "shared"));
+  expect(clean.attributes["session.id"]).toBe("scope-session-shared");
+  expect(clean.attributes["user.id"]).toBe("scope-user-shared");
+  expect(clean.attributes["pi.session.id"]).toBe("scope-session-shared");
+  expect(JSON.parse(String(clean.attributes.metadata))).toEqual({ session_id: "scope-session-shared", user_id: "scope-user-shared", channel: "web" });
+});
+
+test("a span an integration converts and marks with the public rememberFITracerSpan exports its grouping keys as set", () => {
+  // Integrations such as Genkit export copies of their framework's spans, keyed by the native span context.
+  const span = snapshot({ "session.id": "scope-converted-session", "user.id": "scope-converted-user", "control.label": "scope-public-control" });
+  const mark = (publicApi as unknown as Record<string, unknown>).rememberFITracerSpan;
+  expect(typeof mark).toBe("function");
+  (mark as (context: object) => void)(span._spanContext);
+  const first = privacyFilter().span(span);
+  for (const clean of [first, privacyFilter().span(first)]) {
+    expect(clean.attributes["session.id"]).toBe("scope-converted-session");
+    expect(clean.attributes["user.id"]).toBe("scope-converted-user");
+    expect(clean.attributes["control.label"]).toBe("scope-public-control");
+  }
+  expect(getRegisteredSecrets()).not.toContain("scope-converted-session");
 });
