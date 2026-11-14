@@ -24,7 +24,9 @@ func TestSpanLimitsWarningNamesTheSDK(t *testing.T) {
 		struct{ other int }{},
 		struct{ spanLimits int }{},
 		struct{ spanLimits struct{ Other int } }{},
-		struct{ spanLimits struct{ AttributeCountLimit, AttributeValueLengthLimit string } }{},
+		struct {
+			spanLimits struct{ AttributeCountLimit, AttributeValueLengthLimit string }
+		}{},
 	} {
 		for _, field := range []string{"AttributeCountLimit", "AttributeValueLengthLimit"} {
 			if got := spanLimit(reflect.ValueOf(layout), field); got != 0 {
@@ -42,7 +44,9 @@ func TestSpanLimitsWarningNamesTheSDK(t *testing.T) {
 		t.Fatal("the warning must name the OpenTelemetry SDK as its cause")
 	}
 	// A layout that has the field returns its value.
-	if got := spanLimit(reflect.ValueOf(struct{ spanLimits struct{ AttributeCountLimit int } }{spanLimits: struct{ AttributeCountLimit int }{AttributeCountLimit: 7}}), "AttributeCountLimit"); got != 7 {
+	if got := spanLimit(reflect.ValueOf(struct {
+		spanLimits struct{ AttributeCountLimit int }
+	}{spanLimits: struct{ AttributeCountLimit int }{AttributeCountLimit: 7}}), "AttributeCountLimit"); got != 7 {
 		t.Fatalf("a readable layout must return its limit, got %d", got)
 	}
 }
