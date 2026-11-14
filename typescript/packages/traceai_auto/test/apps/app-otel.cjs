@@ -5,11 +5,13 @@
 const { trace, context, propagation, metrics } = require('@opentelemetry/api');
 const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-async-hooks');
 const { W3CTraceContextPropagator } = require('@opentelemetry/core');
-const { BasicTracerProvider, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+const { AlwaysOffSampler, BasicTracerProvider, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 const { resourceFromAttributes } = require('@opentelemetry/resources');
 const spans = [];
 const exporter = { export(batch, done) { spans.push(...batch); done({ code: 0 }); }, async shutdown() {} };
-const provider = new BasicTracerProvider({ resource: resourceFromAttributes({ 'service.name': 'own-app' }), spanProcessors: [new SimpleSpanProcessor(exporter)] });
+// APP_SAMPLER=off: the application samples none of its own spans.
+const sampler = process.env.APP_SAMPLER === 'off' ? { sampler: new AlwaysOffSampler() } : {};
+const provider = new BasicTracerProvider({ resource: resourceFromAttributes({ 'service.name': 'own-app' }), ...sampler, spanProcessors: [new SimpleSpanProcessor(exporter)] });
 const registered = {
   trace: trace.setGlobalTracerProvider(provider),
   context: context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()),

@@ -336,6 +336,20 @@ test("without application OpenTelemetry, incoming HTTP joins the remote W3C pare
   expect(allSpans()).toHaveLength(2);
   expect(JSON.parse(output.stdout.trim())).toEqual({ context: "NoopContextManager", propagation: "NoopTextMapPropagator" });
 });
+test("an application sampler that drops its own spans does not drop AI spans, which keep the application's parent ids", async () => {
+  const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "app-after", APP_SAMPLER: "off" });
+  const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
+  expect(info.appSpans).toEqual([]);
+  expect(allSpans()).toHaveLength(1); expect(wireSpans()).toHaveLength(1);
+  expect(wireSpans()[0].traceId).toBe(info.work.traceId); expect(wireSpans()[0].parentSpanId).toBe(info.work.spanId);
+});
+test("an unsampled incoming traceparent does not drop the SERVER span or its AI call", async () => {
+  await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-00" });
+  const serverSpan = allSpans().find(s => s.kind === 2), wire = wireSpans()[0];
+  expect(allSpans()).toHaveLength(2);
+  expect(serverSpan.traceId).toBe("11111111111111111111111111111111"); expect(serverSpan.parentSpanId).toBe("2222222222222222");
+  expect(wire.parentSpanId).toBe(serverSpan.spanId);
+});
 test("an application NodeSDK started after the preload registers its globals and keeps its spans; Future AGI receives only the AI span", async () => {
   const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "app-after" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
