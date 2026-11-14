@@ -1,6 +1,6 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
-import { TraceIdRatioBasedSampler, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
@@ -50,6 +50,54 @@ function warn(key: string, message: string): void {
   if (warned.has(key)) return; warned.add(key);
   try { console.warn(`[traceai:auto] ${message}`); } catch { /* Host logger may throw. */ }
 }
+// AI spans that the agent's sampler recorded with the sampled flag off (see aiSampler).
+const recordOnly = new WeakSet<object>();
+// The trace id of the sampler's last such decision. The SDK starts that span on the
+// agent's provider, and runs the processor's onStart, right after the sampler returns.
+let recordOnlyDecision: string | undefined;
+/**
+ * AI spans are sampled by trace id at FI_SAMPLE_RATE, and the application's sampling
+ * decision never drops them. Under a parent the application did not sample, an
+ * admitted AI span is recorded with the sampled flag off, so the spans the application
+ * starts inside the AI call, and their outgoing trace headers, keep its decision.
+ */
+function aiSampler(rate: number): Sampler {
+  const ratio: Sampler = new TraceIdRatioBasedSampler(rate);
+  return {
+    shouldSample(ctx, traceId, spanName, spanKind, attributes, links) {
+      recordOnlyDecision = undefined;
+      const result = ratio.shouldSample(ctx, traceId, spanName, spanKind, attributes, links);
+      if (result.decision !== SamplingDecision.RECORD_AND_SAMPLED) return result;
+      const parent = trace.getSpanContext(ctx);
+      if (!parent || !trace.isSpanContextValid(parent) || (parent.traceFlags & TraceFlags.SAMPLED) === TraceFlags.SAMPLED) return result;
+      recordOnlyDecision = traceId;
+      return { decision: SamplingDecision.RECORD };
+    },
+    toString: () => `TraceAIAutoSampler{${ratio.toString()}}`,
+  };
+}
+/** First in the processor's onStart: marks the span the sampler has just recorded with the flag off. */
+function noteRecordOnly(span: ReadableSpan): void {
+  const decided = recordOnlyDecision;
+  recordOnlyDecision = undefined;
+  if (decided === undefined) return;
+  try {
+    const { traceId, traceFlags } = span.spanContext();
+    if (traceId === decided && (traceFlags & TraceFlags.SAMPLED) === 0) recordOnly.add(span);
+  } catch { /* Not marked; the batch processor then drops it. */ }
+}
+// The batch processor exports only sampled spans, so a record-only AI span reaches it
+// as a view whose span context has the sampled flag set. The exporter turns the view
+// back into the span before anything reads it, so lookups by span still match.
+const sampledViews = new WeakMap<object, ReadableSpan>();
+function sampledView(span: ReadableSpan): ReadableSpan {
+  const view = Object.create(span, { spanContext: { value: () => {
+    const ctx = span.spanContext();
+    return { ...ctx, traceFlags: ctx.traceFlags | TraceFlags.SAMPLED };
+  } } }) as ReadableSpan;
+  sampledViews.set(view, span);
+  return view;
+}
 function guardedExporter(exporter: SpanExporter, agent: AgentState, options: Options, failedCaptures: WeakSet<object>): SpanExporter {
   const resource = { project_name: agent.config.projectName, project_type: agent.config.projectType };
   // Default FI constructors own S1 themselves. Unknown/supplied destinations
@@ -60,7 +108,8 @@ function guardedExporter(exporter: SpanExporter, agent: AgentState, options: Opt
   // FI_HIDE_* then also hides other AI tracers' prompt and response keys on them.
   const hiding = agent.config.forwardApplicationSpans ? forwardedHiding(options.traceConfig) : undefined;
   return idempotentExporter({
-    export(spans, callback) {
+    export(batch, callback) {
+      const spans = batch.map(span => sampledViews.get(span) ?? span);
       let called = false;
       const done = (result: { code: ExportResultCode; error?: Error }) => {
         if (called) return; called = true;
@@ -215,10 +264,14 @@ export function init(options: Options = {}): TracerProvider | undefined {
       agent.collector = "not_tested (application-owned destination)";
     }
     agent.processor = processor;
+    // Innermost, before any integration wraps onEnd: a record-only AI span reaches the
+    // batch processor, or a supplied processor, as a view with the sampled flag set.
+    const deliverEnd = processor.onEnd.bind(processor);
+    processor.onEnd = span => deliverEnd(recordOnly.has(span) ? sampledView(span) : span);
     // AI-only route: an incoming SERVER span passes only when its trace has AI work.
     const gate = !forwarding && !agent.processorIsObserver && explicitlyEnabled("http", config) ? serverGate() : undefined;
     const onStart = processor.onStart.bind(processor);
-    processor.onStart = (span, parent) => { agent.tryForward?.(); agent.tryObserve?.(); gate?.start(span); noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
+    processor.onStart = (span, parent) => { noteRecordOnly(span); agent.tryForward?.(); agent.tryObserve?.(); gate?.start(span); noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
     // Where AI spans are created. By default this is the agent's own provider,
     // never registered globally, whose only processor is the FI route. The
     // application's provider is used only when init() is given one without an FI
@@ -233,9 +286,10 @@ export function init(options: Options = {}): TracerProvider | undefined {
     if (!agent.provider) {
       agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
         setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor],
-        // AI spans are sampled by trace id at FI_SAMPLE_RATE alone. They keep the
-        // application's parent ids, but its sampling decision never drops them.
-        sampler: new TraceIdRatioBasedSampler(config.sampleRate) });
+        // AI spans are sampled by trace id at FI_SAMPLE_RATE and keep the application's
+        // parent ids. Its sampling decision never drops them, and under an unsampled
+        // parent they leave the sampled flag off (aiSampler).
+        sampler: aiSampler(config.sampleRate) });
       agent.ownsProvider = true;
       if (forwarding && !host) forwardLater(agent, processor);
     }
@@ -329,10 +383,11 @@ export function init(options: Options = {}): TracerProvider | undefined {
       endCoverage(span);
       if (gate && !gate.admit(span)) return;
       rememberSpanValueLimit(span);
-      // Only sampled spans are exported; a span that is recorded but not sampled never is.
+      // Sampled spans are exported, and so are AI spans recorded with the flag off under
+      // an unsampled application parent. Any other span that is recorded but not sampled never is.
       let sampled = false;
       try { sampled = (span.spanContext().traceFlags & TraceFlags.SAMPLED) === TraceFlags.SAMPLED; } catch { /* Not counted. */ }
-      if (!agent.processorIsObserver && sampled) agent.unsent++;
+      if (!agent.processorIsObserver && (sampled || recordOnly.has(span))) agent.unsent++;
       mappedEnd(span);
     };
     if (config.wireCapture && enabled("wire", config) && typeof globalThis.fetch === "function") {
