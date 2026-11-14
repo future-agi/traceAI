@@ -217,7 +217,21 @@ function isGlobalTracerProvider(provider: unknown): boolean {
 const rememberFITracerSpan = (fiCore as { rememberFITracerSpan?: (context: object) => void }).rememberFITracerSpan;
 
 /**
- * Converted spans are first-party traceAI spans. Marking the native span context
+ * A Genkit span: from Genkit's tracer, or carrying Genkit's own attributes. Genkit's manual
+ * setup attaches the processor to the provider the application uses, so the application's
+ * own spans reach it too; only Genkit spans are first-party copies.
+ */
+function isGenkitSpan(span: GenkitReadableSpan): boolean {
+  try {
+    const scope = span.instrumentationScope ?? span.instrumentationLibrary;
+    return scope?.name === "genkit-tracer" || typeof span.attributes?.["genkit:type"] === "string";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Converted Genkit spans are first-party traceAI spans. Marking the native span context
  * makes the Future AGI export boundary treat the copy like an FI tracer span, so
  * the session and user ids it carries export as set for Sessions grouping.
  */
@@ -237,7 +251,7 @@ export function toExportableSpan(
   privacy: ExportPrivacy = {},
 ): ExportableSpan {
   const ctx = span.spanContext();
-  markFIAuthored(ctx);
+  if (isGenkitSpan(span)) markFIAuthored(ctx);
   let parentSpanContext = span.parentSpanContext;
   const parentSpanId = parentSpanContext?.spanId ?? span.parentSpanId;
   if (!parentSpanContext && parentSpanId) {
