@@ -132,6 +132,12 @@ class _Budget(ValueError):
     """The catalog's depth, node or text limit was reached: the content is not checked, so not sent."""
 
 
+def _past_path_limits(path: str) -> bool:
+    """A path whose names are not checked: longer than PATH_LIMIT characters, or of PATH_PARTS or more
+    separators."""
+    return len(path) > PATH_LIMIT or path.count(".") + path.count("[") >= PATH_PARTS
+
+
 class _Catalog:
     """One loaded catalog: its credential-name predicate and its media predicate."""
 
@@ -491,7 +497,9 @@ class _Catalog:
         pairs = []
         for raw_name, equals, raw_value, name, decoded in parsed:
             if equals:
-                if self.query_name(name):
+                # The checks of a value read its name as a path; past the path limits it is not
+                # read, so the value is not sent.
+                if _past_path_limits(name) or self.query_name(name):
                     raw_value = self.redacted
                 else:
                     replacement = self.media_string(decoded, name, hints=hints)
@@ -688,7 +696,7 @@ class _Catalog:
         budget[0] -= 1
         if _depth > self.max_depth or budget[0] < 0:
             raise _Budget("privacy structure budget")
-        if len(path) > PATH_LIMIT or path.count(".") + path.count("[") >= PATH_PARTS:
+        if _past_path_limits(path):
             raise _Budget("privacy path budget")
         if self.credential_name(path):
             return self.redacted
