@@ -484,5 +484,6 @@ test.each(["sigterm-idle", "sigterm-failed"])("SIGTERM reaches the application a
 });
 test("shutdown removes the promise hook and gives back process.emit", async () => {
   const output = await child("review.cjs", [], { MODE: "promise-hooks" });
-  expect(JSON.parse(output.stdout)).toEqual({ installed: true, restored: true });
+  // The hook fired while the agent ran, and never after shutdown stopped it.
+  expect(JSON.parse(output.stdout)).toEqual({ installed: true, restored: true, hookFired: true, hookStopped: true });
 });

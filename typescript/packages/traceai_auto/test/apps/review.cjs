@@ -16,11 +16,22 @@ function installProvider() {
 }
 (async () => {
   if (mode === 'promise-hooks') {
+    // Count the agent's promise hook callbacks, and calls of the stop function it gets.
+    const v8 = require('node:v8'), createHook = v8.promiseHooks.createHook;
+    let fired = 0, stops = 0;
+    v8.promiseHooks.createHook = hooks => {
+      const stop = Reflect.apply(createHook, v8.promiseHooks, [{ ...hooks, init: (...args) => { fired++; return hooks.init?.(...args); } }]);
+      return () => { stops++; return stop(); };
+    };
     const before = process.emit;
     const auto = require('@traceai/auto'); auto.init({...options,exporter});
     const installed = process.emit !== before;
+    await Promise.resolve().then(() => {});
+    const firedBefore = fired > 0;
     await auto.shutdown();
-    console.log(JSON.stringify({installed,restored:process.emit === before})); return;
+    const afterShutdown = fired;
+    await Promise.resolve().then(() => {}); await new Promise(resolve => setImmediate(resolve));
+    console.log(JSON.stringify({installed,restored:process.emit === before,hookFired:firedBefore,hookStopped:stops === 1 && fired === afterShutdown})); return;
   }
   if (mode === 'wire-context-privacy') {
     installProvider(); const {setSession} = require('@traceai/fi-core');
