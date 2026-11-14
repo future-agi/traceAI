@@ -252,7 +252,7 @@ The evaluation system provides comprehensive AI model assessment capabilities:
 - `FI_BASE_URL`: Base URL for the TraceAI collector
 - `FI_API_KEY`: API key for authentication
 - `FI_SECRET_KEY`: Secret key for authentication
-- `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and the other `FI_HIDE_*` switches, and `FI_PII_REDACTION`: privacy switches. `true`, `1`, `yes` and `on` turn a switch on, and `false`, `0`, `no` and `off` turn it off, in any case. An empty value counts as unset. Any other value turns the switch on, so the content is hidden, and logs one warning that names the variable but not its value.
+- `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and the other `FI_HIDE_*` switches (including `FI_HIDE_LLM_INVOCATION_PARAMETERS` and `FI_HIDE_ERROR_DETAILS`), and `FI_PII_REDACTION`: privacy switches. `true`, `1`, `yes` and `on` turn a switch on, and `false`, `0`, `no` and `off` turn it off, in any case. An empty value counts as unset. Any other value turns the switch on, so the content is hidden, and logs one warning that names the variable but not its value. The warning goes to the OpenTelemetry diagnostic logger, so it is printed only when your application has set one with `diag.setLogger`.
 
 ## Examples
 
