@@ -47,6 +47,39 @@ drops the Future AGI exporter. LiveKit installs its privacy filter once per prov
 ignored. To keep conversation content out of your traces, set `LIVEKIT_TELEMETRY_ALLOW_PII=false` before calling `enable_*`
 (livekit-agents 1.8 and later).
 
+### Grouping a call into a session
+
+After enabling attribute mapping, use `using_session` inside each job entrypoint. Wrap the call's
+`AgentSession` startup and work, not just tracing setup at worker import time:
+
+```python
+from fi_instrumentation import using_session
+from livekit.agents import Agent, AgentSession
+
+# Inside entrypoint(ctx), after register() and enable_http_attribute_mapping():
+with using_session(session_id=ctx.room.name):
+    await ctx.connect()
+    session = AgentSession()
+    await session.start(agent=Agent(instructions="Answer briefly."), room=ctx.room)
+    # Run your conversation here.
+```
+
+The native spans capture `session.id` when they start, so concurrent calls can use different IDs
+on the same provider. An explicit `session.id` takes precedence; an existing `gen_ai.conversation.id`
+(including LiveKit's own conversation ID) is preserved. Grouping does not enable attachments or
+recording. With no session context, no `session.id` is added.
+
+On livekit-agents 1.8, context-derived IDs follow `LIVEKIT_TELEMETRY_ALLOW_PII` and project
+redaction. Set your privacy choice before enabling mapping; changing it afterward does not
+replace LiveKit's installed filter. The IDs are mapped only on the Future AGI export copy, so
+they cannot bypass LiveKit Cloud redaction.
+
+A child can inherit from its in-process parent span even after leaving the context block. A
+bare `SpanContext` or `NonRecordingSpan` carries only tracing IDs, not session metadata: watchdog
+diagnostics such as `event_loop_blocked` may lack a session when emitted with only those IDs. Likewise,
+a span started before entering the block is not retroactively grouped. Pass the context through
+your own asynchronous work instead of assigning one session globally to the worker.
+
 ### Flushing at the end of a job
 
 On Linux a LiveKit job process ends without running `atexit`, and LiveKit flushes only its own processors, so the spans

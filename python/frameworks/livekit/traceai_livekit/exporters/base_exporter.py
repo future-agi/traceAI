@@ -23,6 +23,7 @@ from .._recording_attributes import (
     _withhold_recording_failures,
 )
 from .._recording_boundary import _copy_span, _RecordingScope
+from .._session_context import _SESSION, _CONVERSATION
 
 logger = logging.getLogger(__name__)
 
@@ -289,9 +290,16 @@ def _map_attributes_to_fi_conventions(
         mapped[SpanAttributes.GEN_AI_TOOL_DEFINITIONS] = _ensure_json_string(attributes.get(LK_FUNCTION_TOOLS))
 
     # 5. Session & User Info
+    # These sources survive only when LiveKit's privacy filter permits them.
+    # Map on our export copy, never on the shared span sent to LiveKit Cloud.
+    if not recording_snapshot:
+        for source, alias in ((_SESSION, SpanAttributes.SESSION_ID),
+                              (_CONVERSATION, SpanAttributes.GEN_AI_CONVERSATION_ID)):
+            if source in attributes:
+                mapped.setdefault(alias, attributes[source])
     found, room_name = _first(attributes, LK_ROOM_NAME)
     if found and not recording_snapshot:
-        mapped[SpanAttributes.GEN_AI_CONVERSATION_ID] = room_name
+        mapped.setdefault(SpanAttributes.GEN_AI_CONVERSATION_ID, room_name)
 
     # Only retained recording sources supply aliases; there is no room fallback,
     # including when a sampler or the SDK evicted the operation attribute.
