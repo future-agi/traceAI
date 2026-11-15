@@ -358,6 +358,9 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
     # Automatically set the tracer provider for LiveKit agents
     try:
         from livekit.agents.telemetry import set_tracer_provider
+        from ._session_context import _install_session_context
+
+        _install_session_context(provider)
         set_tracer_provider(provider)
         logger.info("Automatically configured LiveKit agents tracer provider")
     except ImportError:

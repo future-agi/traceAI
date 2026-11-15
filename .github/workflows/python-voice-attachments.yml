@@ -1,0 +1,57 @@
+name: Python Voice Attachments
+
+on:
+  pull_request:
+    paths:
+      - 'python/fi_instrumentation/attachments/**'
+      - 'python/frameworks/livekit/**'
+      - 'python/frameworks/pipecat/**'
+      - 'python/voice-tests/**'
+      - 'python/traceai/**'
+      - 'python/tests/attachments/**'
+      - '.github/workflows/python-voice-attachments.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pipecat 1.15.0 (the qualified recorder surface) requires Python >=3.11.
+        python: ['3.11', '3.12']
+        adapter:
+          - {name: pipecat, upstream: pipecat-ai, version: '1.15.0'}
+          - {name: livekit, upstream: livekit-agents, version: '1.8.10'}
+          - {name: livekit, upstream: livekit-agents, version: '1.8.11'}
+        include:
+          - python: '3.10'
+            adapter: {name: livekit, upstream: livekit-agents, version: '1.8.10'}
+          - python: '3.10'
+            adapter: {name: livekit, upstream: livekit-agents, version: '1.8.11'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install exact upstream with this checkout
+        run: |
+          python -m pip install -e python -e python/frameworks/${{ matrix.adapter.name }} \
+            '${{ matrix.adapter.upstream }}==${{ matrix.adapter.version }}' \
+            opentelemetry-exporter-otlp-proto-grpc pytest pytest-asyncio jsonschema
+          python -m pip check
+          python -m pip freeze > voice-versions.txt
+      - name: Run voice components and negative controls
+        run: python -m pytest python/voice-tests/test_${{ matrix.adapter.name }}_attachments.py -q --tb=short
+      - name: Run existing LiveKit regression tests
+        if: matrix.adapter.name == 'livekit'
+        run: python -m pytest python/frameworks/livekit/tests -q --tb=short
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-versions-${{ matrix.python }}-${{ matrix.adapter.name }}-${{ matrix.adapter.version }}
+          path: voice-versions.txt

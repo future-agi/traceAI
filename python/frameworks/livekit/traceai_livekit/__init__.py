@@ -19,7 +19,16 @@ from .integration import (
     flush_on_job_shutdown,
 )
 
-from .recording import record_egress, wrap_egress_client
+from .recording import LiveKitEgressResolver, import_completed_egress, record_egress, wrap_egress_client
+
+
+def bind_session(session, job_context, *, manager, owned_recording_files=False,
+                 finalization_timeout=30, capture_policy=None):
+    """Opt-in existing recording import; requires the attachment-enabled core."""
+    from .attachments import bind_session as bind
+    return bind(session, job_context, manager=manager, owned_recording_files=owned_recording_files,
+                finalization_timeout=finalization_timeout, capture_policy=capture_policy)
+
 
 __version__ = "0.2.1"  # x-release-please-version
 
@@ -30,6 +39,9 @@ __all__ = [
     "create_mapped_http_exporter",
     "create_mapped_grpc_exporter",
     "flush_on_job_shutdown",
+    "bind_session",
+    "import_completed_egress",
+    "LiveKitEgressResolver",
     "record_egress",
     "wrap_egress_client",
     # Exporters

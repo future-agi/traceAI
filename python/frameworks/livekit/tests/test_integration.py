@@ -86,7 +86,10 @@ def test_enabling_http_mapping_keeps_the_exporter_alongside_livekits_privacy_fil
     assert enable_http_attribute_mapping() is True
 
     processors = _processors(provider)
-    assert len(processors) == 2
+    from traceai_livekit._session_context import _SessionContextProcessor
+
+    assert len(processors) == 3
+    assert isinstance(processors[2], _SessionContextProcessor)
     assert isinstance(processors[0], pii._PIIFilteringSpanProcessor)
     assert isinstance(processors[1], BatchSpanProcessor)
     assert isinstance(processors[1].span_exporter, MappedHTTPSpanExporter)
@@ -404,6 +407,59 @@ def test_the_allow_pii_opt_out_keeps_content_out_of_the_export(
         assert SpanAttributes.INPUT_VALUE not in attributes
         assert SpanAttributes.OUTPUT_VALUE not in attributes
         assert [k for k in attributes if k.startswith("lk.pii.")] == []
+
+
+@pytest.mark.parametrize("allow_pii", [True, False])
+def test_overlapping_native_sessions_reach_collector_with_isolated_grouping(
+    monkeypatch: pytest.MonkeyPatch, collector: _Collector, make_provider: Any, allow_pii: bool,
+) -> None:
+    from fi_instrumentation import using_session
+    from livekit.agents.telemetry import tracer
+
+    monkeypatch.setenv("LIVEKIT_TELEMETRY_ALLOW_PII", str(allow_pii).lower())
+    provider = make_provider()
+    enable_http_attribute_mapping()
+    roots = {}
+
+    async def run():
+        entered = [asyncio.Event(), asyncio.Event()]
+
+        async def call(index):
+            with using_session("native-call-" + str(index)):
+                async with AgentSession(llm=_FakeLLM()) as session:
+                    await session.start(Agent(instructions="Synthetic session isolation test."))
+                    roots[session._session_span.get_span_context().trace_id] = "native-call-" + str(index)
+                    entered[index].set()
+                    await entered[1 - index].wait()
+                    await session.run(user_input=USER_TEXT)
+
+        await asyncio.gather(call(0), call(1))
+        tracer.start_span("outside-session").end()
+
+    asyncio.run(run())
+    provider.force_flush()
+    assert len(roots) == 2
+    names = {trace_id: set() for trace_id in roots}
+    outside = []
+    for body in collector.bodies:
+        request = ExportTraceServiceRequest.FromString(body)
+        for resource in request.resource_spans:
+            for scope in resource.scope_spans:
+                for span in scope.spans:
+                    attrs = {a.key: _any_value(a.value) for a in span.attributes}
+                    trace_id = int.from_bytes(span.trace_id, "big")
+                    if trace_id in roots:
+                        names[trace_id].add(span.name)
+                        if allow_pii:
+                            assert attrs[SpanAttributes.SESSION_ID] == roots[trace_id]
+                        else:
+                            assert SpanAttributes.SESSION_ID not in attrs
+                    elif span.name == "outside-session":
+                        outside.append(attrs)
+    for seen in names.values():
+        assert {"agent_session", "agent_turn", "llm_node", "session_close"} <= seen
+    assert len(outside) == 1
+    assert SpanAttributes.SESSION_ID not in outside[0]
 
 
 # Recording rows use real LiveKit telemetry, but never start an RPC/collector.

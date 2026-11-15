@@ -319,13 +319,26 @@ def _bind(library: str, entry_point: str, *args, **kwargs):
         return None
     # A binding alone is not proof of recorded media. The adapter owns reporting
     # when a real source becomes available; Q02 qualifies end-to-end playback.
-    _adapter_status[library] = "session_bound" if binding is not None else "source_unavailable"
+    status = getattr(binding, "status", None)
+    if binding is None:
+        _adapter_status[library] = "source_unavailable"
+    else:
+        # The adapter's own content-free status (for example a denial reason);
+        # a binding object without one is only "session_bound".
+        _adapter_status[library] = status if isinstance(status, str) and len(status) <= 64 else "session_bound"
     return binding
 
 
-def bind_pipecat_audio_processor(processor, session_context):
-    """Observe an existing processor; never start a new recording implicitly."""
-    return _bind("pipecat", "bind_audio_processor", processor, session_context)
+def bind_pipecat_audio_processor(processor, session_context, **options):
+    """Observe an existing processor; never start a new recording implicitly.
+
+    ``session_context`` is a ``traceai_pipecat.attachments.AudioSessionContext``
+    (``from_pipeline(worker)`` or ``from_span(span)``). Options are passed to
+    ``traceai_pipecat.bind_audio_processor`` (``layout``, ``finalization_timeout``,
+    ``capture_policy``, and the opt-in per-turn caps
+    ``turn_audio=traceai_pipecat.TurnAudioCaps(max_turns=, max_bytes=, max_duration_ms=)``).
+    """
+    return _bind("pipecat", "bind_audio_processor", processor, session_context, **options)
 
 
 def bind_livekit_session(session, job_context, *, owned_recording_files=False,
@@ -336,12 +349,40 @@ def bind_livekit_session(session, job_context, *, owned_recording_files=False,
                  finalization_timeout=finalization_timeout)
 
 
+async def import_livekit_completed_egress(egress_info=None, *, session_context, egress_id, room_name,
+                                         connection_id=None, registry=None, egress_client=None,
+                                         existing_source_authorized=False, timeout=30.0):
+    """Offer an explicitly authorized completed LiveKit Egress to the importer.
+
+    Uses the provider's shared attachment manager. Returns the core
+    ``ImportHandle`` (``queued`` = accepted for import, not playable), or None
+    when the runtime or adapter is unavailable.
+    """
+    if not _ATTACHMENTS_SUPPORTED:
+        _adapter_status["livekit"] = "unsupported_version"
+        return None
+    manager = getattr(_tracer_provider, "attachment_manager", None)
+    if manager is None:
+        raise RuntimeError("initialize traceai before importing a recording")
+    try:
+        module = importlib.import_module(_INSTRUMENTOR_REGISTRY["livekit"])
+        importer = getattr(module, "import_completed_egress")
+    except (ImportError, AttributeError):
+        _adapter_status["livekit"] = "unsupported_version"
+        return None
+    return await importer(egress_info, session_context=session_context, egress_id=egress_id,
+                          room_name=room_name, manager=manager, connection_id=connection_id,
+                          registry=registry, egress_client=egress_client,
+                          existing_source_authorized=existing_source_authorized, timeout=timeout)
+
+
 __all__ = [
     "init",
     "AttachmentConfig",
     "attachment_status",
     "bind_pipecat_audio_processor",
     "bind_livekit_session",
+    "import_livekit_completed_egress",
     "instrument",
     "get_tracer_provider",
     "SemanticConvention",
