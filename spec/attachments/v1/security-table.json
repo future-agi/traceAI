@@ -712,6 +712,34 @@
       }
     },
     {
+      "id": "resolve-exact-session",
+      "reason": "not_found",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "const": "resolve"
+              }
+            }
+          },
+          {
+            "required": [
+              "session_matches"
+            ],
+            "properties": {
+              "session_matches": {
+                "const": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       "id": "session-grant",
       "reason": "not_found",
       "deny_if": {

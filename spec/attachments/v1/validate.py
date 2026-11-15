@@ -438,7 +438,12 @@ def validate_all() -> dict[str, int]:
 if __name__ == "__main__":
     try:
         print(json.dumps({"status": "PASS", "cases": validate_all()}, sort_keys=True))
-    except (AssertionError, ValueError, jsonschema_error) as error:
+    except AssertionError as error:
+        # These assertions contain only checked-in fixture IDs/count positions,
+        # never wire values. Keep cloud failures diagnosable without payloads.
+        print(json.dumps({"status": "FAIL", "fixture": str(error)}))
+        sys.exit(1)
+    except (ValueError, jsonschema_error) as error:
         # Wire validation errors can include payloads. Print only type, not contents.
         print(json.dumps({"status": "FAIL", "error_type": type(error).__name__}))
         sys.exit(1)
