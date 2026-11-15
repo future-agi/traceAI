@@ -343,12 +343,17 @@ Nine mandatory security boundaries
 7. **Session-bound playback.** Resolution returns only the same-origin gateway.
    Media session PLUS an occurrence/representation grant binds the original
    viewer/application session/scope/parent/policy/generation/expiry and GET/HEAD.
-   A copied grant under another session fails. Exchange/mutations use CSRF and
-   exact Origin; cookies are host-only Secure HttpOnly SameSite=Strict with narrow
-   media path. No wildcard credentialed CORS. Reauthorize GET/HEAD/Range/conditional
-   before 200/206/304 and cached metadata; private,no-store is mandatory. Logout,
-   revocation and deletion deny subsequent requests; open streams recheck within
-   the qualified <=5s bound. Downloaded/browser-buffered bytes cannot be recalled.
+   A copied grant under another session fails. Exchange and resolve require an
+   explicit application bearer and exact Origin (the bearer-mode CSRF defense),
+   not ambient application cookies or a claim of Django CSRF-token enforcement.
+   Existing enforced mutation controls remain unchanged. Media cookies are
+   host-only Secure HttpOnly SameSite=Strict with a session-specific path, below.
+   No wildcard credentialed CORS. Reauthorize GET/HEAD/Range/conditional before
+   200/206/304 and cached metadata; private,no-store is mandatory. Revocation of
+   the original access-token row, membership/source denial and deletion deny
+   subsequent requests; open streams recheck within the qualified <=5s bound.
+   See the inherited refresh/logout limitation below. Downloaded/browser-buffered
+   bytes cannot be recalled.
 8. **Source retention.** Occurrence expiry is derived from authoritative source
    trace/session lineage, never upload time, relink time or untrusted event time.
    Unknown finite-retention provenance denies. Unbound jobs expire within 24 hours
@@ -364,6 +369,128 @@ Nine mandatory security boundaries
    unrestricted decoder is insufficient. Probe actual MIME/expansion/duration/
    channels and corruption. Never execute HTML/SVG; active document previews need
    separately sandboxed inert derivatives.
+
+Explicit media-session binding (unreleased wire amendment)
+----------------------------------------------------------
+
+The earlier draft combined fresh random exchange cookies at one shared path with
+implicit newest-row selection at resolve. Concurrent exchanges can overwrite that
+cookie or select a row other than the caller's exchange, including equal-expiry
+rows. Exact gateway binding then correctly denies otherwise authorized playback.
+This is a concurrency/availability defect, not evidence of unauthorized access.
+Timestamp or UUID sorting, unconditional revoke-on-exchange and browser-only locks
+are not fixes.
+
+The amended wire protocol is:
+
+* ``POST /tracer/v1/attachment-media-sessions`` remains authenticated ``204`` with
+  no response body. It returns ``X-Attachment-Media-Session`` (the existing row's
+  non-secret canonical non-nil UUID) and ``X-Attachment-Media-Expires-At`` (its fixed
+  RFC 3339 expiry). Neither field is a credential. The random credential is only
+  in ``Set-Cookie``; persistence remains digest-only. Do not expose the secret or
+  digest in JSON, JS-visible headers, URLs, logs or telemetry.
+* Set ``fi_media_session_v2`` with
+  ``Path=/tracer/v1/attachment-media/{media_session_id}/``, no Domain, Secure,
+  HttpOnly, SameSite=Strict and a lifetime bounded by the fixed session expiry.
+  Distinct handles have distinct paths even though the cookie name is identical.
+* ``POST /tracer/v1/projects/{project_id}/attachments/resolve`` requires
+  ``X-Attachment-Media-Session``. Select only that exact row and check the current
+  authenticated user, original access-token row ID, resolved project organization,
+  expiry and revocation. Absent/malformed/duplicate handles fail as invalid request;
+  unknown, foreign or dead handles are indistinguishable not-found with no grants.
+  Never use a latest-row fallback. Resolve does not need the path-scoped cookie.
+* Each ready result uses exactly
+  ``/tracer/v1/attachment-media/{media_session_id}/{occurrence_id}/{grant_id}``.
+  Canonical lowercase non-nil UUIDs, bounded URL-safe grant token, no query,
+  fragment, encoding aliases, trailing slash or extra path segment are accepted.
+  The response's session segment must equal the captured request handle, and its
+  occurrence segment must equal that item's occurrence. Request bodies, ordered
+  per-item results, expected parents, channels and occurrence identity are unchanged.
+* Before metadata or bytes, the gateway requires
+  ``route media_session_id == cookie-derived row.id == grant.media_session_id``.
+  The session's original user/access row must still be live and its organization
+  must match the grant scope. Existing occurrence/parent/representation/membership/
+  policy/generation/retention/deletion and bounded streaming checks remain mandatory.
+  A handle or grant alone never authorizes media. Reject ambiguous duplicate v2
+  request cookies rather than choosing first or last.
+
+Both issuance endpoints require explicit application bearer identity and exact
+configured HTTPS Origin. Missing, null or foreign Origin denies. The current
+exchange adapter bypasses Django token-CSRF enforcement; this amendment documents
+its actual bearer-only defense and requires exact Origin on resolve as well.
+Configured client ``X-CSRFToken`` is not evidence of enforcement. Do not add
+cookie-only application authentication, accept write/API credentials for these
+operations, loosen enforced controls elsewhere, or use wildcard credentialed CORS.
+These same-origin responses remain private/no-store; no cross-origin header exposure
+is needed. ``MediaSession*Headers`` schemas are closed projections of protocol
+headers, not a prohibition on ordinary HTTP transport/security headers.
+
+Renewal and authentication boundary
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Session and grant deadlines are fixed. A grant expires no later than its session,
+source retention or other existing authorization bound. New exchange B must not
+revoke session/grants A, extend an old grant, or revive expired/revoked application
+sessions. Keep A's cookie through its normal expiry while B serves new grants.
+Concurrent players and independent tabs, including authorized different-org tabs,
+coexist without a shared lock. Organization navigation is not session revocation.
+
+Clients keep only bounded auth/organization-scoped in-memory handle/expiry state.
+Capture that handle, bearer context and organization for each request; do not use a
+shared mutable latest selector. Discard late exchange/resolve results after auth or
+organization changes. Renew before insufficient lifetime remains, preserve seek/play
+state when replacing a grant, and bound issuance/cookie churn. Per-tab single-flight
+is optional optimization, never a correctness dependency. Browser cookie eviction
+must yield unavailable/re-exchange, never weaker authorization or legacy fallback.
+
+Application refresh creates a different access-token row, not a stable login-family
+identity. A refreshed bearer cannot resolve with the prior row's media handle.
+Revoking the ORIGINAL access row denies its existing cookies/grants, including HEAD,
+Range, conditional requests and subsequent stream rechecks; delayed exchange results
+cannot resurrect it. Current logout only deactivates the presented access row.
+Logout of a post-refresh row therefore does NOT automatically revoke pre-refresh
+rows. This inherited limitation is a separate release/security item; no token-family,
+log-out-every-device or ordinary authentication policy change is included here.
+
+Gated cutover and consumer coordination
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is an unreleased coordinated cutover, not a broad compatibility mode. Gate
+issuance/playback while adopting both endpoints and clients; stop old issuance,
+invalidate pre-cutover media rows/grants using existing revocation fields, then
+open v2 and reload old clients. This one-time gate is not revoke-on-every-exchange.
+The old two-identity route is not part of the amended API. Legacy missing-handle
+issuance fails closed. ``fi_media_session`` at the parent path is never an authority
+for the new route, even alongside a valid v2 cookie. A renamed legacy secret must
+also fail because its old row is invalidated. HTTP Cookie contains no Path metadata:
+servers must not pretend to detect a parent path from it. Do not infer v2 authority
+by timestamp/UUID sorting or introduce a compatibility bypass.
+
+Existing session UUID, organization/access-row binding, secret digest, fixed expiry,
+revocation fields and grant FK suffice. No new migration or recoverable-secret
+persistence is required. ``wire_version`` in synthetic fixtures denotes issuance
+under the v2 gate, not a requested database column. A deployment needing a legacy
+playback drain instead of the gated reload needs a separately reviewed bounded plan;
+this amendment neither enables that route nor authorizes legacy issuance.
+
+Consumers must pin this amendment's exact commit. Copy the canonical schema
+byte-for-byte from ``spec/attachments/v1/contract.schema.json`` to the product's
+vendored F01 schema and update its provenance pin; never hand-edit the vendored copy.
+Backend owners must update route/header serializer documentation and regenerate the
+full product OpenAPI via its existing generator, then regenerate frontend API
+contracts and update the explicit client URL validation/fixtures. Regeneration that
+removes the old route must be inspected as this deliberate wire cutover, not a blanket
+permission to shrink unrelated API surface. No application, SDK, UI or database
+implementation is supplied in this contract lane.
+
+``media-session-fixtures.json`` checks trusted synthetic identities, cookie/route/
+grant combinations and original-row liveness, in addition to unchanged occurrence
+security predicates. The stdlib cookie-jar test only checks path selection; the
+loopback HTTP receiver only checks wire composition. Neither is browser race proof.
+Implementation qualification must cover actual reversed exchange response completion,
+equal expiries, interleaved resolves, independent tabs/orgs, renewal during Range and
+open streams, original-row revocation, actual deletion, stale auth/org results,
+cookie eviction and player seek/play continuity against the integrated backend/UI.
 
 Recording and late-arrival truth
 --------------------------------

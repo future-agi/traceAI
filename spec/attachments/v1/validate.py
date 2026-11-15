@@ -6,8 +6,11 @@ reads a media source, sends a request, accesses credentials, or retrieves schema
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
+from datetime import datetime
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -99,9 +102,9 @@ def validate_wire(name: str, value: Any) -> None:
     if name == "OccurrencePage":
         for occurrence in value["items"]:
             validate_wire("Occurrence", occurrence)
-    if name == "ResolveResponse":
-        for item in value["items"]:
-            if item["status"] == "ready" and item["gateway_path"].split("/")[4] != item["occurrence_id"]:
+    if name in {"ResolveResult", "ResolveResponse"}:
+        for item in value["items"] if name == "ResolveResponse" else [value]:
+            if item["status"] == "ready" and item["gateway_path"].split("/")[5] != item["occurrence_id"]:
                 raise ValueError("gateway occurrence mismatch")
     if name in {"ImportRequest", "SingleAttachmentImportRequest", "RecordingImportRequest"}:
         recording = value.get("mode") == "completed_recording"
@@ -240,6 +243,105 @@ def validate_import_completion(scenario: dict[str, Any]) -> None:
         raise ValueError("import segment duration limit")
 
 
+MEDIA_HANDLE = "X-Attachment-Media-Session"
+MEDIA_EXPIRY = "X-Attachment-Media-Expires-At"
+MEDIA_COOKIE = "fi_media_session_v2"
+MEDIA_PREFIX = "/tracer/v1/attachment-media/"
+
+
+def instant(value: str) -> datetime:
+    validate_wire("Timestamp", value)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def validate_resolve_binding(response: dict[str, Any], handle: str, expiry: str) -> None:
+    """Cross-message invariant: a response uses the request's captured selector."""
+    validate_wire("MediaSessionHandle", handle)
+    validate_wire("ResolveResponse", response)
+    for item in response["items"]:
+        if item["status"] == "ready" and (
+            item["gateway_path"].split("/")[4] != handle or
+            instant(item["expires_at"]) > instant(expiry)):
+            raise ValueError("resolve session mismatch")
+
+
+def validate_exchange_response(response: dict[str, Any], session: dict[str, Any], now: str) -> None:
+    """Synthetic HTTP observations, not a browser cookie implementation.
+
+    safe_headers is only the two protocol headers visible to application JS;
+    set_cookie is inspected by the test harness, never exposed to that JS.
+    """
+    if response["status"] != 204 or response["body"] != "":
+        raise ValueError("exchange must be bodyless 204")
+    headers = response["safe_headers"]
+    validate_wire("MediaSessionExchangeHeaders", headers)
+    if headers != {MEDIA_HANDLE: session["id"], MEDIA_EXPIRY: session["expires_at"]}:
+        raise ValueError("exchange row mismatch")
+    if response["cache_control"] != "private, no-store":
+        raise ValueError("private exchange required")
+    cookies = SimpleCookie()
+    cookies.load(response["set_cookie"])
+    if set(cookies) != {MEDIA_COOKIE}:
+        raise ValueError("v2 cookie required")
+    cookie = cookies[MEDIA_COOKIE]
+    if (cookie["path"] != MEDIA_PREFIX + session["id"] + "/" or
+            cookie["domain"] or not cookie["secure"] or not cookie["httponly"] or
+            cookie["samesite"] != "Strict" or
+            not 0 < int(cookie["max-age"]) <= (instant(session["expires_at"]) - instant(now)).total_seconds() or
+            hashlib.sha256(cookie.value.encode()).hexdigest() != session["credential_digest"]):
+        raise ValueError("cookie attributes or credential mismatch")
+    if cookie.value in json.dumps(headers) or cookie.value == session["id"]:
+        raise ValueError("credential exposed")
+
+
+def validate_media_session(stage: str, scenario: dict[str, Any], *, action: str = "GET") -> None:
+    """Fixture-only binding oracle over trusted synthetic rows/observations.
+
+    wire_version denotes issuance under the v2 cutover gate, NOT a new database
+    column. Invalidating legacy rows once before enabling v2 prevents renaming an
+    old secret into a v2 cookie. HTTP Cookie does not report cookie Path.
+    Existing occurrence security predicates remain independently necessary.
+    """
+    session, request = scenario["session"], scenario["request"]
+    now, expiry = instant(scenario["now"]), instant(session["expires_at"])
+    access = scenario["access_rows"].get(session["application_session_id"])
+    if (session["wire_version"] != 2 or session["revoked"] is not False or now >= expiry or
+            not access or access["active"] is not True or access["user_id"] != session["user_id"]):
+        raise ValueError("dead original session")
+    if stage in {"exchange", "resolve"}:
+        if (request["bearer_authenticated"] is not True or request["origin"] != scenario["origin"] or
+                any(request[key] != session[key] for key in ("user_id", "application_session_id", "organization_id"))):
+            raise ValueError("bearer origin or identity mismatch")
+    if stage == "exchange":
+        validate_exchange_response(scenario["exchange_response"], session, scenario["now"])
+        return
+    if stage == "resolve":
+        validate_wire("MediaSessionResolveHeaders", request["headers"])
+        if request["headers"][MEDIA_HANDLE] != session["id"]:
+            raise ValueError("exact selector required")
+        validate_resolve_binding(scenario["resolve_response"], request["headers"][MEDIA_HANDLE], session["expires_at"])
+    elif stage == "gateway":
+        gateway, grant = scenario["gateway"], scenario["grant"]
+        validate_wire("MediaGatewayPath", gateway["path"])
+        validate_wire("PlaybackGrantClaims", grant)
+        selected = [c["value"] for c in gateway["cookies"] if c["name"] == MEDIA_COOKIE]
+        if len(selected) != 1 or hashlib.sha256(selected[0].encode()).hexdigest() != session["credential_digest"]:
+            raise ValueError("missing wrong or ambiguous v2 cookie")
+        route_session, occurrence, token = gateway["path"].split("/")[4:]
+        if (route_session != session["id"] or grant["media_session_id"] != session["id"] or
+                grant["viewer_id"] != session["user_id"] or
+                grant["application_session_id"] != session["application_session_id"] or
+                grant["scope"]["organization_id"] != session["organization_id"] or
+                occurrence != grant["occurrence_id"] or token != scenario["grant_token"] or
+                not now < instant(grant["expires_at"]) <= expiry):
+            raise ValueError("route cookie grant binding mismatch")
+    else:
+        raise ValueError("unknown media fixture stage")
+    controls = {**scenario["controls"], "action": "resolve" if stage == "resolve" else action}
+    if decide(load("security-table.json"), controls)["decision"] != "allow":
+        raise ValueError("occurrence authorization denied")
+
+
 def scoped_key(scope: dict[str, Any], fields: list[str]) -> tuple[Any, ...]:
     """Fixture key oracle: normalize trace IDs, retain the complete scope."""
     normalized = {**scope, "trace_id": normalize_trace(scope["trace_id"])}
@@ -319,6 +421,17 @@ def validate_all() -> dict[str, int]:
         if valid != case["valid"]:
             raise AssertionError("recording import: " + case["id"])
     counts["recording_import"] = len(table["cases"])
+    table = load("media-session-fixtures.json")
+    for case in table["cases"]:
+        scenario = fixture_override(table["base"], case["overrides"])
+        try:
+            validate_media_session(case["stage"], scenario)
+            valid = True
+        except (ValueError, jsonschema_error):
+            valid = False
+        if valid != case["valid"]:
+            raise AssertionError("media session: " + case["id"])
+    counts["media_session"] = len(table["cases"])
     return counts
 
 

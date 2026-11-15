@@ -328,7 +328,7 @@
           {
             "occurrence_id": "00000007-0000-0000-0000-000000000001",
             "status": "ready",
-            "gateway_path": "/tracer/v1/attachment-media/00000007-0000-0000-0000-000000000001/synthetic_grant",
+            "gateway_path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
             "expires_at": "2030-01-01T00:10:00Z"
           },
           {
@@ -2314,7 +2314,7 @@
           {
             "occurrence_id": "00000007-0000-0000-0000-000000000001",
             "status": "ready",
-            "gateway_path": "/tracer/v1/attachment-media/00000007-0000-0000-0000-000000000001/grant?token=secret",
+            "gateway_path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/grant?token=secret",
             "expires_at": "2030-01-01T00:10:00Z"
           }
         ]
@@ -3106,7 +3106,7 @@
           {
             "occurrence_id": "00000007-0000-0000-0000-000000000001",
             "status": "ready",
-            "gateway_path": "/tracer/v1/attachment-media/ffffffff-ffff-ffff-ffff-ffffffffffff/synthetic_grant",
+            "gateway_path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/ffffffff-ffff-ffff-ffff-ffffffffffff/synthetic_grant",
             "expires_at": "2030-01-01T00:10:00Z"
           },
           {
@@ -4161,6 +4161,225 @@
         "state": "importing"
       },
       "valid": true
+    },
+    {
+      "id": "valid-MediaSessionExchangeHeaders",
+      "schema": "MediaSessionExchangeHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001",
+        "X-Attachment-Media-Expires-At": "2030-01-01T00:15:00Z"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-MediaSessionResolveHeaders",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001"
+      },
+      "valid": true
+    },
+    {
+      "id": "resolve-handle-null",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": null
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-empty",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": ""
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-secret",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "raw_media_secret"
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-malformed",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "000000000000000000000000000000000000"
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-nil",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000000-0000-0000-0000-000000000000"
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-uppercase",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "000000AF-0000-0000-0000-000000000001"
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-newline",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001\n"
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-duplicate",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001,ffffffff-ffff-ffff-ffff-ffffffffffff"
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-handle-missing",
+      "schema": "MediaSessionResolveHeaders",
+      "value": {},
+      "valid": false
+    },
+    {
+      "id": "exchange-no-secret-header",
+      "schema": "MediaSessionExchangeHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001",
+        "X-Attachment-Media-Expires-At": "2030-01-01T00:15:00Z",
+        "media_secret": "SYNTHETIC_SECRET"
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-no-secret-selector",
+      "schema": "MediaSessionExchangeHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "SYNTHETIC_SECRET",
+        "X-Attachment-Media-Expires-At": "2030-01-01T00:15:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-expiry-required",
+      "schema": "MediaSessionExchangeHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001"
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-expiry-malformed",
+      "schema": "MediaSessionExchangeHeaders",
+      "value": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001",
+        "X-Attachment-Media-Expires-At": "tomorrow"
+      },
+      "valid": false
+    },
+    {
+      "id": "valid-session-gateway-max-token",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true
+    },
+    {
+      "id": "session-gateway-legacy-route",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-nil-session",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000000-0000-0000-0000-000000000000/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-empty-session",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media//00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-uppercase-session",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-short-session",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/123/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-encoded-session",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/%300000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-empty-grant",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-long-grant",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-trailing-slash",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant/",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-newline",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant\n",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-fragment",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant#x",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-query",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant?x=y",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-extra-segment",
+      "schema": "MediaGatewayPath",
+      "value": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant/x",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-absolute",
+      "schema": "MediaGatewayPath",
+      "value": "https://example.invalid/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
+    },
+    {
+      "id": "session-gateway-backslash",
+      "schema": "MediaGatewayPath",
+      "value": "\\tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "valid": false
     }
   ]
 }

@@ -104,13 +104,15 @@
         "type": "boolean"
       },
       "session_matches": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "For resolve: exact required handle matches the authenticated user, original access-token row ID and resolved organization. For media: route session ID == cookie-derived v2 row ID == grant FK; original access row remains live. Never latest-row selection."
       },
       "representation_matches": {
         "type": "boolean"
       },
       "csrf_origin_valid": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "Exchange and resolve require explicit application bearer plus exact Origin, not a Django CSRF-token claim. Other operations retain their existing enforced CSRF/Origin controls. Ambient cookie-only application auth is not supported by the media issuance adapters."
       },
       "source_occurrence_authorized": {
         "type": "boolean"

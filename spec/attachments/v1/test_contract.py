@@ -5,6 +5,9 @@ import copy
 import importlib.util
 import hashlib
 import io
+from email.message import Message
+from http.cookiejar import CookieJar
+from urllib.request import Request
 import json
 import tempfile
 import unittest
@@ -294,6 +297,137 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(sizes), 120)
         self.assertEqual(set(sizes), {1440044})
         print("PCM_IMPORT " + json.dumps({"source_bytes": total, "segments": len(sizes), "segment_bytes": sizes[0], "output_bytes": sum(sizes), "pcm_sha256": actual_hash.hexdigest()}, sort_keys=True))
+
+    def test_other_attachment_schema_definitions_preserve_reviewed_baseline(self):
+        # f3b0923c62 baseline: only ResolveResult's gateway shape changes.
+        amended = {"ResolveResult", "MediaSessionHandle", "MediaGatewayPath", "MediaSessionExchangeHeaders", "MediaSessionResolveHeaders"}
+        preserved = {key: value for key, value in contract.SCHEMA["$defs"].items() if key not in amended}
+        digest = hashlib.sha256(json.dumps(preserved, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(digest, "5e74054fb23e72fbc5320e122126fe53f57565963b82459c522ecbeae839f272")
+
+    def test_media_openapi_requires_bearer_origin_handle_and_bodyless_exchange(self):
+        paths = contract.load("openapi.json")["paths"]
+        exchange = paths["/tracer/v1/attachment-media-sessions"]["post"]
+        resolve = paths["/tracer/v1/projects/{project_id}/attachments/resolve"]["post"]
+        for operation in (exchange, resolve):
+            self.assertEqual(operation["security"], [{"ApplicationBearer": []}])
+            origin = next(p for p in operation["parameters"] if p["name"] == "Origin")
+            self.assertTrue(origin["required"])
+        selector = next(p for p in resolve["parameters"] if p["name"] == contract.MEDIA_HANDLE)
+        self.assertTrue(selector["required"])
+        self.assertEqual(selector["schema"]["$ref"], "contract.schema.json#/$defs/MediaSessionHandle")
+        success = exchange["responses"]["204"]
+        self.assertNotIn("content", success)
+        self.assertEqual(set(success["headers"]), {contract.MEDIA_HANDLE, contract.MEDIA_EXPIRY, "Set-Cookie", "Cache-Control"})
+        self.assertTrue(all(h["required"] for h in success["headers"].values()))
+        self.assertNotIn("/tracer/v1/attachment-media/{occurrence_id}/{grant_id}", paths)
+        route = paths["/tracer/v1/attachment-media/{media_session_id}/{occurrence_id}/{grant_id}"]
+        for operation in route.values():
+            self.assertEqual(operation["security"], [{"MediaSession": []}])
+            self.assertEqual([p["name"] for p in operation["parameters"] if p["in"] == "path"], ["media_session_id", "occurrence_id", "grant_id"])
+
+    def test_media_binding_fixtures_are_decisive_on_all_gateway_actions(self):
+        table = contract.load("media-session-fixtures.json")
+        for case in table["cases"]:
+            scenario = contract.fixture_override(table["base"], case["overrides"])
+            actions = ("GET", "HEAD", "Range", "conditional") if case["stage"] == "gateway" else ("GET",)
+            for action in actions:
+                with self.subTest(case=case["id"], action=action):
+                    if case["valid"]:
+                        contract.validate_media_session(case["stage"], scenario, action=action)
+                    else:
+                        with self.assertRaises((ValueError, ValidationError)):
+                            contract.validate_media_session(case["stage"], scenario, action=action)
+
+    def test_distinct_same_name_cookie_paths_with_stdlib_not_browser_proof(self):
+        # This tests HTTP cookie path selection in the stdlib, not real browser
+        # concurrency, response ordering, tab coordination or cookie eviction.
+        base = contract.load("media-session-fixtures.json")["base"]
+        first = base["exchange_response"]["set_cookie"]
+        other = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        second = first.replace(base["session"]["id"], other).replace("synthetic_cookie_", "alternate_cookie_")
+        class CookieResponse:
+            def __init__(self, value):
+                self.headers = Message()
+                self.headers["Set-Cookie"] = value
+            def info(self):
+                return self.headers
+        for order in ((first, second), (second, first)):
+            jar = CookieJar()
+            for value in order:
+                jar.extract_cookies(CookieResponse(value), Request(base["origin"] + "/tracer/v1/attachment-media-sessions"))
+            self.assertEqual(len(jar), 2)
+            for handle, marker in ((base["session"]["id"], "synthetic_cookie_"), (other, "alternate_cookie_")):
+                request = Request(base["origin"] + base["gateway"]["path"].replace(base["session"]["id"], handle))
+                jar.add_cookie_header(request)
+                self.assertEqual(request.get_header("Cookie").count(contract.MEDIA_COOKIE + "="), 1)
+                self.assertIn(marker, request.get_header("Cookie"))
+            for path in ("/tracer/v1/attachment-media-sessions", "/tracer/v1/projects/example/attachments/resolve"):
+                request = Request(base["origin"] + path)
+                jar.add_cookie_header(request)
+                self.assertIsNone(request.get_header("Cookie"))
+
+    def test_fixed_deadlines_and_independent_renewal_in_fixture_model(self):
+        first = contract.load("media-session-fixtures.json")["base"]
+        second = copy.deepcopy(first)
+        old_id, new_id = first["session"]["id"], "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        second["session"]["id"] = new_id
+        second["request"]["headers"][contract.MEDIA_HANDLE] = new_id
+        second["grant"]["media_session_id"] = new_id
+        second["gateway"]["path"] = second["gateway"]["path"].replace(old_id, new_id)
+        second["resolve_response"]["items"][0]["gateway_path"] = second["gateway"]["path"]
+        secret = "alternate_synthetic_secret"
+        second["session"]["credential_digest"] = hashlib.sha256(secret.encode()).hexdigest()
+        second["gateway"]["cookies"][0]["value"] = secret
+        # Equal expiry is intentional: no timestamp/UUID ordering participates.
+        for scenario in (second, first, first, second):
+            contract.validate_media_session("resolve", scenario)
+            contract.validate_media_session("gateway", scenario)
+        old_expiry = first["grant"]["expires_at"]
+        second["grant"]["expires_at"] = "2030-01-01T00:12:00Z"
+        for scenario in (first, second):
+            scenario["now"] = old_expiry
+        with self.assertRaises(ValueError):
+            contract.validate_media_session("gateway", first)
+        contract.validate_media_session("gateway", second)
+        self.assertEqual(first["grant"]["expires_at"], old_expiry)
+        first["session"]["revoked"] = True
+        with self.assertRaises(ValueError):
+            contract.validate_media_session("resolve", first)
+        contract.validate_media_session("gateway", second)
+
+    def test_original_access_row_revocation_and_inherited_refresh_logout_limit(self):
+        base = contract.load("media-session-fixtures.json")["base"]
+        original = base["session"]["application_session_id"]
+        refreshed = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        # A refreshed bearer is not the original access-row identity.
+        changed = copy.deepcopy(base)
+        changed["request"]["application_session_id"] = refreshed
+        with self.assertRaises(ValueError):
+            contract.validate_media_session("resolve", changed)
+        # This explicitly records the inherited limit, not a family-logout fix.
+        changed = copy.deepcopy(base)
+        changed["access_rows"][refreshed]["active"] = False
+        contract.validate_media_session("gateway", changed)
+        # Rechecking the ORIGINAL row after a previously allowed chunk denies.
+        for stage in ("exchange", "resolve", "gateway"):
+            changed = copy.deepcopy(base)
+            contract.validate_media_session(stage, changed)
+            changed["access_rows"][original]["active"] = False
+            with self.subTest(stage=stage), self.assertRaises(ValueError):
+                contract.validate_media_session(stage, changed)
+
+    def test_media_secret_absent_from_js_visible_outputs(self):
+        base = contract.load("media-session-fixtures.json")["base"]
+        secret = base["gateway"]["cookies"][0]["value"]
+        safe = base["exchange_response"]["safe_headers"]
+        self.assertNotIn(secret, json.dumps(safe))
+        self.assertNotIn(secret, json.dumps(base["resolve_response"]))
+        self.assertNotIn(base["session"]["credential_digest"], json.dumps(safe))
+        self.assertNotEqual(safe[contract.MEDIA_HANDLE], secret)
+        for value in (secret, base["session"]["credential_digest"]):
+            with self.assertRaises(ValidationError):
+                contract.validate_wire("MediaSessionHandle", value)
 
     def test_security_fixture_covers_every_request_path(self):
         cases = contract.load("security-fixtures.json")["cases"]

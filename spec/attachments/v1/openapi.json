@@ -1166,13 +1166,10 @@
     "/tracer/v1/projects/{project_id}/attachments/resolve": {
       "post": {
         "operationId": "resolveAttachmentOccurrences",
-        "description": "Read-only handler, separate from mutations. Current viewer + expected parent for EACH item; unknown/foreign both not_found. Private no-store. Same-origin session-bound gateway only.",
+        "description": "Read-only handler with explicit application bearer, exact Origin and required non-secret media-session handle. Select that exact row; authorize its user, original access-token row ID, resolved project organization, fixed expiry and revocation. Missing/malformed selector is invalid_request; unknown/foreign/dead selector is indistinguishable not_found. No latest-row, timestamp/UUID sorting or legacy missing-handle fallback. Each occurrence retains independent expected-parent/scope/representation/policy/deletion/retention authorization. Private no-store; ready paths contain the captured handle. Resolve does not receive or need the path-scoped media cookie.",
         "security": [
           {
-            "AttachmentCredential": []
-          },
-          {
-            "ApplicationSession": []
+            "ApplicationBearer": []
           }
         ],
         "x-authority": "scoped_application_identity",
@@ -1185,10 +1182,19 @@
                   "$ref": "contract.schema.json#/$defs/ResolveResponse"
                 }
               }
+            },
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request, including missing or malformed media-session handle",
             "content": {
               "application/json": {
                 "schema": {
@@ -1218,7 +1224,7 @@
             }
           },
           "404": {
-            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "description": "Unknown, foreign, revoked or expired media-session handle; indistinguishable. No grants issued.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1265,6 +1271,25 @@
             "required": true,
             "schema": {
               "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Must equal the configured HTTPS application origin exactly; absent, null, foreign or wildcard origins deny. No cookie-only application authentication or wildcard credentialed CORS.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "X-Attachment-Media-Session",
+            "in": "header",
+            "required": true,
+            "description": "Exact handle returned by the exchange for this captured bearer/organization context, never a mutable latest-session selector or the secret cookie.",
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/MediaSessionHandle"
             }
           }
         ],
@@ -1663,19 +1688,46 @@
     "/tracer/v1/attachment-media-sessions": {
       "post": {
         "operationId": "exchangeAttachmentMediaSession",
-        "description": "Authenticated application-session exchange; CSRF + exact Origin. Set host-only Secure HttpOnly SameSite=Strict fi_media_session cookie with Path=/tracer/v1/attachment-media/. Bound to original application session; revoke on logout/membership change.",
+        "description": "Explicit application bearer plus exact Origin; these bearer-only adapters do not enforce a Django CSRF token and do not accept ambient application cookies. Return 204 with no body and the non-secret existing session UUID/fixed expiry headers. Keep the random secret exclusively in host-only Secure HttpOnly SameSite=Strict fi_media_session_v2 Set-Cookie at /tracer/v1/attachment-media/{media_session_id}/, with digest-only persistence. Concurrent exchanges create independent sessions without revoking predecessors. Original access-row revocation denies media; refresh-family logout is not solved by this contract.",
         "security": [
           {
-            "AttachmentCredential": []
-          },
-          {
-            "ApplicationSession": []
+            "ApplicationBearer": []
           }
         ],
         "x-authority": "scoped_application_identity",
         "responses": {
           "204": {
-            "description": "Success"
+            "description": "No body. All listed headers are mandatory; only the handle and expiry are JS-visible protocol data. No raw media credential in JSON, selectors or URLs.",
+            "headers": {
+              "X-Attachment-Media-Session": {
+                "required": true,
+                "description": "Non-secret UUID of the exact newly issued media-session row.",
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/MediaSessionHandle"
+                }
+              },
+              "X-Attachment-Media-Expires-At": {
+                "required": true,
+                "description": "Fixed session expiry; renewal never extends this deadline.",
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Timestamp"
+                }
+              },
+              "Set-Cookie": {
+                "required": true,
+                "description": "fi_media_session_v2=<random-secret>; Path=/tracer/v1/attachment-media/{media_session_id}/; Secure; HttpOnly; SameSite=Strict; Max-Age bounded by fixed session expiry. Omit Domain. Never expose or log the secret. Reject legacy credentials even if renamed to v2; do not select the first/last of duplicate same-name request cookies.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request",
@@ -1747,13 +1799,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "Must equal the configured HTTPS application origin exactly; absent, null, foreign or wildcard origins deny. No cookie-only application authentication or wildcard credentialed CORS.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        ]
       }
     },
-    "/tracer/v1/attachment-media/{occurrence_id}/{grant_id}": {
+    "/tracer/v1/attachment-media/{media_session_id}/{occurrence_id}/{grant_id}": {
       "get": {
         "operationId": "getAttachmentMedia",
-        "description": "Media session plus narrow occurrence grant; reauthorize before 200/206/304 and every bounded chunk (<=5s). No public storage/source URL. GET/HEAD/Range/conditional all private,no-store; nosniff; same-origin CORP; inert Content-Disposition. Range validated and bounded. Grant identifier alone is insufficient.",
+        "description": "Media session plus narrow occurrence grant; reauthorize before 200/206/304 and every bounded chunk (<=5s). No public storage/source URL. GET/HEAD/Range/conditional all private,no-store; nosniff; same-origin CORP; inert Content-Disposition. Range validated and bounded. Grant identifier alone is insufficient. Exact route media_session_id == cookie-derived row.id == grant.media_session_id, with matching organization and live original user/access row. Accept only v2-issued credentials; old parent-path fi_media_session cookies, including renamed legacy values, do not authorize this route. Ambiguous duplicate v2 cookie values deny. Neither handle nor grant alone is authority. New exchanges never extend or revoke an unrelated live session/grant.",
         "security": [
           {
             "MediaSession": []
@@ -1845,6 +1909,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "media_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/MediaSessionHandle"
+            }
+          },
           {
             "name": "occurrence_id",
             "in": "path",
@@ -1881,7 +1953,7 @@
       },
       "head": {
         "operationId": "headAttachmentMedia",
-        "description": "Media session plus narrow occurrence grant; reauthorize before 200/206/304 and every bounded chunk (<=5s). No public storage/source URL. GET/HEAD/Range/conditional all private,no-store; nosniff; same-origin CORP; inert Content-Disposition. Range validated and bounded. Grant identifier alone is insufficient.",
+        "description": "Media session plus narrow occurrence grant; reauthorize before 200/206/304 and every bounded chunk (<=5s). No public storage/source URL. GET/HEAD/Range/conditional all private,no-store; nosniff; same-origin CORP; inert Content-Disposition. Range validated and bounded. Grant identifier alone is insufficient. Exact route media_session_id == cookie-derived row.id == grant.media_session_id, with matching organization and live original user/access row. Accept only v2-issued credentials; old parent-path fi_media_session cookies, including renamed legacy values, do not authorize this route. Ambiguous duplicate v2 cookie values deny. Neither handle nor grant alone is authority. New exchanges never extend or revoke an unrelated live session/grant.",
         "security": [
           {
             "MediaSession": []
@@ -1973,6 +2045,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "media_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/MediaSessionHandle"
+            }
+          },
           {
             "name": "occurrence_id",
             "in": "path",
@@ -2139,7 +2219,13 @@
       "MediaSession": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "fi_media_session"
+        "name": "fi_media_session_v2",
+        "description": "Host-only Secure HttpOnly SameSite=Strict secret cookie, Path=/tracer/v1/attachment-media/{media_session_id}/. Route session ID, cookie-derived session row and grant media-session FK must agree; legacy fi_media_session is never accepted here."
+      },
+      "ApplicationBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Live application access-token identity only; neither session cookies, API keys nor attachment write capabilities. Binding uses the original access-token row ID, not a refresh/login-family identity."
       }
     },
     "schemas": {
