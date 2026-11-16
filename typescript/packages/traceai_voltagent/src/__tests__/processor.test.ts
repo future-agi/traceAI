@@ -3,7 +3,7 @@ import { ExportResultCode } from "@opentelemetry/core";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { Agent } from "@voltagent/core";
 import { z } from "zod";
-import type { TraceConfigOptions } from "@traceai/fi-core";
+import { privacyFilter, type TraceConfigOptions } from "@traceai/fi-core";
 import { FIVoltAgentSpanProcessor } from "../FIVoltAgentSpanProcessor";
 import { isPromotedUsageKey } from "../mapping";
 import {
@@ -225,6 +225,64 @@ describe("FIVoltAgentSpanProcessor with a real VoltAgent agent (AC-01)", () => {
     const llm = attrs(one(exported, "llm:generateText"));
     expect(llm["input.value"]).toBeUndefined();
     expect(llm["output.value"]).toBeUndefined();
+  });
+});
+
+describe("session identity at the fi-core export boundary", () => {
+  it("exports converted VoltAgent conversation and user ids as set through fi-core privacy", async () => {
+    const { exported, recorded } = await runToolCallingAgent();
+    const privacy = privacyFilter();
+    expect(exported.length).toBeGreaterThan(0);
+    expect(byName(exported, "memory.read").length).toBeGreaterThan(0);
+    for (const span of exported) {
+      const clean = privacy.span(span);
+      for (const view of [clean, privacy.span(clean)]) {
+        expect(attrs(view)["session.id"]).toBe("conv-123");
+        expect(attrs(view)["user.id"]).toBe("user-9");
+      }
+    }
+    // Export privacy must not change the native identities seen by VoltAgent's other processors.
+    for (const span of recorded) {
+      expect(attrs(span)["conversation.id"]).toBe("conv-123");
+      expect(attrs(span)["user.id"]).toBe("user-9");
+      expect(attrs(span)["session.id"]).toBeUndefined();
+    }
+  });
+
+  it("keeps a foreign unmarked session id redacted before and after VoltAgent conversion", async () => {
+    const { exporter: nativeExporter, provider } = fiProvider();
+    const exporter = new InMemorySpanExporter();
+    const processor = new FIVoltAgentSpanProcessor({ exporter, batch: false });
+    const privacy = privacyFilter();
+    try {
+      provider.getTracer("application").startSpan("foreign", {
+        attributes: {
+          "session.id": "conv-123",
+          "conversation.id": "conv-123",
+          "user.id": "user-9",
+          // Similar attribute names are not proof of VoltAgent provenance.
+          "span.type": "memory",
+          "control.label": "public-control",
+        },
+      }).end();
+      await provider.forceFlush();
+      const foreign = one(nativeExporter.getFinishedSpans(), "foreign");
+      // This span has never passed through the VoltAgent converter.
+      expect(attrs(privacy.span(foreign))["session.id"]).toBe("<redacted>");
+      processor.onEnd(foreign);
+      await processor.forceFlush();
+      for (const span of [foreign, one(exporter.getFinishedSpans(), "foreign")]) {
+        const clean = privacy.span(span);
+        for (const view of [clean, privacy.span(clean)]) {
+          expect(attrs(view)["session.id"]).toBe("<redacted>");
+          expect(attrs(view)["control.label"]).toBe("public-control");
+        }
+        expect(attrs(span)["session.id"]).toBe("conv-123");
+      }
+    } finally {
+      await processor.shutdown();
+      await provider.shutdown();
+    }
   });
 });
 
