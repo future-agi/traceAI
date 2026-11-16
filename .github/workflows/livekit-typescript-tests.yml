@@ -69,7 +69,20 @@ jobs:
           pnpm --dir packages/traceai_livekit pack --pack-destination "$RUNNER_TEMP/livekit-package"
           tarballs=("$RUNNER_TEMP/livekit-package/"*.tgz)
           test "${#tarballs[@]}" -eq 1
-          npm install --prefix "$RUNNER_TEMP/livekit-sdk" --ignore-scripts --no-audit --no-fund "${tarballs[0]}"
+          # Workspace fi-core bumps may not be published yet.
+          # Prefer the registry whenever that exact version is available.
+          core_version=$(node -p "require('./packages/fi-core/package.json').version")
+          if published_version=$(npm view "@traceai/fi-core@$core_version" version 2>/dev/null) && [[ -n "$published_version" ]]; then
+            echo "@traceai/fi-core@$core_version source: npm registry"
+          else
+            mkdir -p "$RUNNER_TEMP/fi-core-package"
+            pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/fi-core-package"
+            core_tarballs=("$RUNNER_TEMP/fi-core-package/"*.tgz)
+            test "${#core_tarballs[@]}" -eq 1
+            tarballs+=("${core_tarballs[0]}")
+            echo "@traceai/fi-core@$core_version source: workspace tarball"
+          fi
+          npm install --prefix "$RUNNER_TEMP/livekit-sdk" --ignore-scripts --no-audit --no-fund "${tarballs[@]}"
       - name: Test the tarball with loopback-only networking
         run: |
           exit_args=()
