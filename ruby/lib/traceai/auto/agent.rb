@@ -4,10 +4,12 @@
 require_relative 'config'
 require_relative 'secrets'
 require_relative 'codec'
+require_relative 'bundler_hook'
 module TraceAI
   module Auto
     VERSION = '0.1.0'
     INIT_MUTEX = Mutex.new
+    BUNDLER_BOOT_MUTEX = Mutex.new
     TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester].freeze
     MODEL_KINDS = %w[LLM EMBEDDING RERANKER GUARDRAIL].freeze
     AI_MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
@@ -67,7 +69,7 @@ module TraceAI
       end
       # Observe completed class and module definitions (:end events) only. Never
       # hook method calls, resolve application constants (including autoload
-      # namespaces) or wrap require. sync_hooks turns this off once nothing is
+      # namespaces) or wrap Kernel loading. sync_hooks turns this off once nothing is
       # left to find, and the startup window bounds every other wait.
       def load_hook
         @load_hook ||= TracePoint.new(:end) do |event|
@@ -141,7 +143,7 @@ module TraceAI
       end
       def provider_watch_needed?
         return false if @config.nil? || @config.truthy?('sdk_disabled')
-        return true if @pending
+        return true if @pending || provisional_local_boot?
         !!(@active && @sdk && @own_provider && @provider.equal?(@own_provider))
       end
       def provider_changed
@@ -154,7 +156,7 @@ module TraceAI
       end
       def load_hook_needed?
         return false if @window_closed || @config.nil? || @config.truthy?('sdk_disabled')
-        return true if @pending
+        return true if @pending || provisional_local_boot?
         return false unless @active
         seen = @targets || {}
         needed_targets.any? { |name| !seen.key?(name) }
@@ -224,6 +226,10 @@ module TraceAI
         name = Module.instance_method(:name).bind_call(klass)
         if name == 'Bundler'
           watch_bundler(klass)
+        elsif name == 'Bundler::Runtime'
+          # Observed during normal startup or an explicit discovery pass. Never
+          # resolve Bundler's autoload or force setup just to install this hook.
+          prepend_once(klass, BundlerHook) unless @config&.truthy?('sdk_disabled')
         elsif name == 'OpenTelemetry'
           watch_provider(klass)
         elsif TARGETS.include?(name)
@@ -329,7 +335,7 @@ module TraceAI
       # `how` says what asked for the start:
       #   :explicit  TraceAI::Auto.init or auto_instrument
       #   :request   the first AI request
-      #   :attached  the application set its own SDK provider
+      #   :attached  Bundler boot or the application set its own SDK provider
       #   :report    a report or doctor call
       # The first two start the agent for good. The last two are provisional:
       # until the first AI request, an explicit init replaces them and applies
@@ -339,7 +345,7 @@ module TraceAI
         INIT_MUTEX.synchronize do
           retired = false
           if @initialized
-            unless how == :explicit && @provisional
+            unless (how == :explicit && @provisional) || (how == :attached && provisional_local_boot? && sdk_host_provider)
               if how == :explicit && !@repeat_logged
                 @repeat_logged = true
                 warn 'traceai-auto: already initialized; existing provider retained'
@@ -373,6 +379,7 @@ module TraceAI
       # Under INIT_MUTEX, so that an explicit init that is replacing the start
       # finishes first, and one that has not begun finds the start final.
       def finalize_start
+        adopt_host_provider if provisional_local_boot?
         return unless @provisional
         return @provisional = false if @initializing_thread.equal?(Thread.current)
         INIT_MUTEX.synchronize { @provisional = false }
@@ -543,12 +550,23 @@ module TraceAI
         @provider.add_span_processor(processor)
         @attached_processors << processor
       end
+      # Bundler may finish before a require:false SDK is loaded. Its local
+      # fallback remains replaceable until the first AI request or explicit init.
+      def provisional_local_boot?
+        (@bundler_booted || @bundler_booting) && @provisional && @active && !@sdk
+      end
       # The agent started on its private provider (an AI request came before the
       # application configured OpenTelemetry). Once the application sets its
       # own SDK provider, attach the same processors there and parent later wire
       # spans under the application's spans. Nothing is made global.
       def adopt_host_provider
         check_startup_window
+        if provisional_local_boot? && sdk_host_provider
+          # Retire the unused local pipeline under INIT_MUTEX. The replacement
+          # stays provisional, so explicit init still supplies its own settings.
+          start({}, :attached)
+          return
+        end
         return unless @sdk && @own_provider && @provider.equal?(@own_provider)
         host = sdk_host_provider
         return unless host && !host.equal?(@own_provider)
@@ -562,11 +580,46 @@ module TraceAI
       rescue StandardError => e
         debug(e)
       end
+      # Bundler calls this only after Runtime#require returns successfully.
+      # Keep automatic setup provisional so a later application init still
+      # supplies its settings. Repeated Bundler.require never reconfigures it.
+      def bundler_boot
+        BUNDLER_BOOT_MUTEX.synchronize do
+          return if @bundler_booted || @config.nil? || @config.truthy?('sdk_disabled')
+          @bundle_ready = true
+          return unless active? || startable?
+          @bundler_booting = true
+          if @initialized
+            adopt_host_provider
+            observe_targets
+            install_transports
+          else
+            start({}, :attached)
+          end
+          return unless active?
+          install_server_instrumentation if @sdk
+          @bundle_wait_expired = false
+          @bundler_booted = true
+          sync_hooks
+        ensure
+          @bundler_booting = false
+        end
+      rescue LoadError, SyntaxError, StandardError => e
+        debug(e)
+      end
       def auto_instrument(instrumentations: nil)
+        @config ||= Config.new(announce: false)
+        announce_warnings(@config)
+        # An early explicit discovery is not a failed once-only init. Wait for
+        # the application's bundle/destination, then allow the caller to retry.
+        return @provider || self if @config.truthy?('sdk_disabled') || waiting_for_bundle?
+        return @provider || self unless active? || startable?
         init unless @initialized
+        adopt_host_provider if provisional_local_boot?
         # An explicit call: what it adds must not be undone by a later init.
         @provisional = false
         return @provider || self unless active?
+        @bundle_wait_expired = false
         names = instrumentations || %w[wire rack]
         names = names.split(',').map(&:strip) if names.is_a?(String)
         @enabled_transports |= names.include?('wire') ? %w[net_http httpx] : (names & %w[net_http httpx])
@@ -582,6 +635,8 @@ module TraceAI
       def wire_enabled? = active? && !(@enabled_transports || []).empty?
       def transport_enabled?(name) = wire_enabled? && @enabled_transports.include?(name)
       def current_context
+        # Also adopt after startup hooks close, before capturing a request parent.
+        adopt_host_provider if provisional_local_boot?
         @sdk ? OpenTelemetry::Context.current : (Thread.current[:traceai_local_context] ||= LocalContext.new({}))
       end
       def attach_context(context)
@@ -619,7 +674,8 @@ module TraceAI
       # The context helpers never start the agent. While it waits, they only
       # remember their attributes for the current Fiber; the first AI request
       # made inside the block starts the agent and picks them up.
-      def early_context? = !@active && !!@pending && startable?
+      # Keep helper attributes portable while a boot fallback may become SDK-backed.
+      def early_context? = ((!@active && !!@pending) || provisional_local_boot?) && startable?
       def with_attributes(attributes)
         if early_context? && attributes.instance_of?(Hash)
           previous = Thread.current[:traceai_early_attributes]
