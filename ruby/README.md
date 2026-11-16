@@ -1,14 +1,15 @@
 # traceai-auto
 
 Zero-code tracing for AI calls made from Ruby. Start your application with one
-`RUBYOPT` flag and every recognized AI HTTP call (OpenAI, Anthropic, Gemini,
+`RUBYOPT` flag and recognized AI HTTP calls (OpenAI, Anthropic, Gemini,
 Bedrock, Cohere, Ollama, speech and transcription APIs, OpenAI-compatible
-gateways and more) becomes an OpenTelemetry CLIENT span with model, messages,
-usage, timing and errors, exported to Future AGI or to your own OpenTelemetry
-destination. Your application code does not change.
+gateways and more) through instrumented transports become OpenTelemetry CLIENT
+spans with model, messages, usage, timing and errors, exported to Future AGI or
+to your own OpenTelemetry destination. Normal startup needs no application code
+changes; clients loaded later need the explicit call described below.
 
 Tracing starts only when you turn it on (the `RUBYOPT` flag or an explicit
-`require`). Once on, every recognized AI call is traced with its content
+`require`). Recognized calls through instrumented transports have their content
 captured by default (the `FI_HIDE_*` settings hide it). Future AGI receives only
 AI spans, masked by the shared privacy catalog; your application's own
 OpenTelemetry provider and its other spans are left as they are.
@@ -52,15 +53,51 @@ Without `require: false`, `Bundler.require` (which Rails runs at boot) loads the
 agent in every process that loads the bundle, in every environment: servers,
 consoles, rake tasks and test suites.
 
+### Installed gem outside the application bundle
+
+If `traceai-auto` is installed separately and your application's `Gemfile` does
+not include it, preload the installed entrypoint by absolute path:
+
+```sh
+RUBYOPT="${RUBYOPT:+$RUBYOPT }-r/absolute/gem-home/gems/traceai-auto-0.1.0/lib/traceai/auto.rb" \
+  bundle exec ruby app.rb
+```
+
+Replace the placeholder with the actual installed gem's `lib/traceai/auto.rb`
+for the Ruby you run; use a path without whitespace for this `RUBYOPT` form.
+Use an already resolved application bundle and configure the FI key pair or an
+application OpenTelemetry destination as described here. No application source,
+Gemfile or lockfile edit, and no checkout `RUBYLIB`, is needed for this launch.
+The absolute require loads the installed files without making `traceai-auto` a
+member of the application's bundle.
+
+Installing the gem alone does not turn tracing on. Bare `-rtraceai/auto` depends
+on load-path/gem resolution and must not be assumed to work for an installed gem
+excluded by Bundler. The absolute path bypasses that lookup, not Bundler's
+selection of application dependencies. Keep `bundle exec`: the agent waits for
+the application's Bundler setup and never calls `Bundler.setup` on its behalf.
+
 What happens at startup:
 
 - In a Bundler project the agent waits for your application's own
   `require 'bundler/setup'` (or `Bundler.setup`) before it activates anything.
-- Only the first AI request or an explicit `TraceAI::Auto.init` starts the
-  agent. An AI request is one the wire catalog recognizes. Any other outgoing
-  request (a secrets fetch, a metadata service call, a webhook) starts nothing,
-  and neither do the context helpers: what a helper sets is remembered and used
-  by the first AI request made inside its block.
+- When preloaded before `Bundler.require`, the agent hooks
+  `Bundler::Runtime#require` and configures/discovers integrations once, only
+  after that call succeeds. It does not call `Bundler.setup`, require your gems
+  for you, or configure a second application OpenTelemetry provider. Repeating
+  `Bundler.require` does not reconfigure the agent. This automatic start remains
+  provisional: an explicit `TraceAI::Auto.init` before the first AI request can
+  still apply your settings. If an SDK marked `require: false` is loaded and
+  configured by your application after this boundary, the provisional local
+  fallback adopts that provider before capturing the first AI request's parent,
+  even after startup observation has ended. The agent does not load unselected
+  SDK dependencies to make this happen.
+- Without that boot boundary, the first AI request or an explicit
+  `TraceAI::Auto.init` / `TraceAI::Auto.auto_instrument` starts the agent. An AI
+  request is one the wire catalog recognizes. Any other outgoing request (a
+  secrets fetch, a metadata service call, a webhook) starts nothing, and neither
+  do the context helpers: what a helper sets is remembered and used by the first
+  AI request made inside its block.
 - If your application sets its own OpenTelemetry SDK tracer provider (for
   example with `OpenTelemetry::SDK.configure` in a Rails initializer), the agent
   attaches to that provider at once, so wire spans appear under your own spans
@@ -72,7 +109,7 @@ What happens at startup:
   wire spans use a private provider, and the agent moves to your provider as
   soon as you set one.
 - Without `opentelemetry-sdk` in the bundle, or in a standalone script, the agent
-  uses a dependency-free pipeline that starts on the first AI request.
+  uses a dependency-free pipeline with the same activation boundaries.
 - Export to Future AGI always uses the agent's built-in exporter, which sends
   OTLP/HTTP protobuf to `${FI_BASE_URL}/tracer/v1/traces` (default base
   `https://api.futureagi.com`). It loads OpenSSL itself when your application has
@@ -130,6 +167,36 @@ return it unchanged. `TraceAI::Auto.auto_instrument(instrumentations: ['wire', '
 adds integrations later. Pending spans are flushed within five seconds at exit,
 including an exit caused by SIGTERM or by your own SIGTERM handler calling
 `exit`; the agent installs no signal handlers. SIGKILL and `exit!` cannot flush.
+
+### Clients loaded after boot
+
+Manual requires after `Bundler.require` completes need explicit reinstrumentation
+once the client is loaded. For example:
+
+```ruby
+require 'httpx'
+TraceAI::Auto.auto_instrument(instrumentations: ['httpx'])
+# HTTPX.post(...) now uses the instrumented transport.
+```
+
+Use `TraceAI::Auto.auto_instrument` with no arguments to discover the default
+wire and Rack integrations. It is safe to call before a client loads and again
+afterwards, including twice: existing wrappers and the provider are retained.
+An early call before Bundler setup or before any export destination exists does
+not consume the later explicit call. Set application destinations with `init`
+or the application's OpenTelemetry configuration, as above.
+
+Call `TraceAI::Auto.init` with any custom settings (project name, hide switches,
+destinations) before the first `auto_instrument` call that starts tracing. That
+call finalizes the configuration: a later `init`, even before the first AI
+request, keeps the existing setup and prints an "already initialized" warning.
+
+This is not universal automatic loading. The agent does not wrap Kernel's
+`require`, `require_relative`, or `load`, and does not alter `caller` or intercept
+`eval`. For libraries first defined through any of those paths after boot, call
+`auto_instrument` after loading; caller-relative resolution and loader aliases
+remain the application's responsibility. The bounded startup discovery can
+observe some early loads, but is not a guarantee for later manual requires.
 
 ## Configuration
 
@@ -311,18 +378,22 @@ install anything.
   process has a Future AGI key pair or an OpenTelemetry SDK tracer provider, and
   a proxy `CONNECT` is not observed: the proxy credentials of a connection
   opened before the first AI request are learned from later connections only.
-- The agent's startup hooks (one on completed class and module definitions, and
-  targeted ones on `Bundler.setup` and on setting the OpenTelemetry tracer
+- The agent's startup TracePoints (one on completed class and module definitions,
+  and targeted ones on `Bundler.setup` and on setting the OpenTelemetry tracer
   provider) are turned off as soon as nothing is left to find, and in any case
   at the end of a startup window of 60 seconds after the agent loads. The
   window is fixed and cannot be changed in this release. It is checked when a class or module definition completes, so an idle
   process drops the hooks at its next definition. This also bounds the hooks in
-  tools such as `bundle`, `gem` and `irb` when `RUBYOPT` is exported. After the
-  window:
-  - a client library loaded for the first time is not traced until you call
+  tools such as `bundle`, `gem` and `irb` when `RUBYOPT` is exported. The separate
+  Bundler wrapper, if installed during startup discovery, remains available for
+  its one successful boot callback; it does not keep any TracePoint enabled or
+  run a polling thread. If Bundler's Runtime is first loaded after the window,
+  use explicit `auto_instrument` after setup/loading instead. After the window:
+  - a client library first loaded outside that Bundler boot callback needs
     `TraceAI::Auto.auto_instrument`;
-  - a `Bundler.setup` that has still not run is no longer waited for, and the
-    process is not traced (one warning at exit when keys are set);
+  - a `Bundler.setup` that has still not run is no longer watched. Without an
+    installed Bundler boot wrapper or an explicit call after setup, the process
+    is not traced (one warning at exit when keys are set);
   - a tracer provider set later is used from the next AI request instead of at
     once.
 - When the first AI request starts the agent inside one of its lazy wrappers
