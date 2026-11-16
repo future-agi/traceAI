@@ -26,7 +26,7 @@ test.each([false, true].flatMap(source => ["exporter-only", "processor-only", "h
 const projectionCases = [false, true].flatMap(source => [16, 128].flatMap(limit => ["owned-projection", "host-projection"].map(mode => ({ source, mode, limit }))));
 // Spec A7 rule 4: the 17 protected wire attributes exceed a 16-slot host, so it keeps the
 // family-ordered protected prefix (markers, identity, outcome, model, usage) and no content.
-// NOT_RUN: fi-security Q9 Candidate 2 (6a3aa0a3); auto-mode projection withdrawn. Owner: fi-observe; 2026-11-05.
+// Skipped: auto-mode projection was withdrawn.
 test.skip.each(projectionCases)("A3/A6/A7 $mode preserves markers, usage, drop counts and (capacity permitting) output at $limit ($source source)", ({ source, mode, limit }) => {
   expect(child(mode, source, limit)).toMatchObject({ projected: true, output: limit >= 128 ? "answer" : null, layer: limit >= 128 ? "wire" : null, incomplete: true, service: mode === "host-projection" ? "host-application" : "application-service" });
 });

@@ -195,7 +195,7 @@ test("RC2 complete JSON retains unmarked data and metadata text without loss", (
   expect(inheritedProse.attributes["traceai.capture.host_data_unknown"]).toBe(true);
 });
 
-// G3-2 complete-capture target; owner: fi-observe; 2026-11-05; Q7a interim. NOT_RUN.
+// Skipped: complete-capture target, not implemented yet.
 test.skip.each([48, 64, 80, 96])("G3-2 error prose: RC2 value limit %i enters error prose and its incomplete JSON tail", async limit => {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({ spanLimits: { attributeValueLengthLimit: limit }, spanProcessors: [new SimpleSpanProcessor(exporter)] });
@@ -214,7 +214,7 @@ test.skip.each([48, 64, 80, 96])("G3-2 error prose: RC2 value limit %i enters er
   } finally { await provider.shutdown(); }
 });
 
-// G3-2 complete-capture target; owner: fi-observe; 2026-11-05; Q7a interim. NOT_RUN.
+// Skipped: complete-capture target, not implemented yet.
 test.skip.each(["spanLimits", "generalLimits"].flatMap(source => [true, false].map(recorded => ({ source, recorded }))))("G3-2 mapped MIME: RC2 code-only $source survives a mapping copy without SDK slots (recorded=$recorded)", async ({ source, recorded }) => {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({ [source]: { attributeValueLengthLimit: 120 }, spanProcessors: [{

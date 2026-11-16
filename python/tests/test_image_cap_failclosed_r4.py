@@ -1,8 +1,7 @@
-"""R4 literal-output controls: RED-first core plus continuation controls.
+"""Literal-output controls for the image cap: core cases plus continuation controls.
 
-Continued from the sealed r1 RED-first packet. D4 boundary migrations are
-listed separately and are not applied to protected tests. These additive
-controls do not substitute for the lead's full E2B suite.
+Boundary migrations are listed separately and are not applied to existing tests.
+These additive controls do not replace the full image-cap suite.
 """
 
 import json

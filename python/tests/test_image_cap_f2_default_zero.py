@@ -1,8 +1,8 @@
-"""F2 default-zero RED-first tests; real runtime is a separate E2B gate.
+"""Tests for the default image cap of zero, written before the implementation.
 
-Literal case oracles were authored before production candidates. No old tests
-are changed. Optional integration packages are required for their selected lane;
-missing packages must fail that run rather than silently skip the coverage.
+No old tests are changed. Optional integration packages are required for the run
+that selects them; missing packages must fail that run rather than silently skip
+the coverage.
 """
 import json
 

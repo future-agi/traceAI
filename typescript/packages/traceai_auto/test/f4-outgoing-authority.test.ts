@@ -7,7 +7,7 @@ import { stageNativeOutgoingHeaders } from "../src/outgoing-node";
 // final authority argument. That must fail assertions, not TypeScript compilation.
 const native = stageNativeOutgoingHeaders as (...args: any[]) => ReturnType<typeof stageNativeOutgoingHeaders>;
 const policy = compileOutgoingPolicy(undefined, undefined), privacy = createOutgoingPrivacy();
-// synthetic test value (fi-security F4-R3-context)
+// synthetic test value
 const remote = propagation.setBaggage(trace.setSpanContext(ROOT_CONTEXT, {
   traceId: "13579bdf13579bdf13579bdf13579bdf", spanId: "2468ace02468ace0", traceFlags: 0, isRemote: true,
   traceState: createTraceState("region=west"),

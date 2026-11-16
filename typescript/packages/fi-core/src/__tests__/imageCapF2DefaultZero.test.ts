@@ -40,7 +40,7 @@ const options = (base64ImageMaxLength: number): TraceConfigOptions => ({
 const zero = { ...DefaultTraceConfig, ...options(0) } as typeof DefaultTraceConfig;
 const hexText = (text: string): string => text.split("").map(c => BS + "u" + c.charCodeAt(0).toString(16).padStart(4, "0")).join("");
 
-// Each entry has a distinct RED-first source oracle, including the counted seam.
+// Each entry has its own source oracle, including the counted seam.
 describe("F2 census reads preserve zero", () => {
   it("constants / metadata / public default", () => {
     expect(DEFAULT_BASE64_IMAGE_MAX_LENGTH).toBe(0);
@@ -102,8 +102,8 @@ describe("F2 invalid-cap fail-closed parity contract", () => {
   it.each([0, "0"])("direct parity zero %s redacts", value => {
     expect(capBase64Images(ONE, value as number)).toBe("[image-redacted]");
   });
-  // r2 binds and repairs the initializer. These remain source-only acceptance
-  // controls, not an executed RED/GREEN or a measured Python parity result.
+  // These check the initializer. They are source-only acceptance controls,
+  // not a measured Python parity result.
   it.each(INVALID)("initializer invalid %s must neither throw nor recover a positive cap", (_name, value) => {
     process.env.FI_BASE64_IMAGE_MAX_LENGTH = "32000";
     const warn = jest.spyOn(diag, "warn").mockImplementation(() => undefined);

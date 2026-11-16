@@ -3,8 +3,7 @@ import { privacyFilter } from "../export-privacy";
 import * as runtime from "../privacy-runtime";
 import { getRegisteredSecrets } from "../secrets";
 
-// I1 r10c literal controls. Synthetic values only. Runtime NOT_RUN by this
-// writer; RED/GREEN derivations are recorded in 02-tests.json.
+// Literal privacy controls. Synthetic values only.
 const savedEnv = { ...process.env }, registryKey = Symbol.for("traceai.secrets");
 let savedRegistry: PropertyDescriptor | undefined;
 beforeEach(() => {

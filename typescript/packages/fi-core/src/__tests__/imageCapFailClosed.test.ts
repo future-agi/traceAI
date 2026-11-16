@@ -3,7 +3,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "
 import { capBase64Images, __ImageCapEditsForTest } from "../trace/trace-config/imageCap";
 import { FITracer } from "../trace/trace-config/FITracer";
 
-// Source-first contract controls. No executed RED/GREEN is asserted.
+// Source-first contract controls.
 const A = "__REDACTED__";
 const B = "[image-redacted]";
 const CAP = 64;

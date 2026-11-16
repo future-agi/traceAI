@@ -161,7 +161,7 @@ test.each(["http", "https"])("R2 %s adapters remain off without explicit opt-in"
     expect(out.beforeShutdown.integrations.some((s: any) => s.name === "outgoing-undici")).toBe(false);
   }
 }, 30000);
-// Round-3 RED/GREEN uses the SAME fixture bytes against round 2 and round 3.
+// The same fixture bytes are used against the round-2 and round-3 behaviour.
 // All destinations resolve to loopback; never contact a real provider.
 test.each(["http"])("R3 %s literal backslash paths cannot authorize a denied vendor", async transport => {
   const common = { F4_CASE: "authority", F4_TRANSPORT: transport };

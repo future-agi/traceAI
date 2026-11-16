@@ -19,7 +19,7 @@ EMAIL = "jane@example.com"
 UUID = "73630065-0794-4450-a1f9-8cc987a02b09"
 PHONE = "+1 415 555 0100"
 # Identifier fields are exempt from PII redaction (#195). Metadata is free-form and
-# stays redacted when the flag is on (fi-security ruling on the #244 scope).
+# stays redacted when the flag is on (the scope agreed in #244).
 ID_KEYS = (
     "session.id",
     "user.id",

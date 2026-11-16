@@ -42,7 +42,7 @@ def test_text_flag_keeps_explicitly_typed_images():
     assert config.mask("gen_ai.input.images.0", "image-reference") == "image-reference"
     assert config.mask("gen_ai.input.messages.0.message.contents.0.message_content.image.image.url", "image-reference") == "image-reference"
     default = TraceConfig(hide_input_text=True)
-    # Observed on the merged head (E2B tracebacks, final-r5-targeted line 45 and ifin): a gen_ai.input.images
+    # Observed on the merged head: a gen_ai.input.images
     # value is not an image-cap key and keeps a non-data reference; a message image URL slot is an image key
     # and at the default cap 0 its non-empty payload is replaced whole.
     assert default.mask("gen_ai.input.images.0", "image-reference") == "image-reference"

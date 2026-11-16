@@ -36,7 +36,7 @@ test("S6 one credential predicate drives headers, query, parsed body and export 
   const response = { usage: { input_tokens_details: { cache_read: "123456789" } }, choices: [{ logprobs: { content: [{ token: "ordinary-word" }] } }] };
   // Ordinary tokens are restored only at an explicitly parsed provider root.
   expect(discoverProviderResponseSecrets(response)).toEqual([]);
-  // fi-security (7): identical untrusted attribute/user JSON retains the name rule.
+  // Identical untrusted attribute/user JSON keeps the name rule.
   expect(discoverSecrets([response])).toEqual(["ordinary-word"]);
   expect(isCredentialName("secret.choices.0.logprobs.content.0.token")).toBe(true);
 });
