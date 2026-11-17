@@ -50,10 +50,30 @@ describe.each([0, 0.25, 1])("parent-based local root rate %s", rate => {
   });
 });
 
-test("an invalid parent context uses the root ratio instead of its fi entry", () => {
-  const result = sample(ratioSampler(), parent("r:0.5", true, true, "0".repeat(32)));
-  expect(result.attributes?.[key]).toBe(0.25);
-  expect(result.traceState?.get("fi")).toBe("r:0.25");
+describe.each([true, false])("invalid-parent root metadata (parentBased=%s)", parentBased => {
+  test.each(["traceId", "spanId"] as const)("ignores stale state from a zero %s", field => {
+    const original = createTraceState("vendor=stale-old-trace,fi=r:0.5");
+    const ctx = trace.setSpanContext(ROOT_CONTEXT, {
+      traceId: keptId, spanId: "1234567890123456", traceFlags: TraceFlags.SAMPLED,
+      [field]: "0".repeat(field === "traceId" ? 32 : 16), traceState: original,
+    });
+    const root = new TraceIdRatioBasedSampler(0.25);
+    const delegate = parentBased ? new ParentBasedSampler({ root }) : root;
+    const result = sample(withSamplingRatio({ sampler: delegate, ratio: { rate: 0.25, parentBased } }), ctx);
+    expect(result.decision).toBe(sample(delegate, ctx).decision);
+    expect(result.attributes?.[key]).toBe(0.25);
+    expect(result.traceState?.serialize()).toBe("fi=r:0.25");
+    expect(result.traceState?.get("vendor")).toBeUndefined();
+    expect(original.serialize()).toBe("vendor=stale-old-trace,fi=r:0.5");
+  });
+
+  test("preserves explicit delegate state even with an invalid parent", () => {
+    const original = createTraceState("delegate=retained,fi=r:0.75");
+    const delegate: Sampler = { shouldSample: () => ({ decision: SamplingDecision.RECORD_AND_SAMPLED, traceState: original }), toString: () => "delegate" };
+    const result = sample(withSamplingRatio({ sampler: delegate, ratio: { rate: 0.25, parentBased } }), parent("r:0.5", true, true, "0".repeat(32)));
+    expect(result.traceState?.serialize()).toBe("fi=r:0.25,delegate=retained");
+    expect(original.serialize()).toBe("delegate=retained,fi=r:0.75");
+  });
 });
 
 test.each([true, false])("plain ratio uses the local ratio and replaces fi even with a sampled=%s parent", sampled => {
