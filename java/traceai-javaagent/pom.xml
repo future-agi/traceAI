@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.1.0</version>
+        <version>1.2.0</version>
     </parent>
 
     <artifactId>traceai-javaagent</artifactId>
@@ -418,24 +418,6 @@
                         <artifactId>maven-install-plugin</artifactId>
                         <configuration>
                             <skip>true</skip>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- Held from Maven Central until the owner approves the agent's first release. The Java
-             release still builds, tests and signs this module, but leaves it out of the Central
-             bundle; hold_artifacts in .github/release/config.json keeps it out of the release's
-             Central check. To publish it, remove this profile and that entry. -->
-        <profile>
-            <id>release</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <configuration>
-                            <skipPublishing>true</skipPublishing>
                         </configuration>
                     </plugin>
                 </plugins>

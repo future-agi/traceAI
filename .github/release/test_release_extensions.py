@@ -63,29 +63,27 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual([p['name'] for p in plan['go']], ['github.com/future-agi/traceAI/go/auto'])
         self.assertEqual(plan['skipped'], [])
 
-    def test_java_agent_is_built_but_held_from_central_until_its_first_release_is_approved(self):
+    def test_java_agent_is_released_with_the_reactor(self):
         root = release_plan.REPO_ROOT
         java = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'java']
         self.assertEqual([p['name'] for p in java], ['com.futureagi:traceai-java-parent'])
-        self.assertIn('traceai-javaagent', java[0]['artifacts'], 'the reactor still builds and tests the agent')
+        self.assertIn('traceai-javaagent', java[0]['artifacts'])
         plan = release_plan.plan(java, release_plan.load_config(), offline=True)
-        # The rest of the reactor is still released, and the Central check waits only for what was deployed.
+        # The agent is deployed with the rest of the reactor, so the Central check waits for it too.
         self.assertEqual([p['name'] for p in plan['java']], ['com.futureagi:traceai-java-parent'])
         planned = plan['java'][0]
-        self.assertNotIn('traceai-javaagent', planned['artifacts'])
+        self.assertIn('traceai-javaagent', planned['artifacts'])
         self.assertIn('traceai-java-core', planned['artifacts'])
-        self.assertEqual(planned['held_artifacts'], ['traceai-javaagent'])
-        held = [p for p in plan['skipped'] if p['name'] == 'com.futureagi:traceai-javaagent']
-        self.assertEqual(len(held), 1)
-        self.assertIn('first release', held[0]['reason'])
-        # The deploy leaves the module out: its release profile turns Central publishing off.
+        self.assertEqual(planned['held_artifacts'], [])
+        self.assertEqual([p for p in plan['skipped'] if p['name'] == 'com.futureagi:traceai-javaagent'], [])
+        # No release profile turns Central publishing off for the agent.
         ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
         pom = ET.parse(root / 'java/traceai-javaagent/pom.xml').getroot()
-        profiles = [p for p in pom.findall('m:profiles/m:profile', ns) if p.findtext('m:id', namespaces=ns) == 'release']
-        self.assertEqual(len(profiles), 1)
-        plugins = [p for p in profiles[0].findall('m:build/m:plugins/m:plugin', ns)
-                   if p.findtext('m:artifactId', namespaces=ns) == 'central-publishing-maven-plugin']
-        self.assertEqual([p.findtext('m:configuration/m:skipPublishing', namespaces=ns) for p in plugins], ['true'])
+        skips = [p.findtext('m:configuration/m:skipPublishing', namespaces=ns)
+                 for profile in pom.findall('m:profiles/m:profile', ns)
+                 for p in profile.findall('m:build/m:plugins/m:plugin', ns)
+                 if p.findtext('m:artifactId', namespaces=ns) == 'central-publishing-maven-plugin']
+        self.assertEqual(skips, [])
 
     @staticmethod
     def _java_script(name):
@@ -93,15 +91,15 @@ class ExtensionTests(unittest.TestCase):
         import runpy
         return runpy.run_path(str(release_plan.REPO_ROOT / 'java/scripts' / name))
 
-    def test_bom_leaves_out_a_module_while_it_is_held(self):
+    def test_bom_names_every_released_module_and_no_held_one(self):
         root = release_plan.REPO_ROOT
-        held = release_plan.load_config().get('hold_artifacts', {})
-        self.assertIn('com.futureagi:traceai-javaagent', held)
+        held = {name.split(':', 1)[1] for name in release_plan.load_config().get('hold_artifacts', {})}
         ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
         bom = ET.parse(root / 'java/traceai-bom/pom.xml').getroot()
         managed = {d.findtext('m:artifactId', namespaces=ns) for d in bom.findall('m:dependencyManagement/m:dependencies/m:dependency', ns)}
-        self.assertNotIn('traceai-javaagent', managed, 'a released BOM must not name an artifact Central does not serve')
+        self.assertEqual(managed & held, set(), 'a released BOM must not name an artifact Central does not serve')
         self.assertIn('traceai-java-core', managed)
+        self.assertIn('traceai-javaagent', managed, 'the released agent is aligned by the BOM')
 
     def test_central_check_expects_the_bom_to_leave_out_a_held_module_and_to_name_it_again_once_released(self):
         check = self._java_script('check_central.py')
@@ -112,7 +110,7 @@ class ExtensionTests(unittest.TestCase):
         self.assertTrue(check['bom_errors']({'traceai-java-core'}, expected, {}), 'once the hold is lifted the BOM must name the module')
         self.assertEqual(check['bom_errors']({'traceai-java-core', 'traceai-javaagent'}, expected, {}), [])
         # The exception comes from the release hold list, not from a name written into the checker.
-        self.assertEqual(check['held_artifact_ids'](release_plan.REPO_ROOT / '.github/release/config.json'), {'traceai-javaagent'})
+        self.assertEqual(check['held_artifact_ids'](release_plan.REPO_ROOT / '.github/release/config.json'), set())
 
     def test_jitpack_harvest_leaves_out_a_held_module_and_takes_it_back_once_released(self):
         prepare_script = self._java_script('prepare_jitpack.py')

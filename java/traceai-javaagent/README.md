@@ -9,7 +9,14 @@ The application's own OpenTelemetry setup is left alone. The agent does not regi
 
 ## Quickstart
 
-1. Build the agent jar from this repository (Maven and JDK 17+). It is not on Maven Central yet: it is held from the Java SDK releases until its first release is approved.
+1. Get the agent jar (JDK 17+). It is on Maven Central as `com.futureagi:traceai-javaagent`, released with the Java SDK at the same version:
+
+   ```sh
+   VERSION=1.2.0
+   curl -fLO "https://repo1.maven.org/maven2/com/futureagi/traceai-javaagent/$VERSION/traceai-javaagent-$VERSION.jar"
+   ```
+
+   Or build it from this repository (Maven and JDK 17+):
 
    ```sh
    mvn -B -f java/pom.xml -pl traceai-javaagent -am -DskipTests package
