@@ -264,6 +264,62 @@ class SamplerTest < Minitest::Test
     end
   end
 
+  def test_ratio_admission_preserves_native_ai_filtering_and_coverage
+    code = <<~'RUBY'
+      require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+      OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
+      provider = TraceAI::Auto.init(sample_rate: 0.25)
+      tracer = provider.tracer('native-ai')
+      root = tracer.start_span('native-root', with_parent: OpenTelemetry::Context.empty,
+        attributes: {'gen_ai.span.kind' => 'LLM'})
+      parent = OpenTelemetry::Trace.context_with_span(root, parent_context: OpenTelemetry::Context.empty)
+      nested = tracer.start_span('nested', with_parent: parent)
+      context = OpenTelemetry::Trace.context_with_span(nested, parent_context: OpenTelemetry::Context.empty)
+      allowed = TraceAI::Auto.with_context(context) { TraceAI::Auto.capture_allowed? }
+      nested.finish
+      root.finish
+      abort 'flush failed' unless TraceAI::Auto.flush
+      puts JSON.generate(capture_allowed: allowed)
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT' => '1'})
+    assert status.success?, stderr
+    refute JSON.parse(stdout).fetch('capture_allowed'), 'native model coverage must suppress wire duplicates'
+    spans = export_spans.map(&:first)
+    assert_equal ['native-root'], spans.map(&:name)
+    assert_equal({'fi.sampling.ratio' => 0.25}, attrs(spans.first.attributes))
+    assert_empty traceai_diagnostics(stderr)
+  end
+
+  def test_ratio_restoration_keeps_original_media_admission_evidence
+    code = <<~'RUBY'
+      require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+      OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      provider = TraceAI::Auto.init(sample_rate: 0.25, exporter: memory)
+      span = provider.tracer('native-media').start_span('media', with_parent: OpenTelemetry::Context.empty,
+        attributes: {'blob.id.content.chunk' => JSON.generate({'private' => 'x' * 100}),
+          'ordinary' => 'safe sentence', 'filler' => 'safe sentence',
+          'blob.id.mimeType' => 'application/octet-stream'})
+      span.add_event('safe-event', attributes: {'ordinary' => 'safe sentence'})
+      span.finish
+      abort 'flush failed' unless TraceAI::Auto.flush
+      puts JSON.generate(memory.finished_spans.map { |record| {attributes: record.attributes,
+        events: record.events.map { |event| {name: event.name, attributes: event.attributes} }} })
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil,
+      'OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT' => '3', 'OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT' => '32'})
+    assert status.success?, stderr
+    spans = JSON.parse(stdout)
+    assert_equal 1, spans.length
+    values = spans.first.fetch('attributes')
+    assert_equal 'safe sentence', values.fetch('ordinary', nil)
+    assert_equal 0.25, values.fetch('fi.sampling.ratio')
+    assert_equal '<omitted: media>', values.fetch('blob.id.content.chunk')
+    assert_equal [{'name' => 'safe-event', 'attributes' => {'ordinary' => 'safe sentence'}}], spans.first.fetch('events')
+    assert_empty traceai_diagnostics(stderr)
+    assert_empty export_spans
+  end
+
   def test_fractional_parentbased_root_and_local_child_share_ratio
     spans, stderr = ratio_probe({}, options: {sample_rate: 0.25})
     %w[root local_child invalid_parent].each do |name|
