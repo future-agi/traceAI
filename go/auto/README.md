@@ -319,14 +319,19 @@ its own sampler.
 On agent-owned providers with a known ratio between 0 and 1, sampled spans carry
 `fi.sampling.ratio` as a double: the trace's keep probability (absent means `1.0`).
 A local fractional ratio decision writes `fi=r:<ratio>` to W3C tracestate while
-preserving other entries. All owned parent-based samplers copy a valid finite
-`0 < ratio < 1` from a sampled local or remote parent's `fi` entry, preserving
+preserving entries from a valid parent. An absent parent, or one with a zero trace
+or span ID, starts a locally decided root: none of that invalid context's `fi` or
+other vendor entries are carried forward. A fractional root writes only its own
+`fi` entry; a full-rate root writes none. All owned parent-based samplers copy a
+valid finite `0 < ratio < 1` from a sampled local or remote parent's `fi` entry, preserving
 tracestate, and otherwise omit the attribute. This includes the unset default,
 `parentbased_always_on`/`parentbased_always_off`, and explicit root ratios `0`/`1`.
 Root decisions at `0`/`1` do not stamp. Non-parent-based always-on/off and full-rate
 ratio samplers do not copy parent ratios; a fractional non-parent-based ratio
-sampler stamps its own ratio instead. Dropped or record-only spans and
-application-owned providers are unchanged. Wire admission reserves
+sampler stamps its own ratio instead. Dropped or record-only spans never receive
+the ratio attribute; application-owned providers are unchanged. Export privacy
+recovery preserves a valid finite fractional double ratio without restoring
+hidden content or accepting ratio values of other types. Wire admission reserves
 one attribute slot when this sampler may stamp, keeping admitted content/MIME
 groups atomic. With an attribute-count limit of `1`, the ratio takes the only
 slot and no wire degradation marker can fit; a zero limit keeps no attributes,
