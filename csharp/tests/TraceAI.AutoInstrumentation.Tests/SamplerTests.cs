@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using OpenTelemetry;
+using OpenTelemetry.Context.Propagation;
 using OpenTelemetry.Trace;
 using Xunit;
 
@@ -182,6 +183,100 @@ public class SamplerTests : InitIsolation
         Assert.Equal(sampled?2:0,hostExporter.Spans.Count);
     }
 
+    // The pre-fix API is ordinary Activity.Context. Falling back to it keeps these
+    // regressions executable on the base revision: failure is missing propagation,
+    // not a compilation error caused by a new public API.
+    private static ActivityContext PropagationContext(Activity? activity=null)
+    {
+        var method=typeof(TraceAIAuto).GetMethod("GetPropagationContext",BindingFlags.Public|BindingFlags.Static);
+        return method==null?(activity??Activity.Current)?.Context??default:
+            (ActivityContext)method.Invoke(null,new object?[] { activity })!;
+    }
+
+    [Theory]
+    [InlineData("traceidratio")] [InlineData("parentbased_traceidratio")]
+    public void OwnedRatioPropagatesThroughStandardW3CInjectionAndRemoteExtraction(string samplerName)
+    {
+        using var environment=new EnvironmentScope(samplerName,"0.25");
+        var upstream=new MemoryExporter();
+        TraceAIAuto.Init(options=> {
+            options.Exporter=upstream; options.WireCapture=false;
+            options.ConfigFile=Path.Combine(Path.GetTempPath(),"traceai-propagation-"+Guid.NewGuid()+".toml");
+        });
+        Activity? root=null;
+        for(var attempt=0;attempt<1000;attempt++)
+        {
+            var candidate=TraceAIAuto.Source.StartActivity("upstream",ActivityKind.Internal,default(ActivityContext));
+            if(candidate?.IsAllDataRequested==true) { root=candidate; break; }
+            candidate?.Dispose();
+        }
+        Assert.NotNull(root);
+        var headers=new Dictionary<string,string>();
+        var propagator=new TraceContextPropagator();
+        ActivityTraceId traceId; ActivitySpanId parentId;
+        using(root)
+        {
+            root.TraceStateString="vendor=present";
+            traceId=root.TraceId; parentId=root.SpanId;
+            using(var unrelated=new Activity("application-unobserved").SetIdFormat(ActivityIdFormat.W3C).Start())
+                Assert.Equal(unrelated.Context,PropagationContext(unrelated));
+            var context=PropagationContext();
+            Assert.Equal(context,PropagationContext(root));
+            // A separate context is explicitly selected for this agent-owned handoff;
+            // the raw application's context, tags and sampled bit remain untouched.
+            propagator.Inject(new PropagationContext(context,default),headers,static (carrier,key,value)=>carrier[key]=value);
+            Assert.False(root.Recorded); Assert.Null(root.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal("vendor=present",root.Context.TraceState);
+        }
+        TraceAIAuto.Shutdown();
+        Assert.Equal(root.Context,PropagationContext(root));
+        Assert.Equal("fi=r:0.25,vendor=present",headers["tracestate"]);
+        var received=propagator.Extract(default,headers,static (carrier,key)=>carrier.TryGetValue(key,out var value)?new[] { value }:Array.Empty<string>()).ActivityContext;
+        Assert.True(received.IsRemote); Assert.True((received.TraceFlags&ActivityTraceFlags.Recorded)!=0);
+        Assert.Equal(traceId,received.TraceId); Assert.Equal(parentId,received.SpanId);
+        var downstream=new MemoryExporter();
+        using(var agent=new Agent(Config(downstream,.75)))
+        {
+            using(var child=TraceAIAuto.Source.StartActivity("downstream",ActivityKind.Server,received))
+            { Assert.NotNull(child); Assert.False(child.Recorded); Assert.Null(child.GetTagItem("fi.sampling.ratio")); }
+            Assert.True(agent.Flush(3000));
+        }
+        var span=Assert.Single(downstream.Spans);
+        Assert.True(span.Recorded); Assert.Equal(traceId,span.TraceId); Assert.Equal(parentId,span.ParentSpanId);
+        Assert.Equal(.25,span.GetTagItem("fi.sampling.ratio")); Assert.Equal(received.TraceState,span.TraceStateString);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void RatioReservationAtLimitOneDoesNotWarnThatConfigurationIsZero(bool fallback)
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var sampler=FractionalSampler();
+        var privacy=new AutoProcessor(Config(new MemoryExporter()),sampler:sampler);
+        using var provider=Sdk.CreateTracerProviderBuilder().AddSource("test.ratio.warning").SetSampler(sampler).AddProcessor(privacy).Build();
+        using var source=new ActivitySource("test.ratio.warning");
+        var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"fi=r:0.5",true);
+        using var span=source.StartActivity("chat",ActivityKind.Internal,parent);
+        Assert.NotNull(span); span.SetTag("gen_ai.operation.name","chat"); span.Stop();
+        var previous=Console.Error;
+        using var errors=new StringWriter();
+        try
+        {
+            AgentStartupTests.ClearWarnings(); Console.SetError(errors);
+            object? Safe(string key,object value,string? operation)=>fallback?throw new InvalidDataException():value;
+            var snapshot=ExportSnapshot.Create([span],OpenTelemetry.Resources.Resource.Empty,Safe,text=>text,attributeLimit:1,
+                sampled:sampler.Export,samplingMetadata:sampler.ApplyMetadata);
+            Assert.Equal(.5,Assert.Single(Assert.Single(snapshot.Spans).TagObjects).Value);
+            Assert.DoesNotContain(errors.ToString().Split('\n'),line=>line.StartsWith("[traceAI auto]",StringComparison.Ordinal)&&line.Contains("Span attribute limit is zero"));
+            // A genuinely configured zero still produces the traceAI warning.
+            var zero=ExportSnapshot.Create([span],OpenTelemetry.Resources.Resource.Empty,Safe,text=>text,attributeLimit:0,
+                sampled:sampler.Export,samplingMetadata:sampler.ApplyMetadata);
+            Assert.Empty(Assert.Single(zero.Spans).TagObjects);
+            Assert.Single(errors.ToString().Split('\n'),line=>line.StartsWith("[traceAI auto]",StringComparison.Ordinal)&&line.Contains("Span attribute limit is zero"));
+        }
+        finally { Console.SetError(previous); AgentStartupTests.ClearWarnings(); }
+    }
+
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public void RatioMetadataSurvivesNormalAndPrivacyFallbackCopiesWithoutStampingRawSpans(bool fallback)
@@ -336,13 +431,23 @@ public class SamplerTests : InitIsolation
         var exporter=new MemoryExporter(); var hostExporter=new MemoryExporter();
         using var provider=Sdk.CreateTracerProviderBuilder().AddSource(TraceAIAuto.Source.Name).SetSampler(new AlwaysOnSampler())
             .AddProcessor(new SimpleActivityExportProcessor(hostExporter)).Build();
-        using var agent=new Agent(Config(exporter,provider:provider));
+        TraceAIAuto.Init(options=> {
+            options.Exporter=exporter; options.Provider=provider; options.SampleRate=.25; options.WireCapture=false;
+            options.ConfigFile=Path.Combine(Path.GetTempPath(),"traceai-host-propagation-"+Guid.NewGuid()+".toml");
+        });
         var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"fi=r:0.5",true);
         using(var activity=TraceAIAuto.Source.StartActivity("host",ActivityKind.Internal,parent))
-        { Assert.NotNull(activity); Assert.Null(activity.GetTagItem("fi.sampling.ratio")); }
-        Assert.True(agent.Flush(3000));
+        {
+            Assert.NotNull(activity); Assert.Null(activity.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal(activity.Context,PropagationContext(activity));
+            var headers=new Dictionary<string,string>();
+            new TraceContextPropagator().Inject(new PropagationContext(PropagationContext(activity),default),headers,static (carrier,key,value)=>carrier[key]=value);
+            Assert.Equal(activity.Id,headers["traceparent"]); Assert.Equal(activity.TraceStateString,headers["tracestate"]);
+        }
+        Assert.True(TraceAIAuto.Flush(3000));
         Assert.Null(Assert.Single(hostExporter.Spans).GetTagItem("fi.sampling.ratio"));
         Assert.Null(Assert.Single(exporter.Spans).GetTagItem("fi.sampling.ratio"));
+        TraceAIAuto.Shutdown();
     }
 
     [Fact]
