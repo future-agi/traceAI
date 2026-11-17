@@ -13,26 +13,30 @@ import (
 )
 
 func TestRatioSamplerBudgetPrediction(t *testing.T) {
-	for _, parentBased := range []bool{false, true} {
-		delegate := &ratioResultSampler{}
-		sampler := ratioSampler{delegate: delegate, rate: 0.25, parentBased: parentBased}
-		for _, tc := range []struct {
-			name string
-			ctx  context.Context
-			want bool
-		}{
-			{"root", context.Background(), true},
-			{"inherited", ratioParent(t, true, true, "fi=r:0.5"), true},
-			{"missing", ratioParent(t, true, true, "vendor=kept"), !parentBased},
-			{"invalid", ratioParent(t, true, true, "fi=r:NaN"), !parentBased},
-			{"unsampled", ratioParent(t, true, false, "fi=r:0.5"), !parentBased},
-		} {
-			if _, stamp := sampler.ratioForParent(trace.SpanContextFromContext(tc.ctx)); stamp != tc.want {
-				t.Errorf("parentBased=%v/%s: stamp=%v, want %v", parentBased, tc.name, stamp, tc.want)
+	for _, rate := range []float64{0, 0.25, 1} {
+		for _, parentBased := range []bool{false, true} {
+			delegate := &ratioResultSampler{}
+			sampler := ratioSampler{delegate: delegate, rate: rate, parentBased: parentBased}
+			fractional := rate > 0 && rate < 1
+			for _, tc := range []struct {
+				name string
+				ctx  context.Context
+				want bool
+			}{
+				{"root", context.Background(), fractional},
+				{"inherited", ratioParent(t, true, true, "fi=r:0.5"), parentBased || fractional},
+				{"local", ratioParent(t, false, true, "fi=r:0.5"), parentBased || fractional},
+				{"missing", ratioParent(t, true, true, "vendor=kept"), !parentBased && fractional},
+				{"invalid", ratioParent(t, true, true, "fi=r:NaN"), !parentBased && fractional},
+				{"unsampled", ratioParent(t, true, false, "fi=r:0.5"), !parentBased && fractional},
+			} {
+				if _, stamp := sampler.ratioForParent(trace.SpanContextFromContext(tc.ctx)); stamp != tc.want {
+					t.Errorf("rate=%v/parentBased=%v/%s: stamp=%v, want %v", rate, parentBased, tc.name, stamp, tc.want)
+				}
 			}
-		}
-		if delegate.calls != 0 {
-			t.Fatal("budget prediction called the sampling delegate")
+			if delegate.calls != 0 {
+				t.Fatal("budget prediction called the sampling delegate")
+			}
 		}
 	}
 }
@@ -41,7 +45,7 @@ func TestRatioSamplerBudgetPrediction(t *testing.T) {
 // unlimited control supplies the full content count and admission key set;
 // sweeping constrained limits hits both full groups and one-slot boundaries.
 func TestRatioSamplerWireBudgetOTLP(t *testing.T) {
-	for _, mode := range []string{"inherited", "local-parent", "traceidratio", "missing-fi", "invalid-fi", "host", "rate-one"} {
+	for _, mode := range []string{"inherited", "local-parent", "traceidratio", "missing-fi", "invalid-fi", "host", "rate-one", "default", "default-root", "parentbased-always-on", "fi-one"} {
 		t.Run(mode, func(t *testing.T) {
 			samplerEnvironment(t)
 			t.Setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "-1")
@@ -66,7 +70,13 @@ func TestRatioSamplerWireBudgetOTLP(t *testing.T) {
 					wantRatio = 0
 				case "rate-one":
 					options = append(options, WithSampleRate(1))
+				case "default":
+				case "default-root":
 					wantRatio = 0
+				case "parentbased-always-on":
+					t.Setenv("OTEL_TRACES_SAMPLER", "parentbased_always_on")
+				case "fi-one":
+					t.Setenv("FI_SAMPLE_RATE", "1")
 				default:
 					options = append(options, WithSampleRate(0.25))
 					if mode == "missing-fi" {
@@ -80,12 +90,15 @@ func TestRatioSamplerWireBudgetOTLP(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer stop(context.Background())
-				if (agent.current.ownedRatio != nil) != (mode != "host" && mode != "rate-one") {
+				if (agent.current.ownedRatio != nil) != (mode != "host") {
 					t.Fatal("reservation state does not match the owned sampler")
 				}
 				raw := tracetest.NewSpanRecorder()
 				agent.current.provider.RegisterSpanProcessor(raw)
 				ctx := ratioParent(t, mode != "local-parent", true, state)
+				if mode == "default-root" {
+					ctx = context.Background()
+				}
 				ctx = ContextWithAttributes(ctx,
 					attribute.String("z.record.mimeType", "audio/L16"),
 					attribute.String("z.record.data", r6aPCM))

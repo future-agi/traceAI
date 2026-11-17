@@ -12,6 +12,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	common "go.opentelemetry.io/proto/otlp/common/v1"
 )
 
 func ratioTraceState(t *testing.T, value string) trace.TraceState {
@@ -94,32 +95,47 @@ func TestRatioSamplerRootAndLocalChild(t *testing.T) {
 }
 
 func TestRatioSamplerParentState(t *testing.T) {
-	samplerEnvironment(t)
-	sampler := configuredSampler(Config{SampleRate: 0.25, sampleRateSet: true})
-	for _, remote := range []bool{false, true} {
-		for _, value := range []string{"", "r:0.5", "r:0.125", "r:2", "r:1", "r:0", "r:-0.5", "r:abc", "r:NaN", "r:+Inf", "r:-Inf", "r:1e-999", "r:", "0.5", "x:0.5"} {
-			t.Run("remote="+strconv.FormatBool(remote)+"/fi="+value, func(t *testing.T) {
-				state := "vendor=preserved"
-				if value != "" {
-					state += ",fi=" + value
+	for _, mode := range []string{"explicit-quarter", "explicit-zero", "explicit-one", "", "parentbased_always_on", "parentbased_always_off", "parentbased_traceidratio"} {
+		t.Run(mode, func(t *testing.T) {
+			samplerEnvironment(t)
+			config := Config{}
+			switch mode {
+			case "explicit-quarter":
+				config = Config{SampleRate: 0.25, sampleRateSet: true}
+			case "explicit-zero":
+				config = Config{SampleRate: 0, sampleRateSet: true}
+			case "explicit-one":
+				config = Config{SampleRate: 1, sampleRateSet: true}
+			default:
+				t.Setenv("OTEL_TRACES_SAMPLER", mode)
+			}
+			sampler := configuredSampler(config)
+			for _, remote := range []bool{false, true} {
+				for _, value := range []string{"", "r:0.5", "r:0.125", "r:2", "r:1", "r:0", "r:-0.5", "r:abc", "r:NaN", "r:+Inf", "r:-Inf", "r:1e-999", "r:", "0.5", "x:0.5"} {
+					t.Run("remote="+strconv.FormatBool(remote)+"/fi="+value, func(t *testing.T) {
+						state := "vendor=preserved"
+						if value != "" {
+							state += ",fi=" + value
+						}
+						for _, sampled := range []bool{false, true} {
+							result := sampler.ShouldSample(sdktrace.SamplingParameters{ParentContext: ratioParent(t, remote, sampled, state), TraceID: trace.TraceID{1}})
+							want := 0.0
+							if sampled && (value == "r:0.5" || value == "r:0.125") {
+								want, _ = strconv.ParseFloat(value[2:], 64)
+							}
+							checkRatioAttribute(t, result.Attributes, want)
+							decision := sdktrace.Drop
+							if sampled {
+								decision = sdktrace.RecordAndSample
+							}
+							if result.Decision != decision || result.Tracestate.String() != state {
+								t.Errorf("sampled=%v: decision or inherited tracestate changed: %+v", sampled, result)
+							}
+						}
+					})
 				}
-				for _, sampled := range []bool{false, true} {
-					result := sampler.ShouldSample(sdktrace.SamplingParameters{ParentContext: ratioParent(t, remote, sampled, state), TraceID: trace.TraceID{1}})
-					want := 0.0
-					if sampled && (value == "r:0.5" || value == "r:0.125") {
-						want, _ = strconv.ParseFloat(value[2:], 64)
-					}
-					checkRatioAttribute(t, result.Attributes, want)
-					decision := sdktrace.Drop
-					if sampled {
-						decision = sdktrace.RecordAndSample
-					}
-					if result.Decision != decision || result.Tracestate.String() != state {
-						t.Errorf("sampled=%v: decision or inherited tracestate changed: %+v", sampled, result)
-					}
-				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -141,7 +157,7 @@ func TestRatioSamplerNonParentBased(t *testing.T) {
 	}
 }
 
-func TestRatioSamplerInactiveSelections(t *testing.T) {
+func TestRatioSamplerNonFractionalSelections(t *testing.T) {
 	for _, name := range []string{"", "always_on", "always_off", "parentbased_always_on", "parentbased_always_off", "traceidratio", "parentbased_traceidratio", "unknown"} {
 		for _, rate := range []string{"0", "1", "NaN", "+Inf", "-0.1", "1.1"} {
 			t.Run(name+"/"+rate, func(t *testing.T) {
@@ -149,11 +165,17 @@ func TestRatioSamplerInactiveSelections(t *testing.T) {
 				t.Setenv("OTEL_TRACES_SAMPLER", name)
 				t.Setenv("OTEL_TRACES_SAMPLER_ARG", rate)
 				sampler := configuredSampler(Config{})
-				for _, ctx := range []context.Context{context.Background(), ratioParent(t, true, true, "vendor=preserved,fi=r:0.5")} {
+				// Invalid ratio arguments fall back to the default parent-based sampler.
+				parentBased := name != "always_on" && name != "always_off" && !(name == "traceidratio" && (rate == "0" || rate == "1"))
+				for _, ctx := range []context.Context{context.Background(), ratioParent(t, true, true, "vendor=preserved,fi=r:0.5"), ratioParent(t, false, true, "vendor=preserved,fi=r:0.5")} {
 					result := sampler.ShouldSample(sdktrace.SamplingParameters{ParentContext: ctx, TraceID: trace.TraceID{1}})
-					checkRatioAttribute(t, result.Attributes, 0)
+					want := 0.0
+					if parentBased && trace.SpanContextFromContext(ctx).IsValid() {
+						want = 0.5
+					}
+					checkRatioAttribute(t, result.Attributes, want)
 					if result.Tracestate.String() != trace.SpanContextFromContext(ctx).TraceState().String() {
-						t.Error("inactive ratio selection changed tracestate")
+						t.Error("non-fractional selection changed tracestate")
 					}
 				}
 			})
@@ -199,6 +221,92 @@ func TestRatioSamplerOwnedProviderSelection(t *testing.T) {
 			exportedState := recorder.Ended()[0].SpanContext().TraceState()
 			if exportedState.Get("fi") != ratioTraceState(t, state).Get("fi") || exportedState.Get("vendor") != "preserved" {
 				t.Error("exported ratio or other tracestate entry changed")
+			}
+		})
+	}
+}
+
+// Full-rate root decisions must not disable copying upstream sampling metadata.
+// Exercise activation, a remote parent, a real local child and OTLP serialization.
+func TestRatioSamplerFullRateParentExport(t *testing.T) {
+	for _, mode := range []string{"default", "parentbased_always_on", "parentbased_traceidratio", "fi-one", "option-one", "always_on", "root-default", "unsampled-default"} {
+		t.Run(mode, func(t *testing.T) {
+			samplerEnvironment(t)
+			t.Setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "128")
+			t.Setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "-1")
+			received := privacyCollector(t)
+			options := []Option{WithCredentials("RATIO_COPY_KEY", "RATIO_COPY_SECRET"), WithWireCapture(false)}
+			switch mode {
+			case "parentbased_always_on", "parentbased_traceidratio", "always_on":
+				t.Setenv("OTEL_TRACES_SAMPLER", mode)
+				t.Setenv("OTEL_TRACES_SAMPLER_ARG", "1")
+			case "fi-one":
+				t.Setenv("FI_SAMPLE_RATE", "1")
+				t.Setenv("OTEL_TRACES_SAMPLER", "always_off")
+			case "option-one":
+				options = append(options, WithSampleRate(1))
+			}
+			stop, err := InitForTest(context.Background(), options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stop(context.Background()) })
+			ctx := ratioParent(t, true, mode != "unsampled-default", "vendor=preserved,fi=r:0.125")
+			wantRatio, wantState := 0.125, "vendor=preserved,fi=r:0.125"
+			if mode == "root-default" {
+				ctx, wantRatio, wantState = context.Background(), 0, ""
+			} else if mode == "always_on" {
+				wantRatio = 0
+			}
+			tracer := agent.current.provider.Tracer("ratio-copy")
+			ctx, parent := tracer.Start(ctx, "remote-child")
+			_, child := tracer.Start(ctx, "local-child")
+			for _, span := range []trace.Span{child, parent} {
+				if span.SpanContext().TraceState().String() != wantState || span.SpanContext().IsSampled() != (mode != "unsampled-default") {
+					t.Error("sampling flag or parent state changed")
+				}
+				span.End()
+			}
+			if mode == "unsampled-default" {
+				if err := ForceFlush(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-received:
+					t.Fatal("unsampled parent's descendants were exported")
+				default:
+				}
+				return
+			}
+			request := flushedPrivacyExport(t, received)
+			count := 0
+			for _, resource := range request.ResourceSpans {
+				for _, scope := range resource.ScopeSpans {
+					for _, span := range scope.Spans {
+						count++
+						found := 0
+						for _, kv := range span.Attributes {
+							if kv.Key == "fi.sampling.ratio" {
+								found++
+								value, ok := kv.Value.Value.(*common.AnyValue_DoubleValue)
+								if !ok || wantRatio == 0 || value.DoubleValue != wantRatio {
+									t.Errorf("%s: exported ratio = %v, want double %v", span.Name, kv.Value, wantRatio)
+								}
+							}
+						}
+						if wantRatio != 0 && found != 1 {
+							t.Errorf("%s: found %d ratios, want one", span.Name, found)
+						}
+						state := ratioTraceState(t, span.TraceState)
+						expected := ratioTraceState(t, wantState)
+						if state.Get("fi") != expected.Get("fi") || state.Get("vendor") != expected.Get("vendor") || span.Flags&1 == 0 {
+							t.Error("export changed sampled flag or parent state")
+						}
+					}
+				}
+			}
+			if count != 2 {
+				t.Fatalf("exported %d spans, want remote child and local child", count)
 			}
 		})
 	}
@@ -285,10 +393,35 @@ func TestRatioSamplerDelegatePreservation(t *testing.T) {
 	}
 }
 
+func TestRatioSamplerCopyOnlyDelegatePreservation(t *testing.T) {
+	for _, rate := range []float64{0, 1} {
+		for _, decision := range []sdktrace.SamplingDecision{sdktrace.Drop, sdktrace.RecordOnly, sdktrace.RecordAndSample} {
+			for _, inherited := range []bool{false, true} {
+				original := sdktrace.SamplingResult{Decision: decision, Attributes: []attribute.KeyValue{attribute.String("delegate", "kept")}, Tracestate: ratioTraceState(t, "vendor=kept,fi=r:0.5")}
+				delegate := &ratioResultSampler{result: original}
+				sampler := withSamplingRatio(delegate, rate, true)
+				ctx := context.Background()
+				if inherited {
+					ctx = ratioParent(t, true, true, "fi=r:0.5")
+				}
+				result := sampler.ShouldSample(sdktrace.SamplingParameters{ParentContext: ctx, TraceID: trace.TraceID{1}})
+				if decision == sdktrace.RecordAndSample && inherited {
+					checkRatioAttribute(t, result.Attributes, 0.5)
+				} else if !reflect.DeepEqual(result, original) {
+					t.Error("copy-only wrapper modified a root or non-sampled result")
+				}
+				if result.Decision != decision || result.Tracestate.String() != original.Tracestate.String() || !reflect.DeepEqual(delegate.result, original) || delegate.calls != 1 {
+					t.Error("copy-only wrapper changed delegate result or invocation")
+				}
+			}
+		}
+	}
+}
+
 func TestRatioSamplerRatioGuardAndFormatting(t *testing.T) {
 	for _, rate := range []float64{0, 1, -1, 2, math.NaN(), math.Inf(1), math.Inf(-1)} {
 		delegate := &ratioResultSampler{result: sdktrace.SamplingResult{Decision: sdktrace.RecordAndSample}}
-		if withSamplingRatio(delegate, rate, true) != delegate {
+		if withSamplingRatio(delegate, rate, false) != delegate {
 			t.Errorf("inactive ratio %v wrapped a sampler", rate)
 		}
 	}

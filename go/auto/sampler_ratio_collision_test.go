@@ -15,9 +15,9 @@ import (
 // Start attributes are applied after sampler attributes by the SDK. Exercise
 // that boundary through real wire capture and the local OTLP collector.
 func TestRatioSamplerWireContextAuthorityOTLP(t *testing.T) {
-	for _, mode := range []string{"inherited", "traceidratio", "missing-fi", "invalid-fi", "host-explicit", "host-global", "rate-one", "always-on"} {
+	for _, mode := range []string{"inherited", "traceidratio", "missing-fi", "invalid-fi", "host-explicit", "host-global", "rate-one", "always-on", "default", "default-root", "default-missing-fi", "default-invalid-fi", "parentbased-always-on", "fi-one"} {
 		t.Run(mode, func(t *testing.T) {
-			owned := mode == "inherited" || mode == "traceidratio" || mode == "missing-fi" || mode == "invalid-fi"
+			owned := mode != "host-explicit" && mode != "host-global" && mode != "always-on"
 			limits := []int{-1}
 			if owned {
 				limits = append(limits, 16)
@@ -56,6 +56,17 @@ func TestRatioSamplerWireContextAuthorityOTLP(t *testing.T) {
 								options = append(options, WithSampleRate(0.25))
 							case "rate-one":
 								options = append(options, WithSampleRate(1))
+							case "default":
+							case "default-root":
+								state, wantState, want = "", "", attribute.Value{}
+							case "default-missing-fi":
+								state, wantState, want = "vendor=kept", "vendor=kept", attribute.Value{}
+							case "default-invalid-fi":
+								state, wantState, want = "vendor=kept,fi=r:NaN", "vendor=kept,fi=r:NaN", attribute.Value{}
+							case "parentbased-always-on":
+								t.Setenv("OTEL_TRACES_SAMPLER", "parentbased_always_on")
+							case "fi-one":
+								t.Setenv("FI_SAMPLE_RATE", "1")
 							case "always-on":
 								t.Setenv("OTEL_TRACES_SAMPLER", "always_on")
 							default:
@@ -80,6 +91,9 @@ func TestRatioSamplerWireContextAuthorityOTLP(t *testing.T) {
 							raw := tracetest.NewSpanRecorder()
 							agent.current.provider.RegisterSpanProcessor(raw)
 							ctx := ratioParent(t, true, true, state)
+							if mode == "default-root" {
+								ctx = context.Background()
+							}
 							if override.name != "control" {
 								ctx = ContextWithAttributes(ctx, override.attr)
 							}
@@ -107,7 +121,7 @@ func TestRatioSamplerWireContextAuthorityOTLP(t *testing.T) {
 							}
 							exported := request.ResourceSpans[0].ScopeSpans[0].Spans[0]
 							exportedState := ratioTraceState(t, exported.TraceState)
-							if exportedState.Get("fi") != span.SpanContext().TraceState().Get("fi") || exportedState.Get("vendor") != "kept" || exported.Flags&1 == 0 || exported.DroppedAttributesCount != 0 || len(exported.Attributes) != len(values) {
+							if exportedState.Get("fi") != span.SpanContext().TraceState().Get("fi") || exportedState.Get("vendor") != span.SpanContext().TraceState().Get("vendor") || exported.Flags&1 == 0 || exported.DroppedAttributesCount != 0 || len(exported.Attributes) != len(values) {
 								t.Errorf("export state=%q flags=%d dropped=%d attrs=%d; want state=%q sampled, dropped=0 attrs=%d", exported.TraceState, exported.Flags, exported.DroppedAttributesCount, len(exported.Attributes), wantState, len(values))
 							}
 							var got attribute.Value
