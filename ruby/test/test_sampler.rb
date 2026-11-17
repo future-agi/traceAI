@@ -119,6 +119,175 @@ class SamplerTest < Minitest::Test
     [JSON.parse(stdout), stderr]
   end
 
+  # Real SDK roots and their now-valid local children must agree about which
+  # trace owns the probability. Both kinds of invalid ID retain stale state in
+  # the SDK's input context; testing only the first span misses child weighting.
+  def root_boundary_cases
+    cases = {'absent' => {valid: false, sampled: false}}
+    %w[zero_trace zero_span valid].each do |id|
+      [false, true].each do |remote|
+        [false, true].each do |sampled|
+          cases["#{id}_#{remote ? 'remote' : 'local'}_#{sampled ? 'sampled' : 'unsampled'}"] =
+            {valid: id == 'valid', sampled: sampled}
+        end
+      end
+    end
+    cases
+  end
+
+  def root_boundary_probe(env = {}, options: {}, host: nil)
+    code = <<~RUBY
+      require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+      OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      processor = OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)
+      options = #{options.inspect}.merge(processor: processor)
+      mode = #{host.inspect}
+      if mode
+        # An application sampler, not a recognized owned delegate. In particular,
+        # neither its identity nor its invalid-parent state may be rewritten.
+        custom = Object.new
+        custom.define_singleton_method(:description) { 'application-custom' }
+        custom.define_singleton_method(:should_sample?) do |**arguments|
+          OpenTelemetry::SDK::Trace::Samplers::ALWAYS_ON.should_sample?(**arguments)
+        end
+        host_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(sampler: custom)
+        host_provider.add_span_processor(processor)
+        OpenTelemetry.tracer_provider = host_provider if mode == 'global'
+        options[:provider] = host_provider if mode == 'explicit'
+      end
+      provider = TraceAI::Auto.init(**options)
+      if mode == 'late'
+        OpenTelemetry.tracer_provider = host_provider
+        TraceAI::Auto.adopt_host_provider
+        provider = TraceAI::Auto.provider
+      end
+      abort 'application sampler wrapped' if mode && !provider.sampler.equal?(custom)
+      tracer = provider.tracer('root-boundary-test')
+      decisions = {}
+      states = {}
+      #{root_boundary_cases.inspect}.each do |name, fixture|
+        context = OpenTelemetry::Context.empty
+        unless name == 'absent'
+          parent = OpenTelemetry::Trace::SpanContext.new(
+            trace_id: name.start_with?('zero_trace') ? "\\0".b * 16 : ['03' * 16].pack('H*'),
+            span_id: name.start_with?('zero_span') ? "\\0".b * 8 : ['02' * 8].pack('H*'),
+            remote: name.include?('_remote_'),
+            trace_flags: OpenTelemetry::Trace::TraceFlags.from_byte(fixture[:sampled] ? 1 : 0),
+            tracestate: OpenTelemetry::Trace::Tracestate.from_string('other=kept,fi=r:0.5,another=retained'))
+          abort 'bad validity fixture' unless parent.valid? == fixture[:valid]
+          context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent),
+            parent_context: OpenTelemetry::Context.empty)
+        end
+        root = tracer.start_span(name, with_parent: context, attributes: {'existing' => 'kept'})
+        local = OpenTelemetry::Trace.context_with_span(root, parent_context: OpenTelemetry::Context.empty)
+        child = tracer.start_span(name + '_child', with_parent: local, attributes: {'existing' => 'kept'})
+        decisions[name] = [root.recording?, root.context.trace_flags.sampled?]
+        decisions[name + '_child'] = [child.recording?, child.context.trace_flags.sampled?]
+        states[name] = root.context.tracestate.to_s
+        states[name + '_child'] = child.context.tracestate.to_s
+        abort 'new root context invalid' unless root.context.valid?
+        child.finish
+        root.finish
+      end
+      abort 'flush failed' unless TraceAI::Auto.flush
+      puts JSON.generate(decisions: decisions, states: states, spans: memory.finished_spans.to_h { |span| [span.name,
+        {attributes: span.attributes, state: span.tracestate.to_s, trace_id: span.trace_id.unpack1('H*')}] })
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil}.merge(env))
+    assert status.success?, stderr
+    assert_empty traceai_diagnostics(stderr)
+    assert_empty export_spans
+    JSON.parse(stdout)
+  end
+
+  def assert_root_boundaries(result, rate:, parent_based:, application: false)
+    spans = result.fetch('spans')
+    root_boundary_cases.each do |name, fixture|
+      kept = application || (parent_based && fixture[:valid] ? fixture[:sampled] : rate > 0.0)
+      expected_ratio = if !application && kept
+                         parent_based && fixture[:valid] ? 0.5 : (rate if rate < 1.0)
+                       end
+      expected_state = if (application && name != 'absent') || fixture[:valid]
+                         'other=kept,fi=r:0.5,another=retained'
+                       else
+                         ''
+                       end
+      if expected_ratio && !(parent_based && fixture[:valid])
+        expected_state = fixture[:valid] ? "other=kept,fi=r:#{expected_ratio},another=retained" : "fi=r:#{expected_ratio}"
+      end
+      [name, name + '_child'].each do |span_name|
+        assert_equal [kept, kept], result.fetch('decisions').fetch(span_name), span_name
+        assert_equal expected_state, result.fetch('states').fetch(span_name), span_name
+        unless kept
+          refute spans.key?(span_name), span_name
+          next
+        end
+        span = spans.fetch(span_name)
+        assert_equal expected_state, span.fetch('state'), span_name
+        assert_equal 'kept', span.fetch('attributes').fetch('existing'), span_name
+        if expected_ratio
+          ratio = span.fetch('attributes').fetch('fi.sampling.ratio')
+          assert_instance_of Float, ratio, span_name
+          assert_equal expected_ratio, ratio, span_name
+        else
+          refute span.fetch('attributes').key?('fi.sampling.ratio'), span_name
+        end
+      end
+      assert_equal spans.fetch(name).fetch('trace_id'), spans.fetch(name + '_child').fetch('trace_id'), name if kept
+    end
+  end
+
+  def test_owned_full_rate_roots_clear_invalid_parent_vendors_before_local_children
+    [
+      [{}, {}],
+      [{'FI_SAMPLE_RATE' => '1'}, {}],
+      [{}, {sample_rate: 1.0}],
+      [{'OTEL_TRACES_SAMPLER' => 'parentbased_always_on'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '1'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '1'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'always_on'}, {}]
+    ].each do |env, options|
+      result = root_boundary_probe(env, options: options)
+      nonparent = %w[traceidratio always_on].include?(env['OTEL_TRACES_SAMPLER'])
+      assert_root_boundaries(result, rate: 1.0, parent_based: !nonparent)
+    end
+  end
+
+  def test_owned_fractional_roots_replace_invalid_parent_vendors_with_only_own_ratio
+    [
+      [{}, {sample_rate: 0.25}],
+      [{'FI_SAMPLE_RATE' => '0.25'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0.25'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0.25'}, {}]
+    ].each do |env, options|
+      result = root_boundary_probe(env, options: options)
+      assert_root_boundaries(result, rate: 0.25, parent_based: env['OTEL_TRACES_SAMPLER'] != 'traceidratio')
+    end
+  end
+
+  def test_owned_zero_rate_boundaries_preserve_parentbased_and_nonparent_decisions
+    [
+      [{}, {sample_rate: 0.0}],
+      [{'FI_SAMPLE_RATE' => '0'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'parentbased_always_off'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0'}, {}],
+      [{'OTEL_TRACES_SAMPLER' => 'always_off'}, {}]
+    ].each do |env, options|
+      result = root_boundary_probe(env, options: options)
+      nonparent = %w[traceidratio always_off].include?(env['OTEL_TRACES_SAMPLER'])
+      assert_root_boundaries(result, rate: 0.0, parent_based: !nonparent)
+    end
+  end
+
+  def test_application_custom_sampler_retains_invalid_parent_state_without_stamping
+    %w[explicit global late].each do |mode|
+      result = root_boundary_probe({'OTEL_TRACES_SAMPLER' => 'always_on'}, options: {sample_rate: 0.25}, host: mode)
+      assert_root_boundaries(result, rate: 1.0, parent_based: false, application: true)
+    end
+  end
+
   def traceai_diagnostics(stderr)
     stderr.lines.grep(/\Atraceai-auto:/)
   end
@@ -428,7 +597,11 @@ class SamplerTest < Minitest::Test
       assert_equal 0.25, span.fetch('attributes').fetch('fi.sampling.ratio'), name
       assert_equal 1, span.fetch('state').split(',').count { |entry| entry.start_with?('fi=') }
       assert_includes span.fetch('state').split(','), 'fi=r:0.25'
-      assert_includes span.fetch('state').split(','), 'other=kept' unless %w[root local_child].include?(name)
+      if %w[root local_child invalid_parent].include?(name)
+        assert_equal 'fi=r:0.25', span.fetch('state'), name
+      else
+        assert_includes span.fetch('state').split(','), 'other=kept', name
+      end
     end
     assert spans.key?('remote_unsampled')
     assert_empty traceai_diagnostics(stderr)
@@ -494,7 +667,7 @@ class SamplerTest < Minitest::Test
         if decision == samplers::Decision::RECORD_AND_SAMPLE
           abort 'not double' unless result.attributes['fi.sampling.ratio'].is_a?(Float)
           abort 'ratio missing' unless result.attributes['fi.sampling.ratio'] == 0.25
-          abort 'state changed' unless result.tracestate.to_s == 'other=kept,fi=r:0.25'
+          abort 'root inherited delegate state' unless result.tracestate.to_s == 'fi=r:0.25'
         else
           abort 'non-sampled result replaced' unless result.equal?(original)
         end
@@ -548,6 +721,53 @@ class SamplerTest < Minitest::Test
     stdout, stderr, status = app(code, {'RUBYOPT' => nil})
     assert status.success?, stderr
     assert_equal "DELEGATED\n", stdout
+    assert_empty traceai_diagnostics(stderr)
+  end
+
+  def test_invalid_parent_state_rebasing_preserves_delegate_decision_attributes_and_arguments
+    code = <<~'RUBY'
+      require 'opentelemetry/sdk'; require 'traceai/auto/sampling'
+      samplers = OpenTelemetry::SDK::Trace::Samplers
+      state = OpenTelemetry::Trace::Tracestate.from_string('other=kept,fi=r:0.5,another=retained')
+      [false, true].each do |zero_trace|
+        parent = OpenTelemetry::Trace::SpanContext.new(
+          trace_id: zero_trace ? "\0".b * 16 : ['03' * 16].pack('H*'),
+          span_id: zero_trace ? ['02' * 8].pack('H*') : "\0".b * 8,
+          trace_flags: OpenTelemetry::Trace::TraceFlags::SAMPLED, tracestate: state)
+        context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent),
+          parent_context: OpenTelemetry::Context.empty)
+        arguments = {trace_id: ['01' * 16].pack('H*'), parent_context: context,
+          links: [], name: 'test', kind: :client, attributes: {'input' => 'kept'}}
+        [false, true].each do |parent_based|
+          [0.0, 0.25, 1.0].each do |rate|
+            [samplers::Decision::DROP, samplers::Decision::RECORD_ONLY, samplers::Decision::RECORD_AND_SAMPLE].each do |decision|
+              attributes = {'delegate' => 'kept'}.freeze
+              original = samplers::Result.new(decision: decision, attributes: attributes, tracestate: state)
+              delegate = Object.new
+              delegate.define_singleton_method(:description) { 'delegate' }
+              delegate.define_singleton_method(:should_sample?) do |**received|
+                abort 'arguments changed' unless received == arguments
+                original
+              end
+              wrapper = TraceAI::Auto::RatioSampler.new(delegate, rate, parent_based: parent_based)
+              result = wrapper.should_sample?(**arguments)
+              abort 'description changed' unless wrapper.description == 'delegate'
+              abort 'decision changed' unless [result.sampled?, result.recording?] == [original.sampled?, original.recording?]
+              expected = result.sampled? && rate == 0.25 ? {'delegate' => 'kept', 'fi.sampling.ratio' => 0.25} : attributes
+              abort 'attributes changed' unless result.attributes == expected
+              expected_state = result.sampled? && rate == 0.25 ? 'fi=r:0.25' : ''
+              abort 'invalid state leaked' unless result.tracestate.to_s == expected_state
+              abort 'input state mutated' unless parent.tracestate.equal?(state) && original.tracestate.equal?(state)
+              abort 'input attributes mutated' unless original.attributes.equal?(attributes)
+            end
+          end
+        end
+      end
+      puts 'REBASED'
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil})
+    assert status.success?, stderr
+    assert_equal "REBASED\n", stdout
     assert_empty traceai_diagnostics(stderr)
   end
 
