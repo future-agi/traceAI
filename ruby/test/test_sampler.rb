@@ -102,7 +102,12 @@ class SamplerTest < Minitest::Test
           tracestate: OpenTelemetry::Trace::Tracestate.from_string(state))
         context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent),
           parent_context: OpenTelemetry::Context.empty)
-        tracer.start_span(name, with_parent: context, attributes: {'existing' => 'kept'}).finish
+        span = tracer.start_span(name, with_parent: context, attributes: {'existing' => 'kept'})
+        if name == 'remote_half'
+          inherited = OpenTelemetry::Trace.context_with_span(span, parent_context: OpenTelemetry::Context.empty)
+          tracer.start_span('remote_half_child', with_parent: inherited).finish
+        end
+        span.finish
       end
       TraceAI::Auto.flush
       puts JSON.generate(memory.finished_spans.to_h { |span| [span.name,
@@ -225,8 +230,8 @@ class SamplerTest < Minitest::Test
     assert_empty export_spans
   end
 
-  def test_sampled_parent_without_ratio_preserves_the_wire_projection_slot
-    [0.25, 1.0].each do |rate|
+  def test_unstamped_root_and_sampled_parent_preserve_the_wire_projection_slot
+    [[0.25, true], [1.0, true], [1.0, false]].each do |rate, sampled_parent|
       code = <<~RUBY
         require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
         memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
@@ -237,6 +242,7 @@ class SamplerTest < Minitest::Test
           tracestate: OpenTelemetry::Trace::Tracestate.from_string('other=kept'))
         parent = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(remote),
           parent_context: OpenTelemetry::Context.empty)
+        parent = OpenTelemetry::Context.empty unless #{sampled_parent}
         TraceAI::Auto.with_context(parent) do
           TraceAI::Auto.with_attributes('traceai.capture.dropped_content_count' => 7) do
             request = {method: 'POST', url: 'http://127.0.0.1:1234/v1/chat/completions',
@@ -258,7 +264,7 @@ class SamplerTest < Minitest::Test
       assert_equal 1, values.size
       assert_operator values.fetch('traceai.capture.dropped_content_count'), :>=, 7
       refute values.key?('fi.sampling.ratio')
-      assert_equal 'other=kept', spans.first.fetch('state')
+      assert_equal(sampled_parent ? 'other=kept' : '', spans.first.fetch('state'))
       assert_empty traceai_diagnostics(stderr)
       assert_empty export_spans
     end
@@ -320,6 +326,66 @@ class SamplerTest < Minitest::Test
     assert_empty export_spans
   end
 
+  def assert_parent_ratio_copy(spans)
+    %w[remote_half remote_half_child local_half].each do |name|
+      span = spans.fetch(name)
+      assert span.fetch('attributes').key?('fi.sampling.ratio'), "#{name}: inherited ratio missing"
+      ratio = span.fetch('attributes').fetch('fi.sampling.ratio')
+      assert_instance_of Float, ratio, name
+      assert_equal 0.5, ratio, name
+      assert_equal 'other=kept,fi=r:0.5', span.fetch('state'), name
+      assert span.fetch('sampled'), name
+    end
+    refute spans.key?('remote_unsampled')
+    %w[remote_missing remote_large remote_text remote_nan remote_infinite remote_overflow remote_zero remote_one local_missing].each do |name|
+      refute spans.fetch(name).fetch('attributes').key?('fi.sampling.ratio'), name
+      assert_includes spans.fetch(name).fetch('state').split(','), 'other=kept', name
+    end
+  end
+
+  def test_default_parentbased_sampler_copies_remote_ratio_to_local_descendants
+    # Explicitly unset both sampler sources: this is the cross-language default.
+    spans, stderr = ratio_probe('FI_SAMPLE_RATE' => nil, 'OTEL_TRACES_SAMPLER' => nil,
+                               'OTEL_TRACES_SAMPLER_ARG' => nil)
+    assert_parent_ratio_copy(spans)
+    %w[root local_child].each do |name|
+      refute spans.fetch(name).fetch('attributes').key?('fi.sampling.ratio'), name
+      assert_equal '', spans.fetch(name).fetch('state'), name
+    end
+    refute spans.fetch('invalid_parent').fetch('attributes').key?('fi.sampling.ratio')
+    assert_empty traceai_diagnostics(stderr)
+  end
+
+  def test_full_rate_parentbased_samplers_copy_upstream_ratio_without_stamping_roots
+    [
+      {'OTEL_TRACES_SAMPLER' => 'parentbased_always_on'},
+      {'FI_SAMPLE_RATE' => '1'},
+      {'OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '1'}
+    ].each do |env|
+      spans, stderr = ratio_probe(env)
+      assert_parent_ratio_copy(spans)
+      %w[root local_child].each do |name|
+        refute spans.fetch(name).fetch('attributes').key?('fi.sampling.ratio'), "#{env}/#{name}"
+        assert_equal '', spans.fetch(name).fetch('state'), "#{env}/#{name}"
+      end
+      refute spans.fetch('invalid_parent').fetch('attributes').key?('fi.sampling.ratio'), env.inspect
+      assert_empty traceai_diagnostics(stderr)
+    end
+  end
+
+  def test_zero_root_parentbased_samplers_still_copy_sampled_parent_ratio
+    [
+      {'OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0'},
+      {'OTEL_TRACES_SAMPLER' => 'parentbased_always_off'},
+      {'FI_SAMPLE_RATE' => '0'}
+    ].each do |env|
+      spans, stderr = ratio_probe(env)
+      assert_parent_ratio_copy(spans)
+      %w[root local_child invalid_parent].each { |name| refute spans.key?(name), "#{env}/#{name}" }
+      assert_empty traceai_diagnostics(stderr)
+    end
+  end
+
   def test_fractional_parentbased_root_and_local_child_share_ratio
     spans, stderr = ratio_probe({}, options: {sample_rate: 0.25})
     %w[root local_child invalid_parent].each do |name|
@@ -368,20 +434,40 @@ class SamplerTest < Minitest::Test
     assert_empty traceai_diagnostics(stderr)
   end
 
-  def test_ratio_one_and_nonratio_samplers_never_stamp
-    %w[traceidratio parentbased_traceidratio always_on parentbased_always_on always_off parentbased_always_off unsupported].each do |name|
-      spans, = ratio_probe('OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => '1')
+  def test_nonparent_full_rate_and_off_samplers_never_copy_upstream_ratio
+    %w[traceidratio always_on always_off].each do |name|
+      spans, stderr = ratio_probe('OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => '1')
       spans.each_value { |span| refute span.fetch('attributes').key?('fi.sampling.ratio'), name }
-      assert_equal '', spans.fetch('root').fetch('state') if spans.key?('root')
+      if name == 'always_off'
+        assert_empty spans
+      else
+        assert_equal '', spans.fetch('root').fetch('state')
+        %w[remote_half remote_half_child local_half remote_unsampled].each do |span|
+          assert_equal 'other=kept,fi=r:0.5', spans.fetch(span).fetch('state'), "#{name}/#{span}"
+        end
+      end
+      assert_empty traceai_diagnostics(stderr)
     end
   end
 
-  def test_fractional_config_does_not_stamp_application_owned_provider
-    spans, stderr = ratio_probe({}, options: {sample_rate: 0.25}, host: true)
-    spans.each_value { |span| refute span.fetch('attributes').key?('fi.sampling.ratio') }
+  def test_invalid_sampler_fallback_copies_upstream_ratio_but_does_not_stamp_roots
+    spans, stderr = ratio_probe('OTEL_TRACES_SAMPLER' => 'unsupported')
+    assert_parent_ratio_copy(spans)
+    refute spans.fetch('root').fetch('attributes').key?('fi.sampling.ratio')
     assert_equal '', spans.fetch('root').fetch('state')
-    assert_equal 'other=kept,fi=r:0.5', spans.fetch('remote_half').fetch('state')
-    assert_empty traceai_diagnostics(stderr)
+    assert_equal 1, traceai_diagnostics(stderr).length
+    assert_includes traceai_diagnostics(stderr).join, 'invalid OTEL_TRACES_SAMPLER'
+  end
+
+  def test_sampling_config_does_not_stamp_application_owned_provider
+    [{}, {sample_rate: 0.25}, {sample_rate: 1.0}].each do |options|
+      spans, stderr = ratio_probe({}, options: options, host: true)
+      spans.each_value { |span| refute span.fetch('attributes').key?('fi.sampling.ratio'), options.inspect }
+      assert_equal '', spans.fetch('root').fetch('state')
+      assert_equal 'other=kept,fi=r:0.5', spans.fetch('remote_half').fetch('state')
+      assert_equal 'other=kept,fi=r:0.5', spans.fetch('remote_half_child').fetch('state')
+      assert_empty traceai_diagnostics(stderr)
+    end
   end
 
   def test_ratio_wrapper_preserves_delegate_result_and_arguments
@@ -411,6 +497,50 @@ class SamplerTest < Minitest::Test
           abort 'state changed' unless result.tracestate.to_s == 'other=kept,fi=r:0.25'
         else
           abort 'non-sampled result replaced' unless result.equal?(original)
+        end
+      end
+      puts 'DELEGATED'
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil})
+    assert status.success?, stderr
+    assert_equal "DELEGATED\n", stdout
+    assert_empty traceai_diagnostics(stderr)
+  end
+
+  def test_parentbased_endpoint_wrappers_preserve_drop_and_record_only_results
+    code = <<~'RUBY'
+      require 'opentelemetry/sdk'; require 'traceai/auto/sampling'
+      samplers = OpenTelemetry::SDK::Trace::Samplers
+      state = OpenTelemetry::Trace::Tracestate.from_string('other=kept,fi=r:0.5')
+      parent = OpenTelemetry::Trace::SpanContext.new(trace_id: ['01' * 16].pack('H*'),
+        span_id: ['02' * 8].pack('H*'), remote: true, trace_flags: OpenTelemetry::Trace::TraceFlags::SAMPLED,
+        tracestate: state)
+      context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent),
+        parent_context: OpenTelemetry::Context.empty)
+      arguments = {trace_id: parent.trace_id, parent_context: context, links: [], name: 'test',
+        kind: :client, attributes: {'input' => 'kept'}}
+      [0.0, 1.0].each do |rate|
+        [samplers::Decision::DROP, samplers::Decision::RECORD_ONLY, samplers::Decision::RECORD_AND_SAMPLE].each do |decision|
+          original = samplers::Result.new(decision: decision, attributes: {'delegate' => 'kept'}, tracestate: state)
+          delegate = Object.new
+          delegate.define_singleton_method(:should_sample?) do |**received|
+            abort 'arguments changed' unless received == arguments
+            original
+          end
+          delegate.define_singleton_method(:description) { 'delegate' }
+          wrapper = TraceAI::Auto::RatioSampler.new(delegate, rate, parent_based: true)
+          root = OpenTelemetry::Trace.current_span(OpenTelemetry::Context.empty).context
+          abort 'root endpoint eligible' unless wrapper.ratio_for(root).nil?
+          result = wrapper.should_sample?(**arguments)
+          abort 'description changed' unless wrapper.description == 'delegate'
+          abort 'delegate mutated' if original.attributes.key?('fi.sampling.ratio')
+          if decision == samplers::Decision::RECORD_AND_SAMPLE
+            abort 'delegate metadata lost' unless result.attributes == {'delegate' => 'kept', 'fi.sampling.ratio' => 0.5}
+            abort 'decision changed' unless result.sampled? && result.recording?
+            abort 'tracestate replaced' unless result.tracestate.equal?(state)
+          else
+            abort 'non-sampled result replaced' unless result.equal?(original)
+          end
         end
       end
       puts 'DELEGATED'
