@@ -1,5 +1,5 @@
 // Fresh-process sampler probe: no network, credentials or application SDK hooks.
-const { diag, DiagLogLevel, ROOT_CONTEXT, TraceFlags, trace } = require('@opentelemetry/api');
+const { createTraceState, diag, DiagLogLevel, ROOT_CONTEXT, TraceFlags, trace } = require('@opentelemetry/api');
 const { AlwaysOffSampler, AlwaysOnSampler, BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 
 (async () => {
@@ -57,12 +57,23 @@ const { AlwaysOffSampler, AlwaysOnSampler, BasicTracerProvider, InMemorySpanExpo
     }
     const tracer = provider?.getTracer('sampler-fixture');
     const remote = process.env.TEST_REMOTE !== 'false';
+    // Fix generated roots as well as parent trace IDs, without probabilistic assertions.
+    if (tracer && process.env.TEST_TRACE_ID) tracer._idGenerator.generateTraceId = () => process.env.TEST_TRACE_ID;
     const parent = sampled => trace.setSpanContext(ROOT_CONTEXT, {
-      traceId: '1'.repeat(32), spanId: '2'.repeat(16),
+      traceId: process.env.TEST_TRACE_ID || '1'.repeat(32), spanId: '2'.repeat(16),
       traceFlags: sampled ? TraceFlags.SAMPLED : TraceFlags.NONE, isRemote: remote,
+      traceState: process.env.TEST_TRACESTATE ? createTraceState(process.env.TEST_TRACESTATE) : undefined,
     });
-    const spans = tracer ? [['root', ROOT_CONTEXT], ['sampled-parent', parent(true)], ['unsampled-parent', parent(false)]].map(([name, context]) => {
-      const span = tracer.startSpan(name, {}, context);
+    const { FITracer } = require('@traceai/fi-core');
+    const startTracer = provider && process.env.TEST_AUTO_TRACER === 'true'
+      ? new FITracer({ tracer: FITracer.autoProvider(provider).getTracer('sampler-fixture') }) : tracer;
+    const attributes = Object.freeze(Object.fromEntries(Array.from({ length: Number(process.env.TEST_ATTRIBUTES_COUNT || 0) }, (_, i) => [`existing.${i}`, 'value'])));
+    let rootContext;
+    const inputs = [['root', ROOT_CONTEXT], ['sampled-parent', parent(true)], ['unsampled-parent', parent(false)]];
+    if (process.env.TEST_LOCAL_CHILD === 'true') inputs.push(['local-child', undefined]);
+    const spans = tracer ? inputs.map(([name, context]) => {
+      const span = startTracer.startSpan(name, { attributes }, name === 'local-child' ? rootContext : context);
+      if (name === 'root') rootContext = trace.setSpanContext(ROOT_CONTEXT, span.spanContext());
       const result = { name, recording: span.isRecording(), sampled: !!(span.spanContext().traceFlags & TraceFlags.SAMPLED) };
       span.end();
       return result;
@@ -71,6 +82,7 @@ const { AlwaysOffSampler, AlwaysOnSampler, BasicTracerProvider, InMemorySpanExpo
     await agent.forceFlush();
     const exported = exporter.getFinishedSpans().map(span => ({
       name: span.name, sampled: !!(span.spanContext().traceFlags & TraceFlags.SAMPLED),
+      attributes: span.attributes, traceState: span.spanContext().traceState?.serialize(),
     }));
     result = { spans, exported, warnings, diagnostics, sameProvider: provider === host, hostCalls };
   } finally {
