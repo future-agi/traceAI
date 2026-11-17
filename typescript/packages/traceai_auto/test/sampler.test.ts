@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 interface Snapshot {
   spans: { name: string; recording: boolean; sampled: boolean }[];
@@ -66,6 +67,28 @@ test("an unset rate and sampler default to ParentBased(TraceIdRatio(1))", () => 
   const result = probe();
   decisions(result, [true, true, false]);
   expect(result.warnings).toEqual([]);
+});
+
+test("owned provider starts with the legacy OTel packages resolved by a filtered install", () => {
+  // Keep the rest of auto's dependencies, but put the actual 1.x packages first
+  // on its lookup path, as in the Vercel-only workspace. No global SDK setup.
+  const app = mkdtempSync(resolve(__dirname, "../.sampler-app-"));
+  try {
+    cpSync(resolve(__dirname, "../dist/src"), join(app, "agent"), { recursive: true });
+    const modules = join(app, "node_modules/@opentelemetry");
+    mkdirSync(modules, { recursive: true });
+    const sdk = require.resolve("otel-sdk-trace-base-legacy/package.json");
+    symlinkSync(dirname(sdk), join(modules, "sdk-trace-base"), "dir");
+    symlinkSync(dirname(createRequire(sdk).resolve("@opentelemetry/core/package.json")), join(modules, "core"), "dir");
+    const output = execFileSync(process.execPath, ["-e", `
+      const agent = require('./agent');
+      const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+      agent.init({ exporter: new InMemorySpanExporter(), instrumentations: ['wire'], wireCapture: false });
+      console.log(JSON.stringify(agent.report().active));
+      agent.shutdown();
+    `], { cwd: app, env: { HOME: app, FI_CONFIG_FILE: join(app, "futureagi.toml") }, encoding: "utf8" });
+    expect(JSON.parse(output)).toBe(true);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
 test.each(["traceidratio", "parentbased_traceidratio"])("%s accepts the ratio-one boundary", sampler => {
