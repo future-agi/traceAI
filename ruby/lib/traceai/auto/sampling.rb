@@ -34,26 +34,70 @@ module TraceAI
 
       def description = @delegate.description
 
+      # Metadata eligibility, not a second sampling decision. Wire projection
+      # reserves a slot only when this parent can supply a known probability.
+      def ratio_for(parent)
+        if @parent_based && parent.valid?
+          return unless parent.trace_flags.sampled?
+          SamplingRatio.from_tracestate(parent.tracestate)
+        else
+          @rate
+        end
+      end
+
       def should_sample?(**arguments)
         result = @delegate.should_sample?(**arguments)
         samplers = OpenTelemetry::SDK::Trace::Samplers
         return result unless result.sampled?
 
         parent = OpenTelemetry::Trace.current_span(arguments[:parent_context]).context
+        # A sampled parent's probability belongs to that trace, not to this
+        # process's root sampler. Missing/invalid metadata stays unknown.
+        rate = ratio_for(parent)
+        return result unless rate
         state = result.tracestate
-        if @parent_based && parent.valid?
-          # A sampled parent's probability belongs to that trace, not to this
-          # process's root sampler. Missing/invalid metadata stays unknown.
-          return result unless parent.trace_flags.sampled?
-          rate = SamplingRatio.from_tracestate(parent.tracestate)
-          return result unless rate
-        else
-          rate = @rate
-          state = state.set_value('fi', SamplingRatio.state_value(rate))
-        end
+        state = state.set_value('fi', SamplingRatio.state_value(rate)) unless @parent_based && parent.valid?
         samplers::Result.new(decision: samplers::Decision::RECORD_AND_SAMPLE,
                              attributes: (result.attributes || {}).merge(SamplingRatio::ATTRIBUTE => rate),
                              tracestate: state)
+      end
+    end
+
+    # Installed first on a private ratio-sampled provider, never transferred to
+    # a host provider. SDK admission initially trims sampler attributes last;
+    # restore the known sampled probability before any destination sees the span.
+    class RatioSpanProcessor
+      def initialize(provider)
+        @provider = provider
+      end
+
+      def on_start(span, _parent_context)
+        return unless @provider.sampler.is_a?(RatioSampler) && span.context.trace_flags.sampled?
+        rate = SamplingRatio.from_tracestate(span.context.tracestate)
+        return unless rate
+        span.instance_variable_set(:@traceai_sampling_ratio, rate)
+        span.singleton_class.prepend(RatioSpan)
+        span.send(:trim_span_attributes, span.instance_variable_get(:@attributes))
+      rescue StandardError => e
+        Auto.debug(e)
+      end
+
+      def on_finish(_span); end
+      def force_flush(timeout: nil) = 0
+      def shutdown(timeout: nil) = 0
+    end
+
+    # Per-span, not a global SDK patch: all setters keep the authoritative ratio
+    # first while the SDK still enforces its configured count and value limits.
+    module RatioSpan
+      private
+
+      def trim_span_attributes(attributes)
+        if attributes
+          attributes.delete(SamplingRatio::ATTRIBUTE)
+          attributes.replace({SamplingRatio::ATTRIBUTE => @traceai_sampling_ratio}.merge(attributes))
+        end
+        super
       end
     end
   end

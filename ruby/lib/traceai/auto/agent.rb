@@ -465,6 +465,9 @@ module TraceAI
             # and adopt_host_provider moves to the application's provider once
             # the application sets one.
             @provider = @own_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default, sampler: configured_sampler)
+            # Admission protection belongs only to this provider. Unlike export
+            # processors it must not follow the agent when a host is adopted.
+            @provider.add_span_processor(RatioSpanProcessor.new(@provider)) if @provider.sampler.is_a?(RatioSampler)
           end
           attached = @provider.instance_variable_get(:@span_processors)
           supplied_processor = destinations[:processor]
@@ -761,12 +764,15 @@ module TraceAI
         attributes = Privacy.mask(Privacy.scrub_attributes(context_attrs.merge(result.attributes)), @config)
         description = Privacy.hide_errors?(@config) ? '__REDACTED__' : result.description.to_s
         limit = projection_limit
-        # The SDK merges sampler attributes after the initial attributes and
-        # trims from the end. Reserve one slot on our ratio-sampled wire spans
-        # so a full content budget cannot discard the sampling probability.
-        ratio_sampler = @sdk ? (@provider.equal?(@own_provider) && @provider.sampler.is_a?(RatioSampler)) : SamplingRatio.fractional?(@local_sample_rate)
-        limit -= 1 if ratio_sampler && limit.positive?
-        projection = AttributeProjection.project(attributes, limit)
+        # Reserve a slot only for known local/inherited probability metadata.
+        # A sampled parent without valid fi state keeps the entire wire budget.
+        sampler = @provider.sampler if @sdk && @provider.equal?(@own_provider)
+        ratio = if @sdk
+                  sampler.ratio_for(OpenTelemetry::Trace.current_span(parent).context) if sampler.is_a?(RatioSampler)
+                elsif SamplingRatio.fractional?(@local_sample_rate)
+                  @local_sample_rate
+                end
+        projection = AttributeProjection.project(attributes, ratio && limit.positive? ? limit - 1 : limit)
         attributes = projection.attributes
         if @sdk
           span = @tracer.start_span(result.name, with_parent: parent, kind: :client, start_timestamp: started, attributes: attributes)
@@ -787,9 +793,9 @@ module TraceAI
             return unless Random.rand < @local_sample_rate
           end
           tracestate = ''
-          if SamplingRatio.fractional?(@local_sample_rate)
-            attributes = attributes.merge(SamplingRatio::ATTRIBUTE => @local_sample_rate)
-            tracestate = "fi=#{SamplingRatio.state_value(@local_sample_rate)}"
+          if ratio
+            attributes = attributes.merge(SamplingRatio::ATTRIBUTE => ratio) if limit.positive?
+            tracestate = "fi=#{SamplingRatio.state_value(ratio)}"
           end
           record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), "\0".b * 8,
                                     attributes.size + projection.dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
