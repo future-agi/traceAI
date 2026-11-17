@@ -35,7 +35,7 @@ const server = http.createServer((request, response) => {
     const data = wire.toObject(wire.decode(Buffer.concat(chunks)), { longs: String, bytes: String });
     for (const resource of data.resourceSpans || []) {
       for (const scope of resource.scopeSpans || []) {
-        for (const span of scope.spans || []) spans.push({ ...span, scope: scope.scope, resource: attributes(resource.resource.attributes), attrs: attributes(span.attributes) });
+        for (const span of scope.spans || []) spans.push({ ...span, scope: scope.scope, scopeSchemaUrl: scope.schemaUrl, resource: attributes(resource.resource.attributes), attrs: attributes(span.attributes) });
       }
     }
     response.writeHead(200, { 'content-type': 'application/x-protobuf' });
@@ -382,6 +382,10 @@ test('integration version is deterministic on the OTLP resource and scope', asyn
   await flush();
   const { VERSION } = await import(pathToFileURL(path.join(path.dirname(packagePath), 'version.js')).href);
   assert.equal(spans.length, 1);
+  const [major, minor] = req('@mastra/otel-exporter/package.json').version.split('.').map(Number);
+  // Starting with converter 1.6, Mastra emits a schema URL for its GenAI format.
+  assert.equal(spans[0].scopeSchemaUrl, major > 1 || minor >= 6
+    ? 'https://opentelemetry.io/schemas/1.41.0' : undefined);
   assert.equal(spans[0].scope.version, VERSION);
   assert.equal(spans[0].resource['telemetry.sdk.version'], VERSION);
 });
