@@ -148,11 +148,12 @@ public class TraceAITests : IDisposable
     }
 
     [Theory]
-    [InlineData(true)] [InlineData(false)]
-    public void RegisterSamplerOptionStampsOnlyFactoryProducedRatios(bool known)
+    [InlineData(true, .25)] [InlineData(false, .25)]
+    [InlineData(true, 1)] [InlineData(false, 1)]
+    public void RegisterSamplerOptionStampsOnlyFactoryProducedRatios(bool known, double rate)
     {
         using var environment = new SamplerEnvironment("always_off");
-        Sampler sampler = known ? SamplingConfiguration.Create(.25) : new ParentBasedSampler(new TraceIdRatioBasedSampler(.25));
+        Sampler sampler = known ? SamplingConfiguration.Create(rate) : new ParentBasedSampler(new TraceIdRatioBasedSampler(rate));
         var tracer = RegisterForSampling(options => options.Sampler = sampler);
         var parent = new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded, "fi=r:0.5,vendor=opaque", true);
         using var span = tracer.ActivitySource.StartActivity("ratio", ActivityKind.Internal, parent);
@@ -184,6 +185,37 @@ public class TraceAITests : IDisposable
             Assert.Equal(stamped ? "fi=r:0.25,vendor=opaque" : "vendor=opaque", span.TraceStateString);
         }
         finally { if (span != null) span.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
+    }
+
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData("parentbased_always_on", null, null)]
+    [InlineData(null, null, "1")]
+    [InlineData("parentbased_traceidratio", "0", null)]
+    [InlineData("parentbased_traceidratio", "1", null)]
+    [InlineData("parentbased_always_off", null, null)]
+    public void RegisterParentBasedFactoriesCopyRemoteAndLocalParentRatio(string? name, string? arg, string? rate)
+    {
+        using var environment = new SamplerEnvironment(name, arg, rate);
+        var tracer = RegisterForSampling();
+        var parent = new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded, "fi=r:0.5,vendor=opaque", true);
+        using var server = tracer.ActivitySource.StartActivity("server", ActivityKind.Server, parent);
+        try
+        {
+            Assert.NotNull(server); Assert.True(server.Recorded);
+            Assert.Equal(.5, server.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal(parent.TraceState, server.TraceStateString);
+            using var child = tracer.ActivitySource.StartActivity("local-child");
+            try
+            {
+                Assert.NotNull(child); Assert.True(child.Recorded);
+                Assert.Equal(server.SpanId, child.ParentSpanId);
+                Assert.Equal(.5, child.GetTagItem("fi.sampling.ratio"));
+                Assert.Equal(parent.TraceState, child.TraceStateString);
+            }
+            finally { if (child != null) child.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
+        }
+        finally { if (server != null) server.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
     }
 
     private sealed class CountingDropSampler : Sampler

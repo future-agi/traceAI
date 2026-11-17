@@ -424,6 +424,99 @@ public class SamplerTests : InitIsolation
         Assert.True(agent.Flush(3000)); Assert.Equal(expected,Assert.Single(exporter.Spans).GetTagItem("fi.sampling.ratio"));
     }
 
+    [Theory]
+    [InlineData(null,null,null)]
+    [InlineData("parentbased_always_on",null,null)]
+    [InlineData(null,null,"1")]
+    [InlineData("parentbased_traceidratio","0",null)]
+    [InlineData("parentbased_traceidratio","0.25",null)]
+    [InlineData("parentbased_traceidratio","1",null)]
+    [InlineData("parentbased_always_off",null,null)]
+    public void ParentBasedFactoriesCopyRemoteRatioToExportedLocalDescendants(string? name,string? arg,string? rate)
+    {
+        using var environment=new EnvironmentScope(name,arg,rate);
+        var exporter=new MemoryExporter();
+        TraceAIAuto.Init(options=> {
+            options.Exporter=exporter; options.WireCapture=false;
+            options.ConfigFile=Path.Combine(Path.GetTempPath(),"traceai-copy-ratio-"+Guid.NewGuid()+".toml");
+        });
+        var headers=new Dictionary<string,string> {
+            ["traceparent"]="00-00000000000000010000000000000001-0000000000000001-01",
+            ["tracestate"]="fi=r:0.5,vendor=opaque"
+        };
+        var remote=new TraceContextPropagator().Extract(default,headers,
+            static (carrier,key)=>carrier.TryGetValue(key,out var value)?new[] { value }:Array.Empty<string>()).ActivityContext;
+        Assert.True(remote.IsRemote);
+        Activity server;
+        Activity child;
+        using(server=TraceAIAuto.Source.StartActivity("server",ActivityKind.Server,remote)!)
+        {
+            Assert.NotNull(server);
+            using(child=TraceAIAuto.Source.StartActivity("local-child")!) Assert.NotNull(child);
+            foreach(var raw in new[] { server,child })
+            {
+                Assert.False(raw.Recorded); Assert.Null(raw.GetTagItem("fi.sampling.ratio"));
+                Assert.Equal(remote.TraceState,raw.TraceStateString);
+            }
+            var context=PropagationContext(server);
+            Assert.True((context.TraceFlags&ActivityTraceFlags.Recorded)!=0);
+            Assert.Equal(remote.TraceState,context.TraceState);
+        }
+        Assert.True(TraceAIAuto.Flush(3000));
+        Assert.Equal(2,exporter.Spans.Count);
+        Assert.All(exporter.Spans,copy=> {
+            Assert.True(copy.Recorded); Assert.Equal(.5,copy.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal(remote.TraceState,copy.TraceStateString); Assert.Equal(remote.TraceId,copy.TraceId);
+        });
+        Assert.Equal(remote.SpanId,Assert.Single(exporter.Spans,copy=>copy.DisplayName=="server").ParentSpanId);
+        Assert.Equal(server.SpanId,Assert.Single(exporter.Spans,copy=>copy.DisplayName=="local-child").ParentSpanId);
+        TraceAIAuto.Shutdown();
+    }
+
+    [Theory]
+    [InlineData(null,null,null)]
+    [InlineData("parentbased_always_on",null,null)]
+    [InlineData(null,null,"1")]
+    [InlineData("parentbased_traceidratio","1",null)]
+    public void FullRateParentBasedRootsDoNotInventRatioAndUnsampledParentsDoNotExport(string? name,string? arg,string? rate)
+    {
+        using var environment=new EnvironmentScope(name,arg,rate);
+        var exporter=new MemoryExporter(); using var agent=new Agent(Config(exporter));
+        using(TraceAIAuto.Source.StartActivity("root",ActivityKind.Internal,default(ActivityContext))) { }
+        foreach(bool remote in new[] { true,false })
+        {
+            var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.None,"fi=r:0.5",remote);
+            using(TraceAIAuto.Source.StartActivity("unsampled-parent",ActivityKind.Internal,parent)) { }
+        }
+        Assert.True(agent.Flush(3000));
+        var root=Assert.Single(exporter.Spans);
+        Assert.Equal("root",root.DisplayName); Assert.True(root.Recorded);
+        Assert.Null(root.GetTagItem("fi.sampling.ratio")); Assert.Null(root.TraceStateString);
+    }
+
+    [Theory]
+    [InlineData("always_on",null,true,null)]
+    [InlineData("always_off",null,false,null)]
+    [InlineData("traceidratio","1",true,null)]
+    [InlineData("traceidratio","0",false,null)]
+    [InlineData("traceidratio","0.25",true,.25)]
+    public void NonParentBasedFactoriesNeverCopyUpstreamRatio(string name,string? arg,bool sampled,double? expected)
+    {
+        using var environment=new EnvironmentScope(name,arg);
+        var exporter=new MemoryExporter(); using var agent=new Agent(Config(exporter));
+        foreach(bool remote in new[] { true,false })
+        {
+            var parent=new ActivityContext(ActivityTraceId.CreateFromString("00000000000000010000000000000001"),
+                ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"fi=r:0.5,vendor=opaque",remote);
+            using(TraceAIAuto.Source.StartActivity("child",ActivityKind.Internal,parent)) { }
+        }
+        Assert.True(agent.Flush(3000)); Assert.Equal(sampled?2:0,exporter.Spans.Count);
+        Assert.All(exporter.Spans,copy=> {
+            Assert.True(copy.Recorded); Assert.Equal(expected,copy.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal(expected.HasValue?"fi=r:0.25,vendor=opaque":"fi=r:0.5,vendor=opaque",copy.TraceStateString);
+        });
+    }
+
     [Fact]
     public void ApplicationOwnedProviderDoesNotAcquireRatioMetadata()
     {

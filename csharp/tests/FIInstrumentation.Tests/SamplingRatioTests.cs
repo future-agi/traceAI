@@ -42,11 +42,16 @@ public class SamplingRatioTests
     [InlineData("other=r:0.5", null)]
     public void ParentBasedUsesOnlyValidUpstreamRatio(string? state, double? expected)
     {
-        var result = Sample(SamplingConfiguration.Wrap(SamplingConfiguration.Create(.25)), Parent(state));
-        Assert.Equal(SamplingDecision.RecordAndSample, result.Decision);
-        Assert.Equal(expected, Ratio(result));
-        if (expected == null) Assert.Equal(Sample(SamplingConfiguration.Create(.25), Parent(state)).TraceStateString, result.TraceStateString);
-        else { Assert.Contains("fi=r:0.5", result.TraceStateString); Assert.Contains("vendor=opaque", result.TraceStateString); }
+        foreach (var rate in new[] { 0, .25, 1 })
+        foreach (var remote in new[] { true, false })
+        {
+            var parent = Parent(state, remote: remote);
+            var result = Sample(SamplingConfiguration.Wrap(SamplingConfiguration.Create(rate)), parent);
+            Assert.Equal(SamplingDecision.RecordAndSample, result.Decision);
+            Assert.Equal(expected, Ratio(result));
+            if (expected == null) Assert.Equal(Sample(SamplingConfiguration.Create(rate), parent).TraceStateString, result.TraceStateString);
+            else { Assert.Contains("fi=r:0.5", result.TraceStateString); Assert.Contains("vendor=opaque", result.TraceStateString); }
+        }
     }
 
     [Theory]
@@ -69,10 +74,25 @@ public class SamplingRatioTests
 
     [Theory]
     [InlineData(0)] [InlineData(1)] [InlineData(double.NaN)] [InlineData(double.PositiveInfinity)]
-    public void InvalidOrDisabledRatiosNeverStamp(double rate)
+    public void NonParentBasedInvalidOrFullRatesNeverStamp(double rate)
     {
-        var result = Sample(new RatioSampler(new AlwaysOnSampler(), rate, false));
-        Assert.Null(Ratio(result)); Assert.Null(result.TraceStateString);
+        foreach (var parent in new[] { default(ActivityContext), Parent("fi=r:0.5") })
+        {
+            var result = Sample(new RatioSampler(new AlwaysOnSampler(), rate, false), parent);
+            Assert.Null(Ratio(result)); Assert.Null(result.TraceStateString);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(.25)] [InlineData(1)]
+    public void ParentBasedUnsampledParentsNeverStamp(double rate)
+    {
+        var sampler = SamplingConfiguration.Wrap(SamplingConfiguration.Create(rate));
+        foreach (var remote in new[] { true, false })
+        {
+            var result = Sample(sampler, Parent("fi=r:0.5", sampled: false, remote: remote));
+            Assert.Equal(SamplingDecision.Drop, result.Decision); Assert.Null(Ratio(result));
+        }
     }
 
     [Fact]
