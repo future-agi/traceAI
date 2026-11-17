@@ -2,6 +2,7 @@
 import importlib
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -45,13 +46,104 @@ class ExtensionTests(unittest.TestCase):
             p = release_plan.other_packages(root)[0]
             self.assertEqual((p['version'], p['tag']), ('0.1.7', 'go/openai/v0.1.7'))
 
-    def test_ruby_gem_is_inventoried_but_held_until_publisher_exists(self):
+    def test_both_ruby_gems_are_inventoried_with_their_own_versions_and_tags(self):
         root = release_plan.REPO_ROOT
+        auto_version = re.search(r'''^\s*s\.version\s*=\s*["']([^"']+)["']''',
+                                 (root / 'ruby/traceai-auto.gemspec').read_text(), re.M).group(1)
+        roast_version = re.search(r'''^\s*VERSION\s*=\s*["']([^"']+)["']''',
+                                  (root / 'ruby/roast/lib/traceai/roast/version.rb').read_text(), re.M).group(1)
         gems = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']
-        self.assertEqual([(p['name'], p['version']) for p in gems], [('traceai-roast', '0.1.0')])
-        plan = release_plan.plan(gems, release_plan.load_config(), offline=True)
-        self.assertEqual(plan['skipped'][0]['name'], 'traceai-roast')
-        self.assertIn('RubyGems publishing', plan['skipped'][0]['reason'])
+        self.assertEqual([(p['name'], p['version'], p['dir'], p['tag']) for p in gems], [
+            ('traceai-auto', auto_version, 'ruby', f'ruby-traceai-auto-v{auto_version}'),
+            ('traceai-roast', roast_version, 'ruby/roast', f'ruby-traceai-roast-v{roast_version}'),
+        ])
+
+    def test_ruby_auto_has_release_please_version_file_and_manifest_entry(self):
+        root = release_plan.REPO_ROOT
+        config = json.loads((root / 'release-please-config.json').read_text())['packages']
+        manifest = json.loads((root / '.release-please-manifest.json').read_text())
+        # The component is the publisher's tag prefix (ruby-<gem>-v<version>), so release-please reads the
+        # publisher-created tag as the release boundary, as the NuGet packages do.
+        self.assertEqual(config['ruby'], {
+            'release-type': 'simple', 'component': 'ruby-traceai-auto',
+            'package-name': 'traceai-auto', 'extra-files': ['traceai-auto.gemspec'],
+        })
+        self.assertEqual(config['ruby/roast'], {
+            'release-type': 'simple', 'component': 'ruby-traceai-roast',
+            'package-name': 'traceai-roast', 'extra-files': ['lib/traceai/roast/version.rb'],
+        })
+        for path in ('ruby/traceai-auto.gemspec', 'ruby/roast/lib/traceai/roast/version.rb'):
+            versioned = [line for line in (root / path).read_text().splitlines() if 'x-release-please-version' in line]
+            self.assertEqual(len(versioned), 1, path)
+        for gem in [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']:
+            component = config[gem['dir']]['component']
+            self.assertEqual(gem['tag'], f"{component}-v{gem['version']}")
+        version = re.search(r'''^\s*s\.version\s*=\s*["']([^"']+)["']''',
+                            (root / 'ruby/traceai-auto.gemspec').read_text(), re.M).group(1)
+        self.assertEqual(manifest['ruby'], version)
+        gems = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']
+        self.assertEqual(release_plan.coverage_problems(root, gems), [])
+
+    def test_ruby_auto_version_is_read_from_the_gemspec_without_execution(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'ruby').mkdir()
+            (root / 'ruby/traceai-auto.gemspec').write_text(
+                'raise "gemspec must not execute"\nGem::Specification.new do |s|\n'
+                '  s.name = "traceai-auto"\n  s.version = "0.9.7"\nend\n')
+            gems = release_plan.other_packages(root)
+            self.assertEqual([(p['name'], p['version'], p['tag']) for p in gems],
+                             [('traceai-auto', '0.9.7', 'ruby-traceai-auto-v0.9.7')])
+
+    def test_ruby_auto_missing_literal_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'ruby').mkdir()
+            gemspec = root / 'ruby/traceai-auto.gemspec'
+            for text in ('s.name = "traceai-auto"\n', 's.version = calculate_version()\n'):
+                with self.subTest(gemspec=text):
+                    gemspec.write_text(text)
+                    with self.assertRaisesRegex(ValueError, 'missing Ruby gem version'):
+                        release_plan.other_packages(root)
+
+    def test_both_ruby_gems_are_planned_in_the_ruby_ecosystem_without_holds(self):
+        gems = [p for p in release_plan.other_packages() if p['ecosystem'] == 'ruby']
+        planned = release_plan.plan(gems, release_plan.load_config(), offline=True)
+        self.assertEqual([p['name'] for p in planned['ruby']], ['traceai-auto', 'traceai-roast'])
+        self.assertEqual(planned['skipped'], [])
+
+    def test_ruby_registry_versions_use_the_public_versions_api(self):
+        for name in ('traceai-auto', 'traceai-roast'):
+            with self.subTest(name=name), patch.object(release_plan, '_get_json', return_value=[
+                {'number': '0.1.0'}, {'number': '0.2.0'}, {'number': '0.2.0', 'platform': 'java'},
+            ]) as get:
+                self.assertEqual(release_plan.published_versions({'ecosystem': 'ruby', 'name': name}),
+                                 {'0.1.0', '0.2.0'})
+                get.assert_called_once_with(f'https://rubygems.org/api/v1/versions/{name}.json')
+
+    def test_ruby_registry_404_is_unpublished_but_other_errors_raise(self):
+        package = {'ecosystem': 'ruby', 'name': 'traceai-auto'}
+        for status in (404, 401, 403, 429, 503):
+            error = urllib.error.HTTPError('https://rubygems.org/api/v1/versions/traceai-auto.json', status, 'failed', {}, None)
+            with self.subTest(status=status), patch('urllib.request.urlopen', side_effect=error):
+                if status == 404:
+                    self.assertIsNone(release_plan.published_versions(package))
+                else:
+                    with self.assertRaises(urllib.error.HTTPError):
+                        release_plan.published_versions(package)
+
+    def test_ruby_published_version_is_retained_only_for_reconciliation(self):
+        package = {'ecosystem': 'ruby', 'name': 'traceai-auto', 'version': '0.1.0', 'dir': 'ruby',
+                   'tag': 'ruby-traceai-auto-v0.1.0', 'core': False}
+        with patch.object(release_plan, '_get_json', return_value=[{'number': '0.1.0'}]):
+            planned = release_plan.plan([package], {}, include_published=True)
+            self.assertTrue(planned['ruby'][0]['registry_published'])
+            self.assertFalse(planned['ruby'][0]['first_release'])
+            self.assertEqual(workflow_plan.unfinished(json.loads(json.dumps(planned)), set())['ruby'], planned['ruby'])
+            self.assertEqual(workflow_plan.unfinished(planned, {package['tag']})['ruby'], [])
+            skipped = release_plan.plan([package], {})
+            self.assertEqual(skipped['ruby'], [])
+            self.assertEqual(skipped['skipped'][0]['name'], 'traceai-auto')
 
     def test_go_auto_is_inventoried_and_released_with_its_own_tag(self):
         root = release_plan.REPO_ROOT
