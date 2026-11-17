@@ -503,10 +503,10 @@ def test_auto_sampler_uses_otel_environment(fresh_state, monkeypatch, caplog, na
         provider = _manager.init(span_exporter=exporter, batch=False)
     warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
     if name in ("traceidratio", "parentbased_traceidratio") and arg is None:
-        # The SDK warns once for a missing ratio argument and defaults to 1.0.
-        assert [(record.name, record.getMessage()) for record in warnings] == [
-            ("opentelemetry.sdk.trace.sampling", "Could not convert TRACES_SAMPLER_ARG to float."),
-        ]
+        # The SDK warns once for a missing ratio argument and defaults to 1.0. Newer SDKs append
+        # "Using default rate 1.0." to the message, so match its stable prefix.
+        assert [record.name for record in warnings] == ["opentelemetry.sdk.trace.sampling"]
+        assert warnings[0].getMessage().startswith("Could not convert TRACES_SAMPLER_ARG to float.")
     else:
         assert not warnings
     _assert_head_sampling(provider, exporter, *decisions)

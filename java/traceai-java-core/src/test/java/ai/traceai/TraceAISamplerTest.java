@@ -142,7 +142,8 @@ public class TraceAISamplerTest {
 
     public static void main(String[] args) throws Exception {
         String mode = args[0];
-        TraceConfig.Builder builder = TraceConfig.builder().projectName("sampler-test");
+        // A span processor is required: newer OpenTelemetry SDKs hand out a no-op tracer when the provider has none.
+        TraceConfig.Builder builder = TraceConfig.builder().projectName("sampler-test").enableConsoleExporter(true);
         Sampler option = null;
         if (mode.equals("option-off") || mode.equals("borrowed-on")) option = Sampler.alwaysOff();
         if (mode.equals("option-on") || mode.equals("borrowed-off")) option = Sampler.alwaysOn();
@@ -161,7 +162,9 @@ public class TraceAISamplerTest {
         SdkTracerProvider application = null;
         try {
             if (mode.startsWith("borrowed-")) {
-                application = SdkTracerProvider.builder().setSampler(mode.equals("borrowed-off") ? Sampler.alwaysOff() : Sampler.alwaysOn()).build();
+                application = SdkTracerProvider.builder().setSampler(mode.equals("borrowed-off") ? Sampler.alwaysOff() : Sampler.alwaysOn())
+                    .addSpanProcessor(io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.create(
+                        io.opentelemetry.exporter.logging.LoggingSpanExporter.create())).build();
                 TraceAI.init(config, OpenTelemetrySdk.builder().setTracerProvider(application).build());
             } else TraceAI.init(config);
             probe("ROOT", Context.root());

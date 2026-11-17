@@ -228,8 +228,10 @@ func TestExplicitSampleRateIgnoresInvalidEnvironmentSampler(t *testing.T) {
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "not_a_number")
 	provider, recorder := startSamplerAgent(t, WithSampleRate(0))
 	checkSamplerDecisions(t, provider, recorder, [3]bool{false, true, false})
-	if output.Len() != 0 {
-		t.Fatalf("unused OTEL sampler produced a warning: %s", output.String())
+	// sdktrace.NewTracerProvider parses OTEL_TRACES_SAMPLER itself and reports an invalid value through the
+	// global OpenTelemetry error handler even when WithSampler overrides it; only the agent's own warning is ours.
+	if strings.Contains(output.String(), "traceai auto:") {
+		t.Fatalf("unused OTEL sampler produced an agent warning: %s", output.String())
 	}
 }
 
