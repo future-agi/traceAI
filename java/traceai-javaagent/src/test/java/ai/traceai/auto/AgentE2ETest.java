@@ -224,6 +224,11 @@ class AgentE2ETest {
             var foreign = jar.stream().map(java.util.zip.ZipEntry::getName)
                 .filter(name -> !name.startsWith("ai/traceai/auto/") && !name.startsWith("META-INF/") && !name.equals("ai/") && !name.equals("ai/traceai/")).toList();
             assertEquals(List.of(), foreign);
+            for (String helper : List.of("SamplingRatioSampler.class", "SamplingRatioSampler$KnownRatioSampler.class",
+                    "SamplingRatioSampler$1.class")) {
+                assertNotNull(jar.getEntry("ai/traceai/auto/shaded/core/" + helper),
+                    "owned-provider sampling helpers must be included and relocated: " + helper);
+            }
         }
     }
     @Test void deadCollectorDoesNotAffectApplication() throws Exception { String log = run("jdk", "basic", Map.of("FI_BASE_URL", "http://127.0.0.1:1"), true); assertTrue(spans.isEmpty()); assertEquals(1, log.lines().filter(l -> l.contains("[traceai-auto]")).count(), log); }

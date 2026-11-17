@@ -78,6 +78,43 @@ class AttributeProjectionTest {
             assertEquals(32, host.getSpanLimits().getMaxNumberOfAttributes());
         } finally { io.opentelemetry.api.GlobalOpenTelemetry.resetForTest(); }
     }
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,true", "true,true", "false,false", "true,false"})
+    void samplingMetadataCountsAgainstProviderAndContextBudgets(boolean contextLimit, boolean sampledRatio) {
+        var config = AutoConfig.resolve(Map.of(), Map.of("FI_SAMPLE_RATE", sampledRatio ? "0.25" : "1"));
+        var memory = InMemorySpanExporter.create();
+        try (var provider = SdkTracerProvider.builder().setSampler(TraceAIAuto.ownedSampler(config))
+                .setSpanLimits(SpanLimits.builder().setMaxNumberOfAttributes(contextLimit ? 10 : 3).build())
+                .addSpanProcessor(SimpleSpanProcessor.create(memory)).build()) {
+            var runtime = new TraceAIAuto.RuntimeState(config, provider, provider.get("ratio-budget"), new OtlpJsonExporter(config));
+            var parent = io.opentelemetry.api.trace.SpanContext.createFromRemoteParent(
+                "00000000000000000000000000000001", "0000000000000001",
+                io.opentelemetry.api.trace.TraceFlags.getSampled(),
+                io.opentelemetry.api.trace.TraceState.builder().put("fi", "r:0.25").build());
+            var context = Context.root().with(io.opentelemetry.api.trace.Span.wrap(parent));
+            var request = AdversarialTest.request("http://127.0.0.1/v1/chat/completions", Map.of("model", "m"));
+            var match = WireCore.match(request.method, request.url);
+            var snapshot = new OtelBridge.Snapshot(context, Map.of(), false, 1, 1, contextLimit ? 3 : null, null);
+            var capture = new WireCapture(request, request.headers, match, snapshot, 4194304, runtime);
+            capture.endEpochNanos = 2;
+            TraceAIAuto.emit(capture, new WireCore.Result("ratio-budget", Map.of(
+                "gen_ai.span.kind", "LLM", "output.mime_type", "text/plain", "output.value", "output"), true, null));
+            assertEquals(1, memory.getFinishedSpanItems().size());
+            var attrs = memory.getFinishedSpanItems().get(0).getAttributes();
+            assertEquals(sampledRatio ? 0.25 : null, attrs.get(AttributeKey.doubleKey("fi.sampling.ratio")));
+            assertTrue(attrs.size() <= 3);
+            if (sampledRatio) {
+                assertNull(attrs.get(AttributeKey.stringKey("output.mime_type")));
+                assertNull(attrs.get(AttributeKey.stringKey("output.value")));
+                assertEquals(2L, attrs.get(AttributeKey.longKey(AttributeProjection.DROPPED)));
+            } else {
+                assertEquals("text/plain", attrs.get(AttributeKey.stringKey("output.mime_type")));
+                assertEquals("output", attrs.get(AttributeKey.stringKey("output.value")));
+                assertNull(attrs.get(AttributeKey.longKey(AttributeProjection.DROPPED)));
+            }
+        }
+    }
+
     @ParameterizedTest @ValueSource(ints = {32, 128}) void emissionReservesOutcomeUsageAndNewestContentAtSdkLimit(int limit) {
         var memory = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().setSpanLimits(SpanLimits.builder().setMaxNumberOfAttributes(limit).build())

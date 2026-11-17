@@ -111,6 +111,17 @@ public class TraceAISamplerTest {
         assertTrue(log.contains("ROOT_SAMPLED=false"), log);
     }
 
+    @Test void ownedProviderInstallsRatioWrapperForEnvironmentAndFactoryOption() throws Exception {
+        run("ratio-environment", Map.of("FI_SAMPLE_RATE", "0.25"));
+        run("ratio-option", Map.of("FI_SAMPLE_RATE", "0", "OTEL_TRACES_SAMPLER", "always_off"));
+    }
+
+    @Test void borrowedProviderAndUnknownExplicitSamplerRemainUnstamped() throws Exception {
+        run("ratio-borrowed", Map.of("FI_SAMPLE_RATE", "0.25"));
+        run("ratio-custom", Map.of("FI_SAMPLE_RATE", "0.25"));
+        run("ratio-record-only", Map.of("FI_SAMPLE_RATE", "0.25"));
+    }
+
     private String run(String mode, Map<String, String> environment) throws Exception {
         Path output = Files.createTempFile(temporary, "sampler-", ".log");
         ProcessBuilder builder = new ProcessBuilder(
@@ -142,6 +153,7 @@ public class TraceAISamplerTest {
 
     public static void main(String[] args) throws Exception {
         String mode = args[0];
+        if (mode.startsWith("ratio-")) { ratioProviderProbe(mode); return; }
         // A span processor is required: newer OpenTelemetry SDKs hand out a no-op tracer when the provider has none.
         TraceConfig.Builder builder = TraceConfig.builder().projectName("sampler-test").enableConsoleExporter(true);
         Sampler option = null;
@@ -187,6 +199,52 @@ public class TraceAISamplerTest {
             TraceAI.shutdown();
             if (application != null) application.close();
         }
+    }
+
+    private static void ratioProviderProbe(String mode) {
+        TraceConfig.Builder builder = TraceConfig.builder().enableConsoleExporter(true);
+        Sampler factory = TraceConfig.samplerFromEnvironment(Map.of("FI_SAMPLE_RATE", "0.25"));
+        if (mode.equals("ratio-option") || mode.equals("ratio-borrowed")) builder.sampler(factory);
+        if (mode.equals("ratio-custom")) builder.sampler(Sampler.traceIdRatioBased(0.25));
+        if (mode.equals("ratio-record-only")) builder.sampler(new Sampler() {
+            @Override public SamplingResult shouldSample(Context parent, String traceId, String name,
+                    io.opentelemetry.api.trace.SpanKind kind, io.opentelemetry.api.common.Attributes attributes,
+                    java.util.List<io.opentelemetry.sdk.trace.data.LinkData> links) { return SamplingResult.recordOnly(); }
+            @Override public String getDescription() { return "TraceIdRatioBased{0.250000}"; }
+        });
+        SdkTracerProvider application = null;
+        try {
+            if (mode.equals("ratio-borrowed")) {
+                application = SdkTracerProvider.builder().setSampler(factory).addSpanProcessor(
+                    io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.create(
+                        io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create())).build();
+                TraceAI.init(builder.build(), OpenTelemetrySdk.builder().setTracerProvider(application).build());
+            } else TraceAI.init(builder.build());
+            boolean stamp = mode.equals("ratio-environment") || mode.equals("ratio-option");
+            boolean found = false;
+            for (int i = 0; i < 256; i++) {
+                Span root = TraceAI.getTracer().startSpan("ratio-root", FISpanKind.CHAIN, Context.root());
+                if (root.isRecording()) {
+                    assertRatio(root, stamp ? 0.25 : null);
+                    if (mode.equals("ratio-record-only")) assertFalse(root.getSpanContext().isSampled());
+                    Span child = TraceAI.getTracer().startSpan("ratio-child", FISpanKind.CHAIN, Context.root().with(root));
+                    assertRatio(child, stamp ? 0.25 : null);
+                    child.end(); root.end(); found = true; break;
+                }
+                root.end();
+            }
+            assertTrue(found, "fixed high attempt bound should find a kept ratio root");
+        } finally {
+            TraceAI.shutdown();
+            if (application != null) application.close();
+        }
+    }
+
+    private static void assertRatio(Span span, Double expected) {
+        assertTrue(span instanceof io.opentelemetry.sdk.trace.ReadableSpan);
+        assertEquals(expected, ((io.opentelemetry.sdk.trace.ReadableSpan) span).toSpanData().getAttributes()
+            .get(io.opentelemetry.api.common.AttributeKey.doubleKey("fi.sampling.ratio")));
+        assertEquals(expected == null ? null : "r:" + expected, span.getSpanContext().getTraceState().get("fi"));
     }
 
     private static void probe(String name, Context parent) {
