@@ -77,6 +77,8 @@ If the app already calls `register()` and `instrument()` itself, do not also sta
 
 For a provider the agent creates, `FI_SAMPLE_RATE` (or `init(sample_rate=...)` / `sample_rate` in `futureagi.toml`) wins over `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`; otherwise those standard OpenTelemetry settings choose the head sampler. The default is `ParentBased(TraceIdRatioBased(1.0))`; invalid or unsupported sampler settings use that default with one warning. An explicit `sampler=` still takes precedence. An application-owned provider always keeps its own sampler, including its parent sampled-flag behaviour.
 
+On agent-created providers using a ratio strictly between 0 and 1, sampled spans carry the numeric `fi.sampling.ratio` keep probability (absence means `1.0` for downstream estimates), restored on the Future AGI export copy if SDK attribute limits evict it without changing those limits or the application's spans. Ratio-decided spans also write `fi=r:<ratio>` in W3C tracestate, preserving other entries up to its 32-entry limit, and parent-based sampled children copy only a valid parent `fi` ratio rather than the local configured rate. Dropped or record-only spans, full-rate/always-on/off sampling, explicit custom samplers, and application-owned providers receive no added sampling metadata.
+
 ## Shutdown on termination
 
 From `fi-instrumentation-otel` 1.2.2, `register()` leaves your SIGINT and SIGTERM handlers unchanged. Default SIGTERM does not run Python exit hooks, so call `provider.shutdown()` from your application's shutdown path to export pending spans on container stop, and allow enough termination grace time. SIGKILL cannot flush spans.
