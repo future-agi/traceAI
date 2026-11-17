@@ -8,7 +8,7 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import type { TraceConfigOptions } from "@traceai/fi-core";
+import { rememberFITracerSpan, type TraceConfigOptions } from "@traceai/fi-core";
 import { providerForAgentModel } from "./agentModels";
 import { FIAttributes, VoltAgentAttributes as VA } from "./attributes";
 import {
@@ -297,6 +297,14 @@ export function copySpan(
   status: SpanStatus = span.status,
 ): ReadableSpan {
   const spanContext = span.spanContext();
+  const legacy = span as unknown as Record<string, unknown>;
+  const scope = span.instrumentationScope ?? (legacy.instrumentationLibrary as ReadableSpan["instrumentationScope"] | undefined);
+  // Only converted VoltAgent spans get FI's session/user grouping-key exemption.
+  // Foreign spans can reach this processor too; their identities keep the stricter name rule.
+  if (scope?.name === "@voltagent/core") {
+    try { rememberFITracerSpan(spanContext); }
+    catch { /* Still export the copy, with the stricter credential name rule. */ }
+  }
   const copy = {
     name: span.name,
     kind: span.kind,
@@ -317,7 +325,6 @@ export function copySpan(
     droppedLinksCount: span.droppedLinksCount,
   } as ReadableSpan & Record<string, unknown>;
   // SDK 1.x field names, in case the exporter in use still reads them.
-  const legacy = span as unknown as Record<string, unknown>;
   if (legacy.parentSpanId !== undefined) copy.parentSpanId = legacy.parentSpanId;
   if (legacy.instrumentationLibrary !== undefined) copy.instrumentationLibrary = legacy.instrumentationLibrary;
   return copy;

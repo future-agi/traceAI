@@ -8,6 +8,9 @@ const exporter = { export(spans, done) { fiSpans.push(...spans); done({ code: 0 
 const appExporter = { export(spans, done) { appSpans.push(...spans); done({ code: 0 }); }, async shutdown() {} };
 const options = { apiKey: 'configured-PRIVATE-123', secretKey: 'secret-PRIVATE-123', instrumentations: ['wire'], exporter };
 function installProvider() {
+  // These cases check AI and application spans on the application's provider,
+  // which needs the forwarding switch.
+  process.env.FI_FORWARD_APP_SPANS = 'true';
   const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(appExporter)] });
   trace.setGlobalTracerProvider(provider);
   context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
@@ -55,6 +58,8 @@ function serialized(span) { return JSON.stringify({ name: span.name, attributes:
       legacyPath = join(store, directory, 'node_modules/@opentelemetry/sdk-trace-base');
     }
     const legacy = require(legacyPath);
+    // Application spans reach Future AGI only with the forwarding switch.
+    process.env.FI_FORWARD_APP_SPANS = 'true';
     const provider = new legacy.BasicTracerProvider(); provider.addSpanProcessor(new legacy.SimpleSpanProcessor(appExporter));
     trace.setGlobalTracerProvider(provider); context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
     const auto = require('@traceai/auto'); auto.init({ ...options, exporter: undefined, instrumentations: [] });

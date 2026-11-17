@@ -22,6 +22,7 @@ develop-eggs
 lib
 # Ruby gems store their source in lib/.
 !ruby/roast/lib/
+!ruby/lib/
 lib64
 
 # Installer logs
@@ -84,6 +85,8 @@ planning/
 # C# build artifacts
 **/bin/
 **/obj/
+# The zero-code Ruby gem ships its executable in bin/.
+!ruby/bin/
 
 # Python
 **/uv.lock

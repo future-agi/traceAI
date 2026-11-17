@@ -8,6 +8,16 @@
   "include-v-in-tag": true,
   "tag-separator": "-",
   "pull-request-title-pattern": "chore${scope}: release${component} ${version}",
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "csharp-sdk-and-startup-hook",
+      "components": [
+        "nuget-fi-instrumentation-otel",
+        "nuget-TraceAI.AutoInstrumentation"
+      ]
+    }
+  ],
   "packages": {
     "python/frameworks/temporal": {
       "release-type": "python",
@@ -997,6 +1007,13 @@
       "tag-separator": "/",
       "initial-version": "0.1.0"
     },
+    "go/auto": {
+      "release-type": "go",
+      "component": "go/auto",
+      "package-name": "github.com/future-agi/traceAI/go/auto",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
     "go/eino": {
       "release-type": "go",
       "component": "go/eino",
@@ -1033,6 +1050,18 @@
         {
           "type": "xml",
           "path": "FIInstrumentation.csproj",
+          "xpath": "/Project/PropertyGroup/Version"
+        }
+      ]
+    },
+    "csharp/src/TraceAI.AutoInstrumentation": {
+      "release-type": "simple",
+      "component": "nuget-TraceAI.AutoInstrumentation",
+      "package-name": "TraceAI.AutoInstrumentation",
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "TraceAI.AutoInstrumentation.csproj",
           "xpath": "/Project/PropertyGroup/Version"
         }
       ]

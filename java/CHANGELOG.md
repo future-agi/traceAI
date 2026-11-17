@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 (pending release)
+
+### Features
+
+* **javaagent:** first release of `com.futureagi:traceai-javaagent`, the zero-code Java agent. Add `-javaagent:traceai-javaagent-<version>.jar` (or call `TraceAI.init()`) to trace AI provider HTTP calls and send only those spans to Future AGI, leaving the application's OpenTelemetry setup untouched. The BOM now aligns it with the other modules.
+
 ## [1.1.0](https://github.com/future-agi/traceAI/compare/java-v1.0.3...java-v1.1.0) (2026-11-10)
 
 ### Features
@@ -52,6 +58,7 @@
 
 ## Unreleased
 
+- Honor `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` in core-owned and auto-agent providers when no explicit `FI_SAMPLE_RATE` / `sample_rate` is set; explicit rates use parent-based trace-id sampling. Add `TraceConfig.Builder.sampler(Sampler)` for manual initialization without changing application-owned providers. Invalid standard settings warn once and use the parent-based rate-one default; parent-based choices now respect unsampled application parents.
 - Prepare Maven Central coordinates under `com.futureagi`; Java packages remain `ai.traceai.*`.
 - Add a BOM covering all instrumentation modules and an opt-in release profile for sources, Javadocs, signing, and Central publishing.
 - Read the runtime SDK version from the parent Maven version instead of a separate hard-coded value.

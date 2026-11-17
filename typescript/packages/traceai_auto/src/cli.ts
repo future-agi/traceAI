@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { init, forceFlush, report, shutdown } from "./index";
-import { trace } from "@opentelemetry/api";
 import { inventory } from "./libraries";
 import { resolveConfig } from "./config";
 import { spawn } from "node:child_process";
@@ -25,10 +24,11 @@ async function main(): Promise<void> {
   if (command !== "doctor") {
     console.error("Usage: traceai-auto doctor [--no-check] | bootstrap"); process.exitCode = 1; return;
   }
-  init();
+  // The agent's provider is never global; send the check span through it directly.
+  const provider = init();
   const initial = report();
-  if (initial.active && !process.argv.includes("--no-check")) {
-    const span = trace.getTracer("@traceai/auto/doctor").startSpan("traceai.auto.doctor"); span.end();
+  if (initial.active && provider && !process.argv.includes("--no-check")) {
+    const span = provider.getTracer("@traceai/auto/doctor").startSpan("traceai.auto.doctor"); span.end();
     await forceFlush();
   }
   console.log(JSON.stringify(report(), null, 2));

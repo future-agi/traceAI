@@ -8,7 +8,8 @@ const native = { export(spans, done) { app.push(...spans); done({ code: 0 }); },
 let host, selected, server;
 (async () => {
   try {
-    const options = { exporter, configFile: '/does-not-exist/traceai-fi-config', instrumentations: ['wire'] };
+    // Host and supplied-provider cases put AI spans on that provider, which needs the forwarding switch.
+    const options = { exporter, configFile: '/does-not-exist/traceai-fi-config', instrumentations: ['wire'], forwardApplicationSpans: true };
     if (mode === 'library-limit' || mode === 'wire-value-limit' || mode === 'vercel-provider') {
       host = new BasicTracerProvider({ spanLimits: { attributeCountLimit: Number(process.env.LIMIT || 128), ...(mode === 'wire-value-limit' ? { attributeValueLengthLimit: 12 } : {}) }, spanProcessors: [new SimpleSpanProcessor(native)] });
       trace.setGlobalTracerProvider(host);

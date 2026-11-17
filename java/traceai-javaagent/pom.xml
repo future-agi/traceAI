@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.futureagi</groupId>
+        <artifactId>traceai-java-parent</artifactId>
+        <version>1.2.0</version>
+    </parent>
+
+    <artifactId>traceai-javaagent</artifactId>
+    <name>TraceAI Java Agent</name>
+    <description>Zero-code -javaagent that traces AI provider HTTP calls and sends only those spans to Future AGI, leaving the application's OpenTelemetry setup untouched</description>
+
+    <properties>
+        <byte-buddy.version>1.15.11</byte-buddy.version>
+        <agent.okhttp.version>3.14.9</agent.okhttp.version>
+        <!-- Test only: a child JVM runs the OpenTelemetry Java agent beside this one. -->
+        <otel-javaagent.version>2.10.0</otel-javaagent.version>
+        <!-- The child-JVM suite gates its own workflow. Full-reactor runs (shared Java CI and the
+             Java release) pass -Dtraceai.javaagent.skipITs=true to skip it for this module only;
+             -DskipITs still works as usual. -->
+        <traceai.javaagent.skipITs>false</traceai.javaagent.skipITs>
+        <skipITs>${traceai.javaagent.skipITs}</skipITs>
+        <!-- The OkHttp 4 and 5 jars are only for the child-JVM suite, so a build that skips tests
+             does not fetch them (see the three profiles below). -->
+        <traceai.javaagent.skipOkHttpJars>false</traceai.javaagent.skipOkHttpJars>
+    </properties>
+
+    <dependencies>
+        <!-- Everything below the provided/test entries is bundled, relocated, into the single
+             shaded agent jar. They are optional so that a build which declares the agent as a
+             dependency does not also receive these libraries on its own classpath. -->
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-core</artifactId>
+            <optional>true</optional>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.opentelemetry</groupId>
+                    <artifactId>opentelemetry-exporter-otlp</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.opentelemetry</groupId>
+                    <artifactId>opentelemetry-exporter-logging</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>${byte-buddy.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+            <version>${byte-buddy.version}</version>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- OkHttp and Okio belong to the application; the agent only observes them. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>${agent.okhttp.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Child-JVM tests run the existing wrappers' own OTLP route (TraceAI.init) beside the agent.
+             The JDK sender keeps OkHttp 4 off the test classpath, where the application's OkHttp 3
+             is under test. Before OpenTelemetry 1.38 the JDK sender carries an -alpha version. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.opentelemetry</groupId>
+                    <artifactId>opentelemetry-exporter-sender-okhttp</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-sender-jdk</artifactId>
+            <version>${opentelemetry.version}-alpha</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-logging</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.11.1-alpha</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/AgentBootstrap.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <!-- The entry point stays Java 8 bytecode so an injected -javaagent on an
+                         older JVM prints one line and lets the application start untraced. -->
+                    <execution>
+                        <id>java8-bootstrap</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <release>8</release>
+                            <includes>
+                                <include>**/AgentBootstrap.java</include>
+                            </includes>
+                            <useIncrementalCompilation>false</useIncrementalCompilation>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <execution>
+                        <id>legacy-okhttp-test</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>com.squareup.okhttp3</groupId>
+                                    <artifactId>okhttp</artifactId>
+                                    <version>3.8.1</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/legacy-okhttp</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                    <!-- OkHttp 4.x and 5.x run only in child JVMs. Each folder holds one OkHttp jar and
+                         the Okio and Kotlin runtime jars it needs, each named with its exact version.
+                         They are copied, not declared as dependencies, so they stay off this module's
+                         own compile and test classpaths. -->
+                    <execution>
+                        <id>okhttp-4-test</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${traceai.javaagent.skipOkHttpJars}</skip>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>com.squareup.okhttp3</groupId>
+                                    <artifactId>okhttp</artifactId>
+                                    <version>4.12.0</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/okhttp-4</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>com.squareup.okio</groupId>
+                                    <artifactId>okio-jvm</artifactId>
+                                    <version>3.6.0</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/okhttp-4</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.jetbrains.kotlin</groupId>
+                                    <artifactId>kotlin-stdlib</artifactId>
+                                    <version>1.8.21</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/okhttp-4</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                    <!-- From 5.0.0 the classes for the JVM are in the okhttp-jvm artifact. -->
+                    <execution>
+                        <id>okhttp-5-test</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${traceai.javaagent.skipOkHttpJars}</skip>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>com.squareup.okhttp3</groupId>
+                                    <artifactId>okhttp-jvm</artifactId>
+                                    <version>5.0.0</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/okhttp-5</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>com.squareup.okio</groupId>
+                                    <artifactId>okio-jvm</artifactId>
+                                    <version>3.15.0</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/okhttp-5</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.jetbrains.kotlin</groupId>
+                                    <artifactId>kotlin-stdlib</artifactId>
+                                    <version>2.2.0</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/okhttp-5</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>otel-javaagent-test</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>io.opentelemetry.javaagent</groupId>
+                                    <artifactId>opentelemetry-javaagent</artifactId>
+                                    <version>${otel-javaagent.version}</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/otel-javaagent</outputDirectory>
+                                    <destFileName>opentelemetry-javaagent.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--add-modules jdk.httpserver</argLine>
+                    <environmentVariables>
+                        <XDG_CONFIG_HOME>${project.build.directory}/synthetic-fi-config</XDG_CONFIG_HOME>
+                    </environmentVariables>
+                    <excludes>
+                        <exclude>**/*E2ETest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <!-- Child-JVM tests run against the packaged, shaded agent jar. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.2.3</version>
+                <configuration>
+                    <environmentVariables>
+                        <XDG_CONFIG_HOME>${project.build.directory}/synthetic-fi-config</XDG_CONFIG_HOME>
+                    </environmentVariables>
+                    <systemPropertyVariables>
+                        <traceai.agent.jar>${project.build.directory}/${project.build.finalName}.jar</traceai.agent.jar>
+                    </systemPropertyVariables>
+                    <includes>
+                        <include>**/*E2ETest.java</include>
+                    </includes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- The bundled dependencies are optional, so the published POM does not
+                                 add them to a consumer's classpath. -->
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <relocations>
+                                <relocation>
+                                    <pattern>net.bytebuddy</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.bytebuddy</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.opentelemetry</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.otel</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.gson</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.gson</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.slf4j</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.slf4j</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>ai.traceai.TraceConfig</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.core.TraceConfig</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>ai.traceai.ContextAttributes</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.core.ContextAttributes</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/versions/**/module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                                <!-- ByteBuddy's Windows attach helpers are loaded only through JNA, which the
+                                     agent does not bundle; they would sit unrelocated at the jar root. -->
+                                <filter>
+                                    <artifact>net.bytebuddy:byte-buddy-agent</artifact>
+                                    <excludes>
+                                        <exclude>win32-x86/**</exclude>
+                                        <exclude>win32-x86-64/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <!-- Only the two relocated core helpers enter the agent jar. Any other
+                                     ai.traceai class would sit unrelocated on the system classpath
+                                     beside the application's own traceai-java-core. -->
+                                <filter>
+                                    <artifact>com.futureagi:traceai-java-core</artifact>
+                                    <includes>
+                                        <include>ai/traceai/TraceConfig.class</include>
+                                        <include>ai/traceai/TraceConfig$*.class</include>
+                                        <include>ai/traceai/ContextAttributes.class</include>
+                                        <include>ai/traceai/ContextAttributes$*.class</include>
+                                    </includes>
+                                </filter>
+                            </filters>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Premain-Class>ai.traceai.auto.AgentBootstrap</Premain-Class>
+                                        <Agent-Class>ai.traceai.auto.AgentBootstrap</Agent-Class>
+                                        <Main-Class>ai.traceai.auto.AgentBootstrap</Main-Class>
+                                        <Can-Retransform-Classes>true</Can-Retransform-Classes>
+                                        <Can-Redefine-Classes>true</Can-Redefine-Classes>
+                                    </manifestEntries>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- No test runs, so the OkHttp 4 and 5 test jars are not downloaded. One profile per property,
+             because a profile activates on a single property. -D with no value means true. -->
+        <profile>
+            <id>skip-okhttp-jars-skip-its</id>
+            <activation><property><name>traceai.javaagent.skipITs</name><value>true</value></property></activation>
+            <properties><traceai.javaagent.skipOkHttpJars>true</traceai.javaagent.skipOkHttpJars></properties>
+        </profile>
+        <profile>
+            <id>skip-okhttp-jars-skip-tests</id>
+            <activation><property><name>skipTests</name><value>true</value></property></activation>
+            <properties><traceai.javaagent.skipOkHttpJars>true</traceai.javaagent.skipOkHttpJars></properties>
+        </profile>
+        <profile>
+            <id>skip-okhttp-jars-test-skip</id>
+            <activation><property><name>maven.test.skip</name><value>true</value></property></activation>
+            <properties><traceai.javaagent.skipOkHttpJars>true</traceai.javaagent.skipOkHttpJars></properties>
+        </profile>
+    </profiles>
+</project>

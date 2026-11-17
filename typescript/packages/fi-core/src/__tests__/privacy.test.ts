@@ -19,7 +19,7 @@ test("S1 keeps JSON primitive scalar recognition through SDK serialization", () 
   expect(scrubAttribute("12345678", ["12345678"])).toBe("<redacted>");
 });
 test("S6 full path exclusions never exempt independent credential ancestry", () => {
-  // A flattened name has no provider provenance (RL 2299t). Only the explicit
+  // A flattened name has no provider provenance. Only the explicit
   // provider-root walker may exempt token names; independent ancestry stays private.
   expect(isCredentialName("choices.0.logprobs.content.0.token")).toBe(true);
   expect(isCredentialName("secret.choices.0.logprobs.content.0.token")).toBe(true);

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3] - pending release
+
+### Fixed
+* Inside the zero-code agent (@traceai/auto), the call's own request
+  no longer arrives twice.
+
 ## [0.1.2](https://github.com/future-agi/traceAI/compare/npm-traceai-portkey-v0.1.1...npm-traceai-portkey-v0.1.2) (2026-11-05)
 
 

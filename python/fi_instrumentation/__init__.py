@@ -34,6 +34,8 @@ from .otel import (
     register,
 )
 
+# fi_instrumentation.init and fi_instrumentation.auto_instrument are not listed: they load on first
+# use (see __getattr__ below), and a star import must not load the zero-code agent.
 __all__ = [
     # Context and attributes
     "get_attributes_from_context",
@@ -68,3 +70,12 @@ __all__ = [
     "SemanticConvention",
     "register",
 ]
+
+
+def __getattr__(name: str):
+    # The zero-code entry points load on first use, so `import fi_instrumentation` stays as light as before.
+    if name in ("init", "auto_instrument"):
+        from fi_instrumentation import auto
+
+        return getattr(auto, name)
+    raise AttributeError(f"module 'fi_instrumentation' has no attribute {name!r}")

@@ -753,7 +753,7 @@ describe("sessions", () => {
       await until(() => runSpans().length === 1);
       expect(attr(runSpans()[0], S.SESSION_ID)).toBe("app-session-1");
       expect(attr(runSpans()[0], C.AGENT_ID)).toBe(AGENT_ID);
-      for (const tool of toolSpans()) expect(attr(tool, S.SESSION_ID)).toBeUndefined();
+      for (const tool of toolSpans()) expect(attr(tool, S.SESSION_ID)).toBe("app-session-1");
     } finally {
       context.disable();
     }

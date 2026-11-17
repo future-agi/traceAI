@@ -155,13 +155,16 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
         out.append({"ecosystem": "go", "name": module, "version": version,
                     "dir": path, "tag": f"{path}/v{version}", "core": False,
                     "changelog": f"{path}/CHANGELOG.md"})
-    for f in sorted((root / "csharp/src/FIInstrumentation").glob("*.csproj")):
-        p = ET.fromstring(f.read_text())
-        name, version = p.findtext(".//PackageId"), p.findtext(".//Version")
-        out.append({"ecosystem": "nuget", "name": name, "version": version,
-                    "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
-                    "tag": f"nuget-{name}-v{version}", "core": False,
-                    "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # The startup hook's own folder also holds its private runtime and SDK projects; only the
+    # project in the folder's top level is a package.
+    for folder in ("csharp/src/FIInstrumentation", "csharp/src/TraceAI.AutoInstrumentation"):
+        for f in sorted((root / folder).glob("*.csproj")):
+            p = ET.fromstring(f.read_text())
+            name, version = p.findtext(".//PackageId"), p.findtext(".//Version")
+            out.append({"ecosystem": "nuget", "name": name, "version": version,
+                        "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
+                        "tag": f"nuget-{name}-v{version}", "core": False,
+                        "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
     # Ruby is inventoried for release-please coverage but intentionally held
     # from the five-ecosystem publisher until a RubyGems publisher is configured.
     ruby_version = root / "ruby/roast/lib/traceai/roast/version.rb"
@@ -283,6 +286,14 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
         if p["ecosystem"] == "java" and (p["group"] != "com.futureagi" or "SNAPSHOT" in p["version"]):
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
+        if p["ecosystem"] == "java":
+            # A held module is built and tested with the reactor but not deployed (its release profile
+            # sets skipPublishing), so the Central checks must not wait for it.
+            hold = config.get("hold_artifacts", {})
+            names = {a: f"{p['group']}:{a}" for a in p.get("artifacts", [])}
+            held = [a for a, name in names.items() if name in hold]
+            p = {**p, "artifacts": [a for a in names if a not in held], "held_artifacts": held}
+            out["skipped"].extend({"name": names[a], "reason": hold[names[a]]} for a in held)
         if not offline:
             have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have

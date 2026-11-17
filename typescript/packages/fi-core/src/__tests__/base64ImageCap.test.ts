@@ -181,7 +181,7 @@ describe("base64 image cap", () => {
     it("exactly the limit: I1 omits image payloads and retains non-image attributes", () => {
       const attributes = shape(MAX);
       // PENDING I1xF2-PRECEDENCE T12-T22: TS I1 media omission dominates positive caps.
-      // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1. Literal fixture
+      // Literal fixture
       // replacements retain every other byte, including nested JSON and metadata.
       const expected = Object.fromEntries(Object.entries(attributes).map(([key, value]) => {
         if (typeof value !== "string") return [key, value];
@@ -323,7 +323,6 @@ describe("base64 image cap", () => {
       expect(exportWith({ [key]: dataUrl(MAX + 1) }, {}).attributes[key]).toBe(REDACTED_VALUE);
       exporter.reset();
       // PENDING I1xF2-PRECEDENCE T26: TS I1 media omission dominates positive caps.
-      // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1.
       const span = exportWith({ [key]: dataUrl(MAX) }, {});
       expect(span.attributes[key]).toBe("<omitted: 978 base64 chars>");
       expectNoImage(span);
@@ -334,7 +333,6 @@ describe("base64 image cap", () => {
       const key = "custom.image";
       const value = dataUrl(MAX + 1);
       // PENDING I1xF2-PRECEDENCE T27: TS I1 media omission dominates positive caps.
-      // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1.
       const span = exportWith({ [key]: value }, { base64ImageMaxLength: MAX * 2 });
       expect(span.attributes[key]).toBe("<omitted: 979 base64 chars>");
       expectNoImage(span);

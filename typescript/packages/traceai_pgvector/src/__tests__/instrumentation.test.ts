@@ -531,3 +531,133 @@ describe("PgVector Instrumentation", () => {
     });
   });
 });
+
+describe("PgVector vector-only mode", () => {
+  let instrumentation: any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.resetModules();
+    const mod = require("../instrumentation");
+    instrumentation = new mod.PgVectorInstrumentation({
+      instrumentationConfig: { enabled: true, vectorOnly: true },
+    });
+    instrumentation.enable();
+  });
+
+  afterEach(() => {
+    instrumentation?.disable();
+  });
+
+  it("reports that only vector queries are traced", () => {
+    expect(instrumentation.vectorOnly).toBe(true);
+  });
+
+  it("runs ordinary queries without a span and returns the driver's own result", () => {
+    const result = { rows: [{ id: 1 }], rowCount: 1 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+    const client = {};
+
+    for (const text of ["SELECT * FROM users WHERE email = $1", "INSERT INTO orders (total) VALUES ($1)", "UPDATE carts SET items = $1"]) {
+      expect(mockModule.Client.prototype.query.call(client, text, ["value"])).toBe(result);
+      expect(query).toHaveBeenLastCalledWith(text, ["value"]);
+    }
+    expect(mockModule.Client.prototype.query.call(client, { text: "DELETE FROM sessions" })).toBe(result);
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("still traces vector queries", async () => {
+    const query = (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 });
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding <=> $1 LIMIT 5", [[0.1, 0.2]]);
+    await mockModule.Client.prototype.query.call({}, "INSERT INTO items (embedding) VALUES ($1::vector)", ["[0.1,0.2]"]);
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs full-text, PostGIS and trigram queries without a span", () => {
+    const result = { rows: [], rowCount: 0 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    for (const text of [
+      "SELECT id FROM docs WHERE to_tsvector('english', body) @@ plainto_tsquery($1)",
+      "SELECT id FROM docs WHERE array_to_tsvector(tags) @@ to_tsquery($1)",
+      "SELECT id FROM docs WHERE body_tsv @@ $1::tsquery AND body_tsv = $2::tsvector",
+      "SELECT name FROM places ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) LIMIT 5",
+      "SELECT name FROM places ORDER BY geom <#> $1::geometry LIMIT 5",
+      "SELECT name FROM users ORDER BY name <-> 'jon' LIMIT 3",
+      "SELECT name, similarity(name, $1) FROM users ORDER BY name <-> $1 LIMIT 3",
+    ]) {
+      expect(mockModule.Client.prototype.query.call({}, text, ["value"])).toBe(result);
+    }
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("runs trigram word-distance and PostGIS box-distance queries without a span", () => {
+    const result = { rows: [], rowCount: 0 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    for (const text of [
+      "SELECT name FROM users ORDER BY name <<-> $1 LIMIT 3",
+      "SELECT name FROM users ORDER BY name <->> $1 LIMIT 3",
+      "SELECT name FROM users ORDER BY name <<<-> $1 LIMIT 3",
+      "SELECT name FROM users ORDER BY name <->>> $1 LIMIT 3",
+      "SELECT name FROM places ORDER BY geom <<->> $1 LIMIT 5",
+      "SELECT name FROM places ORDER BY geom <<#>> $1 LIMIT 5",
+    ]) {
+      expect(mockModule.Client.prototype.query.call({}, text, ["value"])).toBe(result);
+    }
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("runs distance queries against a typed geometric literal without a span", () => {
+    const result = { rows: [], rowCount: 0 };
+    const query = (jest.fn() as MockFn).mockReturnValue(result);
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    for (const text of [
+      "SELECT id FROM shops ORDER BY location <-> point '(1,2)' LIMIT 5",
+      "SELECT id FROM zones ORDER BY area <-> circle '<(0,0),1>' LIMIT 5",
+      "SELECT name FROM places ORDER BY geom <-> geometry 'SRID=4326;POINT(1 2)' LIMIT 5",
+    ]) {
+      expect(mockModule.Client.prototype.query.call({}, text)).toBe(result);
+    }
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("traces pgvector distance queries with an untyped parameter or a vector literal", async () => {
+    const query = (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 });
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding <-> $1 LIMIT 5", ["[0.1,0.2]"]);
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding <#> '[0.1,0.2]' LIMIT 5");
+    await mockModule.Client.prototype.query.call({}, "SELECT id FROM items ORDER BY embedding::halfvec(2) <+> $1::halfvec(2) LIMIT 5", ["[0.1,0.2]"]);
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(3);
+  });
+
+  it("traces every query when the option is off", async () => {
+    const mod = require("../instrumentation");
+    instrumentation.disable();
+    instrumentation = new mod.PgVectorInstrumentation({ instrumentationConfig: { enabled: true } });
+    instrumentation.enable();
+    expect(instrumentation.vectorOnly).toBe(false);
+    const query = (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 });
+    const mockModule = { Client: { prototype: { query } } };
+    instrumentation.manuallyInstrument(mockModule);
+
+    await mockModule.Client.prototype.query.call({}, "SELECT * FROM users");
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(1);
+  });
+});

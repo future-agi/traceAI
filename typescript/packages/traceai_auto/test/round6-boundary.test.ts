@@ -11,7 +11,7 @@ function child(mode: string, source: boolean, limit = 128) {
   if (result.status !== 0) throw new Error(`${mode}/${source}/${limit}: ${result.error ?? ""}\n${result.stderr}\n${result.stdout}`);
   return JSON.parse(result.stdout.trim());
 }
-// NOT_RUN: fi-security Q9 Candidate 2 (6a3aa0a3); auto-mode projection withdrawn. Owner: fi-observe; 2026-11-05.
+// Skipped: auto-mode projection was withdrawn.
 test.skip.each([false, true].flatMap(source => [16, 128].map(limit => ({ source, limit }))))("A7 real OpenAI completion retains canonical usage at $limit ($source source)", ({ source, limit }) => {
   expect(child("library-limit", source, limit)).toMatchObject({ output: "answer", input: 101, total: 108 });
 });

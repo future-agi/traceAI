@@ -44,6 +44,30 @@ It runs on the HTTP clients each runtime uses for AI calls:
 1. A wire span is **not** created when the active span at request time was created by the
    library layer, meaning its `gen_ai.span.kind` is one of `LLM`, `EMBEDDING`, `RERANKER`,
    `GUARDRAIL`. The dedicated instrumentor already records that call with richer data.
+   In Node without an application context manager, the active span is the
+   one in the agent's private context. The agent scopes SDK calls through
+   the instrumentation's `_wrap` method or a per-instance call-scope hook
+   under `Symbol.for('traceai.auto.integration-call.v1')`. Groq, Mistral
+   and Portkey keep their own patching and use that hook. The agent
+   defines it only on the instrumentation instance it builds, never on a
+   global, prototype or module export; without the hook, those
+   integrations run as before. Inside either scope, the active span is
+   the model span the integration started in that call; after the call
+   returns, and beside it, it is not. With the hook, Groq, Mistral and
+   Portkey requests are not also recorded as wire spans. Portkey's
+   Responses API delegates to the `openai` package. When the agent's
+   OpenAI integration is also on and the app has no context manager, it
+   starts its own span too: two nested AI spans and no wire span. This
+   is a limitation, not a lost call.
+   BeeAI and the OpenAI Agents SDK start spans in the SDK's own event
+   handlers or trace processor, so the agent cannot tie the SDK's request
+   to its span without guessing. The Vercel AI SDK 7 and Genkit are turned
+   on through their own enable entry, outside the agent's call scopes.
+   ElevenLabs patches namespace getters without the agent's scope and
+   starts its span outside a call cell; its `context.with` does nothing
+   without an application context manager. These five integrations can
+   therefore record their own request twice, as their span and as a wire
+   span. Neither the call nor a request beside it is dropped.
 2. A wire span is not created when OpenTelemetry instrumentation is suppressed in the
    current context (Python `_SUPPRESS_INSTRUMENTATION_KEY`, JS `suppressTracing`, and so on).
    Exporters run suppressed, so the SDK never traces its own export traffic.
@@ -332,8 +356,8 @@ Every SDK runs every case in `privacy-fixtures.json`. Recognition gaps are fixed
 a catalog rule applied inconsistently at different sites is an SDK bug.
 
 The initial vocabulary is the union of the six SDKs' privacy implementations and missed names
-reported in the round-4/5 verdicts. `credentials.sources`, `seed_names`, and
-`missed_name_sources` retain the provenance. All seed and missed names have generated cases.
+reported in the round-4/5 verdicts. `credentials.sources` and `seed_names` retain the provenance;
+`missed_name_sources` groups the missed names by review. All seed and missed names have generated cases.
 
 1. **Credential patterns and exclusions.** ASCII-lowercase names and fold `-`, `_`, and `.`.
    Match the catalog's `contains` patterns (`token`, `secret`, `key`, `auth`, `password`,
@@ -362,7 +386,7 @@ reported in the round-4/5 verdicts. `credentials.sources`, `seed_names`, and
    `session_token`, `token_secret`, `api_token_latency_key` and `auth_token` remain private.
    Credential ancestors/descendants still win; timing names are not blanket subtree exemptions.
 
-   `credentials.contextual_exclusions` remains empty. RL 2299t's reviewed exception
+   `credentials.contextual_exclusions` remains empty. The reviewed name-only exception
    is instead the closed, versioned `logprob_tokens` list and an explicit parsed
    provider-response entry point, not a name/path heuristic available to every
    JSON payload. In that context, **logprob tokens are checked against registered secrets and credential shapes, not key-name rules**.
@@ -503,8 +527,8 @@ reported in the round-4/5 verdicts. `credentials.sources`, `seed_names`, and
 
 ### S1 boundary and S5 known secrets
 
-All agent-exported spans, including forwarded application/library spans, pass through a
-single sanitizer immediately before serialization on a detached snapshot. Apply catalog
+All agent-exported spans, including web request spans and any application spans the user
+opts to forward, pass through a single sanitizer immediately before serialization on a detached snapshot. Apply catalog
 recognition and hide flags to attributes/arrays, status, events, links, resource, scope and
 tracestate, not just wire content. Never invoke unknown-object stringifiers/getters; bound
 work and fail closed on errors, retaining identity/timing and dropping content. Other
@@ -574,7 +598,7 @@ python3 -I spec/auto-instrumentation/sync.py
 ```
 
 On shared hosts, prefix **every** generator/test/runtime invocation with the host-safety
-wrapper `/Volumes/nikm4/futureagi/tmp/traceai-auto-review/heavy.sh` via `bash`.
+wrapper that the host provides, if it has one.
 
 ### Review follow-up (2026-10-30)
 
@@ -728,7 +752,8 @@ remains authoritative even for projected identity/metadata.
   abort, not a transport failure. A response read to its end (EOF, or exactly its
   `Content-Length`) is complete, however the application closes it.
 - **Export-time privacy.** The S1 Privacy boundary and hide flags cover every span the agent
-  exports, including forwarded application/library spans: attributes, status, events, links,
+  exports, including web request spans and any application spans the user opts to forward:
+  attributes, status, events, links,
   resources, instrumentation scopes and tracestate, on detached snapshots.
 - **Bounded work.** Instrumentation never adds latency before the request is sent: a request
   body that cannot be copied without blocking (a stream, a pipe, a slow replay) is treated as
@@ -738,8 +763,18 @@ remains authoritative even for projected identity/metadata.
   level and the call proceeds untouched.
 - Every attribute goes through the SDK's `TraceConfig` masking (`FI_HIDE_INPUTS`,
   `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, ...), the same as library-layer spans.
+- **Privacy switch values.** Every SDK's zero-code agent reads `FI_HIDE_*` and
+  `FI_PII_REDACTION` the same way: `true`, `1`, `yes` and `on` turn a switch on, and `false`,
+  `0`, `no` and `off` turn it off, in any case and with surrounding spaces ignored. An empty
+  value is unset. Any other value turns the switch on, with one warning that names the
+  variable and the accepted values and never repeats the value: a privacy switch someone set
+  never silently does nothing. In Node, the launcher, fi-core, `@traceai/vercel` and
+  `@traceai/genkit` read the switches this way. Other packages that read these variables
+  themselves still follow their own parsing until they are updated.
 - Context attributes (`using_session`, `using_user`, `using_metadata`, ...) are added to wire
-  spans the same way library instrumentors add them.
+  spans the same way library instrumentors add them. Node registers no context manager:
+  applications without their own use the agent's `withSession`, `withUser`, `withMetadata`,
+  `withContext` and `withTracingSuppressed` helpers.
 
 ## Environment variables (all SDKs)
 
@@ -749,48 +784,68 @@ remains authoritative even for projected identity/metadata.
 | `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL. |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, else the working directory's name, else `DEFAULT_PROJECT_NAME` | FI routing project, recorded separately as `project_name`; never assigns or replaces the application's `service.name` or resource identity (A6). |
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment` for the zero-code path. |
-| `FI_AUTO_INSTRUMENT` | unset | Python only: `true` instruments every interpreter in the environment, with no command change. |
-| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of integration names. |
+| `FI_AUTO_INSTRUMENT` | unset | Python only: `true` instruments every interpreter in the environment, with no command change. Node does not read it; use the `--require`/`--import` preload. |
+| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of integration names. Incoming HTTP (`http`) is the exception: it is on only when this list names it. |
+| `FI_FORWARD_APP_SPANS` | `false` | Node only. `true` also sends the application's own spans to Future AGI, as releases before 0.2.0 did (code option `forwardApplicationSpans`). Off by default: Future AGI receives only AI spans. |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist. `wire` disables the wire layer. |
 | `FI_WIRE_CAPTURE` | `true` | `false` disables the wire layer. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Body buffering limit. |
 | `FI_AUTO_DEBUG` | `false` | Log the per-integration report at startup. |
-
-| `FI_SAMPLE_RATE` | `1.0` | Head sampling ratio, parent-based. |
+| `FI_SAMPLE_RATE` | `1.0` | Head sampling ratio, parent-based. Node: by trace id, so the application's sampling decision does not drop AI spans. With no parent or a sampled parent, an admitted AI span is sampled; under an unsampled parent it is recorded with the sampled flag off and still exported, so the application's spans inside the AI call keep the application's decision. When the application's sampler does not record a span the application starts around the provider request, with a parent span or without one, that AI call is exported twice, as the AI span and as a wire span, and no application span is exported: the unrecorded span has a new span id and no parent id, and the agent never matches it by trace id alone, which could drop a separate AI request in the same trace. |
 | `FI_CONFIG_FILE` | `./futureagi.toml` | Agent config file, see below. |
 
 `OTEL_SDK_DISABLED=true` turns everything off, as in upstream OpenTelemetry.
 
 ## Agent behaviour
 
-The zero-code entry points behave like an APM agent: install and run with an application-owned
-OpenTelemetry destination, or optionally set a complete FI credential pair for FI export.
-Content capture remains **ON by default**, subject to the same hide controls on every route.
+Zero-code tracing starts only when the user explicitly turns it on. Once on, every installed
+AI integration is traced with content captured by default (`FI_HIDE_*` hides it), and Future
+AGI receives only the AI spans, masked by the shared privacy catalog, while the application's
+own OpenTelemetry provider and its other spans are left untouched. It is AI instrumentation,
+not a general-purpose APM agent. Run it with a complete FI credential pair for FI export, or
+with a destination supplied in code. Content capture remains **ON by default**, subject to
+the same hide controls on every route.
 
 - **Neutral activation (A11, 2026-10-30).** An application-supplied SDK tracer provider,
   exporter **or** span processor is sufficient to activate the library and wire instrumentors,
-  with no FI keys. A supplied provider is reused; a supplied exporter/processor without a
-  provider is attached to the agent-created provider. Do not construct an FI exporter, resolve
+  with no FI keys. A supplied provider receives the AI spans when there is no FI route; a
+  supplied exporter/processor is the only processor of the agent-created provider. Do not construct an FI exporter, resolve
   an FI collector connection, test FI authentication, or warn about absent FI keys in this
   mode. A complete FI pair adds an FI destination only when that route is requested. With
-  neither an application destination nor a complete FI pair, skip exporter setup and warn
-  once; do not install a replacement provider or disturb existing application behaviour.
-  `OTEL_SDK_DISABLED=true` and explicit instrumentation disables still win.
+  neither a destination supplied in code nor a complete FI pair, install nothing (no
+  provider, hooks or globals) and warn once; a partial pair is part of that one warning. An
+  application provider found at runtime is not a destination. `OTEL_SDK_DISABLED=true` and
+  explicit instrumentation disables still win.
 - **Fail open.** An unreachable collector, a broken instrumentor or an unsupported library
-  version logs one warning and leaves the application running untouched. A missing/partial
-  FI pair never disables an application-owned destination. Nothing on the startup path makes
-  a network call or raises.
+  version logs one warning and leaves the application running untouched. An unsupported
+  runtime version logs one warning. A missing/partial FI pair never disables a destination
+  supplied in code. Nothing on the startup path makes a network call or raises.
 - **No signal-handler takeover.** The agent never replaces how the application handles
   SIGINT/SIGTERM. It flushes on normal exit (`atexit`, `beforeExit`, `AppDomain.ProcessExit`,
   shutdown hook) and exposes an explicit `shutdown()`/`flush()` for short-lived processes.
   Where a SIGTERM kills the process without running exit hooks (Python and Node: servers such
   as uvicorn re-raise SIGTERM after their own graceful shutdown), the agent chains in front of
   the existing SIGTERM handler: it flushes (bounded, 5 s), then runs the previous handler, or
-  restores the default action and re-raises, so the exit code is unchanged.
-- **Coexists with OpenTelemetry.** Reuse an application's global SDK tracer provider; add
-  only explicitly configured destinations and never replace existing processors/exporters.
-  When no provider exists, the agent may install one for the supplied destination or FI pair.
-  Initialization is once per process (S2); repeated initialization cannot rewire ownership.
+  restores the default action and re-raises, so the exit code is unchanged. It holds a
+  SIGTERM only while the FI route has spans to send, and not after the collector has failed.
+- **Coexists with OpenTelemetry.** (Implemented by the Node agent; the other runtimes
+  still follow their own sections until they adopt it.) The agent never registers a global tracer provider,
+  context manager or propagator, so an application SDK started before or after it registers
+  normally and its exporters receive its own spans. The agent keeps its own isolated
+  provider whose only processor is the FI route, binds every instrumentor and the wire layer
+  to it, and never attaches the FI route to the application's provider. AI spans still parent
+  under the application's active span, read through the application's context manager; with
+  none, the agent keeps parent links between its own spans in a private context that is
+  active only inside the callback or SDK call that set it. Future AGI receives
+  only spans from agent-bound tracers (wire and traceAI integration spans). The forwarding
+  switch (`FI_FORWARD_APP_SPANS=true`; Node `forwardApplicationSpans: true`) also attaches the
+  FI route to the application's provider, as releases before 0.2.0 did; `FI_HIDE_*` then also hides
+  other AI tracers' content keys (`ai.prompt*`, `ai.response.*`, `ai.toolCall.*`,
+  `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input/output`,
+  `llm.input_messages.*`, `llm.output_messages.*` and the Vercel AI SDK content keys such as
+  `ai.value`, `ai.documents`, `ai.schema`, `ai.decision.*` and `ai.ranking`) on those spans. Vector database integrations enabled by the agent trace only vector
+  operations. Initialization is once per process (S2); repeated initialization cannot rewire
+  ownership.
 - **Resource identity (A6, 2026-10-30).** Preserve every application resource attribute,
   including `service.name`, `service.namespace`, `service.instance.id`, deployment and cloud
   identity; merging traceAI defaults must not drop unknown application keys. If the application
@@ -801,10 +856,14 @@ Content capture remains **ON by default**, subject to the same hide controls on 
   (and existing project-type/version metadata). Add routing on the FI-owned export snapshot
   when the provider is host-owned; do not mutate its resource or other exporters' view.
   Resource preservation does not bypass S1 credential/media scrubbing of the FI export view.
-- **Transactions.** Incoming HTTP requests become root `SERVER` spans when a server
-  instrumentation is available for the framework in use (FastAPI, Flask, Django, Express,
-  ASP.NET Core, Spring), so every AI call is nested under the request that caused it.
-  Outgoing non-AI HTTP calls are not traced by default.
+- **Transactions.** (Implemented by the Node agent.) Incoming HTTP instrumentation is off by default. Only an explicit
+  allowlist entry turns it on (`FI_INSTRUMENTATIONS` including `http`). Even then, a `SERVER`
+  span is sent to Future AGI only when an AI span was seen in the same trace, so requests
+  with no AI call, such as health checks, are never sent. AI calls inside the application's
+  own request spans parent under them through the application's context manager. Outgoing
+  non-AI HTTP calls are not traced. Node: beside an application tracer provider present at
+  startup, the agent leaves incoming HTTP to the application and warns once; without an
+  application propagator, it reads the W3C `traceparent` with a private propagator.
 - **Report.** At startup, with `FI_AUTO_DEBUG=true`, and on demand through a `doctor`
   command, the agent prints the status of every integration (see statuses above), the
   resolved configuration with secrets masked, and whether the collector accepted a test
@@ -846,7 +905,7 @@ debug = false
 
 | SDK | No code change | One line |
 | --- | --- | --- |
-| Python | `fi-instrument python app.py`, or `FI_AUTO_INSTRUMENT=true python app.py`, or `opentelemetry-instrument python app.py` | `fi_instrumentation.init()` |
+| Python | `fi-instrument python app.py`, or `FI_AUTO_INSTRUMENT=true python app.py`, or `FI_AUTO_INSTRUMENT=true opentelemetry-instrument python app.py` | `fi_instrumentation.init()` |
 | TypeScript | `node --import @traceai/auto/register app.js` (also `NODE_OPTIONS`, `-r @traceai/auto/register` for CJS) | `import { init } from "@traceai/auto"; init()` |
 | Go | blank import `_ "github.com/future-agi/traceAI/go/auto"` | `auto.Init(ctx)` |
 | C# | `DOTNET_STARTUP_HOOKS=/path/TraceAI.AutoInstrumentation.dll` | `TraceAIAuto.Init()` |
@@ -1026,7 +1085,7 @@ implementation, resource preservation or attribute-container admission.
 
 ## Node manual and zero-code batching compatibility
 
-RL2299h preserves the manual public API: explicit **or omitted** `batch: false`
+The manual public API is preserved: explicit **or omitted** `batch: false`
 on fi-core `register()` / `FITracerProvider` selects SimpleSpanProcessor. Manual
 `batch: true` selects bounded BatchSpanProcessor. The zero-code auto agent
 explicitly constructs BatchSpanProcessor for its owned export route and requests
@@ -1046,7 +1105,7 @@ Neither queuing nor successful local handoff proves remote collector acceptance.
 
 The shared credential catalog still masks access-key identifiers and untrusted
 token-named fields. Only the explicitly bound provider-root logprob paths above
-use RL 2299t's name-only exception and required reconstruction rule; numeric token
+use the reviewed name-only exception and required reconstruction rule; numeric token
 metrics remain available. Credential values use `<redacted>`; embedding-vector hiding is
 a fi-core content policy and uses its dev `__REDACTED__` marker, not a new catalog
 credential replacement. Generated privacy fixture bundles must be regenerated

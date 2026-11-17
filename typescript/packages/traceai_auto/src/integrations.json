@@ -329,7 +329,8 @@
     "className": "MongoDBInstrumentation",
     "modules": [
       "mongodb"
-    ]
+    ],
+    "vectorOnly": true
   },
   {
     "name": "n8n",
@@ -394,7 +395,8 @@
     "className": "PgVectorInstrumentation",
     "modules": [
       "pg"
-    ]
+    ],
+    "vectorOnly": true
   },
   {
     "name": "pi-coding-agent",
@@ -459,7 +461,8 @@
     "className": "RedisInstrumentation",
     "modules": [
       "redis"
-    ]
+    ],
+    "vectorOnly": true
   },
   {
     "name": "strands",

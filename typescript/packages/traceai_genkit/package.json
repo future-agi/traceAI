@@ -1,6 +1,6 @@
 {
   "name": "@traceai/genkit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Export Firebase Genkit (JavaScript) native OpenTelemetry spans to Future AGI with a mapping span processor",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",

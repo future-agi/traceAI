@@ -132,12 +132,13 @@ describe("FIGenkitSpanProcessor: forwarding to the Future AGI provider", () => {
     new FIGenkitSpanProcessor({ tracerProvider: optionWins.provider, traceConfig: { hideInputs: false, hideOutputs: false } }).onEnd(span);
     expect(optionWins.exporter.getFinishedSpans()[0].attributes["input.value"]).toContain(PROMPT_MARKER);
 
-    // only "true" hides (fi-core's env parsing)
+    // 1 and yes turn a switch on, like true (the same values fi-core accepts)
     process.env.FI_HIDE_INPUTS = "1";
     process.env.FI_HIDE_OUTPUTS = "yes";
-    const notTrue = fiLikeProvider();
-    new FIGenkitSpanProcessor({ tracerProvider: notTrue.provider }).onEnd(span);
-    expect(notTrue.exporter.getFinishedSpans()[0].attributes["input.value"]).toContain(PROMPT_MARKER);
+    const otherSpellings = fiLikeProvider();
+    new FIGenkitSpanProcessor({ tracerProvider: otherSpellings.provider }).onEnd(span);
+    expect(JSON.stringify(otherSpellings.exporter.getFinishedSpans()[0].attributes)).not.toContain(PROMPT_MARKER);
+    expect(otherSpellings.exporter.getFinishedSpans()[0].attributes["input.value"]).toBe("__REDACTED__");
   });
 
   it("treats the removed captureContent: false as hide inputs and outputs, with a warning", async () => {

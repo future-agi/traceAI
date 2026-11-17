@@ -1,6 +1,6 @@
 {
   "name": "@traceai/auto",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Fail-open, zero-code AI auto-instrumentation for Node.js",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -67,7 +67,7 @@
     "node": ">=20.6"
   },
   "dependencies": {
-    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-core": "workspace:*",
     "@traceai/openai": "workspace:^",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",

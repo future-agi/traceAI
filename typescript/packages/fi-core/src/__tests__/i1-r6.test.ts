@@ -6,7 +6,7 @@ import { FITracer } from "../trace/trace-config/FITracer";
 import { FISpan } from "../trace/trace-config/FISpan";
 import { generateTraceConfig } from "../trace/trace-config/traceConfig";
 
-// RED-first source controls. No tests, builds or typechecks were run by this writer.
+// Source controls, written before the implementation.
 const savedEnv = { ...process.env };
 const secretKey = Symbol.for("traceai.secrets");
 let savedRegistry: PropertyDescriptor | undefined;

@@ -8,7 +8,7 @@ import { mask, maskAttributes, redactValue } from "../trace/trace-config/masking
 import { FITracer } from "../trace/trace-config/FITracer";
 import { TraceConfigOptions } from "../trace/trace-config/types";
 
-// F2 r4c6 rebase under LANE-CALL-NIKM4-5A-F2-CAP0-OVERREDACTION-r2. Runtime NOT_RUN.
+// F2: the default image cap is 0.
 // Cap-0 trigger: in one Q1 scope view, a case-insensitive "data:", then "image/",
 // then ",". The protected split-token pair stays byte-identical.
 // TS-F2-R6 (PENDING PTC-TS-F2-R6-A1): each view is searched with the ASCII members
@@ -40,7 +40,7 @@ const options = (base64ImageMaxLength: number): TraceConfigOptions => ({
 const zero = { ...DefaultTraceConfig, ...options(0) } as typeof DefaultTraceConfig;
 const hexText = (text: string): string => text.split("").map(c => BS + "u" + c.charCodeAt(0).toString(16).padStart(4, "0")).join("");
 
-// Each entry has a distinct RED-first source oracle, including the counted seam.
+// Each entry has its own source oracle, including the counted seam.
 describe("F2 census reads preserve zero", () => {
   it("constants / metadata / public default", () => {
     expect(DEFAULT_BASE64_IMAGE_MAX_LENGTH).toBe(0);
@@ -102,8 +102,8 @@ describe("F2 invalid-cap fail-closed parity contract", () => {
   it.each([0, "0"])("direct parity zero %s redacts", value => {
     expect(capBase64Images(ONE, value as number)).toBe("[image-redacted]");
   });
-  // r2 binds and repairs the initializer. These remain source-only acceptance
-  // controls, not an executed RED/GREEN or a measured Python parity result.
+  // These check the initializer. They are source-only acceptance controls,
+  // not a measured Python parity result.
   it.each(INVALID)("initializer invalid %s must neither throw nor recover a positive cap", (_name, value) => {
     process.env.FI_BASE64_IMAGE_MAX_LENGTH = "32000";
     const warn = jest.spyOn(diag, "warn").mockImplementation(() => undefined);

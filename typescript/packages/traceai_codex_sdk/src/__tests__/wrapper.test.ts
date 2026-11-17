@@ -664,7 +664,9 @@ describe("context", () => {
       const turn = one(spans, "codex.turn");
       expect(turn.attributes["session.id"]).toBe("app-session");
       expect(turn.attributes["codex.thread.id"]).toBe(THREAD_ID);
-      expect(spans.filter((s) => s !== turn).every((s) => s.attributes["session.id"] === undefined)).toBe(true);
+      const children = spans.filter((s) => s !== turn);
+      expect(children.length).toBeGreaterThan(0);
+      for (const child of children) expect(child.attributes["session.id"]).toBe("app-session");
     } finally {
       context.disable();
     }

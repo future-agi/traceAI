@@ -5,7 +5,7 @@ A complete example of tracing OpenAI chat completions.
 ## Prerequisites
 
 ```bash
-pip install fi-instrumentation traceai-openai openai
+pip install fi-instrumentation-otel traceai-openai openai
 ```
 
 ## Full Example

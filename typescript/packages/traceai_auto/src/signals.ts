@@ -20,11 +20,13 @@ function rebindNativeSigterm(): void {
 
 /** Gate dispatch, not listeners: EventEmitter never awaits an async listener.
  * Existing and later handlers retain identity, order, once semantics and arguments.
+ * hold() decides per signal whether a flush is worth waiting for; when it says no,
+ * the signal reaches the application at once.
  */
-export function chainSigterm(flush: () => Promise<void>): () => void {
+export function chainSigterm(flush: () => Promise<void>, hold: () => boolean = () => true): () => void {
   const original = process.emit;
   const sentinel = () => {};
-  let removed = false, queue = Promise.resolve();
+  let removed = false, queue = Promise.resolve(), waiting = 0;
   const restore = () => {
     removed = true;
     if (process.emit === gated) process.emit = original;
@@ -33,6 +35,15 @@ export function chainSigterm(flush: () => Promise<void>): () => void {
   const gated = new Proxy(original, {
     apply(target, receiver, args) {
       if (receiver !== process || args[0] !== "SIGTERM" || removed) return Reflect.apply(target, receiver, args);
+      // A signal never overtakes one that is already waiting for a flush.
+      let held = true;
+      if (!waiting) { try { held = hold(); } catch { held = false; } }
+      if (!held) {
+        if (process.rawListeners("SIGTERM").some(listener => listener !== sentinel)) return Reflect.apply(target, receiver, args);
+        // Only our listener is left: restore the default disposition and re-deliver.
+        restore(); process.kill(process.pid, "SIGTERM"); return true;
+      }
+      waiting++;
       queue = queue.then(async () => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -50,7 +61,7 @@ export function chainSigterm(flush: () => Promise<void>): () => void {
             const listeners = process.rawListeners("SIGTERM").filter(listener => listener !== sentinel);
             if (listeners.length) { for (const listener of listeners) Reflect.apply(listener, process, args.slice(1)); }
             else { restore(); process.kill(process.pid, "SIGTERM"); }
-          } finally { resolve(); }
+          } finally { waiting--; resolve(); }
         }));
       });
       return true;

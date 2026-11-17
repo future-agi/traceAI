@@ -115,9 +115,10 @@ class TestTraceConfig:
         os.environ[FI_BASE64_IMAGE_MAX_LENGTH] = "not_a_number"
         
         config = TraceConfig()
-        
-        # Should fall back to defaults for invalid values
-        assert config.hide_inputs is False  # default
+
+        # A privacy switch someone set never silently does nothing: an
+        # unrecognised value hides. A number that cannot be read falls back.
+        assert config.hide_inputs is True
         assert config.base64_image_max_length == 0  # default
 
     def test_trace_config_frozen(self, clean_env):

@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Go auto instrumentation honors `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` when it creates a provider without an explicit sample rate. Explicit FI rates keep parent-based ratio sampling; application-owned samplers remain unchanged, and invalid OTEL sampler settings fall back to the default with one warning.
 - Gemini installation instructions explicitly install the Google Gen AI SDK, so fresh consumers can build the documented usage without missing `go.sum` entries.
 
 No Go release is published by these changes. Each module's release history will be maintained in its own directory when it is released.

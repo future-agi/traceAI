@@ -160,7 +160,8 @@ async function main() {
   }
   // ES5-only entry: unsupported Node versions never parse the modern dependency graph.
   // Copy the WHOLE agent directory, including runtime/loader/legal-notice siblings.
-  fs.writeFileSync(path.join(out, 'preload.cjs'), '"use strict";\ntry { if (Number(process.versions.node.split(".")[0]) >= 18 && !require("node:worker_threads").isInternalThread) require("./runtime.cjs"); } catch (_) { try { console.warn("[traceai:auto] Auto-instrumentation could not load; the application will continue."); } catch (_) {} }\n');
+  // Unsupported Node prints one warning and runs the application untouched.
+  fs.writeFileSync(path.join(out, 'preload.cjs'), '"use strict";\ntry { if (Number(process.versions.node.split(".")[0]) < 18) { try { console.warn("[traceai:auto] Node.js " + process.versions.node + " is not supported; auto-instrumentation is off and the application will continue."); } catch (_) {} } else if (!require("node:worker_threads").isInternalThread) require("./runtime.cjs"); } catch (_) { try { console.warn("[traceai:auto] Auto-instrumentation could not load; the application will continue."); } catch (_) {} }\n');
   // import-in-the-middle generates an import to this runtime bridge. Keep it beside
   // the loader, not in node_modules, so moving the directory remains supported.
   const hookRegister = await esbuild.build({ ...common, entryPoints: [register], outfile: path.join(out, 'hook-register.cjs'), format: 'cjs' });
