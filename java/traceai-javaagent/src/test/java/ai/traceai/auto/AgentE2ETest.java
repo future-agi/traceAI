@@ -474,6 +474,22 @@ class AgentE2ETest {
         assertTrue(log.contains("APPLICATION_PARENT_UNCHANGED=true"), log);
     }
 
+    @ParameterizedTest @ValueSource(strings = {"1", "0.5"})
+    void invalidApplicationParentExportsOnlyCleanLocallyDecidedRoots(String rate) throws Exception {
+        // This is the reachable auto path: OtelBridge filters invalid external parents. Core
+        // SamplingRatioTest separately covers SDK invalid-context roots and their local children.
+        String log = run("jdk", "framework_ratio_invalid", Map.of("FI_SAMPLE_RATE", rate), true);
+        assertEquals(rate.equals("1") ? 2 : 64, uploads.get(), "sampling never changes application requests");
+        assertFalse(spans.isEmpty(), "64 half-rate decisions should produce a kept root");
+        for (var span : spans) {
+            assertWireSpan(span);
+            assertNull(span.get("parentSpanId"));
+            assertEquals(rate.equals("1") ? "" : "fi=r:0.5", span.get("traceState"));
+            assertEquals(rate.equals("1") ? null : 0.5, attributes(span).get("fi.sampling.ratio"));
+        }
+        assertTrue(log.contains("INVALID_APPLICATION_PARENT_UNCHANGED=true"), log);
+    }
+
     @Test void defaultRootDoesNotInventRatio() throws Exception {
         run("jdk", "basic", Map.of(), true); assertSpan();
         assertNull(attributes(spans.get(0)).get("fi.sampling.ratio"));

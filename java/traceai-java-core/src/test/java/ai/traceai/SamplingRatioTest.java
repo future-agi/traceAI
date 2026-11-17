@@ -203,22 +203,137 @@ class SamplingRatioTest {
         }
     }
 
-    @Test void invalidParentContextStillUsesRootDecision() throws Exception {
-        TraceState incoming = state("r:0.5");
-        SpanContext invalid = SpanContext.create("00000000000000000000000000000000", SPAN_ID, TraceFlags.getSampled(), incoming);
-        SamplingResult result = sample(ratio(0.25, true), Context.root().with(Span.wrap(invalid)), KEPT);
-        assertEquals(Double.valueOf(0.25), result.getAttributes().get(RATIO));
-        assertEquals("r:0.25", result.getUpdatedTraceState(incoming).get("fi"));
-        assertEquals("preserved", result.getUpdatedTraceState(incoming).get("vendor"));
+    private static Context invalidParent(boolean invalidTraceId, boolean remote, boolean sampled) {
+        String traceId = invalidTraceId ? "00000000000000000000000000000000" : KEPT;
+        String spanId = invalidTraceId ? SPAN_ID : "0000000000000000";
+        TraceFlags flags = sampled ? TraceFlags.getSampled() : TraceFlags.getDefault();
+        SpanContext invalid = remote ? SpanContext.createFromRemoteParent(traceId, spanId, flags, state("r:0.5"))
+            : SpanContext.create(traceId, spanId, flags, state("r:0.5"));
+        assertFalse(invalid.isValid());
+        assertEquals(state("r:0.5"), invalid.getTraceState(), "the public API retains invalid-context state");
+        return Context.root().with(Span.wrap(invalid));
     }
 
-    @Test void nonParentBasedFullRateDisabledAndUnknownSamplersAreNotWrappedOrStamped() throws Exception {
+    private static List<Map<String, String>> fullRateEnvironments() {
+        return List.of(Map.<String, String>of(), Map.of("FI_SAMPLE_RATE", "1"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_on"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "1"),
+            Map.of("OTEL_TRACES_SAMPLER", "always_on"),
+            Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "1"));
+    }
+
+    @Test void invalidParentContextStillUsesRootDecisionButResetsAllInheritedState() throws Exception {
+        TraceState incoming = state("r:0.5");
+        SamplingResult result = sample(ratio(0.25, true), invalidParent(true, false, true), KEPT);
+        assertEquals(Double.valueOf(0.25), result.getAttributes().get(RATIO));
+        assertEquals(TraceState.builder().put("fi", "r:0.25").build(), result.getUpdatedTraceState(incoming));
+        assertEquals(state("r:0.5"), incoming, "the invalid context itself is not mutated");
+    }
+
+    @Test void invalidParentsExportCleanFullRateRootsAndLocalChildren() throws Exception {
+        for (Map<String, String> environment : fullRateEnvironments()) {
+            for (boolean invalidTraceId : new boolean[]{false, true}) for (boolean remote : new boolean[]{false, true}) {
+                for (boolean sampled : new boolean[]{false, true}) {
+                    assertExportedPair(owned(TraceConfig.samplerFromEnvironment(environment)),
+                        invalidParent(invalidTraceId, remote, sampled), null, TraceState.getDefault());
+                }
+            }
+        }
+    }
+
+    @Test void invalidParentsExportOnlyTheLocalPartialRatioOnRootsAndChildren() throws Exception {
+        for (Map<String, String> environment : List.of(Map.of("FI_SAMPLE_RATE", "0.25"),
+                Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0.25"),
+                Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0.25"))) {
+            for (boolean invalidTraceId : new boolean[]{false, true}) for (boolean remote : new boolean[]{false, true}) {
+                for (boolean sampled : new boolean[]{false, true}) {
+                    assertExportedPair(owned(TraceConfig.samplerFromEnvironment(environment)),
+                        invalidParent(invalidTraceId, remote, sampled), 0.25, TraceState.builder().put("fi", "r:0.25").build());
+                }
+            }
+        }
+    }
+
+    @Test void noParentFullRateRootsAndChildrenStayUnweighted() throws Exception {
+        for (Map<String, String> environment : fullRateEnvironments()) {
+            assertExportedPair(owned(TraceConfig.samplerFromEnvironment(environment)), Context.root(), null, TraceState.getDefault());
+        }
+    }
+
+    @Test void invalidDroppedRootsAndTheirLocalChildrenHaveNoInheritedState() throws Exception {
+        for (Map<String, String> environment : List.of(Map.of("FI_SAMPLE_RATE", "0"),
+                Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_off"), Map.of("OTEL_TRACES_SAMPLER", "always_off"),
+                Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"),
+                Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"),
+                Map.of("FI_SAMPLE_RATE", "0.25"))) {
+            for (boolean invalidTraceId : new boolean[]{false, true}) for (boolean remote : new boolean[]{false, true}) {
+                for (boolean sampled : new boolean[]{false, true}) {
+                    InMemorySpanExporter exporter = InMemorySpanExporter.create();
+                    try (SdkTracerProvider provider = SdkTracerProvider.builder()
+                            .setSampler(owned(TraceConfig.samplerFromEnvironment(environment))).setIdGenerator(ids(DROPPED))
+                            .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+                        Span root = provider.get("test").spanBuilder("dropped-root")
+                            .setParent(invalidParent(invalidTraceId, remote, sampled)).startSpan();
+                        Span child = provider.get("test").spanBuilder("dropped-child").setParent(Context.root().with(root)).startSpan();
+                        for (Span span : List.of(root, child)) {
+                            assertFalse(span.isRecording()); assertFalse(span.getSpanContext().isSampled());
+                            assertEquals(TraceState.getDefault(), span.getSpanContext().getTraceState(), environment.toString());
+                            span.end();
+                        }
+                        assertTrue(exporter.getFinishedSpanItems().isEmpty());
+                    }
+                }
+            }
+        }
+    }
+
+    @Test void applicationFactoryAndUnknownCustomSamplersRetainInvalidContextState() throws Exception {
+        for (Map<String, String> environment : fullRateEnvironments()) {
+            // A factory-selected sampler on an application provider has provenance but no activation.
+            assertExportedPair(TraceConfig.samplerFromEnvironment(environment), invalidParent(true, true, true), null, state("r:0.5"));
+        }
+        for (Sampler custom : List.of(Sampler.alwaysOn(), Sampler.parentBased(Sampler.alwaysOn()),
+                delegate(SamplingResult.recordAndSample()))) {
+            assertSame(custom, owned(custom));
+            assertExportedPair(owned(custom), invalidParent(false, false, true), null, state("r:0.5"));
+        }
+        for (SamplingResult original : List.of(SamplingResult.drop(), SamplingResult.recordOnly())) {
+            Sampler custom = delegate(original);
+            assertSame(custom, owned(custom));
+            SamplingResult result = sample(owned(custom), invalidParent(true, true, true), KEPT);
+            assertSame(original, result);
+            assertEquals(state("r:0.5"), result.getUpdatedTraceState(state("r:0.5")));
+        }
+    }
+
+    private static void assertExportedPair(Sampler sampler, Context incoming, Double expectedRatio, TraceState expectedState) {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        try (SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(sampler).setIdGenerator(ids(KEPT))
+                .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            Span root = provider.get("test").spanBuilder("new-root").setParent(incoming).startSpan();
+            Span child = provider.get("test").spanBuilder("local-child").setParent(Context.root().with(root)).startSpan();
+            child.end(); root.end();
+            var spans = exporter.getFinishedSpanItems();
+            assertEquals(2, spans.size());
+            for (var span : spans) {
+                assertTrue(span.getSpanContext().isValid()); assertTrue(span.getSpanContext().isSampled());
+                assertEquals(expectedRatio, span.getAttributes().get(RATIO), sampler.getDescription());
+                assertEquals(expectedState, span.getSpanContext().getTraceState(), sampler.getDescription());
+            }
+            assertEquals(root.getSpanContext().getTraceId(), spans.get(0).getTraceId());
+            assertEquals(root.getSpanContext().getSpanId(), spans.get(0).getParentSpanId());
+            assertFalse(spans.get(1).getParentSpanContext().isValid(), "the first span really is a new root");
+        }
+    }
+
+    @Test void nonParentBasedFullRateAndDisabledSamplersNeverStampAndUnknownSamplersAreNotWrapped() throws Exception {
         for (Map<String, String> environment : List.of(
                 Map.of("OTEL_TRACES_SAMPLER", "always_on"), Map.of("OTEL_TRACES_SAMPLER", "always_off"),
                 Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"),
                 Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "1"))) {
             Sampler selected = TraceConfig.samplerFromEnvironment(environment);
-            assertSame(selected, owned(selected));
+            assertNotSame(selected, owned(selected), "known boundary samplers also enforce invalid-root state reset");
+            assertEquals(selected.getDescription(), owned(selected).getDescription());
             for (Context context : List.of(Context.root(), parent(true, true, state("r:0.5")))) {
                 SamplingResult result = sample(owned(selected), context, KEPT);
                 assertNull(result.getAttributes().get(RATIO));
@@ -291,7 +406,7 @@ class SamplingRatioTest {
                     return parentState.toBuilder().put("delegate", "updated").build();
                 }
             };
-            SamplingResult result = sample(wrapper(delegate(original), 0.25, false), Context.root(), KEPT);
+            SamplingResult result = sample(wrapper(delegate(original), 0.25, false), parent(false, true, state("r:0.5")), KEPT);
             assertEquals(decision, result.getDecision());
             assertEquals("retained", result.getAttributes().get(key));
             TraceState updated = result.getUpdatedTraceState(state("r:0.5"));
@@ -304,6 +419,46 @@ class SamplingRatioTest {
                 assertSame(original, result);
                 assertNull(result.getAttributes().get(RATIO));
                 assertEquals("r:0.5", updated.get("fi"));
+            }
+        }
+    }
+
+    @Test void invalidRootStateResetPreservesDelegateCallDecisionAttributesAndNewState() throws Exception {
+        AttributeKey<String> key = AttributeKey.stringKey("delegate.attribute");
+        for (SamplingDecision decision : SamplingDecision.values()) {
+            Context incoming = io.opentelemetry.api.baggage.Baggage.builder().put("test-baggage", "retained").build()
+                .storeInContext(invalidParent(true, true, true));
+            Attributes originalAttributes = Attributes.of(key, "retained");
+            SamplingResult original = new SamplingResult() {
+                @Override public SamplingDecision getDecision() { return decision; }
+                @Override public Attributes getAttributes() { return originalAttributes; }
+                @Override public TraceState getUpdatedTraceState(TraceState parentState) {
+                    assertEquals(TraceState.getDefault(), parentState, "delegate updates start from clean root state");
+                    return parentState.toBuilder().put("delegate", "updated").build();
+                }
+            };
+            Sampler delegate = new Sampler() {
+                @Override public SamplingResult shouldSample(Context context, String traceId, String name, SpanKind kind,
+                        Attributes attributes, List<LinkData> links) {
+                    assertSame(incoming, context, "do not replace the caller's context to clear tracestate");
+                    assertEquals("retained", io.opentelemetry.api.baggage.Baggage.fromContext(context).getEntryValue("test-baggage"));
+                    return original;
+                }
+                @Override public String getDescription() { return "test-delegate"; }
+            };
+            SamplingResult result = sample(wrapper(delegate, 0.25, true), incoming, KEPT);
+            assertEquals(decision, result.getDecision());
+            assertEquals("retained", result.getAttributes().get(key));
+            TraceState updated = result.getUpdatedTraceState(state("r:0.5"));
+            assertEquals("updated", updated.get("delegate"));
+            assertNull(updated.get("vendor"));
+            if (decision == SamplingDecision.RECORD_AND_SAMPLE) {
+                assertEquals(Double.valueOf(0.25), result.getAttributes().get(RATIO));
+                assertEquals("r:0.25", updated.get("fi"));
+            } else {
+                assertSame(originalAttributes, result.getAttributes());
+                assertNull(result.getAttributes().get(RATIO));
+                assertNull(updated.get("fi"));
             }
         }
     }
@@ -325,7 +480,8 @@ class SamplingRatioTest {
 
     private static IdGenerator ids(String traceId) {
         return new IdGenerator() {
-            @Override public String generateSpanId() { return SPAN_ID; }
+            private long nextSpanId = 2;
+            @Override public String generateSpanId() { return String.format("%016x", nextSpanId++); }
             @Override public String generateTraceId() { return traceId; }
         };
     }

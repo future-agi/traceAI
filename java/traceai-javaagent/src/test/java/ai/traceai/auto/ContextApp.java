@@ -21,6 +21,7 @@ public final class ContextApp {
     }
     static void run(String[] args) throws Exception {
         if (args[2].startsWith("framework_ratio_remote")) { remoteRatio(args); return; }
+        if (args[2].equals("framework_ratio_invalid")) { invalidRatio(args); return; }
         boolean ratioBudget = args[2].equals("framework_ratio_budget");
         var builder = SdkTracerProvider.builder();
         if (ratioBudget) builder.setSpanLimits(limits(Integer.parseInt(System.getenv("TRACEAI_TEST_ATTRIBUTE_LIMIT"))));
@@ -54,6 +55,25 @@ public final class ContextApp {
             // A control call outside every application span: the agent is running and traces it.
             if (args[2].startsWith("dedup")) PlainApp.call(args);
         } finally { provider.shutdown(); }
+    }
+
+    /** The bridge rejects invalid application parents before they reach the isolated sampler. */
+    private static void invalidRatio(String[] args) throws Exception {
+        var state = io.opentelemetry.api.trace.TraceState.builder().put("vendor", "value").put("fi", "r:0.25").build();
+        int attempts = "0.5".equals(System.getenv("FI_SAMPLE_RATE")) ? 64 : 2;
+        for (int i = 0; i < attempts; i++) {
+            boolean remote = i % 2 == 0;
+            var invalid = remote ? io.opentelemetry.api.trace.SpanContext.createFromRemoteParent(
+                "00000000000000000000000000000000", "0000000000000001", io.opentelemetry.api.trace.TraceFlags.getSampled(), state)
+                : io.opentelemetry.api.trace.SpanContext.create(
+                    "00000000000000000000000000000001", "0000000000000000", io.opentelemetry.api.trace.TraceFlags.getDefault(), state);
+            if (invalid.isValid()) throw new AssertionError("Expected invalid application context");
+            try (var scope = io.opentelemetry.context.Context.root().with(Span.wrap(invalid)).makeCurrent()) {
+                PlainApp.call(args);
+            }
+            if (!state.equals(invalid.getTraceState())) throw new AssertionError("Application state changed");
+        }
+        System.out.println("INVALID_APPLICATION_PARENT_UNCHANGED=true");
     }
 
     /** Cross the shaded bridge with a remote parent, then with its application-owned local child. */
