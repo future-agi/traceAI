@@ -1,5 +1,5 @@
-import { context, createContextKey, ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
-import { suppressTracing } from "@opentelemetry/core";
+import { context, createContextKey, ROOT_CONTEXT, SpanKind, trace, TraceFlags, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
+import { isTracingSuppressed, suppressTracing } from "@opentelemetry/core";
 import { activeFIContext, getAttributesFromContext, runInFIContext, setMetadata, setSession, setUser } from "@traceai/fi-core";
 import { HTTP_SCOPE, incomingParent } from "./incoming-parent";
 
@@ -49,6 +49,8 @@ interface CallCell {
   readonly active: WeakMap<Context, Context>;
   // For each span in the cell: what was active where it started, to go back to once it ends.
   readonly before: WeakMap<object, Context>;
+  // Dropped incoming SERVER spans never record, even before end().
+  liveDropped?: WeakSet<Span>;
   // The spans this call was opened for. Any other span started in the call makes nothing active.
   readonly accepts?: AcceptSpan;
 }
@@ -66,7 +68,7 @@ function callCell(ctx: Context): CallCell | undefined {
 }
 
 // The context that is active where ctx is current: inside an integration call, the
-// span the integration started there, while it still records; otherwise ctx itself.
+// span the integration started there, until it ends; otherwise ctx itself.
 function inCall(ctx: Context): Context {
   try {
     const cell = callCell(ctx);
@@ -74,9 +76,9 @@ function inCall(ctx: Context): Context {
     let active = cell.active.get(ctx);
     for (let depth = 0; active && active !== ctx && depth < 128; depth++) {
       const span = trace.getSpan(active);
-      let recording = false;
-      try { recording = span?.isRecording() === true; } catch { /* Treat as ended. */ }
-      if (recording) return active;
+      try {
+        if (span && (cell.liveDropped?.has(span) || span.isRecording())) return active;
+      } catch { /* Treat as ended. */ }
       // The span has ended: go back to what was active where it started.
       active = span ? cell.before.get(span) : undefined;
     }
@@ -89,9 +91,22 @@ function inCall(ctx: Context): Context {
 // span outside a call, makes nothing active: the caller's next work never runs under it.
 function activateInCall(parent: Context, span: Span, start: SpanStart): void {
   try {
-    if (!span.isRecording()) return;
     const current = activeFIContext(), cell = callCell(current);
     if (!cell || (cell.accepts && !cell.accepts(start))) return;
+    if (!span.isRecording()) {
+      // Only the incoming HTTP request needs a dropped span installed as its
+      // parent. A no-op/suppressed span must not displace the current context.
+      if (cell.accepts !== incomingServerSpan || isTracingSuppressed(current) || isTracingSuppressed(parent)) return;
+      const remote = trace.getSpanContext(parent), local = span.spanContext();
+      if (!remote?.isRemote || !trace.isSpanContextValid(remote) || (remote.traceFlags & TraceFlags.SAMPLED) ||
+          !trace.isSpanContextValid(local) || local.traceId !== remote.traceId) return;
+      // isRecording() cannot distinguish a live dropped span from an ended one.
+      // Observe end only on this request's span, not on the tracer or prototype.
+      const live = cell.liveDropped ??= new WeakSet<Span>();
+      const end = span.end;
+      span.end = function(...args) { live.delete(span); return end.apply(this, args); };
+      live.add(span);
+    }
     // Keep what is active now, not an ended span, so ended spans are not retained.
     cell.before.set(span, inCall(current));
     cell.active.set(current, trace.setSpan(parent, span));
@@ -215,7 +230,7 @@ function startActiveSpan(tracer: Tracer, args: unknown[]): unknown {
 /**
  * Tracers from this provider start spans on the given provider, mark them as
  * agent spans and keep parent links without a global context manager. SDK
- * pipeline slots stay visible through the prototype; nothing native is patched.
+ * pipeline slots stay visible through the prototype; the provider and tracer are not patched.
  */
 export function contextBoundProvider(provider: TracerProvider): TracerProvider {
   const tracers = new WeakMap<object, Tracer>();
