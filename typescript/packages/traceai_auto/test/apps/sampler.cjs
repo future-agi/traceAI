@@ -7,7 +7,7 @@ const { AlwaysOffSampler, AlwaysOnSampler, BasicTracerProvider, InMemorySpanExpo
   const warn = console.warn, error = console.error;
   const diagnostic = (source, level, args) => diagnostics.push({ source, level, message: args.join(' ') });
   console.warn = (...args) => {
-    warnings.push(args.join(' '));
+    if (args.join(' ').startsWith('[traceai:auto]')) warnings.push(args.join(' '));
     diagnostic('console', 'warn', args);
     if (process.env.TEST_THROW_WARNING === 'true') throw new Error('Synthetic logger failure');
   };
@@ -68,12 +68,14 @@ const { AlwaysOffSampler, AlwaysOnSampler, BasicTracerProvider, InMemorySpanExpo
     const startTracer = provider && process.env.TEST_AUTO_TRACER === 'true'
       ? new FITracer({ tracer: FITracer.autoProvider(provider).getTracer('sampler-fixture') }) : tracer;
     const attributes = Object.freeze(Object.fromEntries(Array.from({ length: Number(process.env.TEST_ATTRIBUTES_COUNT || 0) }, (_, i) => [`existing.${i}`, 'value'])));
-    let rootContext;
+    let rootContext, sampledParentContext;
     const inputs = [['root', ROOT_CONTEXT], ['sampled-parent', parent(true)], ['unsampled-parent', parent(false)]];
     if (process.env.TEST_LOCAL_CHILD === 'true') inputs.push(['local-child', undefined]);
+    if (process.env.TEST_PARENT_LOCAL_CHILD === 'true') inputs.push(['parent-local-child', undefined]);
     const spans = tracer ? inputs.map(([name, context]) => {
-      const span = startTracer.startSpan(name, { attributes }, name === 'local-child' ? rootContext : context);
+      const span = startTracer.startSpan(name, { attributes }, name === 'local-child' ? rootContext : name === 'parent-local-child' ? sampledParentContext : context);
       if (name === 'root') rootContext = trace.setSpanContext(ROOT_CONTEXT, span.spanContext());
+      if (name === 'sampled-parent') sampledParentContext = trace.setSpanContext(ROOT_CONTEXT, span.spanContext());
       const result = { name, recording: span.isRecording(), sampled: !!(span.spanContext().traceFlags & TraceFlags.SAMPLED) };
       span.end();
       return result;

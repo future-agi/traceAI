@@ -28,17 +28,26 @@ test("a deterministic kept root writes its ratio and its local child inherits it
   expect(child.traceState?.get("fi")).toBe("r:0.25");
 });
 
-test.each([true, false])("a valid sampled parent supplies the trace-wide ratio (remote=%s)", remote => {
-  const result = sample(ratioSampler(), parent("r:0.5", true, remote));
-  expect(result.attributes?.[key]).toBe(0.5);
-  expect(result.traceState?.get("fi")).toBe("r:0.5");
-  expect(result.traceState?.get("vendor")).toBe("opaque");
-});
+describe.each([0, 0.25, 1])("parent-based local root rate %s", rate => {
+  test.each([true, false])("a valid sampled parent supplies the trace-wide ratio (remote=%s)", remote => {
+    const result = sample(ratioSampler(true, rate), parent("r:0.5", true, remote));
+    expect(result.decision).toBe(SamplingDecision.RECORD_AND_SAMPLED);
+    expect(result.attributes?.[key]).toBe(0.5);
+    expect(result.traceState?.get("fi")).toBe("r:0.5");
+    expect(result.traceState?.get("vendor")).toBe("opaque");
+  });
 
-test.each([undefined, "r:2", "r:abc", "r:NaN", "r:Infinity", "r:0", "r:-0.1", "r:1", "0.5", "r:", "r:0x0.8", "r: 0.5"])("missing or invalid parent fi=%s does not invent a ratio", value => {
-  const result = sample(ratioSampler(), parent(value));
-  expect(result.decision).toBe(SamplingDecision.RECORD_AND_SAMPLED);
-  expect(result.attributes?.[key]).toBeUndefined();
+  test.each([true, false])("unsampled parents are not stamped (remote=%s)", remote => {
+    const result = sample(ratioSampler(true, rate), parent("r:0.5", false, remote));
+    expect(result.decision).toBe(SamplingDecision.NOT_RECORD);
+    expect(result.attributes?.[key]).toBeUndefined();
+  });
+
+  test.each([undefined, "r:2", "r:abc", "r:NaN", "r:Infinity", "r:0", "r:-0.1", "r:1", "0.5", "r:", "r:0x0.8", "r: 0.5", "r:1e309", "r:1e-999"])("missing or invalid parent fi=%s does not invent a ratio", value => {
+    const result = sample(ratioSampler(true, rate), parent(value));
+    expect(result.decision).toBe(SamplingDecision.RECORD_AND_SAMPLED);
+    expect(result.attributes?.[key]).toBeUndefined();
+  });
 });
 
 test("an invalid parent context uses the root ratio instead of its fi entry", () => {
@@ -79,11 +88,47 @@ test.each([0.1, 0.12345678901234568, 1e-7, Number.MIN_VALUE])("ratio %s uses a s
   expect(Number(result.traceState!.get("fi")!.slice(2))).toBe(rate);
 });
 
-test.each([1, 0, -0.1, 2, NaN, Infinity])("inactive ratio %s returns the original sampler and never inherits metadata", rate => {
+test.each([-0.1, 2, NaN, Infinity, -Infinity])("invalid local ratio %s returns the original sampler and never inherits metadata", rate => {
   const sampler = new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) });
   const wrapped = withSamplingRatio({ sampler, ratio: { rate, parentBased: true } });
   expect(wrapped).toBe(sampler);
   expect(sample(wrapped, parent("r:0.5")).attributes?.[key]).toBeUndefined();
+});
+
+test.each([0, 1])("parent-based boundary %s does not stamp local roots", rate => {
+  const result = sample(ratioSampler(true, rate));
+  expect(result.decision).toBe(rate === 1 ? SamplingDecision.RECORD_AND_SAMPLED : SamplingDecision.NOT_RECORD);
+  expect(result.attributes?.[key]).toBeUndefined();
+  expect(result.traceState?.get("fi")).toBeUndefined();
+});
+
+test.each([0, 1])("non-parent-based boundary %s remains unwrapped and never inherits", rate => {
+  const sampler = new TraceIdRatioBasedSampler(rate);
+  const wrapped = withSamplingRatio({ sampler, ratio: { rate, parentBased: false } });
+  expect(wrapped).toBe(sampler);
+  expect(sample(wrapped, parent("r:0.5")).attributes?.[key]).toBeUndefined();
+});
+
+test.each(["r:0.12345678901234568", "r:1e-7", `r:${Number.MIN_VALUE}`])("full-rate parent-based sampling preserves valid parent entry %s verbatim", entry => {
+  const result = sample(ratioSampler(true, 1), parent(entry));
+  expect(result.attributes?.[key]).toBe(Number(entry.slice(2)));
+  expect(result.traceState?.get("fi")).toBe(entry);
+});
+
+describe.each([0, 0.25, 1])("parent-based delegate preservation at root rate %s", rate => {
+  test.each([SamplingDecision.NOT_RECORD, SamplingDecision.RECORD])("does not stamp or change decision %s under a sampled parent", decision => {
+    const result: SamplingResult = { decision, attributes: { original: "value" }, traceState: createTraceState("vendor=opaque,fi=r:0.5") };
+    const sampler: Sampler = { shouldSample: () => result, toString: () => "delegate" };
+    const wrapped = withSamplingRatio({ sampler, ratio: { rate, parentBased: true } });
+    expect(sample(wrapped, parent("r:0.5"))).toBe(result);
+  });
+
+  test("never stamps an unsampled parent even if a custom delegate samples it", () => {
+    const result: SamplingResult = { decision: SamplingDecision.RECORD_AND_SAMPLED };
+    const sampler: Sampler = { shouldSample: () => result, toString: () => "delegate" };
+    const wrapped = withSamplingRatio({ sampler, ratio: { rate, parentBased: true } });
+    expect(sample(wrapped, parent("r:0.5", false))).toBe(result);
+  });
 });
 
 test("an unknown custom sampler is not inspected or wrapped", () => {
