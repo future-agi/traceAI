@@ -1,8 +1,6 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
-import { ExportResultCode, getStringFromEnv } from "@opentelemetry/core";
-import { ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
-// The SDK's environment factory is exported from config, not its package root.
-import { buildSamplerFromEnv } from "@opentelemetry/sdk-trace-base/build/src/config";
+import { ExportResultCode } from "@opentelemetry/core";
+import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
@@ -17,6 +15,7 @@ import { privacyFilter } from "./export-privacy";
 import { contextBoundProvider, isAgentSpan, markAgentSpan } from "./agent-context";
 import { HTTP_SCOPE } from "./incoming-parent";
 import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
+import { samplingRatioAdmission, type SamplerSelection } from "./sampling-ratio";
 
 const VERSION = "0.2.0"; // x-release-please-version
 import { chainSigterm } from "./signals";
@@ -53,31 +52,37 @@ function warn(key: string, message: string): void {
   try { console.warn(`[traceai:auto] ${message}`); } catch { /* Host logger may throw. */ }
 }
 /** Only called for a provider the agent creates; an application's sampler is never replaced. */
-function environmentSampler(): Sampler {
-  const fallback = () => new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) });
-  const name = getStringFromEnv("OTEL_TRACES_SAMPLER");
-  if (name === undefined) return fallback();
+function environmentSampler(): SamplerSelection {
+  const fallback = (): SamplerSelection => ({
+    sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) }),
+    ratio: { rate: 1, parentBased: true },
+  });
+  // Filtered installs can resolve OTel 1.x. Use public sampler constructors
+  // shared by both majors and parse the environment once for decision and metadata.
+  const name = process.env.OTEL_TRACES_SAMPLER;
+  if (!name?.trim()) return fallback();
   switch (name) {
-    case "always_on": case "always_off":
-    case "parentbased_always_on": case "parentbased_always_off":
-      break;
+    case "always_on": return { sampler: new AlwaysOnSampler() };
+    case "always_off": return { sampler: new AlwaysOffSampler() };
+    case "parentbased_always_on": case "parentbased_always_off": {
+      const on = name === "parentbased_always_on";
+      return { sampler: new ParentBasedSampler({ root: on ? new AlwaysOnSampler() : new AlwaysOffSampler() }),
+        ratio: { rate: on ? 1 : 0, parentBased: true } };
+    }
     case "traceidratio": case "parentbased_traceidratio": {
-      const raw = getStringFromEnv("OTEL_TRACES_SAMPLER_ARG");
-      // Match the SDK's Number conversion and blank-as-unset semantics, but
-      // reject invalid values with one value-free warning and a parent-based fallback.
-      if (raw !== undefined && (!Number.isFinite(Number(raw)) || Number(raw) < 0 || Number(raw) > 1)) {
+      const raw = process.env.OTEL_TRACES_SAMPLER_ARG;
+      const rate = raw?.trim() ? Number(raw) : 1;
+      if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
         warn("sampler", "Invalid OTEL_TRACES_SAMPLER_ARG; using ParentBased(TraceIdRatio(1)).");
         return fallback();
       }
-      break;
+      const root = new TraceIdRatioBasedSampler(rate), parentBased = name === "parentbased_traceidratio";
+      return { sampler: parentBased ? new ParentBasedSampler({ root }) : root, ratio: { rate, parentBased } };
     }
     default:
       warn("sampler", "Invalid or unsupported OTEL_TRACES_SAMPLER; using ParentBased(TraceIdRatio(1)).");
       return fallback();
   }
-  // Keep the SDK's six standard mappings and ratio-argument defaults. In
-  // particular, a plain ratio sampler is not wrapped in aiSampler/ParentBased.
-  return buildSamplerFromEnv();
 }
 // AI spans that the agent's sampler recorded with the sampled flag off (see aiSampler).
 const recordOnly = new WeakSet<object>();
@@ -314,8 +319,14 @@ export function init(options: Options = {}): TracerProvider | undefined {
     }
     if (!agent.provider) {
       // Resolve against the application's environment before constructing the SDK.
-      // Explicit rates retain aiSampler's record-only handling of unsampled parents.
-      const sampler = config.sampleRateExplicit ? aiSampler(config.sampleRate) : environmentSampler();
+      // Explicit rates retain aiSampler's decisions, including record-only handling
+      // of unsampled parents, but sampled decisions inherit the parent's metadata.
+      const admission = samplingRatioAdmission(config.sampleRateExplicit
+        ? { sampler: aiSampler(config.sampleRate), ratio: { rate: config.sampleRate, parentBased: true } }
+        : environmentSampler());
+      const { sampler } = admission;
+      const ownedStart = processor.onStart.bind(processor);
+      processor.onStart = (span, parent) => { admission.onStart(span); ownedStart(span, parent); };
       const samplerName = process.env.OTEL_TRACES_SAMPLER, samplerArg = process.env.OTEL_TRACES_SAMPLER_ARG;
       try {
         // BasicTracerProvider evaluates its env defaults even with a sampler supplied.
@@ -385,8 +396,8 @@ export function init(options: Options = {}): TracerProvider | undefined {
         let admitted = {};
         try { if (secrets !== null) admitted = admissionPrivacy.attributes({ ...getAttributesFromContext(parent), ...result.attributes }, undefined, result.attributes["gen_ai.operation.name"]); }
         catch { /* Fail closed before SDK value truncation, retaining identity/timing. */ }
-        // Host SDK limits admit this already-protected FI-authored data. Auto
-        // does not rewrite native storage to prioritize FI projection fields.
+        // Host SDK limits admit this already-protected FI-authored data. Only
+        // our own provider reserves sampler metadata; borrowed storage is untouched.
         const span = wireTracer.startSpan(result.name, { kind: SpanKind.CLIENT, startTime: start, attributes: admitted }, parent);
         markAgentSpan(span.getContextSpan());
         if (secrets === null) failedCaptures.add(span.getContextSpan());

@@ -188,6 +188,7 @@ type agentState struct {
 	flushing       atomic.Bool
 	nativeHooks    nativeCredentialHooks
 	attributeLimit int
+	ownedRatio     *ratioSampler // Only the known wrapper installed on our private provider.
 }
 
 // retire stops an armed wrapper that will not be activated. Inside an
@@ -343,7 +344,11 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 		if owned == nil {
 			owned = res
 		}
-		state.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(owned), sdktrace.WithSampler(configuredSampler(c)), sdktrace.WithSpanProcessor(state.registration))
+		sampler := configuredSampler(c)
+		if ratio, ok := sampler.(ratioSampler); ok {
+			state.ownedRatio = &ratio
+		}
+		state.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(owned), sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(state.registration))
 		state.owned = true
 	}
 	state.attributeLimit = providerAttributeLimit(state.provider)

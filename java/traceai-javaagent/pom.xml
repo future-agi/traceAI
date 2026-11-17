@@ -331,6 +331,10 @@
                                     <shadedPattern>ai.traceai.auto.shaded.core.TraceConfig</shadedPattern>
                                 </relocation>
                                 <relocation>
+                                    <pattern>ai.traceai.SamplingRatioSampler</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.core.SamplingRatioSampler</shadedPattern>
+                                </relocation>
+                                <relocation>
                                     <pattern>ai.traceai.ContextAttributes</pattern>
                                     <shadedPattern>ai.traceai.auto.shaded.core.ContextAttributes</shadedPattern>
                                 </relocation>
@@ -355,7 +359,7 @@
                                         <exclude>win32-x86-64/**</exclude>
                                     </excludes>
                                 </filter>
-                                <!-- Only the two relocated core helpers enter the agent jar. Any other
+                                <!-- Only the relocated core helpers enter the agent jar. Any other
                                      ai.traceai class would sit unrelocated on the system classpath
                                      beside the application's own traceai-java-core. -->
                                 <filter>
@@ -363,6 +367,8 @@
                                     <includes>
                                         <include>ai/traceai/TraceConfig.class</include>
                                         <include>ai/traceai/TraceConfig$*.class</include>
+                                        <include>ai/traceai/SamplingRatioSampler.class</include>
+                                        <include>ai/traceai/SamplingRatioSampler$*.class</include>
                                         <include>ai/traceai/ContextAttributes.class</include>
                                         <include>ai/traceai/ContextAttributes$*.class</include>
                                     </includes>

@@ -98,7 +98,8 @@ public final class TraceAI {
 
             // Build tracer provider
             SdkTracerProviderBuilder providerBuilder = SdkTracerProvider.builder()
-                .setSampler(config.getSampler() != null ? config.getSampler() : TraceConfig.samplerFromEnvironment(System.getenv()))
+                .setSampler(TraceConfig.samplerForOwnedProvider(config.getSampler() != null
+                    ? config.getSampler() : TraceConfig.samplerFromEnvironment(System.getenv())))
                 .setResource(resource);
 
             // Add OTLP exporter if configured

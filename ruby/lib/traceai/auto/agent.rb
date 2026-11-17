@@ -5,6 +5,7 @@ require_relative 'config'
 require_relative 'secrets'
 require_relative 'codec'
 require_relative 'bundler_hook'
+require_relative 'sampling'
 module TraceAI
   module Auto
     VERSION = '0.1.0'
@@ -464,6 +465,9 @@ module TraceAI
             # and adopt_host_provider moves to the application's provider once
             # the application sets one.
             @provider = @own_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default, sampler: configured_sampler)
+            # Admission protection belongs only to this provider. Unlike export
+            # processors it must not follow the agent when a host is adopted.
+            @provider.add_span_processor(RatioSpanProcessor.new(@provider)) if @provider.sampler.is_a?(RatioSampler)
           end
           attached = @provider.instance_variable_get(:@span_processors)
           supplied_processor = destinations[:processor]
@@ -560,7 +564,12 @@ module TraceAI
                when 'always_off' then samplers::ALWAYS_OFF
                when 'traceidratio' then samplers.trace_id_ratio_based(rate)
                end
-        name.start_with?('parentbased_') ? samplers.parent_based(root: root) : root
+        parent_based = name.start_with?('parentbased_')
+        sampler = parent_based ? samplers.parent_based(root: root) : root
+        # Every known owned delegate needs the invalid-parent root boundary,
+        # including unweighted nonparent samplers. The wrapper never resamples
+        # and adds no probability metadata for full-rate/always-on decisions.
+        RatioSampler.new(sampler, rate, parent_based: parent_based)
       end
       def add_owned_processor(destination, ai_only: false)
         processor = OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(destination, exporter_timeout: 4000, max_queue_size: 512, max_export_batch_size: 64)
@@ -756,7 +765,16 @@ module TraceAI
         context_attrs = parent.value(@attributes_key) || {}
         attributes = Privacy.mask(Privacy.scrub_attributes(context_attrs.merge(result.attributes)), @config)
         description = Privacy.hide_errors?(@config) ? '__REDACTED__' : result.description.to_s
-        projection = AttributeProjection.project(attributes, projection_limit)
+        limit = projection_limit
+        # Reserve a slot only for known local/inherited probability metadata.
+        # A sampled parent without valid fi state keeps the entire wire budget.
+        sampler = @provider.sampler if @sdk && @provider.equal?(@own_provider)
+        ratio = if @sdk
+                  sampler.ratio_for(OpenTelemetry::Trace.current_span(parent).context) if sampler.is_a?(RatioSampler)
+                elsif SamplingRatio.fractional?(@local_sample_rate)
+                  @local_sample_rate
+                end
+        projection = AttributeProjection.project(attributes, ratio && limit.positive? ? limit - 1 : limit)
         attributes = projection.attributes
         if @sdk
           span = @tracer.start_span(result.name, with_parent: parent, kind: :client, start_timestamp: started, attributes: attributes)
@@ -776,10 +794,15 @@ module TraceAI
           else
             return unless Random.rand < @local_sample_rate
           end
+          tracestate = ''
+          if ratio
+            attributes = attributes.merge(SamplingRatio::ATTRIBUTE => ratio) if limit.positive?
+            tracestate = "fi=#{SamplingRatio.state_value(ratio)}"
+          end
           record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), "\0".b * 8,
                                     attributes.size + projection.dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
                                     attributes, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
-                                    Random.urandom(8), trace_id || Random.urandom(16), 1, '', false)
+                                    Random.urandom(8), trace_id || Random.urandom(16), 1, tracestate, false)
           @processor.enqueue(record)
         end
       rescue StandardError => e
@@ -1090,7 +1113,8 @@ module TraceAI
       def shutdown(timeout: nil) = @delegate.shutdown(timeout: timeout)
       private
       def ai_span?(span)
-        Auto.ai_marked?(span.attributes, span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil)
+        span.instance_variable_get(:@traceai_ratio_ai) ||
+          Auto.ai_marked?(span.attributes, span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil)
       end
       def remember(trace_id)
         @mutex.synchronize do

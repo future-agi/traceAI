@@ -72,30 +72,44 @@ public class TraceConfig {
                 rate = Double.parseDouble(explicitRate);
                 if (!Double.isFinite(rate) || rate < 0 || rate > 1) rate = 1.0;
             } catch (NumberFormatException ignored) { }
-            return Sampler.parentBased(Sampler.traceIdRatioBased(rate));
+            return SamplingRatioSampler.ratioSampler(rate, true);
         }
         String name = environment.get("OTEL_TRACES_SAMPLER");
-        if (name == null) return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
+        if (name == null) return SamplingRatioSampler.ratioSampler(1.0, true);
         try {
             switch (name) {
-                case "always_on": return Sampler.alwaysOn();
-                case "always_off": return Sampler.alwaysOff();
-                case "parentbased_always_on": return Sampler.parentBased(Sampler.alwaysOn());
-                case "parentbased_always_off": return Sampler.parentBased(Sampler.alwaysOff());
+                case "always_on": return SamplingRatioSampler.alwaysSampler(true);
+                case "always_off": return SamplingRatioSampler.alwaysSampler(false);
+                case "parentbased_always_on": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOn(), 1.0);
+                case "parentbased_always_off": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOff(), 0.0);
                 case "traceidratio":
                 case "parentbased_traceidratio":
                     String arg = environment.get("OTEL_TRACES_SAMPLER_ARG");
                     double rate = arg == null || arg.isEmpty() ? 1.0 : Double.parseDouble(arg);
                     if (!Double.isFinite(rate) || rate < 0 || rate > 1) throw new IllegalArgumentException();
-                    Sampler ratio = Sampler.traceIdRatioBased(rate);
-                    return name.equals("traceidratio") ? ratio : Sampler.parentBased(ratio);
+                    return SamplingRatioSampler.ratioSampler(rate, name.equals("parentbased_traceidratio"));
                 default: throw new IllegalArgumentException();
             }
         } catch (IllegalArgumentException ignored) {
             // Do not echo configuration values: they may contain unrelated private data.
             System.err.println("[traceai] Invalid OTEL_TRACES_SAMPLER or OTEL_TRACES_SAMPLER_ARG; using default ParentBased(TraceIdRatio(1.0))");
-            return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
+            return SamplingRatioSampler.ratioSampler(1.0, true);
         }
+    }
+
+    /**
+     * Enables sampling-ratio attributes and invalid-root state reset only for a TraceAI-owned
+     * provider. Recognizes samplers returned by {@link #samplerFromEnvironment(Map)}, including
+     * an explicit builder sampler obtained from that factory. Parent-based samplers copy valid
+     * upstream ratios even at root rates zero or one. Known always-on/off and ratio boundary
+     * samplers only reset invalid-root state, without stamping. All other samplers are returned
+     * unchanged. This must not be applied to an application-owned provider.
+     *
+     * @param sampler the selected sampler
+     * @return a decision-preserving sampler carrying ratio metadata when the ratio is known
+     */
+    public static Sampler samplerForOwnedProvider(Sampler sampler) {
+        return SamplingRatioSampler.forOwnedProvider(sampler);
     }
 
     /**

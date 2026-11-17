@@ -193,6 +193,50 @@ An application-owned provider keeps its own sampler, including for an added FI
 exporter. The agent never changes the application's sampled flag; only accepted
 detached exports are marked sampled, and parent-based choices honor parent flags.
 
+For agent-created providers, accepted exported copies carry `fi.sampling.ratio`, a
+double strictly between 0 and 1 when the head-sampling keep probability is known;
+absent means 1.0 for estimated counts and costs. Export copies and the explicit
+propagation context below carry `fi=r:<ratio>` in W3C `tracestate` while preserving
+other entries. Parent-based children of sampled local or remote parents inherit only
+a valid upstream `fi` ratio, regardless of the local root rate (including 0 or 1).
+This includes the default and `parentbased_always_on`/`parentbased_always_off`.
+Non-parent-based samplers never copy upstream ratios; fractional `traceidratio`
+decisions stamp their own rate. The metadata survives privacy-fallback export copies
+(other tracestate content may be cleared for privacy), but is never stamped on raw
+record-only activities, dropped spans, full-rate roots, or application-owned providers.
+
+### Explicit agent-owned propagation (in-process entry point)
+
+The zero-code hook deliberately leaves `Activity.Context`, automatic HTTP header
+injection, and application-owned propagation unchanged. **Export metadata alone
+does not propagate a new ratio across processes.** To carry the agent's decision
+on a handoff you own, use the in-process project reference described above and
+explicitly inject `TraceAIAuto.GetPropagationContext()` instead of `Activity.Current.Context`:
+
+```csharp
+using OpenTelemetry.Context.Propagation;
+using TraceAI.AutoInstrumentation;
+
+// Run inside an active activity observed by the agent's owned provider.
+// Use an agent-owned carrier/transport, not one whose headers the host injects.
+var headers = new Dictionary<string, string>();
+new TraceContextPropagator().Inject(
+    new PropagationContext(TraceAIAuto.GetPropagationContext(), default),
+    headers, static (carrier, key, value) => carrier[key] = value);
+// Send these traceparent/tracestate headers. The receiver extracts them with its
+// standard W3C propagator and uses that remote context when starting its activity.
+```
+
+The returned value carries the owned agent's sampled decision and valid ratio,
+merged into the activity's current vendor tracestate, without mutating its tags,
+tracestate, sampled bit, or ambient context. You can pass an explicit `Activity`
+instead of using the current one. With a supplied provider, an unobserved activity,
+a rejected decision, or an inactive agent, the API returns the ordinary activity
+context unchanged (or the default context when no activity exists). It does not
+replace a process-global propagator or override existing headers. The hook-only
+NuGet package has no compile asset for this API; zero-code applications need this
+explicit in-process integration for agent-owned cross-process ratio propagation.
+
 All `FI_HIDE_*` switches from `FIInstrumentation.TraceConfig` are honored in this
 path, including flattened message attributes and audio transcript text. Their
 lower-case file equivalents work too (`hide_inputs = true`, etc.). A hide switch

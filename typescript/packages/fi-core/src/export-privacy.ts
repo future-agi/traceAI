@@ -8,7 +8,7 @@ import { maskAttributes, redactValue } from "./trace/trace-config/maskingRules";
 import { capBase64Images } from "./trace/trace-config/imageCap";
 import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-config/structuredRedaction";
 import type { TraceConfigOptions } from "./trace/trace-config/types";
-import { DROPPED_CONTENT_COUNT, isProjectionMetadata, PROJECTION_METADATA } from "./attribute-projection";
+import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
@@ -53,6 +53,7 @@ const NON_CONTENT = {
 } as const;
 const NON_CONTENT_KEYS: ReadonlySet<string> = new Set(Object.keys(NON_CONTENT.attributes));
 function nonContent(key: string, value: unknown): boolean {
+  if (key === SAMPLING_RATIO) return isSamplingRatio(value);
   if (!NON_CONTENT_KEYS.has(key)) return false;
   const rule = NON_CONTENT.attributes[key as keyof typeof NON_CONTENT.attributes];
   if (rule === "boolean") return typeof value === "boolean";
