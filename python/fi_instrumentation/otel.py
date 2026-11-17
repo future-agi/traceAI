@@ -27,6 +27,7 @@ from fi_instrumentation.settings import (
     get_env_collector_endpoint,
     get_env_fi_auth_header,
     get_env_grpc_collector_endpoint,
+    get_env_traces_endpoint,
     get_env_project_name,
     get_env_project_version_name,
 )
@@ -275,7 +276,7 @@ class TracerProvider(_TracerProvider):
     the OpenTelemetry documentation at https://opentelemetry.io/docs/specs/otel/trace/sdk/.
 
     On construction a default `SimpleSpanProcessor` is added, exporting over `transport`.
-    The collector endpoint is inferred from `transport` and the `FI_BASE_URL`/`FI_GRPC_URL`
+    The collector endpoint is inferred from `transport` and the `FI_TRACES_URL` (else `FI_BASE_URL`)/`FI_GRPC_URL`
     environment variables. The first `add_span_processor` call replaces the default; later calls
     add processors next to it. The provider `register()` returns has no such default: processors
     added to it run next to its exporter. In addition to the arguments below, all upstream
@@ -314,7 +315,7 @@ class TracerProvider(_TracerProvider):
 
 
         if transport == Transport.HTTP:
-            endpoint = get_env_collector_endpoint()
+            endpoint = get_env_traces_endpoint()
             parsed_url, endpoint = _normalized_endpoint(endpoint)
             exporter: SpanExporter = HTTPSpanExporter(endpoint=endpoint)
         elif transport == Transport.GRPC:
@@ -445,7 +446,7 @@ def _build_default_exporter(
 ) -> SpanExporter:
     """Build the default OTLP exporter for `transport` (endpoint from env)."""
     if transport == Transport.HTTP:
-        _, endpoint = _normalized_endpoint(get_env_collector_endpoint())
+        _, endpoint = _normalized_endpoint(get_env_traces_endpoint())
         return HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=timeout)
     if transport == Transport.GRPC:
         endpoint = get_env_grpc_collector_endpoint()
@@ -463,7 +464,7 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
     Args:
         span_exporter (SpanExporter, optional): The `SpanExporter` to which ended spans will be
             passed. If not provided, a default OTLP exporter is created for `transport`; its
-            collector endpoint is taken from the `FI_BASE_URL`/`FI_GRPC_URL` environment
+            collector endpoint is taken from the `FI_TRACES_URL` (else `FI_BASE_URL`)/`FI_GRPC_URL` environment
             variables.
         headers (dict, optional): Optional headers to include in the request to the collector.
             If not provided, the `FI_API_KEY` and `FI_SECRET_KEY`
@@ -547,7 +548,7 @@ class BatchSpanProcessor(_BatchSpanProcessor):
     Args:
         span_exporter (SpanExporter, optional): The `SpanExporter` to which ended spans will be
             passed. If not provided, a default OTLP exporter is created for `transport`; its
-            collector endpoint is taken from the `FI_BASE_URL`/`FI_GRPC_URL` environment
+            collector endpoint is taken from the `FI_TRACES_URL` (else `FI_BASE_URL`)/`FI_GRPC_URL` environment
             variables.
         headers (dict, optional): Optional headers to include in the request to the collector.
             If not provided, the `FI_API_KEY` and `FI_SECRET_KEY`
@@ -670,7 +671,8 @@ class HTTPSpanExporter(_HTTPSpanExporter):
 
     Args:
         endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
-            the endpoint is derived from `FI_BASE_URL`, defaulting to the Future AGI HTTP endpoint.
+            the endpoint is derived from `FI_TRACES_URL`, else `FI_BASE_URL`, defaulting to the
+            Future AGI HTTP endpoint.
         headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
             and `FI_SECRET_KEY` environment variables will be used.
     """
@@ -722,7 +724,7 @@ def _construct_http_endpoint(parsed_endpoint: ParseResult) -> ParseResult:
 
 def _normalized_endpoint(endpoint: Optional[str]) -> Tuple[ParseResult, str]:
     if endpoint is None:
-        endpoint = get_env_collector_endpoint()
+        endpoint = get_env_traces_endpoint()
 
     parsed = urlparse(endpoint)
     parsed = _construct_http_endpoint(parsed)
