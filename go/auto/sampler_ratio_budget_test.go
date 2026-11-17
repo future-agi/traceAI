@@ -9,6 +9,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	collector "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 )
 
 func TestRatioSamplerBudgetPrediction(t *testing.T) {
@@ -42,59 +43,79 @@ func TestRatioSamplerBudgetPrediction(t *testing.T) {
 func TestRatioSamplerWireBudgetOTLP(t *testing.T) {
 	for _, mode := range []string{"inherited", "local-parent", "traceidratio", "missing-fi", "invalid-fi", "host", "rate-one"} {
 		t.Run(mode, func(t *testing.T) {
+			samplerEnvironment(t)
+			t.Setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "-1")
+			t.Setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "-1")
+			received := privacyCollector(t)
+			// Each capture shuts down its agent/provider before the next one.
+			// The unlimited reference runs directly, not in a filterable sibling.
+			capture := func(t *testing.T) (sdktrace.ReadOnlySpan, *collector.ExportTraceServiceRequest, float64) {
+				t.Helper()
+				options := []Option{WithCredentials("RATIO_BUDGET_KEY", "RATIO_BUDGET_SECRET"), WithWireCapture(true)}
+				wantRatio := 0.5
+				state := "vendor=kept,fi=r:0.5"
+				switch mode {
+				case "traceidratio":
+					t.Setenv("OTEL_TRACES_SAMPLER", "traceidratio")
+					t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
+					wantRatio = 0.25
+				case "host":
+					host := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+					defer host.Shutdown(context.Background())
+					options = append(options, WithTracerProvider(host), WithSampleRate(0.25))
+					wantRatio = 0
+				case "rate-one":
+					options = append(options, WithSampleRate(1))
+					wantRatio = 0
+				default:
+					options = append(options, WithSampleRate(0.25))
+					if mode == "missing-fi" {
+						state, wantRatio = "vendor=kept", 0
+					} else if mode == "invalid-fi" {
+						state, wantRatio = "vendor=kept,fi=r:NaN", 0
+					}
+				}
+				stop, err := InitForTest(context.Background(), options...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stop(context.Background())
+				if (agent.current.ownedRatio != nil) != (mode != "host" && mode != "rate-one") {
+					t.Fatal("reservation state does not match the owned sampler")
+				}
+				raw := tracetest.NewSpanRecorder()
+				agent.current.provider.RegisterSpanProcessor(raw)
+				ctx := ratioParent(t, mode != "local-parent", true, state)
+				ctx = ContextWithAttributes(ctx,
+					attribute.String("z.record.mimeType", "audio/L16"),
+					attribute.String("z.record.data", r6aPCM))
+				r6aLongChat(t, ctx, 8)
+				request := flushedPrivacyExport(t, received)
+				if len(raw.Ended()) != 1 {
+					t.Fatalf("got %d SDK spans, want one", len(raw.Ended()))
+				}
+				return raw.Ended()[0], request, wantRatio
+			}
+			reference, _, _ := capture(t)
 			var full []attribute.KeyValue
 			totalContent := 0
+			for _, kv := range reference.Attributes() {
+				if kv.Key == "fi.sampling.ratio" {
+					continue
+				}
+				full = append(full, kv)
+				if protectedAttributePriority(kv) < 0 && contentGroup(string(kv.Key), "chat").content {
+					totalContent++
+				}
+			}
+			if totalContent == 0 {
+				t.Fatal("unlimited control has no content")
+			}
 			limits := []int{-1, 0, 1, 2, 3, 16, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 40, 64}
 			for _, limit := range limits {
 				t.Run(fmt.Sprint(limit), func(t *testing.T) {
-					samplerEnvironment(t)
 					t.Setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", fmt.Sprint(limit))
-					t.Setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "-1")
-					received := privacyCollector(t)
-					options := []Option{WithCredentials("RATIO_BUDGET_KEY", "RATIO_BUDGET_SECRET"), WithWireCapture(true)}
-					wantRatio := 0.5
-					state := "vendor=kept,fi=r:0.5"
-					switch mode {
-					case "traceidratio":
-						t.Setenv("OTEL_TRACES_SAMPLER", "traceidratio")
-						t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
-						wantRatio = 0.25
-					case "host":
-						host := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
-						t.Cleanup(func() { _ = host.Shutdown(context.Background()) })
-						options = append(options, WithTracerProvider(host), WithSampleRate(0.25))
-						wantRatio = 0
-					case "rate-one":
-						options = append(options, WithSampleRate(1))
-						wantRatio = 0
-					default:
-						options = append(options, WithSampleRate(0.25))
-						if mode == "missing-fi" {
-							state, wantRatio = "vendor=kept", 0
-						} else if mode == "invalid-fi" {
-							state, wantRatio = "vendor=kept,fi=r:NaN", 0
-						}
-					}
-					stop, err := InitForTest(context.Background(), options...)
-					if err != nil {
-						t.Fatal(err)
-					}
-					t.Cleanup(func() { _ = stop(context.Background()) })
-					if (agent.current.ownedRatio != nil) != (mode != "host" && mode != "rate-one") {
-						t.Fatal("reservation state does not match the owned sampler")
-					}
-					raw := tracetest.NewSpanRecorder()
-					agent.current.provider.RegisterSpanProcessor(raw)
-					ctx := ratioParent(t, mode != "local-parent", true, state)
-					ctx = ContextWithAttributes(ctx,
-						attribute.String("z.record.mimeType", "audio/L16"),
-						attribute.String("z.record.data", r6aPCM))
-					r6aLongChat(t, ctx, 8)
-					request := flushedPrivacyExport(t, received)
-					if len(raw.Ended()) != 1 {
-						t.Fatalf("got %d SDK spans, want one", len(raw.Ended()))
-					}
-					span := raw.Ended()[0]
+					span, request, wantRatio := capture(t)
 					if !span.SpanContext().IsSampled() {
 						t.Fatal("wire span was not sampled")
 					}
@@ -114,17 +135,8 @@ func TestRatioSamplerWireBudgetOTLP(t *testing.T) {
 						if kv.Key == "fi.sampling.ratio" {
 							continue
 						}
-						if limit < 0 {
-							full = append(full, kv)
-						}
 						if protectedAttributePriority(kv) < 0 && contentGroup(string(kv.Key), "chat").content {
 							keptContent++
-						}
-					}
-					if limit < 0 {
-						totalContent = keptContent
-						if totalContent == 0 {
-							t.Fatal("unlimited control has no content")
 						}
 					}
 					wireLimit := limit
