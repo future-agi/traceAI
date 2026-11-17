@@ -72,7 +72,7 @@ public class TraceConfig {
                 rate = Double.parseDouble(explicitRate);
                 if (!Double.isFinite(rate) || rate < 0 || rate > 1) rate = 1.0;
             } catch (NumberFormatException ignored) { }
-            return Sampler.parentBased(Sampler.traceIdRatioBased(rate));
+            return SamplingRatioSampler.ratioSampler(rate, true);
         }
         String name = environment.get("OTEL_TRACES_SAMPLER");
         if (name == null) return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
@@ -87,8 +87,7 @@ public class TraceConfig {
                     String arg = environment.get("OTEL_TRACES_SAMPLER_ARG");
                     double rate = arg == null || arg.isEmpty() ? 1.0 : Double.parseDouble(arg);
                     if (!Double.isFinite(rate) || rate < 0 || rate > 1) throw new IllegalArgumentException();
-                    Sampler ratio = Sampler.traceIdRatioBased(rate);
-                    return name.equals("traceidratio") ? ratio : Sampler.parentBased(ratio);
+                    return SamplingRatioSampler.ratioSampler(rate, name.equals("parentbased_traceidratio"));
                 default: throw new IllegalArgumentException();
             }
         } catch (IllegalArgumentException ignored) {
@@ -96,6 +95,19 @@ public class TraceConfig {
             System.err.println("[traceai] Invalid OTEL_TRACES_SAMPLER or OTEL_TRACES_SAMPLER_ARG; using default ParentBased(TraceIdRatio(1.0))");
             return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
         }
+    }
+
+    /**
+     * Enables sampling-ratio attributes only for a TraceAI-owned provider. Recognizes partial
+     * ratio samplers returned by {@link #samplerFromEnvironment(Map)}, including an explicit
+     * builder sampler obtained from that factory; all other samplers are returned unchanged.
+     * This must not be applied to an application-owned provider.
+     *
+     * @param sampler the selected sampler
+     * @return a decision-preserving sampler carrying ratio metadata when the ratio is known
+     */
+    public static Sampler samplerForOwnedProvider(Sampler sampler) {
+        return SamplingRatioSampler.forOwnedProvider(sampler);
     }
 
     /**
