@@ -5,7 +5,7 @@ import { FITracer } from "../trace/trace-config/FITracer";
 import { privacyFilter } from "../export-privacy";
 import { getRegisteredSecrets } from "../secrets";
 
-// RED-first source controls; neither RED nor GREEN has been executed.
+// Source controls, written before the implementation.
 const saved = { ...process.env };
 beforeEach(() => { for (const key of Object.keys(process.env)) if (/^(FI_|OTEL_)/.test(key)) delete process.env[key]; });
 afterEach(() => { process.env = { ...saved }; });

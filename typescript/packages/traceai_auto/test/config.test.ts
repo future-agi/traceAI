@@ -31,6 +31,29 @@ test("privacy options honor file/env/code precedence without mutating the enviro
     expect(resolveConfig({ configFile: path }, {}).traceConfig).toEqual({ hideInputs: true, hideOutputs: true });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test("an empty privacy variable is unset, so the config file's value still applies", () => {
+  const dir = mkdtempSync(join(__dirname, ".empty-switch-")), path = join(dir, "futureagi.toml");
+  try {
+    writeFileSync(path, 'hide_inputs = true\nhide_output_text = "on"\npii_redaction = true\n');
+    for (const empty of ["", "   "]) {
+      // A deployment that passes an undefined variable through as an empty string.
+      const config = resolveConfig({ configFile: path }, { FI_HIDE_INPUTS: empty, FI_HIDE_OUTPUT_TEXT: empty, FI_PII_REDACTION: empty });
+      expect(config.traceConfig).toEqual({ hideInputs: true, hideOutputText: true, piiRedaction: true });
+      // An empty option string in code is not set either.
+      expect(resolveConfig({ configFile: path, traceConfig: { hideInputs: empty as any } }, {}).traceConfig.hideInputs).toBe(true);
+    }
+    // A variable that is set still wins over the file, and an option over both.
+    expect(resolveConfig({ configFile: path }, { FI_HIDE_INPUTS: "off" }).traceConfig.hideInputs).toBe(false);
+    expect(resolveConfig({ configFile: path, traceConfig: { hideInputs: false } }, { FI_HIDE_INPUTS: "on" }).traceConfig.hideInputs).toBe(false);
+    // With every source empty or missing, the switch is left out.
+    expect(resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_HIDE_INPUTS: "" }).traceConfig).toEqual({});
+    // FI_HIDE_ERROR_DETAILS is read the same way: empty, it is not set, so the file's false
+    // applies and error details are kept, even with a content switch on.
+    const errors = join(dir, "errors.toml");
+    writeFileSync(errors, "hide_inputs = true\nhide_error_details = false\n");
+    expect(resolveConfig({ configFile: errors }, { FI_HIDE_ERROR_DETAILS: "" }).traceConfig).toEqual({ hideInputs: true, hideErrorDetails: false });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 test("allowlist, denylist, wire setting, disabled SDK and numeric validation", () => {
   const config = resolveConfig({}, { FI_INSTRUMENTATIONS: "OpenAI, Wire", FI_DISABLED_INSTRUMENTATIONS: "openai", FI_SAMPLE_RATE: "2", FI_WIRE_MAX_BODY_BYTES: "bad", FI_AUTO_DEBUG: "true" });
   expect(enabled("openai", config)).toBe(false); expect(enabled("wire", config)).toBe(true); expect(enabled("langchain", config)).toBe(false);
@@ -90,6 +113,26 @@ test.each(["api_key", "secret_key"])("S7 ignored %s from every config/profile so
     expect(config).toMatchObject({ apiKey: "selected-code-private-key", secretKey: "selected-code-private-secret" });
     expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
   } finally { cwd.mockRestore(); warn.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+test("half a pair with no complete pair leaves the single warning to init()", () => {
+  const dir = mkdtempSync(join(__dirname, ".half-pair-")), cwd = jest.spyOn(process, "cwd").mockReturnValue(dir);
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const config = resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_API_KEY: "env-private-half", XDG_CONFIG_HOME: join(dir, "user") });
+    expect(config.apiKey).toBeUndefined(); expect(config.secretKey).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  } finally { cwd.mockRestore(); warn.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+test("the forwarding switch is off by default and comes from code, the environment or the file", () => {
+  const dir = mkdtempSync(join(__dirname, ".forward-")), path = join(dir, "futureagi.toml");
+  try {
+    writeFileSync(path, "forward_app_spans = true\n");
+    expect(resolveConfig({ configFile: join(dir, "missing.toml") }, {})).toMatchObject({ forwardApplicationSpans: false });
+    expect(resolveConfig({ configFile: join(dir, "missing.toml") }, { FI_FORWARD_APP_SPANS: "true" })).toMatchObject({ forwardApplicationSpans: true });
+    expect(resolveConfig({ configFile: path }, {})).toMatchObject({ forwardApplicationSpans: true });
+    const code = { configFile: path, forwardApplicationSpans: false };
+    expect(resolveConfig(code, { FI_FORWARD_APP_SPANS: "true" })).toMatchObject({ forwardApplicationSpans: false });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test("registry covers every instrumentation package and records exported class and targets", () => {
   const packages = resolve(__dirname, "../..");

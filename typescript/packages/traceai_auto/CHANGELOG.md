@@ -1,3 +1,38 @@
+## [0.2.0] - pending release
+
+### If you upgrade from 0.1.x
+- **The agent no longer takes over your app's OpenTelemetry.** It registers no global tracer provider, context manager or propagator, and an OpenTelemetry SDK your app starts registers normally. If your code created spans through OpenTelemetry's global API without starting an SDK of its own, those spans now go nowhere: start an SDK (for example `NodeSDK`) in your app.
+- **Only AI spans are sent to Future AGI.** Your app's HTTP, database, cache and custom spans stay with your own provider. To send them to Future AGI as well, set `FI_FORWARD_APP_SPANS=true`; this needs an OpenTelemetry SDK in your app. Without forwarding, incoming HTTP spans are sent only when `FI_INSTRUMENTATIONS` lists `http`, and only for a request that made an AI call.
+- **AI spans no longer reach your app's own provider and exporters.** In 0.1.x, when your app had its own tracer provider, the agent created AI spans on it, so your own exporters received them too; now they are created on the agent's own provider and go only to Future AGI. To create them on your provider again, set `FI_FORWARD_APP_SPANS=true`.
+- **Genkit spans are no longer sent by default,** and Genkit is reported as `manual`: Genkit creates its spans with the global tracer provider, which the agent no longer registers. To send them, set `FI_FORWARD_APP_SPANS=true`, or use the manual setup in `@traceai/genkit`'s README.
+- **Listing `http` beside your app's own tracer provider no longer installs the agent's HTTP instrumentation;** the agent warns once and leaves incoming HTTP to your OpenTelemetry setup. To have the agent install it there, set `FI_FORWARD_APP_SPANS=true`.
+- **A privacy switch with an unrecognised value now hides.** `FI_HIDE_*` and `FI_PII_REDACTION` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, in any case. Any other non-empty value hides that content with one warning; before, only `true` hid. `FI_HIDE_ERROR_DETAILS` set to `off`, `no` or `0` now shows error details, as `false` did. To keep content visible, use one of the accepted values.
+- **An empty `FI_HIDE_*` or `FI_PII_REDACTION` variable no longer masks the config file's value:** it counts as unset, so the file's setting applies, and an empty `FI_HIDE_ERROR_DETAILS` beside the file's `false` now shows error details even with a content switch on. To override the file, set the variable to an accepted value.
+- **`FI_SAMPLE_RATE` now decides by trace id for every AI span on the agent's own provider, the default,** and your app's own sampler no longer drops AI spans. In 0.1.x a provider your app owned kept its sampler for them; with `FI_FORWARD_APP_SPANS=true`, AI spans are created on your provider and keep its sampler. If your app samples with a trace-id ratio sampler, set `FI_SAMPLE_RATE` to the same ratio: the same traces are kept where your sampler decides at the root of a trace, but not where it follows an incoming parent's decision.
+
+### Changed
+- `@traceai/auto` depends on exactly the `@traceai/fi-core` version it is built with, 1.3.0.
+- AI spans keep their parent from your app's active span. A span is active only inside its own SDK call, so a request your app sends beside a call is captured as its own wire span.
+
+### Known limitations
+- Without an application context manager, a call's own request can also
+  arrive as a wire span beside its AI span for BeeAI, the OpenAI Agents
+  SDK, the Vercel AI SDK 7, Genkit and ElevenLabs. BeeAI and the OpenAI
+  Agents SDK start spans in the SDK's own event handlers or trace
+  processor, so the agent cannot tie the SDK's request to its span
+  without guessing. The Vercel AI SDK 7 and Genkit are turned on through
+  their own enable entry, outside the agent's call scope. ElevenLabs
+  patches namespace getters without the agent's scope and starts its
+  span outside a call cell. The duplicate-wire-span fix needs
+  `@traceai/groq` 0.1.2 or later, `@traceai/mistral` 0.1.2 or later and
+  `@traceai/portkey` 0.1.3 or later; with older versions of these packages,
+  the call's own request can still arrive twice. Portkey's Responses API
+  delegates to the `openai` package: when the agent's OpenAI integration
+  is also on and the app has no context manager, OpenAI starts its own
+  span too. The request produces two nested AI spans and no wire span.
+  These are duplicate-span limitations, not lost calls.
+- LangChain is not traced by the agent yet. Its model requests are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans.
+
 ## [0.1.4] - pending release
 
 ### Added

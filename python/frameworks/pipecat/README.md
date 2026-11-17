@@ -71,7 +71,7 @@ The integration automatically maps Pipecat-specific attributes to Future AGI con
 
 ### Transport Support
 - **HTTP**: Full support for HTTP transport with automatic endpoint detection
-- **gRPC**: Support for gRPC transport (requires `fi-instrumentation[grpc]`)
+- **gRPC**: Support for gRPC transport (requires `fi-instrumentation-otel[grpc]`)
 
 ### Span Kind Detection
 Automatically determines the appropriate `fi.span.kind` based on span attributes:
@@ -178,7 +178,7 @@ Base class for mapped span exporters.
    - Check that the transport type matches your tracer provider configuration
 
 2. **Import errors for gRPC**
-   - Install gRPC dependencies: `pip install "fi-instrumentation[grpc]"`
+   - Install gRPC dependencies: `pip install "fi-instrumentation-otel[grpc]"`
 
 3. **Data not being sent to FutureAGI**
    - Ensure that your you have set the `FI_API_KEY` and `FI_SECRET_KEY` environment variables

@@ -6,13 +6,15 @@
  * exported by default, and the standard flags hide them: `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
  * `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`,
  * `FI_HIDE_EMBEDDING_VECTORS`, or the same options on `traceConfig`. Precedence and parsing are fi-core's: option > env var >
- * default, and only the string "true" (any case) hides.
+ * default. In a variable, true, 1, yes and on turn a switch on, false, 0, no and off turn it off
+ * (any case), an empty value counts as unset, and any other value turns it on with one warning.
  *
  * Never exported, in either mode: Genkit's request context, stack traces, and local file paths
  * (rewritten to `[cwd]`, `~` or `[path]`). Error text additionally loses emails and this
  * machine's user and host names.
  */
 import * as os from "os";
+import { diag } from "@opentelemetry/api";
 import {
   DEFAULT_HIDE_EMBEDDING_VECTORS,
   DEFAULT_HIDE_INPUTS,
@@ -68,16 +70,38 @@ export const HIDE_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideLLMInvocationParameters: true,
 });
 
+const SWITCH_ON = ["true", "1", "yes", "on"];
+const SWITCH_OFF = ["false", "0", "no", "off"];
+const warnedSwitches = new Set<string>();
+
 /**
- * One fi-core boolean flag: option > env var > default, with fi-core's env rule
- * (`value.toLowerCase() === "true"`). Read here because fi-core's `generateTraceConfig` is not
- * exported and reads the env vars only when a config object is passed.
+ * One fi-core boolean flag: option > env var > default. The env var follows the rule of every
+ * traceAI privacy switch, so a switch someone set never silently does nothing: true, 1, yes and
+ * on turn it on, false, 0, no and off turn it off (any case, surrounding spaces ignored), and an
+ * empty value counts as unset. Any other value turns it on, with one warning per variable that
+ * names the accepted values and never the value. This is the package's own copy of the rule
+ * fi-core's trace configuration follows, so the span processor reads the variables the same way
+ * with or without a config object.
  */
 function flag(option: boolean | undefined, envKey: string, fallback: boolean): boolean {
   if (option !== undefined) return option;
   const value = typeof process !== "undefined" ? process.env?.[envKey] : undefined;
-  if (value !== undefined) return value.toLowerCase() === "true";
-  return fallback;
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") return fallback;
+  if (SWITCH_ON.includes(normalized)) return true;
+  if (SWITCH_OFF.includes(normalized)) return false;
+  if (!warnedSwitches.has(envKey)) {
+    warnedSwitches.add(envKey);
+    try {
+      diag.warn(
+        `@traceai/genkit: ${envKey} is not one of true, 1, yes, on, false, 0, no or off; treating it as on, so the content it controls is hidden.`,
+      );
+    } catch {
+      // a diagnostic logger that throws never changes the policy
+    }
+  }
+  return true;
 }
 
 /**

@@ -4,8 +4,7 @@ import { privacyFilter, rememberSpanValueLimit } from "../export-privacy";
 import { getRegisteredSecrets, registerSecret } from "../secrets";
 import { FITracer } from "../trace/trace-config/FITracer";
 
-// I1 r7 literal controls. Synthetic values only. No tests, builds or
-// typechecks were run by this writer; RED/GREEN reasoning is in 02-tests.json.
+// Literal privacy controls. Synthetic values only.
 const savedEnv = { ...process.env };
 const secretKey = Symbol.for("traceai.secrets");
 let savedRegistry: PropertyDescriptor | undefined;

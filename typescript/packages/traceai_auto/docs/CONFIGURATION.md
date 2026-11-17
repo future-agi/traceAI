@@ -15,14 +15,15 @@ Unless noted, precedence is **code option → environment → `futureagi.toml` �
 | `FI_BASE_URL` | `baseUrl` | `https://api.futureagi.com`; base or full collector endpoint. Falls back to the selected project/user profile's `base_url` before the default |
 | `FI_PROJECT_NAME` | `projectName` | After code/env/file: `OTEL_SERVICE_NAME` → profile `project` → working-directory basename → `DEFAULT_PROJECT_NAME` |
 | `FI_PROJECT_TYPE` | `projectType` | `observe`; `experiment` is opt-in |
-| `FI_INSTRUMENTATIONS` | `instrumentations` | Empty list means all eligible integrations; e.g. `openai,wire` |
+| `FI_INSTRUMENTATIONS` | `instrumentations` | Empty list means all eligible integrations except `http`, which is on only when this list names it; e.g. `openai,wire` |
 | `FI_DISABLED_INSTRUMENTATIONS` | `disabledInstrumentations` | Empty list; disable named integrations even if allowlisted |
 | `FI_WIRE_CAPTURE` | `wireCapture` | `true`; enables global-fetch capture and transport credential observation when `wire` is also enabled |
 | `TRACEAI_PROPAGATE_OUTGOING_ADAPTERS` | `propagateOutgoingAdapters` | `false`; strict opt-in to native HTTP/HTTPS propagation only, independent of wire capture and instrumentation lists |
 | `TRACEAI_PROPAGATE_OUTGOING` | `propagateOutgoing` | `default`; destination policy (`default`, `all`, `none`), never adapter activation |
 | `TRACEAI_PROPAGATE_HOSTS` | `propagateHosts` | No explicit rules; host rules as environment CSV or a string array in code/file |
 | `FI_WIRE_MAX_BODY_BYTES` | `wireMaxBodyBytes` | `4194304` bytes; nonnegative finite values are rounded down, invalid values use the default. A capture cap, not an application payload-size limit |
-| `FI_SAMPLE_RATE` | `sampleRate` | `1`; finite values clamped to `[0,1]`, invalid values use `1`. Parent-based root sampling for agent-owned providers only |
+| `FI_SAMPLE_RATE` | `sampleRate` | `1`; finite values clamped to `[0,1]`, invalid values use `1`. Agent-owned providers only: AI spans are sampled by trace id at this ratio and keep the application's parent ids, and the application's sampling decision does not drop them. With no parent span, or a sampled one, an admitted AI span is sampled. Under a parent the application did not sample, it is recorded with the sampled flag off and still sent to Future AGI, so the spans the application starts inside the AI call, and the trace headers its propagator sends from them, keep the application's decision. When the application's sampler does not record a span the application starts around the provider request, with a parent span or without one, that AI call reaches Future AGI twice, as the AI span and as a wire span, and no application span is sent; see the [limits](../README.md#limits-to-plan-for) |
+| `FI_FORWARD_APP_SPANS` | `forwardApplicationSpans` | `false`; `true` also sends the application's own spans to Future AGI. See [forwarding application spans](#forwarding-application-spans). File key: `forward_app_spans` |
 | `FI_AUTO_DEBUG` | `debug` | `false`; masked startup JSON report |
 | `FI_CONFIG_FILE` | `configFile` | `futureagi.toml`, resolved relative to the working directory |
 | `FI_PROFILE` | `profile` | `default`; selects a named profile from the FI project/user files |
@@ -30,7 +31,7 @@ Unless noted, precedence is **code option → environment → `futureagi.toml` �
 | `OTEL_SDK_DISABLED` | — | `false`; `true` disables initialization, including when an exporter/provider is supplied |
 | — | `exporter` | Unset; standard OTel `SpanExporter`, batched by the agent. No FI credentials required; takes precedence over the default FI exporter |
 | — | `spanProcessor` | Unset; explicit OTel `SpanProcessor`. Takes precedence over `exporter` and the default FI route; keeps its selected processor policy, not automatically batched |
-| — | `provider` | Existing global provider, otherwise an agent-created provider. Explicit provider selects the instrumentation destination without replacing the global provider |
+| — | `provider` | Unset. Without an FI route (no complete pair, `exporter` or `spanProcessor`), AI spans are created on this provider. With an FI route it is used only with `forwardApplicationSpans`. A provider registered on the OpenTelemetry API is never picked up on its own |
 | — | `traceConfig` | Privacy object described below |
 
 Except for `hideErrorDetails` and the strict outgoing-adapter opt-in below, environment booleans are true only when their case-insensitive string value is `true`; `1` is not true. Prefer the literal `true` / `false` forms.
@@ -226,15 +227,15 @@ All code options below are nested under `traceConfig`; file keys are snake_case.
 | `FI_PII_REDACTION` | `piiRedaction` | `false` | Apply supported PII patterns; not a guarantee of complete PII removal |
 | `FI_BASE64_IMAGE_MAX_LENGTH` | `base64ImageMaxLength` | `0` | Value-level image cap. Invalid/negative/fractional values fall back to `0`; positive values do not restore base64 image export |
 
-When error hiding is unset, any input/output value, message or text hide flag enables it. Invocation-parameter hiding additionally implies error hiding at the export boundary. Image/vector hiding and PII do not imply it. Explicit `true` or `false` overrides the derived error setting; empty/invalid environment values mean derive. Secret and media scrubbing still run with explicit `false`.
+When error hiding is unset, any input/output value, message or text hide flag enables it. Invocation-parameter hiding additionally implies error hiding at the export boundary. Image/vector hiding and PII do not imply it. A set value overrides the derived error setting. Each privacy switch accepts `true`, `1`, `yes` and `on` to turn it on and `false`, `0`, `no` and `off` to turn it off, in any case and with surrounding spaces ignored; any other value turns it on, with one warning that never repeats the value. An empty or blank value counts as unset in code, in the environment and in the config file, so the next source applies; with none set, error hiding is derived. So an empty `FI_HIDE_ERROR_DETAILS` with `hide_error_details = false` in the config file keeps error details, even with a content switch on; earlier, the empty variable left error hiding derived, which hid them. Secret and media scrubbing still run with explicit `false`.
 
 Known-secret redaction is always active on traceAI-owned exports. The registry is bounded to 1024 values of at least eight characters. `registerSecret(value)` adds an exact string without coercing objects. Unknown free-text credentials, transformed secrets and credentials hidden in unparsed bodies may remain unknown; hide sensitive content instead of relying on inference.
 
 ## Bring your own OpenTelemetry destination
 
-With no complete FI key pair, `init({ exporter })`, `init({ spanProcessor })`, `init({ provider })`, or an existing application provider activates instrumentation **without creating an FI export route**. If neither a destination nor a complete pair exists, instrumentation is disabled. With a complete pair and a provider but no explicit exporter/processor, the agent attempts to attach its FI route to that provider.
+With no complete FI key pair, `init({ exporter })`, `init({ spanProcessor })` or `init({ provider })` activates instrumentation **without creating an FI export route**. If none of these is given and no complete pair exists, nothing is installed (no provider, hooks or OpenTelemetry globals) and one warning is printed; a half pair is named in that same warning. A provider your application registered on the OpenTelemetry API is not a destination by itself.
 
-Keep one global provider. Existing OTel JS 1.x/2.x providers retain their sampler and context manager; the agent attaches its processor where supported. An incompatible provider may trigger a warning and an isolated AI provider rather than replacement of the global SDK.
+The agent never registers a global tracer provider, context manager or propagator, and never adds a processor to your provider. It keeps its own provider, whose only processor is the FI route (the default FI exporter, or your `exporter` or `spanProcessor`), and binds every integration and the wire layer to it. Your SDK, started before or after the preload, registers normally; its sampler, context manager, propagator and exporters keep working, and its exporters receive only your spans. AI spans parent under your active span through your context manager. With no context manager, the agent keeps parent links between its own spans privately, without registering one. `init()` returns the agent's provider.
 
 For an app without an existing SDK, install the exporter you want to use:
 
@@ -264,13 +265,25 @@ node --import ./instrument.mjs app.mjs
 
 The agent batches and sanitizes its supplied `exporter` route. A supplied `spanProcessor` is application-owned policy: configure that processor's privacy/export behavior yourself. Agent shutdown invokes the processor/exporter it attaches, but never shuts down an application-owned provider; do not hand it a processor whose lifecycle must remain independent.
 
+### Forwarding application spans
+
+By default Future AGI receives only AI spans: wire spans and spans from traceAI integrations. To also send your application's own spans, as earlier releases did, set `FI_FORWARD_APP_SPANS=true` (or `forwardApplicationSpans: true` in `init()`, or `forward_app_spans = true` in `futureagi.toml`). If your provider is registered when the agent starts (or you pass it to `init()`), the agent adds its FI route to it and creates AI spans on it, so your exporters also receive them. If your SDK starts after the preload, the FI route joins your provider on the next tick or when the next AI span starts, and your spans that end from then on are forwarded; AI spans stay on the agent's own provider, so your exporters do not receive them. Forwarded spans pass the same privacy boundary, and `FI_HIDE_*` also hides the prompt and response keys that other AI tracers write: `ai.prompt*`, `ai.response.*` (except ids, model, finish reason and timing), `ai.toolCall.args`/`result`, `gen_ai.prompt.*`, `gen_ai.completion.*`, `llm.prompts`, `traceloop.entity.input`/`output`, the flattened `llm.input_messages.*`/`llm.output_messages.*`, and the Vercel AI SDK content keys that `@traceai/vercel` hides (such as `ai.value`, `ai.values`, `ai.documents`, `ai.request.text`, `ai.schema`, `ai.decision.*`, `ai.ranking` and `ai.response.providerMetadata`). Session and user ids on forwarded spans keep the credential name rule.
+
+### Incoming HTTP spans
+
+Incoming HTTP `SERVER` spans are off by default. Add `http` to `FI_INSTRUMENTATIONS` (for example `wire,http`) to turn them on; `@opentelemetry/instrumentation-http` must be installed. Even then, a request's `SERVER` span is sent only when an AI span was seen in the same trace, so routes without AI calls, such as health checks, are never sent. A remote parent from an incoming `traceparent` header is read through your application's propagator; without one, the agent reads the W3C `traceparent` with its own propagator, which it never registers. When your application already has a tracer provider at startup and spans go to a Future AGI route without `FI_FORWARD_APP_SPANS`, the agent does not install its HTTP instrumentation beside yours: it prints one warning and `report()` shows `http` as disabled. A second HTTP instrumentation would replace yours or nest its spans under ones your backend never receives.
+
+### Vector database integrations
+
+When the agent enables `@traceai/pgvector`, `@traceai/redis` or `@traceai/mongodb`, they trace only vector operations: pgvector queries that use vector operators or casts, Redis `FT.SEARCH`/`FT.AGGREGATE` with `KNN` and `FT.CREATE` with a `VECTOR` field, and MongoDB `aggregate` with a vector search stage. Other database calls create no span. An installed release without this option is reported as `manual` and not enabled.
+
 Standard `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` preserve application identity; FI project routing does not replace `service.name`. The default FI exporter uses `FI_BASE_URL`, not `OTEL_EXPORTER_OTLP_ENDPOINT`. Standard OTel attribute-count/value limits still apply (`OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` / `OTEL_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` / `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`). Native host loss can withhold the FI content view rather than retain a partial value.
 
 ## Lifecycle API
 
 | Export | Contract |
 | --- | --- |
-| `init(options?)` | Initialize once; return the same provider on later calls, or `undefined` when disabled/failed |
+| `init(options?)` | Initialize once; return the same provider on later calls, or `undefined` when disabled/failed. The provider is never registered globally |
 | `report()` | Masked configuration, `active`, integration statuses and collector state; does not probe the collector |
 | `forceFlush()` | Flush completed spans with a five-second deadline; does not consume unread responses |
 | `shutdown()` | Idempotent hook removal and bounded drain/shutdown; no supported reinitialization afterwards |

@@ -31,10 +31,10 @@ Make an AI request, consume the response, then open **Observe → my-ai-app** in
 With the FI variables above already set, use `NODE_OPTIONS` for an npm script or process launcher:
 
 ```sh
-NODE_OPTIONS="--import @traceai/auto/register" npm start
+NODE_OPTIONS="--require @traceai/auto/register" npm start
 ```
 
-Preserve any other Node flags your deployment already needs. For CommonJS, either use the same `--import` preload or:
+Use `--require` in `NODE_OPTIONS`: every Node version accepts it, while a Node without `--import` refuses to start when `NODE_OPTIONS` contains it. On an unsupported Node version the agent prints one warning and the application runs untraced. Preserve any other Node flags your deployment already needs. For CommonJS, either use the same `--import` preload or:
 
 ```sh
 node --require @traceai/auto/register app.cjs
@@ -72,10 +72,11 @@ The **Try it with OpenAI** example, as it appears in Future AGI (a real run with
 
 - **Model calls without per-call wrappers.** OpenAI instrumentation is included. Recognized AI requests through the process's global `fetch` are also captured, including compatible gateways.
 - **More context from installed integrations.** Dedicated packages can add framework, agent, tool, retrieval and database spans. They retain their own method/version limits; auto-registration does not expand their coverage.
-- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression. Existing providers keep their sampler, context and application processors.
+- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression. On the default route it yields only to model spans the agent made, since your own model spans stay with your provider. It still yields when your code wraps the provider request in one recorded span of its own inside such a model span, or in a span from an app that has a context manager but no tracer provider. See the limits below for the cases it misses.
+- **Your OpenTelemetry setup stays yours.** The agent registers no global tracer provider, context manager or propagator, and by default never adds a processor to your provider (the outgoing propagation opt-in below adds one that only observes span starts). An SDK you start before or after the preload registers normally and its exporters keep receiving your spans. AI spans still parent under your active span.
 - **Standard OpenTelemetry.** Send to Future AGI by default, or use an [application-owned provider/exporter](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#bring-your-own-opentelemetry-destination) without FI credentials.
 
-This is AI instrumentation, not a general-purpose APM agent. Outgoing non-AI HTTP calls, arbitrary application functions and every possible AI transport are not automatically traced.
+This is AI instrumentation, not a general-purpose APM agent. **Future AGI receives only AI spans**: wire spans and spans from traceAI integrations. Your HTTP, database, cache and custom spans stay with your own provider. Incoming HTTP spans are off unless `FI_INSTRUMENTATIONS` lists `http`; even then a request span is sent only when the request made an AI call. When your application already has its own tracer provider at startup, the agent leaves incoming HTTP to your setup, prints one warning and reports `http` as disabled. Database integrations that the agent enables (pgvector, Redis, MongoDB) trace only vector operations. Outgoing non-AI HTTP calls, arbitrary application functions and every possible AI transport are not automatically traced. To also send your application's own spans, as earlier releases did, set `FI_FORWARD_APP_SPANS=true` (or `forwardApplicationSpans: true` in `init()`); see [forwarding application spans](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#forwarding-application-spans). Genkit creates its spans with the global tracer provider, so on the default route they stay with your provider and `report()` shows `genkit` as `manual`; the forwarding switch sends them.
 
 ## Supported libraries and protocols
 
@@ -154,7 +155,18 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 
 </details>
 
-Dedicated instrumentors other than OpenAI are not installed implicitly. The bundled server-build adapters are inactive until you add their plugin to your build configuration. Genkit and Vercel versions without an enable entry report `manual`. Mastra is manual-only in this release. See each integration's README for supported methods and versions, and use doctor to inspect the version actually installed in your app.
+Dedicated instrumentors other than OpenAI are not installed implicitly. The bundled server-build adapters are inactive until you add their plugin to your build configuration. Genkit and Vercel versions without an enable entry report `manual`. Mastra is manual-only in this release. LangChain is not traced by the agent yet, in ES-module and CommonJS apps alike: the integration stays `pending`, and the model requests LangChain sends are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans. See each integration's README for supported methods and versions, and use doctor to inspect the version actually installed in your app.
+
+Without an application context manager, calls from BeeAI, the OpenAI
+Agents SDK, the Vercel AI SDK 7, Genkit and ElevenLabs can also produce a
+wire span for the call's own request. BeeAI and the OpenAI Agents SDK
+start spans in the SDK's own event handlers or trace processor, so the
+agent cannot tie the SDK's request to the span without guessing. The
+Vercel AI SDK 7 and Genkit are turned on through their own enable entry,
+outside the agent's call scope. ElevenLabs patches namespace getters
+without the agent's scope and starts its span outside a call cell.
+Neither the call nor a request beside it is dropped.
+See [Limits to plan for](#limits-to-plan-for).
 
 ### HTTP protocol coverage
 
@@ -172,6 +184,7 @@ Recognition needs a matching endpoint and request shape, not just an AI-looking 
 | PII pattern redaction | **Off** | `FI_PII_REDACTION=true`; pattern matching is not comprehensive PII detection |
 | Base64 media and raw audio | Recognized payloads omitted; no audio bytes exported | Image cap defaults to `0`; increasing it does not enable base64 image export |
 | Embeddings | Catalog wire formats record dimensions, not vectors | `FI_HIDE_EMBEDDING_VECTORS=true` also hides vectors on library/forwarded and generic-JSON routes |
+| Your application's own spans | **Not sent** to Future AGI | `FI_FORWARD_APP_SPANS=true` sends them; `FI_HIDE_*` then also hides other AI tracers' prompt and response keys on them |
 | Extra instrumentors / server bundler plugins | Extra instrumentors are not installed; build plugins are inactive until configured | Install the integration or explicitly add a server bundler plugin |
 
 The agent sanitizes a detached copy for its own exporter. **Other exporters retain their own privacy policies.** Explicit application-owned processors are not silently rewritten. Host SDK limits may force the FI view to withhold content as `<unknown: host-truncated>` rather than export a partial value. Unknown, transformed or unobserved secrets cannot always be recognized; use the hide flags for sensitive content.
@@ -187,14 +200,35 @@ The most-used settings are below. Set them **before** loading the agent; later `
 | `FI_API_KEY` + `FI_SECRET_KEY` | Unset | Complete pair for the default Future AGI destination |
 | `FI_PROJECT_NAME` | See full reference | Project in Observe; set explicitly for stable routing |
 | `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL or full traces endpoint |
-| `FI_INSTRUMENTATIONS` | All eligible integrations | Comma-separated allowlist, e.g. `openai,wire` |
+| `FI_INSTRUMENTATIONS` | All eligible integrations, except `http` | Comma-separated allowlist, e.g. `openai,wire`; incoming HTTP spans need `http` listed here |
 | `FI_DISABLED_INSTRUMENTATIONS` | Empty | Denylist; takes precedence over the allowlist |
 | `FI_WIRE_CAPTURE` | `true` | Enable global-fetch capture and transport credential observation |
-| `FI_SAMPLE_RATE` | `1` | Root sampling ratio on agent-owned providers; existing providers keep their sampler |
+| `FI_SAMPLE_RATE` | `1` | Sampling ratio for AI spans, decided by trace id; your app's sampling decision does not drop them. With no parent span or a sampled one, AI spans are sampled. Under a parent your app did not sample, they are still sent but keep the sampled flag off, so spans your app starts inside the AI call keep your sampler's decision. When your sampler does not record a span your code starts around the provider request (for example in a custom `fetch`), with a parent span or without one, that AI call reaches Future AGI twice, as the AI span and as a wire span; see [Limits to plan for](#limits-to-plan-for) |
+| `FI_FORWARD_APP_SPANS` | `false` | Also send the application's own spans to Future AGI |
 | `FI_AUTO_DEBUG` | `false` | Print the masked startup report |
 | `OTEL_SDK_DISABLED` | `false` | Disable auto-instrumentation |
 
 [Full configuration reference](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md) covers every `init()` option, environment setting, config/profile precedence, privacy flag and CLI command.
+
+### Session, user and metadata for AI spans
+
+The agent registers no context manager. If your application has its own OpenTelemetry
+SDK, fi-core's context helpers used with `context.with` (for example
+`context.with(setSession(context.active(), { sessionId }), fn)`) reach AI spans as usual.
+Without one, `context.with` does nothing, so use the agent's helpers. They work in both
+cases and register nothing globally:
+
+```js
+const { withSession, withUser, withMetadata, withContext, withTracingSuppressed } = require('@traceai/auto');
+
+await withSession('session-42', () => withUser('user-7', () => withMetadata({ plan: 'pro' }, () => answer(question))));
+await withTracingSuppressed(() => healthCheckCall()); // no AI span, and other OpenTelemetry instrumentations see the suppression
+await withContext(myContext, () => answer(question)); // runs with exactly this context
+```
+
+`withSession`, `withUser`, `withMetadata` and `withTracingSuppressed` add to the current
+context and nest. `withContext(ctx, fn)` runs `fn` with `ctx` both in the agent's own
+context and through `context.with`.
 
 ### Outgoing W3C propagation (HTTP/HTTPS only)
 
@@ -222,6 +256,13 @@ node --import @traceai/auto/register app.mjs
 | `propagateOutgoingAdapters` | `TRACEAI_PROPAGATE_OUTGOING_ADAPTERS` | `propagate_outgoing_adapters` | `false` |
 | `propagateOutgoing` | `TRACEAI_PROPAGATE_OUTGOING` | `propagate_outgoing` | `default` |
 | `propagateHosts` | `TRACEAI_PROPAGATE_HOSTS` | `propagate_hosts` | No explicit rules |
+
+Headers are added only under spans whose start the agent observed. With the opt-in on
+and an FI route, the agent therefore adds one processor to your tracer provider (found
+on the API at startup, on the next tick, or at the next AI span start) that only notes when your spans
+start; it never exports, ends or changes a span, and is removed at shutdown. Requests
+read the active span through your context manager, so an application without its own
+OpenTelemetry setup gets no headers from this adapter.
 
 Policy alone, even `all`, never activates the adapter. Shared-catalog vendor hosts
 and provider ports (including Ollama's `11434`) are **unconditionally excluded**,
@@ -286,7 +327,7 @@ HTTP/HTTPS receipt, TLS, body/error parity and lifecycle on your deployed Node v
 | esbuild, Vite SSR, Rollup or webpack | Opt into the Node-server adapter and deploy the complete agent payload; keep AI SDKs external for library hooks |
 | AWS Lambda | Initialize once outside the handler and flush at each invocation boundary, not just process exit |
 | Edge / browser | The Node preload is not supported. The `/edge` subpath is a low-level fetch observer, not a configured tracing SDK |
-| Existing OpenTelemetry setup | Keep one global provider; configure a single export route for each destination |
+| Existing OpenTelemetry setup | Start your SDK as usual, before or after the preload; the agent keeps its own provider and sends only AI spans |
 
 [Framework recipes and packaging requirements](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/FRAMEWORKS.md)
 
@@ -308,7 +349,7 @@ npx --no-install traceai-auto doctor --no-check
 
 | Symptom | What to check |
 | --- | --- |
-| Everything is `disabled` | Supply both FI keys in the same source, or configure an application destination. Check `OTEL_SDK_DISABLED` and the allowlist/denylist. |
+| Everything is `disabled` | Supply both FI keys in the same source, or pass a destination to `init()`. An application provider alone is not a destination. Check `OTEL_SDK_DISABLED` and the allowlist/denylist. |
 | `collector: failed` | Check `FI_BASE_URL`, both keys, outbound connectivity and collector access. Initialization itself never probes the collector. |
 | `collector: not_tested` | No completed test export yet, `--no-check`, zero sampling, or an application-owned destination. It is not a success signal. |
 | `missing_instrumentor` | Install the suggested dedicated package from bootstrap, then restart. |
@@ -325,6 +366,37 @@ npx --no-install traceai-auto doctor --no-check
 - **Response-driven completion:** unread and never-ending responses do not produce completed wire spans. Flush does not consume them for you. Cancelling a clone can end the shared capture before another branch finishes.
 - **Provider error semantics:** an error inside an HTTP 200 stream can retain HTTP-derived OK status; inspect finish reasons as well.
 - **Best-effort delivery:** natural-exit/SIGTERM flushes are bounded. Hard termination, Lambda freezing and collector failures can lose spans. The agent never makes app success depend on export success.
+- **Spans your app creates inside an AI call:** Spans your application creates inside an AI call (for example its own HTTP span for the provider request, or a database span inside a tool) are parented to a span that only Future AGI receives, so your own tracing backend shows them without that parent. They keep the same trace id, and your sampler's decision: in a trace it did not sample, the AI span keeps the sampled flag off as well. Nothing of your application's is sent to Future AGI, and your provider and exporters are untouched.
+- **An AI request inside two or more of your own recorded spans:** when your code wraps the provider request in two or more recorded spans of its own in a row (for example a custom `fetch` that starts a request span and then an attempt span), Future AGI receives that call twice. It arrives as the integration's AI span and as a wire span whose parent is your inner span, which Future AGI does not receive. None of your spans is sent. One recorded span of yours around the request does not cause this, and neither does a span from an app that has a context manager but no tracer provider.
+- **An AI request inside a span your sampler did not record:** in a trace your sampler did not sample (with an always-off, trace-id-ratio or parent-based sampler), a span your code starts around the provider request (for example in a custom `fetch`) gets an id of its own and no parent id, so the agent cannot connect it to the AI span. Future AGI then receives that call twice: as the integration's AI span and as a wire span whose parent is your span, which Future AGI does not receive. None of your spans is sent. The agent does not guess from the trace id: a separate AI request that your code sends with plain `fetch` in the same trace looks just the same, and a guess would drop it. In this case the call arrives twice rather than being dropped.
+- **A different model request made inside an AI call:** while an integration's AI call runs, wire capture takes every model API request made inside that call to be the call's own, which the AI span already records. If code that runs inside the call sends a different request to a model API (for example a custom `fetch` you give the SDK that first asks another model), that request gets no span of its own.
+- **Calls outside the agent's scope can arrive twice without an
+  application context manager:** BeeAI and the OpenAI Agents SDK start
+  spans in the SDK's own event handlers or trace processor, so the agent
+  cannot tie the SDK's request to the span without guessing. The Vercel
+  AI SDK 7 and Genkit are turned on through their own enable entry,
+  outside the agent's call scope. ElevenLabs patches namespace getters
+  without the agent's scope and starts its span outside a call cell.
+  For these five integrations, the call's own request can also arrive
+  in Future AGI as a wire span beside its AI span. Nothing is lost: a
+  request your code sends beside the call, in the same tick or while it
+  reads a stream, arrives as a wire span of its own. With an application
+  context manager, these calls arrive once. With the Vercel AI SDK 5 and
+  6, the AI SDK's spans nest without a context manager.
+- **Groq, Mistral and Portkey need updated integrations:** the fix needs
+  `@traceai/groq` 0.1.2 or later, `@traceai/mistral` 0.1.2 or later and
+  `@traceai/portkey` 0.1.3 or later. They keep their AI span to the SDK
+  call through a per-instance hook, even without an application context
+  manager: the SDK's own request no longer also arrives as a wire span,
+  and a request beside it still arrives as its own wire span. With older
+  versions of these packages, the call's own request can still arrive
+  twice. OpenAI and other integrations using OpenTelemetry's
+  instrumentation wrapper also keep their AI span to the call.
+  **Portkey Responses API limitation:** it delegates to the `openai`
+  package. When the agent's OpenAI integration is also on and the app
+  has no context manager, OpenAI starts its own span too. The request
+  produces two nested AI spans and no wire span; the call is not lost.
+- **LangChain is not traced by the agent yet:** in ES-module and CommonJS apps alike, the LangChain integration stays `pending` and records no LangChain spans. The model requests LangChain sends are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans, so the calls themselves are not lost. Use `@traceai/langchain`'s own API until a later release adds it.
 
 [Architecture, complete capture limits and redistribution notices](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md)
 

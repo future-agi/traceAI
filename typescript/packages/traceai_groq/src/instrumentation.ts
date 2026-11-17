@@ -28,6 +28,11 @@ import {
 import { observeResponse, audioResponseAttributes } from "./response";
 
 const MODULE_NAME = "groq-sdk";
+// The zero-code agent (@traceai/auto) puts a function under this key on the
+// instrumentation instance it builds. Traced calls use it to keep their own
+// request from also arriving as a wire span; without it they run as before.
+// The v1 key is shared with the agent, so both must change together.
+const INTEGRATION_CALL = Symbol.for("traceai.auto.integration-call.v1");
 type Operation = "chat" | "transcription" | "translation" | "speech";
 const spanNames: Record<Operation, string> = {
   chat: "Groq Chat Completions",
@@ -215,44 +220,48 @@ export class GroqInstrumentation extends InstrumentationBase {
       const body = args[0] as Record<string, unknown> | undefined;
       // Preserve SDK validation/error behavior for invalid arguments.
       if (!body || typeof body !== "object") return original.apply(this, args);
-      const input = operation === "chat" ? chatInput(body) : audioInput(body);
-      const parameters = operation === "chat" ? invocationParameters(body) : { ...input };
-      if (operation !== "chat") { delete parameters.prompt; delete parameters.input; }
-      const span = instrumentation.fiTracer.startSpan(
-        spanNames[operation],
-        {
-          kind: SpanKind.INTERNAL,
-          attributes: {
-            [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-            [SemanticConventions.LLM_MODEL_NAME]: typeof body.model === "string" ? body.model : undefined,
-            [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(input) ?? undefined,
-            [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-            [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safelyJSONStringify(parameters) ?? undefined,
-            [SemanticConventions.LLM_PROVIDER]: LLMProvider.GROQ,
-            [SemanticConventions.GEN_AI_OPERATION_NAME]: operation,
-            ...(operation === "chat" ? {
-              ...getLLMInputMessagesAttributes(body as unknown as GroqChatCompletionCreateParams),
-              ...getLLMToolsJSONSchema(body as unknown as GroqChatCompletionCreateParams),
-            } : {}),
-            [SemanticConventions.RAW_INPUT]: safelyJSONStringify(input) ?? "",
+      const scope = (instrumentation as unknown as Record<symbol, unknown>)[INTEGRATION_CALL];
+      const traced = () => {
+        const input = operation === "chat" ? chatInput(body) : audioInput(body);
+        const parameters = operation === "chat" ? invocationParameters(body) : { ...input };
+        if (operation !== "chat") { delete parameters.prompt; delete parameters.input; }
+        const span = instrumentation.fiTracer.startSpan(
+          spanNames[operation],
+          {
+            kind: SpanKind.INTERNAL,
+            attributes: {
+              [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
+              [SemanticConventions.LLM_MODEL_NAME]: typeof body.model === "string" ? body.model : undefined,
+              [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(input) ?? undefined,
+              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+              [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safelyJSONStringify(parameters) ?? undefined,
+              [SemanticConventions.LLM_PROVIDER]: LLMProvider.GROQ,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: operation,
+              ...(operation === "chat" ? {
+                ...getLLMInputMessagesAttributes(body as unknown as GroqChatCompletionCreateParams),
+                ...getLLMToolsJSONSchema(body as unknown as GroqChatCompletionCreateParams),
+              } : {}),
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(input) ?? "",
+            },
           },
-        },
-      );
-      const execContext = trace.setSpan(context.active(), span);
-      const execPromise = safeExecuteInTheMiddle(
-        () => context.with(execContext, () => original.apply(this, args)),
-        error => {
-          if (error) {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-          }
-        },
-      );
-      // Speech resolves to a binary Response owned by the caller. Record completion
-      // at response availability, without reading/cloning the body or logging audio.
-      const output = operation === "chat" ? undefined : operation === "speech" ? () => ({}) : audioResponseAttributes;
-      return observeResponse(execPromise, span, execContext, output);
+        );
+        const execContext = trace.setSpan(context.active(), span);
+        const execPromise = safeExecuteInTheMiddle(
+          () => context.with(execContext, () => original.apply(this, args)),
+          error => {
+            if (error) {
+              span.recordException(error);
+              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+              span.end();
+            }
+          },
+        );
+        // Speech resolves to a binary Response owned by the caller. Record completion
+        // at response availability, without reading/cloning the body or logging audio.
+        const output = operation === "chat" ? undefined : operation === "speech" ? () => ({}) : audioResponseAttributes;
+        return observeResponse(execPromise, span, execContext, output);
+      };
+      return typeof scope === "function" ? (scope as <T>(f: () => T) => T)(traced) : traced();
     };
   }
 }

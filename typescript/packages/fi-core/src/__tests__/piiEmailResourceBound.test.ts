@@ -200,7 +200,7 @@ describe("email matching has bounded candidate work", () => {
   });
 
   it("retains email-first ordering and all other PII replacements", () => {
-    const input = "123-45-6789@x.test | 123-45-6789 | 4111 1111 1111 1111 | 192.168.1.1 | 555-123-4567 | " + ["sk", "live", "A".repeat(24)].join("_"); // synthetic test value (fi-security RLIT-TRACEAI-R15-3888B65C-GH013-STRIPE-FIXTURES-r1-FISEC)
+    const input = "123-45-6789@x.test | 123-45-6789 | 4111 1111 1111 1111 | 192.168.1.1 | 555-123-4567 | " + ["sk", "live", "A".repeat(24)].join("_"); // synthetic test value
     expect(measuredScan(input).output).toBe(
       "<EMAIL_ADDRESS> | <SSN> | <CREDIT_CARD> | <IP_ADDRESS> | <PHONE_NUMBER> | <API_KEY>",
     );
@@ -237,7 +237,6 @@ describe("email resource controls reach actual SDK exports", () => {
       [malformed, malformed],
       [input, piiRedaction ? redacted : input],
       // PENDING I1xF2-PRECEDENCE T36-T37: TS I1 media omission dominates positive caps.
-      // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1.
       [exactImage, "<omitted: 234 base64 chars>"],
       [exactImage + "A", "__REDACTED__"],
     ];

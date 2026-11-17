@@ -16,6 +16,7 @@ Welcome to the traceAI documentation. This guide covers installation, configurat
 
 ### Python SDK
 - [Core Concepts](python/core-concepts.md) - Understanding fi_instrumentation
+- [Zero-code tracing](python/auto-instrumentation.md) - Trace an app without changing its code
 - [Context Managers](python/context-managers.md) - Adding metadata to spans
 
 ### TypeScript SDK

@@ -67,8 +67,7 @@ for (const sdk of ['mistral-current', 'mistral-floor']) {
             'fi.span.kind': 'EMBEDDING',
             'gen_ai.provider.name': 'mistralai',
             'gen_ai.request.model': 'requested-embedding-alias',
-            // PENDING I1-STRICTER: hideEmbeddingVectors also hides embedding.model_name
-            // (LANE-CALL-NIKM4-5A-EMBEDDING-MODEL-NAME-CUT-r1).
+            // PENDING I1-STRICTER: hideEmbeddingVectors also hides embedding.model_name.
             'embedding.model_name': privateContent ? '__REDACTED__' : 'requested-embedding-alias',
             'gen_ai.response.model': 'resolved-embedding-model',
             'gen_ai.response.id': 'embedding-id',

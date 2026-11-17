@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -51,6 +52,100 @@ class ExtensionTests(unittest.TestCase):
         plan = release_plan.plan(gems, release_plan.load_config(), offline=True)
         self.assertEqual(plan['skipped'][0]['name'], 'traceai-roast')
         self.assertIn('RubyGems publishing', plan['skipped'][0]['reason'])
+
+    def test_go_auto_is_inventoried_and_released_with_its_own_tag(self):
+        root = release_plan.REPO_ROOT
+        auto = [p for p in release_plan.other_packages(root) if p['dir'] == 'go/auto']
+        # Each release PR bumps the manifest version; the tag follows it.
+        self.assertEqual([p['name'] for p in auto], ['github.com/future-agi/traceAI/go/auto'])
+        self.assertEqual(auto[0]['tag'], f"go/auto/v{auto[0]['version']}")
+        plan = release_plan.plan(auto, release_plan.load_config(), offline=True)
+        self.assertEqual([p['name'] for p in plan['go']], ['github.com/future-agi/traceAI/go/auto'])
+        self.assertEqual(plan['skipped'], [])
+
+    def test_java_agent_is_released_with_the_reactor(self):
+        root = release_plan.REPO_ROOT
+        java = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'java']
+        self.assertEqual([p['name'] for p in java], ['com.futureagi:traceai-java-parent'])
+        self.assertIn('traceai-javaagent', java[0]['artifacts'])
+        plan = release_plan.plan(java, release_plan.load_config(), offline=True)
+        # The agent is deployed with the rest of the reactor, so the Central check waits for it too.
+        self.assertEqual([p['name'] for p in plan['java']], ['com.futureagi:traceai-java-parent'])
+        planned = plan['java'][0]
+        self.assertIn('traceai-javaagent', planned['artifacts'])
+        self.assertIn('traceai-java-core', planned['artifacts'])
+        self.assertEqual(planned['held_artifacts'], [])
+        self.assertEqual([p for p in plan['skipped'] if p['name'] == 'com.futureagi:traceai-javaagent'], [])
+        # No release profile turns Central publishing off for the agent.
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        pom = ET.parse(root / 'java/traceai-javaagent/pom.xml').getroot()
+        skips = [p.findtext('m:configuration/m:skipPublishing', namespaces=ns)
+                 for profile in pom.findall('m:profiles/m:profile', ns)
+                 for p in profile.findall('m:build/m:plugins/m:plugin', ns)
+                 if p.findtext('m:artifactId', namespaces=ns) == 'central-publishing-maven-plugin']
+        self.assertEqual(skips, [])
+
+    @staticmethod
+    def _java_script(name):
+        # Loaded inside each test so that a script that cannot be loaded fails that test only.
+        import runpy
+        return runpy.run_path(str(release_plan.REPO_ROOT / 'java/scripts' / name))
+
+    def test_bom_names_every_released_module_and_no_held_one(self):
+        root = release_plan.REPO_ROOT
+        held = {name.split(':', 1)[1] for name in release_plan.load_config().get('hold_artifacts', {})}
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        bom = ET.parse(root / 'java/traceai-bom/pom.xml').getroot()
+        managed = {d.findtext('m:artifactId', namespaces=ns) for d in bom.findall('m:dependencyManagement/m:dependencies/m:dependency', ns)}
+        self.assertEqual(managed & held, set(), 'a released BOM must not name an artifact Central does not serve')
+        self.assertIn('traceai-java-core', managed)
+        self.assertIn('traceai-javaagent', managed, 'the released agent is aligned by the BOM')
+
+    def test_central_check_expects_the_bom_to_leave_out_a_held_module_and_to_name_it_again_once_released(self):
+        check = self._java_script('check_central.py')
+        expected = {'traceai-java-parent', 'traceai-bom', 'traceai-java-core', 'traceai-javaagent'}
+        hold = {'com.futureagi:traceai-javaagent': 'held'}
+        self.assertEqual(check['bom_errors']({'traceai-java-core'}, expected, hold), [])
+        self.assertTrue(check['bom_errors']({'traceai-java-core', 'traceai-javaagent'}, expected, hold), 'a held module in the BOM is an error')
+        self.assertTrue(check['bom_errors']({'traceai-java-core'}, expected, {}), 'once the hold is lifted the BOM must name the module')
+        self.assertEqual(check['bom_errors']({'traceai-java-core', 'traceai-javaagent'}, expected, {}), [])
+        # The exception comes from the release hold list, not from a name written into the checker.
+        self.assertEqual(check['held_artifact_ids'](release_plan.REPO_ROOT / '.github/release/config.json'), set())
+
+    def test_jitpack_harvest_takes_every_module_including_the_released_agent(self):
+        prepare_script = self._java_script('prepare_jitpack.py')
+        root = release_plan.REPO_ROOT / 'java'
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        parent = ET.parse(root / 'pom.xml').getroot()
+        version = parent.findtext('m:version', namespaces=ns)
+        artifacts = [parent.findtext('m:artifactId', namespaces=ns)] + [
+            ET.parse(root / m.text.strip() / 'pom.xml').getroot().findtext('m:artifactId', namespaces=ns) for m in parent.findall('m:modules/m:module', ns)]
+        self.assertIn('traceai-javaagent', artifacts)
+
+        def installed(repo, leave_out=()):
+            # What a JitPack install leaves behind: a flattened POM for each module that was installed.
+            for artifact in artifacts:
+                if artifact in leave_out:
+                    continue
+                path = repo / 'com/futureagi' / artifact / version / f'{artifact}-{version}.pom'
+                path.parent.mkdir(parents=True)
+                path.write_text(f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>com.futureagi</groupId>'
+                                f'<artifactId>{artifact}</artifactId><version>{version}</version></project>')
+
+        with tempfile.TemporaryDirectory() as d:
+            installed(Path(d))
+            self.assertEqual(prepare_script['prepare'](Path(d), 'com.github.future-agi.traceAI', 'some-commit'), len(artifacts))
+        with tempfile.TemporaryDirectory() as d:
+            installed(Path(d), leave_out={'traceai-javaagent'})
+            with self.assertRaises(OSError):
+                prepare_script['prepare'](Path(d), 'com.github.future-agi.traceAI', 'some-commit')
+        # The agent is installed on the JitPack route: no profile turns its install plugin off.
+        agent = ET.parse(root / 'traceai-javaagent/pom.xml').getroot()
+        skips = [p.findtext('m:configuration/m:skip', namespaces=ns)
+                 for profile in agent.findall('m:profiles/m:profile', ns)
+                 for p in profile.findall('m:build/m:plugins/m:plugin', ns)
+                 if p.findtext('m:artifactId', namespaces=ns) == 'maven-install-plugin']
+        self.assertEqual(skips, [])
 
     def test_go_proxy_case_escaping(self):
         with patch.object(release_plan, '_get_json', return_value={'Version': 'v0.1.0'}) as get:

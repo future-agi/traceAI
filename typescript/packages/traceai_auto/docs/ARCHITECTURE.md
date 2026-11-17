@@ -25,19 +25,24 @@ For short-lived programs, finish reading responses, then `await forceFlush()` or
 The preload does not perform network I/O. The first real completed span initiates
 a bounded batch export, or `doctor` can explicitly send a test span. FI credentials
 are required only for the default FI destination. `init({ exporter })`,
-`init({ spanProcessor })`, `init({ provider })`, or an existing application OTel provider
-activates instrumentation without FI credentials and without creating an FI export route.
-With neither a destination nor a complete FI pair, both layers are disabled with one warning.
+`init({ spanProcessor })` or `init({ provider })` activates instrumentation without FI
+credentials and without creating an FI export route. With neither a destination given in
+code nor a complete FI pair, nothing is installed and one warning is printed (a half pair
+is named in that same warning); an application provider on the OpenTelemetry API is not a
+destination. On an unsupported Node version the preload prints one warning and loads nothing.
 FI project routing never replaces application `service.name` or environment resource
 identity. Export/integration failures warn once per
 failure category, do not log credentials/provider bodies, and leave the app running.
 A one-shot `beforeExit` handler flushes completed spans. The agent adds no SIGINT
 handler. Its SIGTERM listener starts a bounded flush and preserves app-owned listeners;
 without one, it restores the default action and re-raises SIGTERM (preserving the signal
-exit). Explicit flush/shutdown have a five-second deadline. Shutdown reserves up to
+exit). It holds a SIGTERM for that flush only while the FI route has spans to send and the
+collector has not failed; otherwise the signal reaches the application at once. Explicit
+flush/shutdown have a five-second deadline. Shutdown reserves up to
 2.5 seconds for flush and then invokes exporter shutdown with the remaining 2.5 seconds,
-even if flush never resolves. A failed initialization rolls back this agent's hooks,
-processor and newly installed globals; app-owned globals are retained. The first
+even if flush never resolves. Shutdown also removes the wire layer's promise hook and gives
+back `process.emit`. A failed initialization rolls back this agent's hooks and
+processor; the agent installs no OpenTelemetry globals. The first
 configuration remains terminal, so a later `init()` cannot retry or rewire the
 process. SIGKILL/forced termination cannot guarantee delivery.
 
@@ -103,7 +108,48 @@ partial output; consumer cancellation is OK with `traceai.wire.incomplete = true
 
 Wire **span creation** is skipped for OTel-suppressed contexts, nested captures, and
 LLM/EMBEDDING/RERANKER/GUARDRAIL ancestors, even through intermediate native SDK
-spans. Outgoing credential observation is never skipped by these rules: fetch reads
+spans. On the AI-only route only ancestors made by the agent's tracers count: a model
+span on the application's own provider never reaches Future AGI, so the call is
+captured as a wire span under it. The agent does not see the application's spans on
+that route, so when an application span is active, the parent id it records is
+looked up among the agent's live spans: one recorded application span directly under
+a model span the agent made does not hide that model span. A span that does not record
+but carries the model span's own span context, as the API's no-op tracer gives an
+application with a context manager and no tracer provider, is looked up by its own
+ids; a remote span context is not. A span the application's sampler did not record
+has a new span id and no parent id, so the walk stops there and the call is also
+captured as a wire span. That includes a parent-based sampler in a trace it did not
+sample, because the agent's model span is then unsampled too. Such a span keeps the
+trace id, but it is not matched by trace id: a separate AI request in the same trace,
+such as a plain `fetch` beside an SDK call, looks the same, and a match would drop it.
+In this case the call is sent twice: the agent never drops a request on a guess from
+the trace id. Two or more
+recorded application spans in a row are not followed, and the call is then also
+captured as a wire span. A request under a covered model span is still skipped
+whether or not it is that call's own: a different model request that code inside the
+call sends (for example a custom `fetch` that first asks another model) gets no wire
+span. Without an application context manager, the agent scopes SDK calls
+through the instrumentation's `_wrap` method or a per-instance call-scope
+hook under `Symbol.for('traceai.auto.integration-call.v1')`. Groq, Mistral
+and Portkey keep their own patching and use that hook on the
+instrumentation instance the agent builds; the hook is never installed
+on a global, prototype or module export. A model span started inside
+either scope is active only for that call, so the wire layer skips its
+own request and a request beside it still gets its own wire span.
+Portkey's Responses API delegates to the `openai` package. When the
+agent's OpenAI integration is also on and the app has no context manager,
+OpenAI starts its own span too: two nested AI spans and no wire span,
+not a lost call. See [Existing OTel SDKs](#existing-otel-sdks).
+BeeAI and the OpenAI Agents SDK start spans in the SDK's own event
+handlers or trace processor, so the agent cannot tie the SDK's request
+to its span without guessing. The Vercel AI SDK 7 and Genkit are turned
+on through their own enable entry, outside these call scopes. ElevenLabs
+patches namespace getters without the agent's scope and starts its span
+outside a call cell; its `context.with` does nothing without an
+application context manager. For these five integrations, the SDK's own
+request can also be captured as a wire span. Neither that call nor a
+request beside it is dropped. Outgoing credential observation is never
+skipped by these rules: fetch reads
 headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
 diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
 cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span
@@ -122,7 +168,10 @@ Hidden transcripts use `[REDACTED]`, exactly like hidden input/output values.
 ### Privacy
 
 One export-time boundary sanitizes **every span sent through the agent's exporter**:
-wire spans, dedicated-library spans and forwarded application spans. It builds a
+wire spans and dedicated-library spans, plus application spans when the forwarding
+switch sends them. On forwarded application spans, `FI_HIDE_*` also hides other AI
+tracers' prompt and response keys, and session and user ids keep the credential name
+rule, which only spans made by an FI tracer are exempt from. It builds a
 detached snapshot of the ended native span; other exporters keep the original
 span/resource/context unchanged by that export policy. In auto destination mode,
 foreign attributes are never rewritten by FI policy. FI-authored attributes still
@@ -243,18 +292,76 @@ additive processor registration (`exclusiveProcessor:false`), preserving applica
 processors. Shutdown recognizes processor/class-registry ownership as well as
 shimmer wrappers, and leaves application-owned patches intact.
 
-If `@opentelemetry/instrumentation-http` is installed and resolvable in the app, it is enabled for incoming SERVER spans only. Outgoing non-AI HTTP spans are not enabled by default.
+Incoming HTTP is off by default. With `http` in `FI_INSTRUMENTATIONS` and `@opentelemetry/instrumentation-http` installed and resolvable in the app, it is enabled for incoming SERVER spans only, on the agent's provider. A SERVER span is sent only when an AI span was seen in the same trace: the agent keeps a small bounded set of recent trace ids with AI work and checks it when the SERVER span ends. Outgoing non-AI HTTP spans are not enabled.
+
+When the agent enables pgvector, Redis or MongoDB, it passes `vectorOnly: true`, so only vector operations create spans. An installed release that does not report `vectorOnly` is left `manual`.
 
 ### Existing OTel SDKs
 
-An existing global SDK provider is retained, with the FI processor added beside its
-existing processors. Its sampler/context manager remain authoritative. OTel JS 2.x
+The agent never registers a global tracer provider, context manager or propagator,
+from the preload, `init()`, the launcher or the bundler plugins. It keeps an isolated
+provider whose only processor is the FI route and binds every instrumentor and the wire
+layer to it, so an application SDK started before or after the preload registers
+normally and keeps its sampler, context manager, propagator, processors and exporters.
+The FI route is never attached to the application's provider, and Future AGI receives
+only spans from agent-bound tracers. AI spans read the active context through the
+OpenTelemetry API, so they parent under the application's active span when it has a
+context manager. Without one, the agent reads and sets context in fi-core's private
+context (`activeFIContext` and `runInFIContext`), the one `FITracer.startActiveSpan`
+uses. It is never registered globally, and a context set there is active for a callback
+and the work it starts, never for the caller after the callback returns. The agent keeps
+no context store of its own. Spans started with `startActiveSpan`, such as the Vercel AI
+SDK 5 and 6 spans, nest without a context manager. For integrations the agent sets up
+itself, an SDK call runs in its own scope of that context through either the
+instrumentation's `_wrap` method or the per-instance call-scope hook under
+`Symbol.for('traceai.auto.integration-call.v1')`. Groq, Mistral and Portkey keep their own
+patching and run their traced body, including span creation and the original SDK call,
+through this hook. The agent defines it only on the instrumentation instance it builds,
+as a non-enumerable, configurable own property, never on a global, prototype or module
+export. Without the hook, each integration runs its traced body as before. After the
+agent disables the instance, a retained hook runs the body directly without a scope.
+Each scoped call has a context cell of its own. Each incoming request from the agent's
+HTTP instrumentation gets the same scope, whose cell keeps only that request's SERVER
+span. A span the integration starts in that call is kept in the call's cell: it is the
+parent of the rest of the call's own work, such as the SDK's provider request, which the
+wire layer then skips, and spans started in the call nest under it. A context set later
+inside the call, with `runInFIContext` or `startActiveSpan`, takes precedence while it
+lasts, and a span that has ended is no longer active. The cell ends with the call. So, as
+with an application context manager, the caller's next work, such as a plain `fetch`
+beside the call in the same tick or while it reads a stream, does not run under that
+span. With the hook, Groq, Mistral and Portkey requests are not also
+recorded as wire spans, without hiding requests beside them, even when
+the application has no context manager. Portkey's Responses API
+delegates to the `openai` package. When the agent's OpenAI integration
+is also on and the app has no context manager, Portkey's `context.with`
+does not propagate suppression to OpenAI, which starts its own span.
+The request produces two nested AI spans and no wire span; the call
+is not lost.
+
+Outside such a call, starting a span makes nothing active, and so does
+starting any span but the SERVER span inside an incoming request. BeeAI
+and the OpenAI Agents SDK start spans in the SDK's own event handlers or
+trace processor, so the agent cannot tie the SDK's request to its span
+without guessing. The Vercel AI SDK 7 and Genkit are turned on through
+their own enable entry, outside the agent's call scopes. ElevenLabs
+patches namespace getters without the agent's scope and starts its span
+outside a call cell, with `context.active()`; its `context.with` does
+nothing without an application context manager. For these five
+integrations, a model span started outside `startActiveSpan` is not the
+parent of the SDK's own request, which can then also arrive as a wire
+span. Neither that call nor a request beside it is lost.
+
+With the forwarding switch (`FI_FORWARD_APP_SPANS=true` or `forwardApplicationSpans`),
+the application's provider keeps its processors and the FI processor is added beside
+them, as earlier releases did; AI spans are then created on that provider. OTel JS 2.x
 has no public late-add-processor API, so this uses the live MultiSpanProcessor list;
-the public 1.x API is also recognized. FI project resource attributes are enriched
+the public 1.x API is also recognized. A provider registered after the preload is joined
+on the next tick or when the next agent span starts. AI spans then stay on the agent's
+own provider, so the application's exporters do not receive them, and application spans
+that ended before the join are not forwarded. FI project resource attributes are enriched
 only on the FI export copy. If a custom provider does not expose either supported
-attachment mechanism, the agent warns and uses an isolated AI provider without
-replacing the global provider. This is a degraded fallback, not a promise of
-processor attachment to arbitrary OTel implementations.
+attachment mechanism, the agent warns and keeps AI spans on its own provider. This is a
+degraded fallback, not a promise of processor attachment to arbitrary OTel implementations.
 
 ## SDK attribute limits and streaming timing
 

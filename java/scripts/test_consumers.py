@@ -36,6 +36,11 @@ TEST_LIBRARIES = [
 def check_jitpack_poms(version):
     parent = ET.parse(ROOT / "pom.xml").getroot()
     directories = [ROOT] + [ROOT / m.text.strip() for m in parent.findall("m:modules/m:module", NS)]
+    prepare_script = runpy.run_path(str(ROOT / "scripts/prepare_jitpack.py"))
+    # A module in hold_artifacts is built and flattened but not installed on this route, so it is not harvested.
+    held = prepare_script["held_artifact_ids"]()
+    harvested = [d for d in directories
+                 if ET.parse(d / "pom.xml").getroot().findtext("m:artifactId", namespaces=NS) not in held]
     for directory in directories:
         path = directory / "target/jitpack-pom.xml"
         pom = ET.parse(path).getroot()
@@ -50,24 +55,24 @@ def check_jitpack_poms(version):
             managed = pom.findall("m:dependencyManagement/m:dependencies/m:dependency", NS)
             artifacts = {d.findtext("m:artifactId", namespaces=NS) for d in managed
                          if d.findtext("m:groupId", namespaces=NS) == "com.futureagi"}
-            expected = {d.name for d in directories[1:] if d.name != "traceai-bom"}
+            expected = {d.name for d in directories[1:] if d.name != "traceai-bom"} - held
             assert artifacts == expected, "flattened BOM lost SDK version alignment"
             for dep in managed:
                 assert dep.findtext("m:scope", "", NS) != "test", "BOM leaks test scope"
     # JitPack does not remap dependencyManagement itself. Exercise our final
     # harvesting step on copies and verify both the BOM and direct dependencies.
-    prepare = runpy.run_path(str(ROOT / "scripts/prepare_jitpack.py"))["prepare"]
+    prepare = prepare_script["prepare"]
     with tempfile.TemporaryDirectory(prefix="traceai-jitpack-poms-") as temp:
         repo = Path(temp)
         staged = []
-        for directory in directories:
+        for directory in harvested:
             artifact = ET.parse(directory / "pom.xml").getroot().findtext("m:artifactId", namespaces=NS)
             path = repo / "com/futureagi" / artifact / version / f"{artifact}-{version}.pom"
             path.parent.mkdir(parents=True)
             path.write_bytes((directory / "target/jitpack-pom.xml").read_bytes())
             staged.append(path)
         group, commit = "com.github.future-agi.traceAI", "consumer-regression-sha"
-        assert prepare(repo, group, commit) == len(directories)
+        assert prepare(repo, group, commit) == len(harvested)
         for path in staged:
             pom = ET.parse(path).getroot()
             assert pom.findtext("m:groupId", namespaces=NS) == "com.futureagi", path

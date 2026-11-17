@@ -67,6 +67,11 @@ interface PgVectorInstrumentationConfig {
 
   // Capture query parameters
   captureParameters?: boolean;
+
+  // Trace only queries that look like vector search (see "Vector-only mode"
+  // below); every other query runs without a span. @traceai/auto turns this on
+  // when it enables pgvector.
+  vectorOnly?: boolean;
 }
 
 interface TraceConfigOptions {
@@ -77,6 +82,23 @@ interface TraceConfigOptions {
   maskOutputs?: boolean;
 }
 ```
+
+### Vector-only mode
+
+With `vectorOnly: true`, the query text decides. A query is traced when it has:
+
+- a pgvector-only distance operator: `<=>`, `<+>`, `<~>` or `<%>`;
+- a cast to `vector`, `halfvec` or `sparsevec`, or one of those names followed by `(`, as in `$1::vector` or `vector(3)`; or
+- the `<->` or `<#>` operator on its own, unless the same query also has one of these:
+  - a function call whose name starts with `ST_`, as PostGIS functions do;
+  - a cast to `geometry`, `geography`, `box2d`, `box3d`, `box`, `point`, `polygon` or `circle`;
+  - one of those type names and a quoted literal right after the operator, such as `<-> point '(1,2)'`;
+  - a `similarity`, `word_similarity` or `strict_word_similarity` call;
+  - a quoted literal right after the operator that does not start with `[`, such as `<-> 'jon'` (a vector literal such as `'[0.1,0.2]'` still counts).
+
+`<->` and `<#>` inside a longer operator do not count: the trigram word-distance operators `<<->`, `<->>`, `<<<->` and `<->>>`, and the PostGIS box-distance operators `<<->>` and `<<#>>`.
+
+A `<->` or `<#>` query whose other operand is an untyped parameter, such as `ORDER BY embedding <-> $1`, is traced, because the query text cannot tell it from vector search. That includes trigram and PostGIS nearest-neighbour queries written that way, such as `ORDER BY name <-> $1` on a text column. Every other query runs without a span.
 
 ## Traced Operations
 

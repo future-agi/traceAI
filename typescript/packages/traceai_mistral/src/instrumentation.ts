@@ -11,6 +11,11 @@ import { inputAttributes, outputAttributes, record, StreamOutput } from "./attri
 import { observeStream } from "./stream";
 
 const MODULE_NAME = "@mistralai/mistralai";
+/* The zero-code agent (@traceai/auto) defines a function under this key on the
+ * instrumentation instance it builds. Traced calls use it so the agent can keep
+ * the call's own request to it. Without it, calls run as before. The v1 key is
+ * shared with the agent; change both together. */
+const INTEGRATION_CALL = Symbol.for("traceai.auto.integration-call.v1");
 // Telemetry is best effort. Do not put request content from an exception into logs.
 function telemetry<T>(work: () => T): T | null {
   return withSafety({ fn: work, onError: () => diag.warn("Mistral instrumentation could not record telemetry.") })();
@@ -166,53 +171,57 @@ export class MistralInstrumentation extends InstrumentationBase {
       if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
         return original.apply(this, args);
       }
-      const input = typeof args[0] === "string"
-        ? { model: args[0], [operation === "embeddings" ? "inputs" : "messages"]: args[1] }
-        : args[0];
-      const span = telemetry(() => instrumentation.fiTracer.startSpan(name, {
-        kind: SpanKind.INTERNAL,
-        attributes: inputAttributes(input, operation, instrumentation.resolvedConfig),
-      }));
-      if (!span) return original.apply(this, args);
-      const spanContext = trace.setSpan(context.active(), span);
-      let ended = false;
-      const finish = (error?: unknown) => {
-        if (ended) return;
-        ended = true;
-        telemetry(() => {
-          if (error !== undefined) {
-            span.recordException(error instanceof Error ? error : String(error));
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
-          } else {
-            span.setStatus({ code: SpanStatusCode.OK });
+      const scope = (instrumentation as unknown as Record<symbol, unknown>)[INTEGRATION_CALL];
+      const traced = () => {
+        const input = typeof args[0] === "string"
+          ? { model: args[0], [operation === "embeddings" ? "inputs" : "messages"]: args[1] }
+          : args[0];
+        const span = telemetry(() => instrumentation.fiTracer.startSpan(name, {
+          kind: SpanKind.INTERNAL,
+          attributes: inputAttributes(input, operation, instrumentation.resolvedConfig),
+        }));
+        if (!span) return original.apply(this, args);
+        const spanContext = trace.setSpan(context.active(), span);
+        let ended = false;
+        const finish = (error?: unknown) => {
+          if (ended) return;
+          ended = true;
+          telemetry(() => {
+            if (error !== undefined) {
+              span.recordException(error instanceof Error ? error : String(error));
+              span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+            } else {
+              span.setStatus({ code: SpanStatusCode.OK });
+            }
+          });
+          telemetry(() => span.end());
+        };
+        const onResult = (result: unknown): unknown => {
+          if (result && typeof Reflect.get(Object(result), Symbol.asyncIterator) === "function") {
+            const output = new StreamOutput(instrumentation.resolvedConfig);
+            return observeStream(result as AsyncIterable<unknown>, spanContext,
+              chunk => { telemetry(() => output.add(chunk)); },
+              error => {
+                telemetry(() => span.setAttributes(output.attributes()));
+                finish(error ?? output.error);
+              });
           }
-        });
-        telemetry(() => span.end());
-      };
-      const onResult = (result: unknown): unknown => {
-        if (result && typeof Reflect.get(Object(result), Symbol.asyncIterator) === "function") {
-          const output = new StreamOutput(instrumentation.resolvedConfig);
-          return observeStream(result as AsyncIterable<unknown>, spanContext,
-            chunk => { telemetry(() => output.add(chunk)); },
-            error => {
-              telemetry(() => span.setAttributes(output.attributes()));
-              finish(error ?? output.error);
-            });
+          telemetry(() => span.setAttributes(outputAttributes(result, operation, instrumentation.resolvedConfig)));
+          finish();
+          return result;
+        };
+        try {
+          const result = context.with(spanContext, () => original.apply(this, args));
+          if (result && typeof record(result).then === "function") {
+            return Promise.resolve(result).then(onResult, error => { finish(error); throw error; });
+          }
+          return onResult(result);
+        } catch (error) {
+          finish(error);
+          throw error;
         }
-        telemetry(() => span.setAttributes(outputAttributes(result, operation, instrumentation.resolvedConfig)));
-        finish();
-        return result;
       };
-      try {
-        const result = context.with(spanContext, () => original.apply(this, args));
-        if (result && typeof record(result).then === "function") {
-          return Promise.resolve(result).then(onResult, error => { finish(error); throw error; });
-        }
-        return onResult(result);
-      } catch (error) {
-        finish(error);
-        throw error;
-      }
+      return typeof scope === "function" ? (scope as <T>(fn: () => T) => T)(traced) : traced();
     };
     Object.defineProperty(wrapped, WRAPPED, { value: true });
     const patch: Patch = {

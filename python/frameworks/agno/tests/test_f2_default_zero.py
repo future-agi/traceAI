@@ -52,7 +52,7 @@ def test_f2_agno_default_env_and_explicit_positive(monkeypatch):
 
 
 def test_f2_agno_supplied_config_without_cap_resolves_zero(monkeypatch):
-    # Lead slice (RL 2193): F2-PY-CAP0-COMPLETENESS-001. A config passed only to
+    # Cap-0 completeness: a config passed only to
     # set another option carries OI's default cap and must not bypass cap 0.
     from openinference.instrumentation import TraceConfig as OITraceConfig
     from traceai_agno._wrappers._privacy import privacy_configs, _PrivacyConfig

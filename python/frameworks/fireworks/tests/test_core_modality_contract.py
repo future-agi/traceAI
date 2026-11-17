@@ -64,7 +64,7 @@ def test_core_not_instrumentor_applies_image_mask(monkeypatch):
     assert type(attrs["input.value"]) is module.ChatInput
     # Reapply a different policy to the same ORIGINAL typed data. This cannot
     # work with a package-sanitized string or a boolean assertion of trust.
-    # F2 (RL 2310bu): retain the original assertions at the former default cap.
+    # Retain the original assertions at the former default cap.
     visible = TraceConfig(base64_image_max_length=32_000).mask("input.value", attrs["input.value"])
     assert IMAGE in visible and PROMPT in visible
     hidden = TraceConfig(hide_input_text=True, base64_image_max_length=32_000).mask(

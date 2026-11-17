@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- One payload for .NET 8 and .NET 10 applications. A startup hook built for a newer
+         runtime cannot load in an older process, and that failure happens before the hook
+         runs, so it would stop the application. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PackageId>TraceAI.AutoInstrumentation</PackageId>
+    <Version>1.0.1</Version>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Description>Fail-open startup hook and ActivitySource/HttpClient tracing for traceAI</Description>
+    <Authors>Future AGI</Authors>
+    <Company>Future AGI</Company>
+    <PackageProjectUrl>https://docs.futureagi.com/docs/tracing</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/future-agi/traceAI</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageTags>traceai;futureagi;opentelemetry;tracing;observability;llm;ai;dotnet;startup-hook</PackageTags>
+    <!-- The package is a directory to point DOTNET_STARTUP_HOOKS into, not a library to reference:
+         nothing goes under lib/, no dependency is declared, and a project that installs it
+         compiles against none of it. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
+    <HookPayloadDir>$(MSBuildProjectDirectory)/obj/$(Configuration)/hook-payload/</HookPayloadDir>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);CollectHookPayload</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Only this BCL-only type enters the application's default load context. -->
+    <Compile Include="StartupHook.cs" />
+    <ProjectReference Include="AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <!-- Pack runs the same publish the README's build-from-source route runs, then puts the whole
+       published directory under tools/net8.0/any/. The hook DLL, the private runtime DLL and the
+       pinned OpenTelemetry files stay together there; one directory serves .NET 8 and .NET 10. -->
+  <Target Name="CollectHookPayload">
+    <RemoveDir Directories="$(HookPayloadDir)" />
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Publish" Properties="NoBuild=true;PublishDir=$(HookPayloadDir)" />
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(HookPayloadDir)**" PackagePath="tools/net8.0/any/%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
+</Project>

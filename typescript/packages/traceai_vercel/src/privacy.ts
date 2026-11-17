@@ -1,21 +1,44 @@
-import { Attributes } from '@opentelemetry/api';
+import { Attributes, diag } from '@opentelemetry/api';
 import { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { addFIAttributesToSpan } from './utils';
+
+const SWITCH_ON = ['true', '1', 'yes', 'on'];
+const SWITCH_OFF = ['false', '0', 'no', 'off'];
+const warnedSwitches = new Set<string>();
+
+/** Reads one privacy switch. A switch someone set must never silently do nothing: true, 1,
+ * yes and on turn it on, false, 0, no and off turn it off (any case, surrounding spaces
+ * ignored), and an empty value counts as unset. Any other value turns it on, with one
+ * warning per variable that names the accepted values and never the value.
+ */
+function readSwitch(name: string): boolean | undefined {
+  const normalized = process.env[name]?.trim().toLowerCase();
+  if (normalized === undefined || normalized === '') return undefined;
+  if (SWITCH_ON.includes(normalized)) return true;
+  if (SWITCH_OFF.includes(normalized)) return false;
+  if (!warnedSwitches.has(name)) {
+    warnedSwitches.add(name);
+    try {
+      diag.warn(`@traceai/vercel: ${name} is not one of true, 1, yes, on, false, 0, no or off; treating it as on, so the content it controls is hidden.`);
+    } catch { /* Diagnostics must also fail open. */ }
+  }
+  return true;
+}
 
 /** Snapshot the FI environment contract once, when a processor is constructed.
  * Keep this adapter independent of fi-core, which requires OpenTelemetry SDK 2.x.
  */
 export function readPrivacyConfig() {
-  const enabled = (name: string) => process.env[name]?.toLowerCase() === 'true';
+  const enabled = (name: string) => readSwitch(name) === true;
   const hideInputs = enabled('FI_HIDE_INPUTS') || enabled('FI_HIDE_INPUT_MESSAGES') || enabled('FI_HIDE_INPUT_TEXT');
   const hideOutputs = enabled('FI_HIDE_OUTPUTS') || enabled('FI_HIDE_OUTPUT_MESSAGES') || enabled('FI_HIDE_OUTPUT_TEXT');
-  const errorFlag = process.env.FI_HIDE_ERROR_DETAILS?.trim().toLowerCase();
+  const hideErrorDetails = readSwitch('FI_HIDE_ERROR_DETAILS');
   return {
     hideInputs: hideInputs || enabled('FI_HIDE_INPUT_IMAGES'),
     hideOutputs,
     hideEmbeddingVectors: enabled('FI_HIDE_EMBEDDING_VECTORS'),
-    // Match fi-core's tri-state: invalid/unset values derive from content hiding.
-    hideErrorDetails: errorFlag === 'true' ? true : errorFlag === 'false' ? false : hideInputs || hideOutputs,
+    // Match fi-core's tri-state: an unset value derives from content hiding.
+    hideErrorDetails: hideErrorDetails ?? (hideInputs || hideOutputs),
   };
 }
 

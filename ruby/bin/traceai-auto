@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+# Run from the application's directory, the doctor should see the application's
+# bundle, as the application itself would. Load it first when there is one.
+if !ENV['BUNDLE_GEMFILE'].to_s.empty? || File.file?('Gemfile') || File.file?('gems.rb')
+  begin
+    require 'bundler/setup'
+  rescue LoadError, StandardError => e
+    warn "traceai-auto: could not load the application's bundle (#{e.class.name}); continuing without it"
+  end
+end
+# Load the agent that ships next to this file. After bundler/setup the load path
+# holds only the application's gems, and the application's Gemfile need not
+# list traceai-auto.
+require_relative '../lib/traceai/auto'
+require_relative '../lib/traceai/auto/codec'
+case ARGV.shift
+when 'doctor'
+  puts TraceAI::Auto::Codec.generate(TraceAI::Auto.report(test_export: !ARGV.include?('--no-export')))
+when 'bootstrap'
+  puts TraceAI::Auto::Codec.generate(TraceAI::Auto.report[:integrations])
+  warn 'Wire transports require no dedicated instrumentors. Optional Rack server spans: gem install opentelemetry-instrumentation-rack'
+else
+  warn 'Usage: traceai-auto doctor [--no-export] | bootstrap'
+  exit 2
+end

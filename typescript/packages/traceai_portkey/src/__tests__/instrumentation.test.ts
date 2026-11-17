@@ -1,8 +1,11 @@
 import { PortkeyInstrumentation, isPatched, _resetPatchedStateForTesting } from '../instrumentation';
+import * as instrumentationModule from '../instrumentation';
+import * as publicModule from '../index';
+import { SemanticConventions as S, FISpanKind, MimeType } from '@traceai/fi-semantic-conventions';
 import { VERSION } from '../version';
 import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { context, trace } from '@opentelemetry/api';
+import { context, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { isTracingSuppressed, suppressTracing } from '@opentelemetry/core';
 
 const exporter = new InMemorySpanExporter();
@@ -111,4 +114,222 @@ it('does not duplicate spans with two instrumentors or independently loaded modu
     await b.create(req);
     expect(exporter.getFinishedSpans()).toHaveLength(2);
   } finally { second.disable(); }
+});
+
+describe('integration call hook', () => {
+  const hookKey = Symbol.for('traceai.auto.integration-call.v1');
+  const request = { model: 'synthetic-model', messages: [{ role: 'user', content: 'hello' }] };
+  const reply = {
+    id: 'chat-synthetic', model: 'synthetic-model',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+  };
+  const config = { provider: 'synthetic-provider' };
+  const options = { headers: { 'x-synthetic': 'private-header-value' } };
+  const spanData = () => exporter.getFinishedSpans().map(span => ({
+    name: span.name, kind: span.kind, attributes: { ...span.attributes }, status: { ...span.status },
+  }));
+  const installHook = () => {
+    let calls = 0;
+    let result: unknown;
+    Object.defineProperty(inst, hookKey, {
+      value: <T>(fn: () => T): T => { calls++; const value = fn(); result = value; return value; },
+    });
+    return { calls: () => calls, result: () => result };
+  };
+  const expectOriginalCall = (original: jest.Mock, receiver: unknown, args: unknown[]) => {
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(original.mock.contexts[0]).toBe(receiver);
+    expect(original.mock.calls[0]).toHaveLength(args.length);
+    args.forEach((arg, index) => expect(original.mock.calls[0][index]).toBe(arg));
+  };
+
+  it.each([false, true])('preserves chat results and span data with an identity hook=%s', async withHook => {
+    const sdkPromise = Promise.resolve(reply);
+    const original = jest.fn(function () { return sdkPromise; });
+    const resource = setup(original);
+    const args = [request, config, options];
+    expect(hookKey in inst).toBe(false);
+    const baseline = resource.create(...args);
+    expect(baseline).toBeInstanceOf(Promise);
+    // Portkey already observes promises through a proxy, without copying parsed results.
+    expect(baseline).not.toBe(sdkPromise);
+    expect(await baseline).toBe(reply);
+    expect(await baseline).toBe(reply);
+    expectOriginalCall(original, resource, args);
+    const before = spanData();
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatchObject({
+      name: 'Portkey Chat Completions', kind: SpanKind.CLIENT, status: { code: SpanStatusCode.OK },
+      attributes: {
+        [S.FI_SPAN_KIND]: FISpanKind.LLM, [S.LLM_PROVIDER]: 'portkey',
+        [S.LLM_MODEL_NAME]: reply.model, [S.GEN_AI_OPERATION_NAME]: 'chat',
+        [S.INPUT_VALUE]: JSON.stringify(request), [S.INPUT_MIME_TYPE]: MimeType.JSON,
+        [S.RAW_INPUT]: JSON.stringify(request), [S.LLM_INPUT_MESSAGES]: JSON.stringify(request.messages),
+        [S.OUTPUT_VALUE]: 'hello', [S.LLM_OUTPUT_MESSAGES]: JSON.stringify([reply.choices[0].message]),
+        [S.RAW_OUTPUT]: JSON.stringify(reply), [S.GEN_AI_RESPONSE_ID]: reply.id,
+        [S.GEN_AI_RESPONSE_MODEL]: reply.model, [S.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(['stop']),
+        [S.LLM_TOKEN_COUNT_PROMPT]: 2, [S.LLM_TOKEN_COUNT_COMPLETION]: 1, [S.LLM_TOKEN_COUNT_TOTAL]: 3,
+      },
+    });
+    expect(JSON.stringify(before)).not.toContain('private-header-value');
+
+    exporter.reset();
+    original.mockClear();
+    const hook = withHook ? installHook() : undefined;
+    const pending = resource.create(...args);
+    if (hook) {
+      expect(hook.calls()).toBe(1);
+      expect(pending).toBe(hook.result());
+    } else expect(hookKey in inst).toBe(false);
+    expect(pending).toBeInstanceOf(Promise);
+    expect(pending).not.toBe(sdkPromise);
+    expect(await pending).toBe(reply);
+    expect(await pending).toBe(reply);
+    expectOriginalCall(original, resource, args);
+    expect(spanData()).toEqual(before);
+    if (hook) expect(hook.calls()).toBe(1);
+  });
+
+  it('preserves Responses promise helpers and span data with and without the hook', async () => {
+    const params = { model: 'synthetic-model', input: 'hello' };
+    const result = {
+      id: 'resp-synthetic', model: 'synthetic-model', status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hello' }] }],
+      usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
+    };
+    const raw = new Response(JSON.stringify(result), { headers: { 'x-request-id': 'synthetic-request' } });
+    const sdkPromise = Object.assign(Promise.resolve(result), {
+      asResponse: async () => raw,
+      withResponse: async () => ({ data: result, response: raw, request_id: 'synthetic-request' }),
+    });
+    const original = jest.fn(function () { return sdkPromise; });
+    const resource = { create: original as Function };
+    inst.manuallyInstrument({ chat: { completions: {} }, responses: resource });
+    const args = [params, config, options];
+    let before: ReturnType<typeof spanData> | undefined;
+    for (const withHook of [false, true]) {
+      exporter.reset();
+      original.mockClear();
+      expect(hookKey in inst).toBe(false);
+      const hook = withHook ? installHook() : undefined;
+      const pending = resource.create(...args);
+      if (hook) {
+        expect(hook.calls()).toBe(1);
+        expect(pending).toBe(hook.result());
+      }
+      expect(pending).toBeInstanceOf(Promise);
+      expect(pending).not.toBe(sdkPromise);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      const response = await pending.withResponse();
+      expect(response.data).toBe(result);
+      expect(response.response).toBe(raw);
+      expect(response.request_id).toBe('synthetic-request');
+      expect(await pending).toBe(result);
+      expect(await pending.asResponse()).toBe(raw);
+      expect(raw.bodyUsed).toBe(false);
+      expectOriginalCall(original, resource, args);
+      const spans = spanData();
+      expect(spans).toHaveLength(1);
+      expect(spans[0]).toMatchObject({
+        name: 'Portkey Responses', kind: SpanKind.CLIENT, status: { code: SpanStatusCode.OK },
+        attributes: {
+          [S.FI_SPAN_KIND]: FISpanKind.LLM, [S.LLM_PROVIDER]: 'portkey',
+          [S.GEN_AI_OPERATION_NAME]: 'generate_content', [S.LLM_MODEL_NAME]: result.model,
+          [S.INPUT_VALUE]: JSON.stringify(params), [S.RAW_OUTPUT]: JSON.stringify(result),
+          [S.OUTPUT_VALUE]: JSON.stringify([{ role: 'assistant', content: [{ type: 'text', text: 'hello' }] }]),
+          [S.LLM_TOKEN_COUNT_TOTAL]: 3,
+        },
+      });
+      if (withHook) expect(spans).toEqual(before);
+      else before = spans;
+      if (hook) expect(hook.calls()).toBe(1);
+    }
+  });
+
+  it('preserves stream objects, chunks and span data with and without the hook', async () => {
+    const chunk = { choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }] };
+    class Stream {
+      marker() { return 'same-stream-api'; }
+      async *[Symbol.asyncIterator]() { yield chunk; }
+    }
+    const sdkStream = new Stream();
+    const sdkPromise = Promise.resolve(sdkStream);
+    const original = jest.fn(function () { return sdkPromise; });
+    const resource = setup(original);
+    const params = { ...request, stream: true };
+    const args = [params, config, options];
+    let before: ReturnType<typeof spanData> | undefined;
+    for (const withHook of [false, true]) {
+      exporter.reset();
+      original.mockClear();
+      expect(hookKey in inst).toBe(false);
+      const hook = withHook ? installHook() : undefined;
+      const pending = resource.create(...args);
+      if (hook) {
+        expect(hook.calls()).toBe(1);
+        expect(pending).toBe(hook.result());
+      }
+      const stream = await pending;
+      expect(stream).toBeInstanceOf(Stream);
+      // The existing stream proxy is cached by the observed promise.
+      expect(stream).not.toBe(sdkStream);
+      expect(await pending).toBe(stream);
+      expect(stream.marker()).toBe('same-stream-api');
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      const chunks = [];
+      for await (const value of stream) chunks.push(value);
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toBe(chunk);
+      expectOriginalCall(original, resource, args);
+      const spans = spanData();
+      expect(spans).toHaveLength(1);
+      expect(spans[0]).toMatchObject({
+        name: 'Portkey Chat Completions', kind: SpanKind.CLIENT,
+        attributes: {
+          [S.FI_SPAN_KIND]: FISpanKind.LLM, [S.LLM_PROVIDER]: 'portkey',
+          [S.LLM_MODEL_NAME]: params.model, [S.INPUT_VALUE]: JSON.stringify(params),
+          [S.OUTPUT_VALUE]: 'hello', [S.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(['stop']),
+        },
+      });
+      if (withHook) expect(spans).toEqual(before);
+      else before = spans;
+      if (hook) expect(hook.calls()).toBe(1);
+    }
+  });
+
+  it.each(['disabled', 'suppressed'])('bypasses the hook for a %s call', async mode => {
+    const sdkPromise = Promise.resolve(reply);
+    const original = jest.fn(function () { return sdkPromise; });
+    const resource = setup(original);
+    const wrapped = resource.create;
+    const hook = installHook();
+    const args = [request, config, options];
+    if (mode === 'disabled') inst.disable();
+    // A saved wrapper must bypass the hook too, not just the restored method.
+    const call = () => wrapped.apply(resource, args);
+    const pending = mode === 'suppressed' ? context.with(suppressTracing(context.active()), call) : call();
+    expect(pending).toBe(sdkPromise);
+    expect(await pending).toBe(reply);
+    expect(hook.calls()).toBe(0);
+    expectOriginalCall(original, resource, args);
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it('keeps the hook on its own instance, not prototypes, modules or globalThis', () => {
+    const second = new PortkeyInstrumentation();
+    const shared = [
+      PortkeyInstrumentation, PortkeyInstrumentation.prototype,
+      instrumentationModule, publicModule, globalThis, second,
+    ];
+    try {
+      expect(hookKey in inst).toBe(false);
+      for (const target of shared) expect(hookKey in target).toBe(false);
+      const hook = installHook();
+      expect(Object.hasOwn(inst, hookKey)).toBe(true);
+      expect(Object.getOwnPropertyDescriptor(inst, hookKey)?.enumerable).toBe(false);
+      for (const target of shared) expect(hookKey in target).toBe(false);
+      expect(hook.calls()).toBe(0);
+    } finally { second.disable(); }
+  });
 });

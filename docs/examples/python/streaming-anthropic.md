@@ -5,7 +5,7 @@ Trace streaming responses with Anthropic Claude.
 ## Prerequisites
 
 ```bash
-pip install fi-instrumentation traceai-anthropic anthropic
+pip install fi-instrumentation-otel traceai-anthropic anthropic
 ```
 
 ## Full Example

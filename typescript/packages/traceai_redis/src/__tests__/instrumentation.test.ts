@@ -627,3 +627,77 @@ describe("Redis Instrumentation", () => {
     });
   });
 });
+
+describe("Redis vector-only mode", () => {
+  let instrumentation: any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.resetModules();
+    const mod = require("../instrumentation");
+    instrumentation = new mod.RedisInstrumentation({
+      instrumentationConfig: { enabled: true, vectorOnly: true },
+    });
+    instrumentation.enable();
+  });
+
+  afterEach(() => {
+    instrumentation?.disable();
+  });
+
+  it("reports that only vector operations are traced", () => {
+    expect(instrumentation.vectorOnly).toBe(true);
+  });
+
+  it("runs hash, JSON, DEL and text searches without a span", async () => {
+    const hGet = (jest.fn() as MockFn).mockResolvedValue("cart-value");
+    const del = (jest.fn() as MockFn).mockResolvedValue(1);
+    const jsonGet = (jest.fn() as MockFn).mockResolvedValue({ items: 2 });
+    const search = (jest.fn() as MockFn).mockResolvedValue({ total: 0, documents: [] });
+    const mockClient = { hGet, del, json: { get: jsonGet }, ft: { search } };
+    const mockModule = { createClient: jest.fn().mockReturnValue(mockClient) };
+
+    instrumentation.manuallyInstrument(mockModule);
+    const client = mockModule.createClient() as typeof mockClient;
+
+    expect(await client.hGet("cart:1", "items")).toBe("cart-value");
+    expect(await client.del("session:1")).toBe(1);
+    expect(await client.json.get("profile:1")).toEqual({ items: 2 });
+    await client.ft.search("idx:titles", "@title:hello");
+
+    expect(hGet).toHaveBeenCalledWith("cart:1", "items");
+    expect(mockSpan.end).not.toHaveBeenCalled();
+  });
+
+  it("still traces KNN searches and vector index creation", async () => {
+    const search = (jest.fn() as MockFn).mockResolvedValue({ total: 1, documents: [] });
+    const create = (jest.fn() as MockFn).mockResolvedValue("OK");
+    const mockClient = { ft: { search, create } };
+    const mockModule = { createClient: jest.fn().mockReturnValue(mockClient) };
+
+    instrumentation.manuallyInstrument(mockModule);
+    const client = mockModule.createClient() as typeof mockClient;
+
+    await client.ft.search("idx:docs", "*=>[KNN 3 @embedding $vector AS score]", { PARAMS: { vector: Buffer.alloc(8) } });
+    await client.ft.create("idx:docs", { embedding: { type: "VECTOR", ALGORITHM: "HNSW", TYPE: "FLOAT32", DIM: 2, DISTANCE_METRIC: "COSINE" } });
+    await client.ft.create("idx:titles", { title: { type: "TEXT" } });
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(2);
+  });
+
+  it("traces VECTOR_RANGE searches and leaves text searches that only mention knn alone", async () => {
+    const search = (jest.fn() as MockFn).mockResolvedValue({ total: 0, documents: [] });
+    const mockClient = { ft: { search } };
+    const mockModule = { createClient: jest.fn().mockReturnValue(mockClient) };
+
+    instrumentation.manuallyInstrument(mockModule);
+    const client = mockModule.createClient() as typeof mockClient;
+
+    await client.ft.search("idx:docs", "@embedding:[VECTOR_RANGE $radius $vector]=>{$YIELD_DISTANCE_AS: score}", { PARAMS: { radius: 0.2, vector: Buffer.alloc(8) } });
+    await client.ft.search("idx:docs", "(@genre:{drama})=>[KNN $K @embedding $vector]", { PARAMS: { K: 3, vector: Buffer.alloc(8) } });
+    await client.ft.search("idx:titles", "@title:knn");
+    await client.ft.search("idx:titles", "knn algorithms explained");
+
+    expect(mockSpan.end).toHaveBeenCalledTimes(2);
+  });
+});
