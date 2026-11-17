@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import { ROOT_CONTEXT, SpanKind, trace } from "@opentelemetry/api";
 import { InstrumentationBase, type InstrumentationConfig } from "@opentelemetry/instrumentation";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { FITracer, runInFIContext } from "@traceai/fi-core";
-import { activeContext, applicationContextManager, contextBoundProvider, runIntegrationCall } from "../src/agent-context";
+import { activeContext, applicationContextManager, contextBoundProvider, incomingServerSpan, runIntegrationCall } from "../src/agent-context";
+import { HTTP_SCOPE, readIncomingParent } from "../src/incoming-parent";
 import type { Config } from "../src/config";
 import { enableLibraries, type IntegrationStatus } from "../src/libraries";
 
@@ -155,6 +156,39 @@ test("inside the call, a span that has ended is no longer active", async () => {
   });
   expect(ended).toBeUndefined();
   expect(parentOf("after-end")).toBeUndefined();
+});
+
+const incomingTraceId = "11111111111111111111111111111111";
+const httpTracer = contextBoundProvider(provider).getTracer(HTTP_SCOPE);
+function startDroppedRequest() {
+  readIncomingParent({ headers: { traceparent: `00-${incomingTraceId}-2222222222222222-00` } });
+  return httpTracer.startSpan("request", { kind: SpanKind.SERVER }, ROOT_CONTEXT);
+}
+
+test("a non-recording AI child keeps the incoming request's trace ID across an await", async () => {
+  await runIntegrationCall(async () => {
+    const server = startDroppedRequest();
+    await tick();
+    // Inspect the child directly: a dropped span never reaches a processor or exporter.
+    const ai = other.startSpan("chat probe", { kind: SpanKind.CLIENT }, activeContext());
+    expect(activeSpanId()).toBe(server.spanContext().spanId);
+    expect(ai.spanContext().traceId).toBe(incomingTraceId);
+    expect(ai.isRecording()).toBe(false);
+    ai.end(); server.end();
+  }, incomingServerSpan);
+  expect(exporter.getFinishedSpans()).toHaveLength(0);
+});
+
+test("ending a dropped SERVER span restores the previous live span in its request cell", async () => {
+  await runIntegrationCall(async () => {
+    const previous = httpTracer.startSpan("previous", { kind: SpanKind.SERVER });
+    const dropped = startDroppedRequest();
+    dropped.end();
+    await tick();
+    other.startSpan("after-request", {}, activeContext()).end();
+    previous.end();
+  }, incomingServerSpan);
+  expect(parentOf("after-request")).toBe(idOf("previous"));
 });
 
 test("the launcher keeps no context store of its own and never enters a context for the caller's flow", () => {

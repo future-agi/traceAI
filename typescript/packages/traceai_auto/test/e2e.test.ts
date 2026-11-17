@@ -374,7 +374,12 @@ test("an application sampler that drops its own spans does not drop AI spans, wh
   expect(allSpans()).toHaveLength(1); expect(wireSpans()).toHaveLength(1);
   expect(wireSpans()[0].traceId).toBe(info.work.traceId); expect(wireSpans()[0].parentSpanId).toBe(info.work.spanId);
 });
-test("an unsampled incoming traceparent does not drop the SERVER span or its AI call", async () => {
+test("the default parent-based sampler exports neither the unsampled incoming request nor its AI call", async () => {
+  await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-00" });
+  expect(requests).toBe(1);
+  expect(allSpans()).toEqual([]);
+});
+test("an explicit full sample rate keeps the SERVER span and AI call for an unsampled incoming traceparent", async () => {
   await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", FI_SAMPLE_RATE: "1", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-00" });
   const serverSpan = allSpans().find(s => s.kind === 2), wire = wireSpans()[0];
   expect(allSpans()).toHaveLength(2);
