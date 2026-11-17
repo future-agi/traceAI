@@ -17,6 +17,7 @@ import { privacyFilter } from "./export-privacy";
 import { contextBoundProvider, isAgentSpan, markAgentSpan } from "./agent-context";
 import { HTTP_SCOPE } from "./incoming-parent";
 import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
+import { samplingRatioAdmission, type SamplerSelection } from "./sampling-ratio";
 
 const VERSION = "0.2.0"; // x-release-please-version
 import { chainSigterm } from "./signals";
@@ -53,10 +54,11 @@ function warn(key: string, message: string): void {
   try { console.warn(`[traceai:auto] ${message}`); } catch { /* Host logger may throw. */ }
 }
 /** Only called for a provider the agent creates; an application's sampler is never replaced. */
-function environmentSampler(): Sampler {
-  const fallback = () => new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) });
+function environmentSampler(): SamplerSelection {
+  const fallback = (): SamplerSelection => ({ sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) }) });
   const name = getStringFromEnv("OTEL_TRACES_SAMPLER");
   if (name === undefined) return fallback();
+  let ratio: SamplerSelection["ratio"];
   switch (name) {
     case "always_on": case "always_off":
     case "parentbased_always_on": case "parentbased_always_off":
@@ -69,6 +71,7 @@ function environmentSampler(): Sampler {
         warn("sampler", "Invalid OTEL_TRACES_SAMPLER_ARG; using ParentBased(TraceIdRatio(1)).");
         return fallback();
       }
+      ratio = { rate: raw === undefined ? 1 : Number(raw), parentBased: name === "parentbased_traceidratio" };
       break;
     }
     default:
@@ -77,7 +80,7 @@ function environmentSampler(): Sampler {
   }
   // Keep the SDK's six standard mappings and ratio-argument defaults. In
   // particular, a plain ratio sampler is not wrapped in aiSampler/ParentBased.
-  return buildSamplerFromEnv();
+  return { sampler: buildSamplerFromEnv(), ratio };
 }
 // AI spans that the agent's sampler recorded with the sampled flag off (see aiSampler).
 const recordOnly = new WeakSet<object>();
@@ -315,7 +318,12 @@ export function init(options: Options = {}): TracerProvider | undefined {
     if (!agent.provider) {
       // Resolve against the application's environment before constructing the SDK.
       // Explicit rates retain aiSampler's record-only handling of unsampled parents.
-      const sampler = config.sampleRateExplicit ? aiSampler(config.sampleRate) : environmentSampler();
+      const admission = samplingRatioAdmission(config.sampleRateExplicit
+        ? { sampler: aiSampler(config.sampleRate), ratio: { rate: config.sampleRate, parentBased: false } }
+        : environmentSampler());
+      const { sampler } = admission;
+      const ownedStart = processor.onStart.bind(processor);
+      processor.onStart = (span, parent) => { admission.onStart(span); ownedStart(span, parent); };
       const samplerName = process.env.OTEL_TRACES_SAMPLER, samplerArg = process.env.OTEL_TRACES_SAMPLER_ARG;
       try {
         // BasicTracerProvider evaluates its env defaults even with a sampler supplied.
@@ -385,8 +393,8 @@ export function init(options: Options = {}): TracerProvider | undefined {
         let admitted = {};
         try { if (secrets !== null) admitted = admissionPrivacy.attributes({ ...getAttributesFromContext(parent), ...result.attributes }, undefined, result.attributes["gen_ai.operation.name"]); }
         catch { /* Fail closed before SDK value truncation, retaining identity/timing. */ }
-        // Host SDK limits admit this already-protected FI-authored data. Auto
-        // does not rewrite native storage to prioritize FI projection fields.
+        // Host SDK limits admit this already-protected FI-authored data. Only
+        // our own provider reserves sampler metadata; borrowed storage is untouched.
         const span = wireTracer.startSpan(result.name, { kind: SpanKind.CLIENT, startTime: start, attributes: admitted }, parent);
         markAgentSpan(span.getContextSpan());
         if (secrets === null) failedCaptures.add(span.getContextSpan());
