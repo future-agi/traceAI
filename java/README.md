@@ -196,6 +196,8 @@ Add `com.futureagi:traceai-java-core` to your application using the BOM above, o
 
 `TraceAI.init(config)` and `TraceAI.initFromEnvironment()` create a provider used by `TraceAI.getTracer()` and the TraceAI wrappers. They do **not** register, replace or read global OpenTelemetry. Global tracers do not send spans through this local provider. This lets a Java agent or application SDK coexist without registration errors, including when the application registers its SDK after TraceAI starts.
 
+For these owned providers, `TraceConfig.builder().sampler(Sampler.alwaysOff())` (import `io.opentelemetry.sdk.trace.samplers.Sampler`) selects an explicit sampler. If the option is absent or null, `FI_SAMPLE_RATE` wins and selects `ParentBased(TraceIdRatio(rate))`; otherwise `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` select one of the six [standard sampler choices](traceai-javaagent/README.md#configuration). With no settings, or invalid standard settings (one warning), the default is `ParentBased(TraceIdRatio(1.0))`. Parent-based choices preserve the parent's sampled decision; even rate `0` retains children of sampled parents. This sampler option is unreleased and requires the source build above.
+
 If your application already owns OpenTelemetry, share its pipeline instead:
 
 ```java
@@ -211,7 +213,7 @@ TraceAI.init(TraceConfig.builder()
     .build(), GlobalOpenTelemetry.get());
 ```
 
-You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection or resource settings. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
+You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection, resource or sampler settings. An application-owned provider keeps its own sampler, regardless of these options or environment variables. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
 
 The first initialization wins until `TraceAI.shutdown()`. Shutdown flushes and closes only a TraceAI-owned provider, with a ten-second wait each for flush and shutdown. In borrowed mode it only detaches TraceAI; the application remains responsible for flushing and closing its SDK. Reinitialization is supported in either mode. Obtain a new `FITracer` and rebuild wrappers after restarting a TraceAI-owned provider; existing wrappers retain their previous tracer.
 
