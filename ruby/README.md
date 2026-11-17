@@ -229,6 +229,17 @@ ratio sampling to the exported trace ID using the Ruby SDK's cutoff; explicit
 rates retain their existing random sampling. An application-owned provider always
 keeps its own sampler, including its parent sampled-flag decisions.
 
+For fractional ratio sampling (`0 < r < 1`), kept spans carry the double attribute
+`fi.sampling.ratio` and roots propagate `fi=r:<ratio>` in W3C tracestate (also on
+SDK-free exports); non-parent-based ratio sampling sets the configured ratio on
+children too, preserving other tracestate entries.
+Parent-based children inherit a sampled parent's valid fractional `fi` ratio,
+including remote parents, and omit the attribute when that ratio is absent or
+invalid rather than substitute the local rate.
+An absent attribute means `1.0` for count/cost estimation; this metadata never
+changes sampling decisions and is not added for rate one, always-on/off samplers,
+dropped or record-only spans, or application-owned providers.
+
 ```toml
 # futureagi.toml
 project_name = "checkout"
