@@ -316,6 +316,18 @@ explicit rate, the six standard OpenTelemetry sampler names select the sampler
 that same default with one warning. An application-owned provider always keeps
 its own sampler.
 
+On agent-owned providers with a known ratio between 0 and 1, sampled spans carry
+`fi.sampling.ratio` as a double: the trace's keep probability (absent means `1.0`).
+A local ratio decision writes `fi=r:<ratio>` to W3C tracestate while preserving
+other entries; parent-based children inherit a valid ratio from a sampled
+parent's `fi` entry, including across process boundaries, and otherwise omit the
+attribute. Always-on/off, ratio `0`/`1`, unknown samplers, dropped or record-only
+spans, and application-owned providers are not stamped. Wire admission reserves
+one attribute slot when this sampler may stamp, keeping admitted content/MIME
+groups atomic. With an attribute-count limit of `1`, the ratio takes the only
+slot and no wire degradation marker can fit; a zero limit keeps no attributes,
+and a negative (unlimited) limit needs no reservation.
+
 Allow/deny lists report manual library integrations as disabled; they cannot
 remove middleware you explicitly added yourself. Provider-specific allowlists
 do not filter wire requests: `wire` is the integration that owns that layer.
