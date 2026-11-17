@@ -77,7 +77,7 @@ module TraceAI
         return unless rate
         span.instance_variable_set(:@traceai_sampling_ratio, rate)
         span.singleton_class.prepend(RatioSpan)
-        span.send(:trim_span_attributes, span.instance_variable_get(:@attributes))
+        span.send(:traceai_restore_ratio)
       rescue StandardError => e
         Auto.debug(e)
       end
@@ -92,8 +92,21 @@ module TraceAI
     module RatioSpan
       private
 
+      def traceai_restore_ratio
+        # These candidates have already passed media admission and SDK trimming.
+        # Reordering metadata must not reinterpret truncated content as new input.
+        @traceai_ratio_restoring = true
+        trim_span_attributes(@attributes)
+      ensure
+        @traceai_ratio_restoring = false
+      end
+
       def trim_span_attributes(attributes)
         if attributes
+          # Classification is a bounded boolean sidecar, not an extra SDK tag.
+          # Preserve it before the reserved ratio slot can displace its marker.
+          @traceai_ratio_ai ||= Auto.ai_marked?(attributes, @instrumentation_scope)
+          @traceai_covered ||= MODEL_KINDS.include?(attributes['gen_ai.span.kind'])
           attributes.delete(SamplingRatio::ATTRIBUTE)
           attributes.replace({SamplingRatio::ATTRIBUTE => @traceai_sampling_ratio}.merge(attributes))
         end

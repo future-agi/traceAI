@@ -1111,7 +1111,8 @@ module TraceAI
       def shutdown(timeout: nil) = @delegate.shutdown(timeout: timeout)
       private
       def ai_span?(span)
-        Auto.ai_marked?(span.attributes, span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil)
+        span.instance_variable_get(:@traceai_ratio_ai) ||
+          Auto.ai_marked?(span.attributes, span.respond_to?(:instrumentation_scope) ? span.instrumentation_scope : nil)
       end
       def remember(trace_id)
         @mutex.synchronize do
