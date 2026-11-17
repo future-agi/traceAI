@@ -115,6 +115,15 @@ public static class TraceAIAuto
     public static string Bootstrap() => string.Join(Environment.NewLine,GetStatus().Select(s=>$"{s.Name}: {s.Status} — {s.Reason}"));
     public static bool Flush(int timeoutMilliseconds = 3000)
     { try { return s_agent?.Flush(timeoutMilliseconds)??true; } catch { Warn("export","Collector unavailable; tracing data may be dropped."); return false; } }
+    /// <summary>Returns a context for explicitly propagating the owned agent's sampling
+    /// decision. Inject it with a W3C trace-context propagator on an agent-owned handoff.
+    /// Does not change Activity.Current, the Activity, or application header injection.
+    /// Supplied providers and activities not recorded by this agent are unchanged.</summary>
+    public static ActivityContext GetPropagationContext(Activity? activity = null)
+    {
+        activity??=Activity.Current;
+        return activity==null?default:Volatile.Read(ref s_agent)?.PropagationContext(activity)??activity.Context;
+    }
     public static void Shutdown(int timeoutMilliseconds = 3000)
     {
         Agent? agent;
@@ -153,6 +162,7 @@ internal sealed class Agent : IDisposable
     private readonly ExportCompletion _completion=new();
     private readonly PrivacyBatchProcessor? _batch;
     private readonly bool _ownsProvider;
+    private readonly ExportSampler? _sampler;
     private int _disposed;
     private readonly object _lifecycle=new();
     private Task<bool>? _flush;
@@ -165,7 +175,7 @@ internal sealed class Agent : IDisposable
         _ownsProvider=config.Options.Provider==null;
         // A supplied provider owns sampling completely, including any FI destination
         // attached to it. Only resolve FI/OTel configuration for our own provider.
-        var sampler=_ownsProvider?new ExportSampler(SamplingConfiguration.Wrap(SamplingConfiguration.Create(
+        var sampler=_sampler=_ownsProvider?new ExportSampler(SamplingConfiguration.Wrap(SamplingConfiguration.Create(
             config.HasSampleRate?config.SampleRate:null,message=>TraceAIAuto.Warn("sampler",message)))):null;
         var privacy=new AutoProcessor(config,()=>Volatile.Read(ref _disposed)==0,sampler);
         TracerProviderBuilder? builder=null;
@@ -255,6 +265,11 @@ internal sealed class Agent : IDisposable
         } catch { }
         return result;
     }
+    // Only the sampler belonging to this owned provider can resolve its private
+    // decision property. Do not re-sample arbitrary application activities here.
+    internal ActivityContext PropagationContext(Activity activity) => Volatile.Read(ref _disposed)==0 &&
+        activity.GetCustomProperty("traceai.suppressed") is not true && !InstrumentationSuppression.Active?
+        _sampler?.Context(activity)??activity.Context:activity.Context;
     internal bool Flush(int timeout)
     {
         timeout=Math.Max(0,timeout);

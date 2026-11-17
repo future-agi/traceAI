@@ -128,7 +128,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
             // Reserve a slot before atomic content selection, not after it. Application
             // tags cannot claim this reservation, and a zero limit still means no tags.
             var candidates=trustedRatio?copy.TagObjects.Where(tag=>tag.Key!=RatioSampler.Attribute):copy.TagObjects;
-            var projected=AttributeProjection.Project(candidates,trustedRatio&&limit>0?limit-1:limit);
+            var projected=AttributeProjection.Project(candidates,limit,reserved:trustedRatio&&limit>0?1:0);
             Set(copy,"_tags",null);
             foreach(var tag in projected) copy.SetTag(tag.Key,tag.Value);
             if(trustedRatio&&limit>0) copy.SetTag(RatioSampler.Attribute,ratio);
