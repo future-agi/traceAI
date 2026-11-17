@@ -998,8 +998,8 @@ class _RatioMetadataSampler(Sampler):
         self._rate = root.rate if isinstance(root, TraceIdRatioBased) and 0.0 < root.rate < 1.0 else None
 
     def sampled_ratio(self, context: Optional[trace_api.SpanContext]) -> Optional[float]:
-        """Recover metadata only for sampled spans under our fractional-ratio wrapper."""
-        if self._rate is None or context is None or not context.trace_flags.sampled:
+        """Recover locally decided or parent-inherited metadata only for sampled spans."""
+        if (not self._parent_based and self._rate is None) or context is None or not context.trace_flags.sampled:
             return None
         return _parse_sampling_ratio(context.trace_state)
 
@@ -1008,18 +1008,21 @@ class _RatioMetadataSampler(Sampler):
         result = self._sampler.should_sample(
             parent_context, trace_id, name, kind, attributes, links, trace_state,
         )
-        rate = self._rate
-        if result.decision is not Decision.RECORD_AND_SAMPLE or rate is None:
+        if result.decision is not Decision.RECORD_AND_SAMPLE:
             return result
 
+        rate = self._rate
         state = result.trace_state
         parent = trace_api.get_current_span(parent_context).get_span_context()
         if self._parent_based and parent.is_valid:
-            # A sampled parent's decision is not ours: never substitute our configured rate.
-            rate = _parse_sampling_ratio(parent.trace_state)
+            # Inherit a sampled parent's ratio regardless of our local root rate.
+            # Never substitute our configured rate for an absent/invalid parent entry.
+            rate = _parse_sampling_ratio(parent.trace_state) if parent.trace_flags.sampled else None
             if rate is None:
                 return result
         else:
+            if rate is None:
+                return result
             # repr(float) is Python's shortest round-trippable decimal representation.
             # Keep vendor ordering; at W3C's 32-entry limit only the rightmost entry expires.
             entries = [(key, value) for key, value in (state or trace_api.TraceState()).items() if key != "fi"]
