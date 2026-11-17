@@ -18,7 +18,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
-from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from opentelemetry.sdk.trace.sampling import ParentBased, Sampler, TraceIdRatioBased, _get_from_env_or_default
 from opentelemetry.trace import Link, Status
 
 from fi_instrumentation.auto import _privacy, _registry
@@ -962,6 +962,34 @@ def _filter_registered_export(provider: Any, config: Any) -> bool:
     return True
 
 
+def _head_sampler(settings: AutoConfig) -> Sampler:
+    """Select a sampler only for a provider the agent creates."""
+    default = ParentBased(TraceIdRatioBased(settings.sample_rate))
+    # resolve() records arguments, FI_SAMPLE_RATE and config-file rates, including an explicit 1.0.
+    if settings.sources.get("sample_rate", "default") != "default":
+        return default
+    name = os.environ.get("OTEL_TRACES_SAMPLER")
+    if name is None:
+        return default
+    name = name.lower()  # Match the SDK's case handling; whitespace is not stripped.
+    try:
+        if name not in ("always_on", "always_off", "traceidratio", "parentbased_always_on",
+                        "parentbased_always_off", "parentbased_traceidratio"):
+            raise ValueError
+        # The SDK warns and substitutes a ratio for malformed text, but can raise for an
+        # out-of-range ratio. Validate first so every invalid setting gets one warning and
+        # the same parent-based fallback, without logging environment values.
+        if name in ("traceidratio", "parentbased_traceidratio"):
+            rate = float(os.environ.get("OTEL_TRACES_SAMPLER_ARG", "1.0"))
+            if not 0.0 <= rate <= 1.0:
+                raise ValueError
+        return _get_from_env_or_default()
+    except ValueError:
+        logger.warning("traceAI: invalid or unsupported OTEL_TRACES_SAMPLER/OTEL_TRACES_SAMPLER_ARG; "
+                       "using ParentBased(TraceIdRatioBased(1.0))")
+        return default
+
+
 def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
                     supplied: Any = None) -> Tuple[Any, bool]:
     """The provider to trace with, and whether the agent created (and so owns) it."""
@@ -1006,7 +1034,8 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
         return existing, False
 
     kwargs["span_exporter"] = selected
-    kwargs.setdefault("sampler", ParentBased(TraceIdRatioBased(settings.sample_rate)))
+    if kwargs.get("sampler") is None:
+        kwargs["sampler"] = _head_sampler(settings)
     kwargs.setdefault("set_global_tracer_provider", True)
     kwargs.setdefault("project_name", settings.project_name)
     kwargs.setdefault("project_type", project_type)

@@ -4,6 +4,9 @@
 - Zero-code auto-instrumentation. Start an unchanged app with `FI_AUTO_INSTRUMENT=true python app.py` (or under `opentelemetry-instrument`), or call `fi_instrumentation.init()` once in code: every installed traceAI integration turns on when the app first imports its library, and Future AGI receives only AI spans while your other OpenTelemetry exporters keep every span.
 - `fi-instrument` command: `fi-instrument doctor` shows which libraries are covered, and `fi-instrument bootstrap --install` adds the missing traceAI packages.
 
+### Fixed
+- Agent-owned providers honour `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` when no explicit sample rate is set. Explicit rates still win; invalid sampler settings warn once and use the parent-based default. Application-owned providers keep their sampler unchanged.
+
 ## [1.3.2] - 2026-11-12
 
 ### Fixed

@@ -75,6 +75,8 @@ Every installed traceAI integration turns on when the app first imports its libr
 
 If the app already calls `register()` and `instrument()` itself, do not also start it with `fi-instrument` or `FI_AUTO_INSTRUMENT`: the agent would register its own provider first, and your calls would have no effect. Remove those calls, or keep them and call `fi_instrumentation.init()` after them.
 
+For a provider the agent creates, `FI_SAMPLE_RATE` (or `init(sample_rate=...)` / `sample_rate` in `futureagi.toml`) wins over `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`; otherwise those standard OpenTelemetry settings choose the head sampler. The default is `ParentBased(TraceIdRatioBased(1.0))`; invalid or unsupported sampler settings use that default with one warning. An explicit `sampler=` still takes precedence. An application-owned provider always keeps its own sampler, including its parent sampled-flag behaviour.
+
 ## Shutdown on termination
 
 From `fi-instrumentation-otel` 1.2.2, `register()` leaves your SIGINT and SIGTERM handlers unchanged. Default SIGTERM does not run Python exit hooks, so call `provider.shutdown()` from your application's shutdown path to export pending spans on container stop, and allow enough termination grace time. SIGKILL cannot flush spans.
