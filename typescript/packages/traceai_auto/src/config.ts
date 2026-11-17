@@ -23,8 +23,11 @@ export interface Options {
   provider?: TracerProvider;
   spanProcessor?: SpanProcessor;
   mastraSpanProducer?: "exporter" | "bridge";
+  /** Also send the application's own spans to Future AGI (off by default; FI_FORWARD_APP_SPANS). */
+  forwardApplicationSpans?: boolean;
 }
 export interface Config {
+  forwardApplicationSpans: boolean;
   propagateOutgoingAdapters: boolean;
   propagateOutgoing: OutgoingPropagationMode;
   apiKey?: string; secretKey?: string; baseUrl: string; projectName: string;
@@ -64,6 +67,25 @@ export function parseConfigFile(text: string, profile?: string): Record<string, 
 function bool(v: unknown, fallback: boolean): boolean {
   return v === undefined ? fallback : typeof v === "boolean" ? v : String(v).toLowerCase() === "true";
 }
+const SWITCH_ON = ["true", "1", "yes", "on"], SWITCH_OFF = ["false", "0", "no", "off"];
+const warnedSwitches = new Set<string>();
+/**
+ * A privacy switch someone set must never silently do nothing: true, 1, yes and on turn it on,
+ * false, 0, no and off turn it off (any case, surrounding spaces ignored), and an empty value is
+ * unset. Any other value turns it on, with one warning per switch that never repeats the value.
+ */
+function hideSwitch(v: unknown, where: string): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  const normalized = String(v).trim().toLowerCase();
+  if (normalized === "") return undefined;
+  if (SWITCH_ON.includes(normalized)) return true;
+  if (SWITCH_OFF.includes(normalized)) return false;
+  if (!warnedSwitches.has(where)) {
+    warnedSwitches.add(where);
+    try { console.warn(`[traceai:auto] ${where} is not one of true, 1, yes, on, false, 0, no or off; treating it as on, so the content it controls is hidden.`); } catch { /* Diagnostics cannot change configuration. */ }
+  }
+  return true;
+}
 function names(v: unknown): string[] { return (Array.isArray(v) ? v : String(v ?? "").split(",")).map(x => String(x).trim().toLowerCase()).filter(Boolean); }
 function readProfile(path: string, profile: string): Record<string, unknown> {
   try { return parseConfigFile(readFileSync(path, "utf8"), profile); } catch { return {}; }
@@ -87,17 +109,27 @@ export function outgoingPolicyForConfig(config: Config): OutgoingPolicy {
   return outgoingPolicies.get(config) ?? compileOutgoingPolicy("none", undefined);
 }
 export function credentialsForConfig(config: Config): readonly unknown[] { return configCredentials.get(config) ?? []; }
-function credentialPair(sources: { source: string; apiKey: unknown; secretKey: unknown }[]): { apiKey?: string; secretKey?: string } {
+// Sources that held only half of a pair when no source held a complete one.
+// init() folds them into its single "disabled" warning. Names only, never values.
+const incompleteSources = new WeakMap<Config, readonly string[]>();
+export function incompleteCredentialSources(config: Config): readonly string[] { return incompleteSources.get(config) ?? []; }
+function credentialPair(sources: { source: string; apiKey: unknown; secretKey: unknown }[]): { pair: { apiKey?: string; secretKey?: string }; incomplete: string[] } {
+  const incomplete: string[] = [];
   for (const { source, apiKey, secretKey } of sources) {
     const key = typeof apiKey === "string" && apiKey.trim() ? apiKey : undefined;
     const secret = typeof secretKey === "string" && secretKey.trim() ? secretKey : undefined;
-    if (key && secret) return { apiKey: key, secretKey: secret };
-    if (key || secret) {
-      try { console.warn(`[traceai:auto] Ignoring incomplete credentials from ${source}: missing ${key ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`); } catch { /* Never change application behaviour. */ }
+    if (key && secret) {
+      // A complete pair was found: say which earlier halves were ignored.
+      for (const note of incomplete) {
+        try { console.warn(`[traceai:auto] Ignoring incomplete credentials from ${note}. Supply both in the same source.`); } catch { /* Never change application behaviour. */ }
+      }
+      return { pair: { apiKey: key, secretKey: secret }, incomplete: [] };
     }
+    if (key || secret) incomplete.push(`${source}: missing ${key ? "FI_SECRET_KEY" : "FI_API_KEY"}`);
   }
-  return {};
+  return { pair: {}, incomplete };
 }
+function flag(value: unknown): boolean { return value === true || typeof value === "string" && value.trim().toLowerCase() === "true"; }
 function mastraProducer(value: unknown): "exporter" | "bridge" {
   if (value === undefined || value === "exporter") return "exporter";
   if (value === "bridge") return "bridge";
@@ -115,20 +147,27 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
     { source: "config file", apiKey: file.api_key, secretKey: file.secret_key },
     ...profiles.map((p, i) => ({ source: i ? "fi user profile" : "fi project profile", apiKey: p.api_key, secretKey: p.secret_key })),
   ];
-  const pair = credentialPair(credentialSources);
-  const value = (code: keyof Options, key: string, envName = `FI_${key.toUpperCase()}`): any => options[code] ?? env[envName] ?? file[key];
+  const { pair, incomplete } = credentialPair(credentialSources);
+  const value =(code: keyof Options, key: string, envName = `FI_${key.toUpperCase()}`): any => options[code] ?? env[envName] ?? file[key];
   const sample = Number(value("sampleRate", "sample_rate") ?? 1), max = Number(value("wireMaxBodyBytes", "wire_max_body_bytes") ?? 4194304);
   const traceConfig: TraceConfigOptions = {};
   for (const key of ["hideInputs", "hideOutputs", "hideInputMessages", "hideOutputMessages", "hideInputImages", "hideInputText", "hideOutputText", "hideEmbeddingVectors", "hideLLMInvocationParameters", "base64ImageMaxLength", "piiRedaction", "hideErrorDetails"] as (keyof TraceConfigOptions)[]) {
     const snake = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/([A-Z])([A-Z][a-z])/g, "$1_$2").toLowerCase();
-    const raw = options.traceConfig?.[key] ?? env[`FI_${snake.toUpperCase()}`] ?? file[snake];
-    if (raw !== undefined) {
-      if (key === "base64ImageMaxLength") { const n = Number(raw); if (Number.isFinite(n)) traceConfig[key] = n; }
-      else if (key === "hideErrorDetails") {
-        // Optional boolean: empty/invalid values mean derive, not an explicit opt-out.
-        const normalized = String(raw).trim().toLowerCase();
-        if (normalized === "true" || normalized === "false") traceConfig[key] = normalized === "true";
-      } else traceConfig[key] = bool(raw, false);
+    const envName = `FI_${snake.toUpperCase()}`;
+    if (key === "base64ImageMaxLength") {
+      const raw = options.traceConfig?.[key] ?? env[envName] ?? file[snake];
+      if (raw !== undefined) { const n = Number(raw); if (Number.isFinite(n)) traceConfig[key] = n; }
+    } else {
+      // A privacy switch. The first source that is set wins: the option in code, the variable,
+      // then the config file. A null, empty or blank value is not set, so an empty variable never
+      // masks the file's value. With none set the key is left out (hideErrorDetails then follows
+      // the content switches). An unrecognised value hides, with one warning naming its source.
+      const sources: [unknown, string][] = [[options.traceConfig?.[key], `traceConfig.${key}`], [env[envName], envName], [file[snake], `${snake} in the config file`]];
+      const source = sources.find(([raw]) => raw != null && String(raw).trim() !== "");
+      if (source) {
+        const value = hideSwitch(source[0], source[1]);
+        if (value !== undefined) traceConfig[key] = value;
+      }
     }
   }
   const rawHosts = value("propagateHosts", "propagate_hosts", "TRACEAI_PROPAGATE_HOSTS");
@@ -143,6 +182,7 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
   // Strict opt-in, separate from destination policy: "all" is not activation.
   const rawAdapters = value("propagateOutgoingAdapters", "propagate_outgoing_adapters", "TRACEAI_PROPAGATE_OUTGOING_ADAPTERS");
   const config: Config = {
+    forwardApplicationSpans: flag(value("forwardApplicationSpans", "forward_app_spans", "FI_FORWARD_APP_SPANS")),
     propagateOutgoingAdapters: rawAdapters === true || rawAdapters === "true",
     propagateOutgoing: outgoing.mode,
     ...pair,
@@ -159,10 +199,15 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
   };
   outgoingPolicies.set(config, outgoing);
   configCredentials.set(config, credentialSources.flatMap(source => [source.apiKey, source.secretKey]));
+  if (incomplete.length) incompleteSources.set(config, incomplete);
   return config;
 }
 export function enabled(name: string, config: Config): boolean {
   return !config.sdkDisabled && !config.disabledInstrumentations.includes(name) && (!config.instrumentations.length || config.instrumentations.includes(name));
+}
+/** Off unless the allowlist names it, for integrations that also see non-AI traffic. */
+export function explicitlyEnabled(name: string, config: Config): boolean {
+  return !config.sdkDisabled && !config.disabledInstrumentations.includes(name) && config.instrumentations.includes(name);
 }
 export function maskConfig(config: Config): Record<string, unknown> {
   let baseUrl = config.baseUrl;

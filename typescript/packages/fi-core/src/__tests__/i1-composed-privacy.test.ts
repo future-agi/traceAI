@@ -172,11 +172,12 @@ test.each(["ordinary", "registered", "credential-shaped"])("I1-H1b typed identit
       expect(clean.attributes["control.label"]).toBe("i1-public-control");
       if (kind !== "ordinary") expect(JSON.stringify(clean)).not.toContain(id);
     }
-    // A distinct, ordinary unbound id is a grouping key and exports as set.
+    // A distinct, ordinary unbound id on a span not made by an FI tracer keeps
+    // the credential name rule.
     const unboundId = `different-unbound-i1-${kind}`;
     const unbound = privacyFilter().span(snapshot({ "session.id": unboundId, "control.label": "i1-public-control" }));
     for (const clean of [unbound, privacyFilter().span(unbound)]) {
-      expect(clean.attributes["session.id"]).toBe(unboundId);
+      expect(clean.attributes["session.id"]).toBe("<redacted>");
       expect(clean.attributes["control.label"]).toBe("i1-public-control");
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
@@ -232,7 +233,7 @@ test("I1-O1 cap mechanism has exact boundary while composed A remains stronger",
   expect(clean.name).toBe("retained span");
   expect(clean.attributes.safe).toBe("ordinary words");
   // PENDING I1xF2-PRECEDENCE T10: TS I1 media omission dominates positive caps.
-  // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1; retain the original omission/absence checks.
+  // Retain the original omission/absence checks.
   expect(clean.attributes.arbitrary).toBe("<omitted: 150 base64 chars>");
   expect(clean.attributes.arbitrary).toContain("<omitted:");
   expect(JSON.stringify(clean)).not.toContain(png);

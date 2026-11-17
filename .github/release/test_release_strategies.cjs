@@ -64,6 +64,11 @@ const scm = {
   assert(!updates.has('python/frameworks/anthropic/traceai_anthropic/version.py'), 'core release must not rewrite untouched sibling SDK runtime versions');
   assert.equal(JSON.parse(updates.get('typescript/packages/traceai_openai/package.json')).version, next['typescript/packages/traceai_openai']);
   assert(updates.get('csharp/src/FIInstrumentation/FIInstrumentation.csproj').includes(`<Version>${next['csharp/src/FIInstrumentation']}</Version>`));
+  // The hook embeds the SDK sources, so the linked-versions plugin moves them together.
+  const SDK = 'csharp/src/FIInstrumentation', HOOK = 'csharp/src/TraceAI.AutoInstrumentation';
+  assert.equal(next[HOOK], next[SDK], 'an SDK feature releases the hook at the same version');
+  assert(updates.get(`${HOOK}/TraceAI.AutoInstrumentation.csproj`).includes(`<Version>${next[HOOK]}</Version>`));
+  assert(updates.has(`${HOOK}/CHANGELOG.md`) && updates.has(`${SDK}/CHANGELOG.md`), 'both csharp changelogs are written');
   assert(!next.java.includes('SNAPSHOT'), 'one release PR, no Maven snapshot PR');
   assert(updates.get('go/bedrock/client.go').includes(`Version   = "${next['go/bedrock']}"`), 'Bedrock runtime instrumentation version follows release');
   assert.match(updates.get('java/pom.xml'), new RegExp(`<version>${next.java.replaceAll('.', '\\.')}</version>`));
@@ -94,6 +99,9 @@ const scm = {
     [['python/fi_instrumentation/instrumentation/config.py'], ['python']],
     [['python/frameworks/openai/pyproject.toml'], ['python/frameworks/openai']],
     [['python/frameworks/new-sdk/pyproject.toml'], []],
+    [['csharp/src/FIInstrumentation/Example.cs'], ['csharp/src/FIInstrumentation', 'csharp/src/TraceAI.AutoInstrumentation']],
+    [['csharp/src/TraceAI.AutoInstrumentation/Example.cs'], ['csharp/src/FIInstrumentation', 'csharp/src/TraceAI.AutoInstrumentation']],
+    [['csharp/src/FIInstrumentation/Example.cs', 'csharp/src/TraceAI.AutoInstrumentation/Example.cs'], ['csharp/src/FIInstrumentation', 'csharp/src/TraceAI.AutoInstrumentation']],
   ]) {
     const scenarioScm = {...scm, async *mergeCommitIterator() {
       yield {sha: 'e'.repeat(40), message: 'fix: update dependency security constraint', files};
@@ -110,7 +118,22 @@ const scm = {
       if (result !== undefined) contents.set(update.path, result);
     }
     const versions = contents.has('.release-please-manifest.json') ? JSON.parse(contents.get('.release-please-manifest.json')) : baseline;
-    assert.deepEqual(Object.keys(versions).filter(p => versions[p] !== baseline[p]), expected);
+    assert.deepEqual(Object.keys(versions).filter(p => versions[p] !== baseline[p]).sort(), [...expected].sort());
+    if (expected.some(p => p.startsWith('csharp/'))) {
+      const SDK = 'csharp/src/FIInstrumentation', HOOK = 'csharp/src/TraceAI.AutoInstrumentation';
+      const {TagName: Tag} = require('release-please/build/src/util/tag-name.js');
+      const {Version: Ver} = require('release-please/build/src/version.js');
+      assert.equal(versions[SDK], versions[HOOK], `${files}: SDK and hook leave together at one version`);
+      const [major, minor, patch] = baseline[SDK].split('.').map(Number);
+      assert.equal(baseline[HOOK], baseline[SDK], 'aligned baseline');
+      assert.equal(versions[SDK], `${major}.${minor}.${patch + 1}`, `${files}: a fix is a patch`);
+      for (const [dir, project, tag] of [[SDK, 'FIInstrumentation.csproj', 'nuget-fi-instrumentation-otel'], [HOOK, 'TraceAI.AutoInstrumentation.csproj', 'nuget-TraceAI.AutoInstrumentation']]) {
+        assert(contents.get(`${dir}/${project}`).includes(`<Version>${versions[dir]}</Version>`), `${dir}: project version follows the release`);
+        assert(contents.has(`${dir}/CHANGELOG.md`), `${dir}: changelog is written`);
+        assert.equal(config.packages[dir].component, tag);
+        assert.equal(new Tag(Ver.parse(versions[dir]), config.packages[dir].component, config['tag-separator'], true).toString(), `${tag}-v${versions[dir]}`);
+      }
+    }
     if (expected.includes('python')) {
       const [major, minor, patch] = baseline.python.split('.').map(Number);
       assert.equal(versions.python, `${major}.${minor}.${patch + 1}`);

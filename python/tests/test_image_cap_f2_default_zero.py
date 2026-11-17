@@ -1,8 +1,8 @@
-"""F2 default-zero RED-first tests; real runtime is a separate E2B gate.
+"""Tests for the default image cap of zero, written before the implementation.
 
-Literal case oracles were authored before production candidates. No old tests
-are changed. Optional integration packages are required for their selected lane;
-missing packages must fail that run rather than silently skip the coverage.
+No old tests are changed. Optional integration packages are required for the run
+that selects them; missing packages must fail that run rather than silently skip
+the coverage.
 """
 import json
 
@@ -752,7 +752,7 @@ def test_f2_fixed_marker_remains_protected():
         cap_base64_images("ordinary", 0, "[image-redacted]")
 
 
-# Ruling r2 continuation (LANE-CALL-NIKM4-5A-F2-CAP0-OVERREDACTION-r2): the cap-0
+# The cap-0
 # trigger is data:, then image/, then a comma, within one Q1 scope view.
 
 

@@ -25,7 +25,7 @@ function fixture(): any {
     status: { code: 2, message: "registered-manual-private" }, events: [{ name: "registered-manual-private", time: [1, 2], attributes: { echoed: "registered-manual-private" } }], links: [],
     resource: resourceFromAttributes({ safe: "application" }), instrumentationScope: { name: "application" } };
 }
-test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "register-default", "register-batch", "direct-provider"])("A2 every owned %s route applies S1 on a detached span; RL2299h preserves manual policy", async route => {
+test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "register-default", "register-batch", "direct-provider"])("A2 every owned %s route applies S1 on a detached span; manual policy is preserved", async route => {
   registerSecret("registered-manual-private");
   const fetch = jest.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
   const original = fixture(), before = JSON.stringify(original);

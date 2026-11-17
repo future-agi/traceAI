@@ -252,6 +252,7 @@ The evaluation system provides comprehensive AI model assessment capabilities:
 - `FI_BASE_URL`: Base URL for the TraceAI collector
 - `FI_API_KEY`: API key for authentication
 - `FI_SECRET_KEY`: Secret key for authentication
+- `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and the other `FI_HIDE_*` switches (including `FI_HIDE_LLM_INVOCATION_PARAMETERS` and `FI_HIDE_ERROR_DETAILS`), and `FI_PII_REDACTION`: privacy switches. `true`, `1`, `yes` and `on` turn a switch on, and `false`, `0`, `no` and `off` turn it off, in any case. An empty value counts as unset. Any other value turns the switch on, so the content is hidden, and logs one warning that names the variable but not its value. The warning goes to the OpenTelemetry diagnostic logger, so it is printed only when your application has set one with `diag.setLogger`.
 
 ## Examples
 
@@ -512,13 +513,20 @@ Other provider structures have no new exception without catalog/source evidence.
 resource identity, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and an optional
 application `resource` are preserved.
 
-`session.id` and `user.id` are exported as set, so don't use a credential or a
-session cookie as either. The same applies to the session ids that the Pi coding
-agent, Claude Agent SDK and Genkit integrations record under their own keys:
-`pi.session.id`; `claude_agent.session.id` and `claude_agent.session_id`, plus
-the resumed and forked-from session ids `claude_agent.resume_session_id`,
+On spans made by an FI tracer (`FITracer`, which traceAI instrumentors use), and
+on spans that a traceAI integration converts from its framework's spans (such as
+Genkit's), `session.id` and `user.id` are exported as set, so don't use a
+credential or a session cookie as either. The same applies to the session ids that
+the Pi coding agent, Claude Agent SDK and Genkit integrations record under their
+own keys: `pi.session.id`; `claude_agent.session.id` and `claude_agent.session_id`,
+plus the resumed and forked-from session ids `claude_agent.resume_session_id`,
 `claude_agent.session.previous_id` and `claude_agent.session.fork_from`; and
-`genkit:metadata:agent:sessionId`.
+`genkit:metadata:agent:sessionId`. An integration marks its converted spans with
+`rememberFITracerSpan(span.spanContext())`. Spans made by any other tracer, such
+as application spans that `@traceai/auto` forwards, keep the credential name rule
+for these keys, so a session-named value on them is exported as `<redacted>`.
+Their values are still never registered as secrets, so an FI span with the same
+session id keeps it.
 
 Resource detection is minimal by default: the provider adds the Node.js runtime
 name and version (`process.runtime.*`) and nothing that identifies the machine,
@@ -659,7 +667,7 @@ API while making zero-code ownership explicit.
 ### Media policy and image cap for this release
 
 For this release, the ratified
-`LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1` decision makes I1 media
+media policy makes I1 media
 omission dominant at every cap in the FI retained/export view. Recognized
 base64/media and data URLs are omitted, including images at or below a positive
 cap; recognized base64 image payloads in payload fields or `data:` URLs use

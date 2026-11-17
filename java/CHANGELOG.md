@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 (pending release)
+
+### Features
+
+* **javaagent:** first release of `com.futureagi:traceai-javaagent`, the zero-code Java agent. Add `-javaagent:traceai-javaagent-<version>.jar` (or call `TraceAI.init()`) to trace AI provider HTTP calls and send only those spans to Future AGI, leaving the application's OpenTelemetry setup untouched. The BOM now aligns it with the other modules.
+
 ## [1.1.0](https://github.com/future-agi/traceAI/compare/java-v1.0.3...java-v1.1.0) (2026-11-10)
 
 ### Features

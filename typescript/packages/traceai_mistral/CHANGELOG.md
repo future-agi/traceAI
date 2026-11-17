@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2] - pending release
+
+### Fixed
+* Inside the zero-code agent (@traceai/auto), the call's own request
+  no longer arrives twice.
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/npm-traceai-mistral-v0.1.0...npm-traceai-mistral-v0.1.1) (2026-11-05)
 
 

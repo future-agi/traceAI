@@ -1,0 +1,46 @@
+name: Ruby auto tests
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - ruby/**
+      - '!ruby/roast/**'
+      - spec/auto-instrumentation/**
+      - .github/workflows/ruby-auto-tests.yml
+  pull_request:
+    paths:
+      - ruby/**
+      - '!ruby/roast/**'
+      - spec/auto-instrumentation/**
+      - .github/workflows/ruby-auto-tests.yml
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.2', '3.3', '3.4']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # v1.334.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: false
+      - name: Install locked dependencies
+        working-directory: ruby
+        run: |
+          bundle config set --local path .bundle/vendor
+          bundle config set --local frozen true
+          bundle install
+      - name: Install the older json gem that child-process tests pin
+        working-directory: ruby
+        run: gem install json -v 2.6.3 --no-document --install-dir "$(bundle exec ruby -e 'print Gem.dir')"
+      - name: Test traceai-auto
+        working-directory: ruby
+        run: bundle exec rake test
+      - name: Build RubyGem
+        working-directory: ruby
+        run: gem build traceai-auto.gemspec

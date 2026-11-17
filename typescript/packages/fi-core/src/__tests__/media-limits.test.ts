@@ -184,7 +184,7 @@ test("RC2 truncated JSON, arrays, absent MIME, and non-base64 payloads fail clos
   expect(execute).not.toHaveBeenCalled();
 });
 
-// G3-2 complete-capture target; owner: fi-observe; 2026-11-05; Q7a interim. NOT_RUN.
+// Skipped: complete-capture target, not implemented yet.
 test.skip.each([8, 16, 24])("G3-2 pre-admission text: RC2 complete pre-admission text evidence survives limit %i but is invalidated by later writes", async limit => {
   const exporter = new InMemorySpanExporter(), provider = new BasicTracerProvider({ spanLimits: { attributeCountLimit: 32, attributeValueLengthLimit: limit }, spanProcessors: [new SimpleSpanProcessor(exporter)] });
   try {
@@ -196,7 +196,7 @@ test.skip.each([8, 16, 24])("G3-2 pre-admission text: RC2 complete pre-admission
   } finally { await provider.shutdown(); }
 });
 
-// G3-2 complete-capture target; owner: fi-observe; 2026-11-05; Q7a interim. NOT_RUN.
+// Skipped: complete-capture target, not implemented yet.
 test.skip("G3-2 structured media: RC2 truncated JSON, arrays, absent MIME, and non-base64 payloads fail closed without invoking accessors", () => {
   const execute = jest.fn(() => { throw new Error("user code"); });
   const attributes = Object.defineProperty({ json: '{"x":"AQ', arbitrary: [payload], "parts.0.bytes.0": 7, "parts.1.data": "binary bytes", "gen_ai.usage.input_tokens": 5 }, "mimeType", { enumerable: true, get: execute });

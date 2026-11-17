@@ -8,7 +8,7 @@ export type * from "./utils/types";
 export * from "./otel";
 export * from "./fi_types";
 export { registerSecret, getRegisteredSecrets, seedSecrets, markSecretDiscoveryFailed } from "./secrets";
-export { privacyFilter, LIBRARY_SECRETS, rememberMediaAdmission, rememberSpanValueLimit } from "./export-privacy";
+export { privacyFilter, LIBRARY_SECRETS, rememberMediaAdmission, rememberSpanValueLimit, rememberFITracerSpan } from "./export-privacy";
 export type { PrivacyOptions } from "./export-privacy";
 export { projectAttributes, tracerAttributeLimit, DROPPED_CONTENT_COUNT } from "./attribute-projection";
 export * from "./awsLambda";

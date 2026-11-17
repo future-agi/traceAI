@@ -251,7 +251,7 @@ const PARENT_RUNTIME_SHA256 = "d4601e3aff870d917336c78510ffa0544eb62204383d8e429
 const BASE_RUNTIME_SHA256 = "411d30cc45c3cdc801a6a9e172ddd3cf41a6ffdc4b193861cec6962a067b95a9";
 // fi-core 1.2.2: rebase both runtime oracles onto scalar catalog v6. The
 // algorithm is unchanged; audioCacheCount.test.ts verifies the new typed key.
-const BASE_CATALOG_SHA256 = "9da3fef3a84741f8cbe345a44f6a2f8c6aa7737fdf3c1a91d590f271eadb138f";
+const BASE_CATALOG_SHA256 = "2e278f5ea945d7049cbbfff0ba8c38d98cdc2f9959ed78a29fd0ba59c9ff2539";
 const source = readFileSync(join(__dirname, "..", "privacy-runtime.ts"), "utf8");
 const currentCatalogSource = readFileSync(join(__dirname, "..", "privacy.json"), "utf8");
 // Strip each additive declaration section explicitly; neither belongs to 1.2.0.

@@ -140,9 +140,9 @@ describe("hideErrorDetails derivation", () => {
     expect(generateTraceConfig().hideErrorDetails).toBe(true);
   });
 
-  it("an unparseable FI_HIDE_ERROR_DETAILS falls back to the derived value", () => {
+  it("an unrecognised FI_HIDE_ERROR_DETAILS hides error details: a privacy switch someone set never silently does nothing", () => {
     process.env[FI_HIDE_ERROR_DETAILS] = "yes please";
-    expect(generateTraceConfig().hideErrorDetails).toBe(false);
+    expect(generateTraceConfig().hideErrorDetails).toBe(true);
     process.env[FI_HIDE_INPUTS] = "true";
     expect(generateTraceConfig().hideErrorDetails).toBe(true);
   });

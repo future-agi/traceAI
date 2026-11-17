@@ -14,7 +14,8 @@ let host, supplied;
         spanLimits: { attributeCountLimit: Number(process.env.LIMIT || 128) }, spanProcessors: [new SimpleSpanProcessor({ export(spans, done) { app.push(...spans); done({ code: 0 }); }, async shutdown() {} })] });
       trace.setGlobalTracerProvider(host);
     }
-    const options = { projectName: 'routing-project', instrumentations: ['wire'], configFile: '/does-not-exist/traceai-fi-config' };
+    // Host cases send the application's spans too, which needs the forwarding switch.
+    const options = { projectName: 'routing-project', instrumentations: ['wire'], configFile: '/does-not-exist/traceai-fi-config', forwardApplicationSpans: !!host };
     if (mode !== 'host-only' && mode !== 'processor-only') options.exporter = exporter;
     if (mode === 'host-only') options.provider = host;
     if (mode === 'processor-only') { supplied = new SimpleSpanProcessor(exporter); options.spanProcessor = supplied; }

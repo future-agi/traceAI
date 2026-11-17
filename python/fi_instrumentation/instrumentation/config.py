@@ -193,6 +193,31 @@ _CONTENT_HIDE_FLAGS = (
     "hide_output_text",
 )
 
+_SWITCH_ON = ("true", "1", "yes", "on")
+_SWITCH_OFF = ("false", "0", "no", "off")
+_warned_switches: set = set()
+
+
+def _parse_switch(raw: str, env_var: str, default: Any) -> Any:
+    """Reads a privacy switch. A switch someone set must never silently do nothing:
+    true, 1, yes and on turn it on, false, 0, no and off turn it off (any case,
+    surrounding spaces ignored), and an empty value counts as unset. Any other value
+    turns it on, with one warning per variable that never repeats the value."""
+    normalized = raw.strip().lower()
+    if normalized == "":
+        return default
+    if normalized in _SWITCH_ON:
+        return True
+    if normalized in _SWITCH_OFF:
+        return False
+    if env_var not in _warned_switches:
+        _warned_switches.add(env_var)
+        logger.warning(
+            f"{env_var} is not one of true, 1, yes, on, false, 0, no or off; "
+            "treating it as on, so the content it controls is hidden."
+        )
+    return True
+
 
 @dataclass(frozen=True)
 class TraceConfig:
@@ -531,20 +556,16 @@ class TraceConfig:
             env_value = os.getenv(env_var)
             if env_value is None:
                 object.__setattr__(self, field_name, default_value)
+            elif expected_type is bool:
+                object.__setattr__(self, field_name, _parse_switch(env_value, env_var, default_value))
             else:
                 try:
-                    env_value = self._cast_value(env_value, expected_type)
-                    object.__setattr__(self, field_name, env_value)
+                    object.__setattr__(self, field_name, self._cast_value(env_value, expected_type))
                 except Exception:
-                    fallback = (
-                        default_value
-                        if default_value is not None
-                        else "derived from the other hide flags"
-                    )
+                    # Names the variable, never the value: it may hold anything.
                     logger.warning(
-                        f"Could not parse '{env_value}' to {type_name} "
-                        f"for the environment variable '{env_var}'. "
-                        f"Using default value instead: {fallback}."
+                        f"Could not read the environment variable '{env_var}' as {type_name}. "
+                        f"Using default value instead: {default_value}."
                     )
                     object.__setattr__(self, field_name, default_value)
         else:

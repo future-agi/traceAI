@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.1.0</version>
+        <version>1.2.0</version>
     </parent>
     <artifactId>traceai-bom</artifactId>
     <packaging>pom</packaging>
@@ -140,6 +140,11 @@
             <dependency>
                 <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-semantic-kernel</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.futureagi</groupId>
+                <artifactId>traceai-javaagent</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

@@ -19,6 +19,46 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 
 The provider modules are not interchangeable: the OpenAI module does not trace the Responses API or embeddings, and the Gen AI module does not claim Vertex AI support. See each module's limitations before choosing it. Instrumentors use the tracer provider you supply (or the OpenTelemetry global provider); none configures an exporter automatically.
 
+## Zero-code tracing with one import
+
+[`go/auto`](auto/README.md) traces AI calls without per-SDK code. Import it once and rebuild; it wraps `http.DefaultTransport`, so calls made by any client built on the default transport (including the default OpenAI and Anthropic Go clients) become wire-layer spans, exported to Future AGI under the same shared privacy catalog (version 3) as traceAI's other SDKs, with [a few differences](auto/README.md#privacy-differences-from-other-traceai-sdks). It configures its own exporter from `FI_API_KEY` and `FI_SECRET_KEY`. Only AI spans are sent to Future AGI: the wire spans, and spans from the modules above when they run on an SDK tracer provider the agent attaches to. It never replaces your OpenTelemetry tracer provider; if you install one, do it before the first AI call, or pass it to `auto.Init(ctx, auto.WithTracerProvider(tp))` before that call. When the agent attaches to your provider, the wire spans, with their captured content, also go to that provider's own exporters; `FI_HIDE_*` applies to both copies, and known-secret replacement only to the copy sent to Future AGI.
+
+```sh
+go get github.com/future-agi/traceAI/go/auto@dev
+```
+
+```go
+import (
+    "context"
+    "time"
+
+    "github.com/future-agi/traceAI/go/auto"
+)
+
+func main() {
+    // Go has no exit hook: flush queued spans before main returns.
+    defer func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+        _ = auto.Shutdown(ctx)
+    }()
+    // Your code. AI calls through http.DefaultTransport are traced.
+}
+```
+
+**`http.DefaultTransport` changes type.** With FI keys set and wire capture on, `http.DefaultTransport` is the agent's wrapper, not an `*http.Transport`, from package initialization on. An unchecked `http.DefaultTransport.(*http.Transport)` assertion, such as `http.DefaultTransport.(*http.Transport).Clone()`, then panics; a checked assertion takes its fallback. Build custom transports from `&http.Transport{...}` and wrap them with `auto.Transport`, or set `FI_WIRE_CAPTURE=false` if a dependency makes the unchecked assertion.
+
+**Module spans need an SDK tracer provider.** The modules above use the global tracer provider unless you pass them one, and their spans reach Future AGI only through an SDK tracer provider the agent attaches to. With only the import and no provider of your own, module spans go nowhere. Install one as the global provider before the first AI call, or pass it to `auto.Init` with `auto.WithTracerProvider(tp)` (and to each module's own `WithTracerProvider` option):
+
+```go
+tp := sdktrace.NewTracerProvider() // sdktrace "go.opentelemetry.io/otel/sdk/trace"
+otel.SetTracerProvider(tp)         // before the first AI call
+```
+
+Module spans that end before the agent activates are not forwarded, so call `auto.Init` at startup if a step can finish before the first AI call.
+
+Use `@dev` until its first go/auto tag exists. A long-running service can use `import _ "github.com/future-agi/traceAI/go/auto"` and skip the `Shutdown` call. Wire spans cover the HTTP call (model, messages, usage, timing); agent, chain and tool steps still need the modules above, on an SDK tracer provider as shown. Custom transports need `auto.Transport(base)`, and gRPC, WebSocket and realtime audio are not covered. See the [go/auto README](auto/README.md) and its [example](auto/example/main.go).
+
 ## Install
 
 **Before the first release:** these modules live on `dev`, not the default branch. Use `@dev` in place of `@latest` until their first release tags exist. Go records the resolved pseudo-version in your application's `go.mod`; commit that file and `go.sum` to pin it. For example:

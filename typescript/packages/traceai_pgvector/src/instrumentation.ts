@@ -27,6 +27,27 @@ export interface PgVectorInstrumentationConfig extends InstrumentationConfig {
   captureQueryVectors?: boolean;
   captureResultVectors?: boolean;
   captureQueries?: boolean;
+  /** Trace only vector queries; every other query runs without a span. */
+  vectorOnly?: boolean;
+}
+
+// pgvector-only distance operators: cosine, L1, Hamming and Jaccard.
+const PGVECTOR_OPERATOR = /<=>|<\+>|<~>|<%>/;
+// A cast to, or constructor of, a pgvector type. tsvector is full-text search.
+const PGVECTOR_TYPE = /::\s*(?:vector|halfvec|sparsevec)\b|\b(?:vector|halfvec|sparsevec)\s*\(/i;
+// L2 and inner-product distance share their operators with PostGIS and pg_trgm. They
+// count only on their own, not inside the longer pg_trgm word-distance operators
+// (<<->, <->>, <<<->, <->>>) or the PostGIS box-distance operators (<<->>, <<#>>).
+const SHARED_OPERATOR = /(?:^|[^<])(?:<->|<#>)(?!>)/;
+// PostGIS functions, geometric casts, a typed geometric literal or a text literal as
+// the other operand, and trigram similarity functions.
+const OTHER_DISTANCE = /\bst_\w+\s*\(|::\s*(?:geometry|geography|box2d|box3d|box|point|polygon|circle)\b|(?:<->|<#>)\s*(?:geometry|geography|box2d|box3d|box|point|polygon|circle)\s*'|\b(?:strict_word_|word_)?similarity\s*\(|(?:<->|<#>)\s*'(?!\s*\[)/i;
+
+/** vectorOnly: a pgvector query, not full-text, PostGIS or trigram distance. */
+function vectorOnlyQuery(text: unknown): boolean {
+  if (typeof text !== "string" || !text) return false;
+  if (PGVECTOR_OPERATOR.test(text) || PGVECTOR_TYPE.test(text)) return true;
+  return SHARED_OPERATOR.test(text) && !OTHER_DISTANCE.test(text);
 }
 
 export class PgVectorInstrumentation extends InstrumentationBase {
@@ -44,6 +65,11 @@ export class PgVectorInstrumentation extends InstrumentationBase {
     super("@traceai/pgvector", VERSION, Object.assign({}, instrumentationConfig));
     this._traceConfig = traceConfig;
     this._pgConfig = instrumentationConfig || {};
+  }
+
+  /** True when only vector queries are traced. */
+  public get vectorOnly(): boolean {
+    return this._pgConfig?.vectorOnly === true;
   }
 
   public override enable(): void {
@@ -102,6 +128,11 @@ export class PgVectorInstrumentation extends InstrumentationBase {
     const originalQuery = prototype.query;
 
     prototype.query = function (this: any, ...args: any[]) {
+      if (instrumentation.vectorOnly) {
+        const queryText = typeof args[0] === "string" ? args[0] : args[0]?.text;
+        // Non-vector queries keep the driver's own call and return value.
+        if (!vectorOnlyQuery(queryText)) return originalQuery.apply(this, args);
+      }
       return instrumentation._wrapQuery(this, originalQuery, args);
     };
   }

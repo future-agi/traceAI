@@ -11,12 +11,17 @@ if (process.env.OWNER === 'host') {
     ...(valueLimit ? { attributeValueLengthLimit: valueLimit } : {}) },
     spanProcessors: [new SimpleSpanProcessor({ export(spans, done) { native.push(...spans); done({ code: 0 }); }, async shutdown() {} })] });
   trace.setGlobalTracerProvider(host);
+  // The host's spans reach Future AGI only with the forwarding switch.
+  process.env.FI_FORWARD_APP_SPANS = 'true';
 }
 const earlyTracer = trace.getTracer('preexisting-application');
 async function main() {
   const auto = require('@traceai/auto');
   if (process.env.ENTRY === 'init') assert(auto.init());
   assert(auto.report().active);
+  // The agent never registers its provider globally. This application chooses to
+  // use it for its own spans, which then go to Future AGI.
+  if (!host) assert(trace.setGlobalTracerProvider(globalThis[Symbol.for('traceai.auto.agent.v1')].provider));
   const tracer = process.env.OWNER === 'host' ? earlyTracer : trace.getTracer('application');
   const ctx = { traceId: '1'.repeat(32), spanId: '2'.repeat(16), traceFlags: 1 };
   let spans = 0;

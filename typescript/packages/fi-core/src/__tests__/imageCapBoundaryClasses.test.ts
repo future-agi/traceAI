@@ -7,7 +7,7 @@ import { mask, maskAttributes, redactValue } from "../trace/trace-config/masking
 import { generateTraceConfig } from "../trace/trace-config/traceConfig";
 import { TraceConfigOptions } from "../trace/trace-config/types";
 
-// Populated counterexamples, authored before the production overlay. No expected
+// Populated counterexamples, written before the implementation. No expected
 // result is obtained from the cap, a private scanner or a replacement regex.
 const CAP = 64;
 const MARK = "__REDACTED__";

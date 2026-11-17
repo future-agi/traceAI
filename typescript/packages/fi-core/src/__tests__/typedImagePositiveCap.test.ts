@@ -8,7 +8,7 @@ import { FISpan } from "../trace/trace-config/FISpan";
 import { capBase64Images } from "../trace/trace-config/imageCap";
 import { generateTraceConfig } from "../trace/trace-config/traceConfig";
 
-// Authored before the production overlay. RED/GREEN execution belongs to E2B.
+// Written before the implementation.
 // Valid synthetic 58-byte, 1x1, 24-bit BMP: 14-byte header, 40-byte DIB and
 // one padded red BGR pixel. No catalog magic matches; below the 256-char heuristic.
 const BMP_1X1 = "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==";
@@ -71,7 +71,7 @@ const DECLARATIONS: Array<[string, Record<string, string>]> = [
   ["mimeType image", { mimeType: "image/bmp" }],
   ["mediaType image", { mediaType: "image/bmp" }],
   ["content_type image", { content_type: "image/bmp" }],
-  // Lead edit (RL 2310en AMENDED-3 coverage): other image media types on every route.
+  // Other image media types on every route.
   ["mime_type image/png", { mime_type: "image/png" }],
   ["mime_type image/jpeg", { mime_type: "image/jpeg" }],
   ["mime_type image/gif", { mime_type: "image/gif" }],
@@ -189,7 +189,7 @@ test("credential names and exact secrets still precede media-only sentinels", ()
   expect(scrubValue({ type: "image", data: BMP_1X1 }, [BMP_1X1])).toEqual({ type: "image", data: "<redacted>" });
 });
 
-// FICORE-121-R2: RED-first rows authored before the video runtime overlay.
+// Rows written before the video runtime existed.
 // These four synthetic bytes intentionally have no media magic. The declaration,
 // not a file header, must establish omission. No credential-shaped values added.
 const MEDIA_BYTES = "AQIDBA==";

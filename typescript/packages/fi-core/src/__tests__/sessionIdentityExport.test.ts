@@ -38,8 +38,13 @@ function identity(base: Context = ROOT_CONTEXT): Context {
   return setMetadata(setUser(setSession(base, { sessionId: SESSION }), { userId: USER }), METADATA);
 }
 
+// A detached copy of a fresh span made by an FI tracer: it carries that span's
+// context. Grouping keys export as set only on spans made by an FI tracer.
+const fiProvider = new BasicTracerProvider();
 function snapshot(attributes: Attributes): any {
-  return { _spanContext: { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 },
+  const span = new FITracer({ tracer: fiProvider.getTracer("identity-copy") }).startSpan("application");
+  span.end();
+  return { _spanContext: span.spanContext(),
     name: "application", kind: 2, startTime: [1, 0], endTime: [2, 0], _duration: [1, 0], attributes,
     status: { code: 1 }, resource: { attributes: {} }, instrumentationScope: { name: "application" }, events: [], links: [] };
 }

@@ -208,7 +208,7 @@ def _redact_credit_cards(text: str) -> str:
 # raw payloads, error text, prompt variables and newer semantic conventions.
 # An allowlist would silently remove that existing PII protection. Metadata is
 # free-form and is where opted-in users put emails and phone numbers, so it
-# stays redacted (fi-security ruling on the #244 scope).
+# stays redacted (the scope agreed in #244).
 _PII_STRUCTURED_PREFIXES = (
     "session.id",
     "user.id",

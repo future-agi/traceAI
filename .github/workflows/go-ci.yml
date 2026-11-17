@@ -4,11 +4,14 @@ on:
   pull_request:
     paths:
       - 'go/**'
+      # go/auto embeds byte-identical copies of the shared privacy catalogs.
+      - 'spec/auto-instrumentation/**'
       - '.github/workflows/go-ci.yml'
   push:
     branches: [dev, main]
     paths:
       - 'go/**'
+      - 'spec/auto-instrumentation/**'
       - '.github/workflows/go-ci.yml'
   workflow_dispatch:
 
@@ -27,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [a2a, anthropic, bedrock, eino, genai, lambda, langchaingo, openai]
+        module: [a2a, anthropic, auto, bedrock, eino, genai, lambda, langchaingo, openai]
         go: ['1.26.0', stable]
     defaults:
       run:
@@ -64,6 +67,63 @@ jobs:
         run: go build -o "$RUNNER_TEMP/traceai-example" ./example
       - name: Render package documentation
         run: go doc .
+
+  auto-sdk-compatibility:
+    name: auto / real OpenAI and Anthropic SDK clients
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # A separate, unpublished test module, so go/auto never requires either SDK.
+        working-directory: go/auto/sdkcompat
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/auto/sdkcompat/go.sum
+      - name: Vet and race tests through the SDK default clients
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+  auto-opentelemetry-latest:
+    name: auto / span limits on the latest OpenTelemetry SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go/auto
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/auto/go.sum
+      # An application's build may select a newer SDK than go/auto requires. The
+      # agent reads span limits from the SDK's configuration, so these
+      # regressions fail when a newer SDK changes that layout.
+      - name: Select the latest OpenTelemetry API and SDK
+        run: |
+          go get go.opentelemetry.io/otel@latest go.opentelemetry.io/otel/sdk@latest
+          go mod tidy
+          go list -m go.opentelemetry.io/otel go.opentelemetry.io/otel/sdk
+      - name: Span-limit regressions
+        run: |
+          set -o pipefail
+          tests='TestProviderValueLengthAdapter TestSmallHostAttributeLimitsOTLP TestCountLimitEvictedHintOTLP TestValueLengthTruncatedHintOTLP TestWireSpanValueLengthOTLP TestZeroCodeSpanLimitsE2E TestSpanLimitsWarningNamesTheSDK'
+          go test -race -count=1 -v -run "^($(echo $tests | tr ' ' '|'))\$" . | tee "$RUNNER_TEMP/span-limits.log"
+          for name in $tests; do
+            grep -q -- "^--- PASS: $name " "$RUNNER_TEMP/span-limits.log" || { echo "$name did not run and pass"; exit 1; }
+          done
 
   genai-sdk-compatibility:
     name: genai / SDK ${{ matrix.sdk }}

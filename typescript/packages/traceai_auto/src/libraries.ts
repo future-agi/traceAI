@@ -9,10 +9,13 @@ import { readFileSync } from "node:fs";
 import type { TracerProvider } from "@opentelemetry/api";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import type { SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Config, enabled, Options } from "./config";
+import { Config, enabled, explicitlyEnabled, Options } from "./config";
+import { readIncomingParent } from "./incoming-parent";
+import { incomingServerSpan, runIntegrationCall } from "./agent-context";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
-export interface Integration { name: string; package: string; targets: string[]; modules: string[]; className?: string; manual?: string; enable?: string }
+/** vectorOnly: the database integration traces only vector operations when the agent enables it. */
+export interface Integration { name: string; package: string; targets: string[]; modules: string[]; className?: string; manual?: string; enable?: string; vectorOnly?: boolean }
 export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string }
 export const integrations: Integration[] = catalog as Integration[];
 export function appRequire() { return createRequire(join(process.cwd(), "__traceai_auto__.cjs")); }
@@ -90,13 +93,14 @@ function patchSnapshot(root: object): () => boolean {
   visit(root, 0);
   return () => snapshots.some(([value, key, before]) => Object.getOwnPropertyDescriptor(value, key)?.value !== before);
 }
-export function enableLibraries(config: Config, options: Options, provider: TracerProvider, statuses: IntegrationStatus[], warn: (key: string, message: string) => void, spanProcessor?: SpanProcessor): () => void {
+/** httpBesideApplication: an application provider is present while AI spans stay off it. */
+export function enableLibraries(config: Config, options: Options, provider: TracerProvider, statuses: IntegrationStatus[], warn: (key: string, message: string) => void, spanProcessor?: SpanProcessor, httpBesideApplication = false): () => void {
   const removers: (() => void)[] = [];
   // Register before loading any instrumentation package: its own imports can load targets.
   let esm = true;
   try {
     const pending = integrations.filter(i => statuses.find(s => s.name === i.name)?.status === "pending");
-    const http = enabled("http", config) && resolvable("@opentelemetry/instrumentation-http");
+    const http = explicitlyEnabled("http", config) && !httpBesideApplication && resolvable("@opentelemetry/instrumentation-http");
     installLoader([...pending.flatMap(i => [...i.targets, ...i.modules]), ...(http ? ["http", "https", "node:http", "node:https"] : [])], [...pending.map(i => i.package), ...(http ? ["@opentelemetry/instrumentation-http"] : [])]);
   } catch { esm = false; warn("esm", "ESM loader could not be installed; CommonJS and fetch capture remain available."); }
   for (const entry of integrations) {
@@ -123,7 +127,12 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       }
       const Instrumentor = exports[entry.className!];
       if (typeof Instrumentor !== "function") throw new Error("Missing exported Instrumentation class");
-      instance = new Instrumentor({ instrumentationConfig: { enabled: false }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false });
+      instance = new Instrumentor({ instrumentationConfig: { enabled: false, ...(entry.vectorOnly ? { vectorOnly: true } : {}) }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false });
+      if (entry.vectorOnly && instance.vectorOnly !== true) {
+        // An older release would trace every database call, not only vector operations.
+        instance.disable(); status.status = "manual"; status.reason = "Installed version traces every database call; update it so the agent traces only vector operations";
+        continue;
+      }
       const known = (instance._modules ?? []).map((definition: any) => ({ definition, version: moduleVersion(definition.name) })).filter((item: any) => item.version);
       if (known.length && known.every(({ definition, version }: any) => !definition.supportedVersions.some((range: string) => satisfies(version, range, { includePrerelease: definition.includePrerelease })))) {
         instance.disable(); status.status = "failed"; status.reason = "Installed target version is outside the instrumentor's supported range";
@@ -140,6 +149,14 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
         // retained wrapper inert before cleanup, including rollback/error paths.
         active = false; return Reflect.apply(disableInstance, this, args);
       };
+      // Integrations that keep their own patching run a traced call
+      // through this hook.
+      const INTEGRATION_CALL_HOOK =
+        Symbol.for("traceai.auto.integration-call.v1");
+      Object.defineProperty(instance, INTEGRATION_CALL_HOOK, {
+        enumerable: false, configurable: true,
+        value: <T>(fn: () => T): T => active ? runIntegrationCall(fn) : fn(),
+      });
       const wrapMethod = instance._wrap, unwrapMethod = instance._unwrap;
       instance._wrap = function(target: any, name: string, wrapper: any) {
         const before = target[name];
@@ -149,7 +166,9 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
           const instrumented = wrapper(original);
           return function(this: unknown, ...args: unknown[]) {
             if (!active) return Reflect.apply(original, this, args);
-            return Reflect.apply(instrumented, this, args);
+            // Without an application context manager, a span the integration starts
+            // here stays active only for this SDK call, not for the caller's next work.
+            return runIntegrationCall(() => Reflect.apply(instrumented, this, args));
           };
         });
         if (target[name] !== before) {
@@ -237,17 +256,41 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       warn(entry.name, `Integration ${entry.name} failed; the application will continue.`);
     }
   }
-  if (enabled("http", config)) {
+  // Incoming requests are application traffic: only an explicit allowlist entry
+  // enables them, and the agent sends a SERVER span only for a trace with AI work.
+  if (explicitlyEnabled("http", config) && httpBesideApplication) {
+    // A second HTTP instrumentation would replace the application's patch, or nest
+    // its SERVER spans under one the application's backend never receives.
+    statuses.push({ name: "http", status: "disabled", reason: "An application tracer provider is present; its own OpenTelemetry setup keeps incoming HTTP" });
+    warn("http", "Incoming HTTP spans are left to the application's OpenTelemetry setup; the agent's HTTP instrumentation is not installed beside an application tracer provider.");
+  } else if (explicitlyEnabled("http", config)) {
     try {
       const path = appRequire().resolve("@opentelemetry/instrumentation-http");
       const { HttpInstrumentation } = appRequire()(path);
       // Outgoing propagation has its own privacy/policy boundary; it creates no
       // HTTP CLIENT spans and must not be enabled by this incoming-only package.
-      const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true });
+      // The start hook reads a W3C parent privately when the application has no propagator.
+      const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true, startIncomingSpanHook: readIncomingParent });
+      // Without an application context manager, the SERVER span is active for the work
+      // its request starts, and not for anything after it, as for an integration's call.
+      // Only the request event gets this scope, and only the SERVER span is made active
+      // in it: a span another integration starts while the request runs makes nothing
+      // active, as outside a call, so a request sent beside it is still captured.
+      const wrapMethod = instance._wrap;
+      instance._wrap = function(target: any, name: string, wrapper: any) {
+        return wrapMethod.call(this, target, name, (original: any) => {
+          const instrumented = wrapper(original);
+          if (name !== "emit") return instrumented;
+          return function(this: unknown, ...args: unknown[]) {
+            if (args[0] !== "request") return Reflect.apply(instrumented, this, args);
+            return runIntegrationCall(() => Reflect.apply(instrumented, this, args), incomingServerSpan);
+          };
+        });
+      };
       removers.push(registerInstrumentations({ tracerProvider: provider, instrumentations: [instance] }));
       statuses.push({ name: "http", status: "instrumented", reason: esm ? "Incoming SERVER spans only" : "Incoming SERVER spans, CommonJS only; ESM loader unavailable" });
     } catch { statuses.push({ name: "http", status: "not_installed", reason: "Optional @opentelemetry/instrumentation-http" }); }
-  } else statuses.push({ name: "http", status: "disabled" });
+  } else statuses.push({ name: "http", status: "disabled", ...(enabled("http", config) ? { reason: "Off unless FI_INSTRUMENTATIONS lists http" } : {}) });
   return () => {
     for (const remove of removers.reverse()) { try { remove(); } catch { /* Leave host running. */ } }
   };

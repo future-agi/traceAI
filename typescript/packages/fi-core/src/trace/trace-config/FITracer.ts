@@ -1,5 +1,4 @@
 import {
-    context as apiContext,
     Attributes,
     Context,
     SpanOptions,
@@ -14,10 +13,11 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
+  import { activeFIContext, runInFIContext } from "./activeContext";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext, getSession } from "../contextAttributes";
   import { type PrivacyHints, rememberSessionIdentity } from "../../privacy-runtime";
-  import { privacyFilter, rememberAuthoredRedactions, rememberProjectedAttributeDrops } from "../../export-privacy";
+  import { privacyFilter, rememberAuthoredRedactions, rememberFITracerSpan, rememberProjectedAttributeDrops } from "../../export-privacy";
   import { projectAttributes, tracerAttributeLimit } from "../../attribute-projection";
   
   /**
@@ -47,7 +47,8 @@ import {
     }
   
     opts = opts ?? {};
-    ctx = ctx ?? apiContext.active();
+    // An explicit context, the root context included, always wins.
+    ctx = ctx ?? activeFIContext();
   
     return { opts, ctx, fn };
   }
@@ -163,11 +164,12 @@ import {
       // Auto application writes use the native handle; only the instrumentor's
       // explicit callback handle applies FI write-time policy. Standalone keeps
       // its existing active-wrapper contract.
-      return apiContext.with(
+      // The span is active for fn and the work it starts, through the API's
+      // context.with and fi-core's private store, so spans nest without an
+      // application context manager; the caller's context is back after fn.
+      return runInFIContext(
         trace.setSpan(ctx, fiSpan.getContextSpan()),
-        fn,
-        undefined,
-        fiSpan,
+        () => fn(fiSpan),
       ) as ReturnType<F>;
     }
 
@@ -181,7 +183,8 @@ import {
         // The global tracer can be a real one, so its span gets the masked attributes too.
         tracer = trace.getTracer("fi-noop-tracer-internal");
       }
-      const ctx = context ?? apiContext.active();
+      // Parent selection only: startSpan never makes its span active.
+      const ctx = context ?? activeFIContext();
       const contextAttributes = getAttributesFromContext(ctx);
       return this.startFISpan(
         tracer,
@@ -239,6 +242,9 @@ import {
           : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
         context,
       );
+      // Only spans made here export session and user grouping keys as set.
+      try { rememberFITracerSpan(span.spanContext()); }
+      catch { /* Without the mark the span keeps the stricter credential name rule. */ }
       // Auto only: bind the NUMBER of start values FI withheld or changed to the
       // export lineage. Nothing is written to, or replayed from, native storage.
       if (this.autoDestination) {

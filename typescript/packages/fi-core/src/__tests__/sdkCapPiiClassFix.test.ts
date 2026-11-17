@@ -90,7 +90,7 @@ describe("class-fix", () => {
   });
   it.each(URL_CASES)("boundary exact control %s", (_label, url) => {
     // PENDING I1xF2-PRECEDENCE T39-T44: TS I1 media omission dominates positive caps.
-    // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1. Counts include the
+    // Counts include the
     // original LF/CRLF payload units, matching I1 rather than a normalized decoder.
     const omissions: Record<string, string> = {
       "long-header": "<omitted: 2011 base64 chars>",
@@ -176,7 +176,6 @@ describe("class-fix", () => {
     const payload = "\\u0051\\u0055\\u004a\\u0044".repeat(repeats);
     const raw = '{"media_type":"image/png","data":"' + payload + '"}';
     // PENDING I1xF2-PRECEDENCE T53: TS I1 media omission dominates positive caps.
-    // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1.
     expect(capBase64Images(raw, MAX)).toBe(repeats * 4 > MAX ? raw.replace(payload, MARK) : raw);
     const result = valueExport(raw);
     expect(result).toBe(raw.replace(payload, repeats * 4 > MAX ? MARK : "<omitted: 256 base64 chars>"));
@@ -186,7 +185,6 @@ describe("class-fix", () => {
   it("exact image omission preserves lossless non-image JSON tokens", () => {
     const raw = '{"id":9007199254740993,"n":1e400,"url":' + JSON.stringify(at(MAX)) + '}';
     // PENDING I1xF2-PRECEDENCE T54: TS I1 media omission dominates positive caps.
-    // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1.
     expect(capBase64Images(raw, MAX)).toBe(raw);
     const result = valueExport(raw);
     expect(result).toBe(raw.replace(at(MAX), "<omitted: 234 base64 chars>"));
@@ -195,7 +193,7 @@ describe("class-fix", () => {
   it.each([0, 1, 4])("schema metadata cap %i", (maximum) => {
     const raw = '{"type":"image","modality":"image","id":"QUJD","name":"image","schema":"base64","other":"QUJD","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}';
     // PENDING I1xF2-PRECEDENCE T56: TS I1 media omission dominates positive caps.
-    // LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1. Cap-zero T55 keeps its r1 marker fix.
+    // Cap-zero T55 keeps its r1 marker fix.
     const expected = maximum === 0 ? raw.replace('"data":"QUJD"', '"data":"[image-redacted]"') : maximum < 4 ? raw.replace('"data":"QUJD"', '"data":"' + MARK + '"') : raw.replace('"data":"QUJD"', '"data":"<omitted: 4 base64 chars>"');
     const result = valueExport(raw, { base64ImageMaxLength: maximum });
     const parsed = JSON.parse(result as string);

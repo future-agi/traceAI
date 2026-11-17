@@ -3,7 +3,7 @@ import { privacyFilter, rememberSpanValueLimit } from "../export-privacy";
 import { getRegisteredSecrets } from "../secrets";
 import * as runtime from "../privacy-runtime";
 
-// Synthetic RED-first source controls. RED/GREEN have not been executed.
+// Synthetic source controls, written before the implementation.
 const saved = { ...process.env };
 beforeEach(() => { for (const key of Object.keys(process.env)) if (/^(FI_|OTEL_)/.test(key)) delete process.env[key]; });
 afterEach(() => { process.env = { ...saved }; });
@@ -126,7 +126,7 @@ test("Q8b NON_CONTENT validates types and finite enums, never arbitrary text or 
   expect(getRegisteredSecrets()).toContain("r4-enum-synthetic-secret");
 });
 
-test.skip("A7 private complete-value omissions (withdrawn: fi-security Q9 Candidate 2, no auto-mode projection)", () => {
+test.skip("A7 private complete-value omissions (withdrawn: no auto-mode projection)", () => {
   const raw = fixture({ note: "ordinary words", "traceai.capture.dropped_content_count": 3 });
   const first = privacyFilter().span(raw);
   expect(first.attributes).toEqual({ note: "ordinary words", "traceai.capture.dropped_content_count": 3 });

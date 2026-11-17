@@ -118,11 +118,12 @@ test.each(["ordinary", "credential-shaped"])("H1 typed FI session retains only s
     }
     if (kind === "credential-shaped") expect(JSON.stringify([first, second])).not.toContain(id);
     expect(JSON.stringify(native.attributes)).toBe(before);
-    // A session id is a grouping key: unbound, rewritten and copied ids export
-    // as set, while other session-named values stay masked.
+    // A session id is a grouping key on FI spans: rewritten and copied ids that
+    // carry this FI span's context export as set, while other session-named
+    // values stay masked. A copy with no FI span context keeps the name rule.
     const unbound = privacyFilter().span(snapshot({ "session.id": "h1-unbound-session", "session.cookie": "h1-cookie-credential" }));
     for (const clean of [unbound, privacyFilter().span(unbound)]) {
-      expect(clean.attributes).toMatchObject({ "session.id": "h1-unbound-session", "session.cookie": "<redacted>" });
+      expect(clean.attributes).toMatchObject({ "session.id": "<redacted>", "session.cookie": "<redacted>" });
     }
     const changed = { ...snapshot({ "session.id": "h1-rewritten-session" }), _spanContext: native.spanContext() };
     const changedFirst = privacyFilter().span(changed);
@@ -156,11 +157,12 @@ test.each(["native", "fi-wrapper"])("H1 raw setAttribute does not establish type
     const native = exporter.getFinishedSpans()[0];
     const before = JSON.stringify(native.attributes);
     expect(native.attributes["session.id"]).toBe(id);
-    // Not a typed handoff, but a session id is a grouping key and exports as set.
+    // Not a typed handoff. On an FI span a session id is a grouping key and
+    // exports as set; a span from another tracer keeps the credential name rule.
     expect(isSessionIdentity(native.spanContext(), id)).toBe(false);
     const first = privacyFilter().span(native);
     for (const clean of [first, privacyFilter().span(first)]) {
-      expect(clean.attributes["session.id"]).toBe(id);
+      expect(clean.attributes["session.id"]).toBe(kind === "native" ? "<redacted>" : id);
       expect(clean.attributes["control.label"]).toBe("h1-public-control");
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
@@ -188,11 +190,12 @@ test.each(["cloned-context", "different-span"])("H1 typed session requires the b
       target.end();
     }
     expect(other._spanContext).not.toBe(native.spanContext());
-    // The typed binding still needs the bound context; the id itself exports as set.
+    // The typed binding still needs the bound context. The id exports as set on
+    // another FI span; a cloned context is not an FI span and keeps the name rule.
     expect(isSessionIdentity(other._spanContext, id)).toBe(false);
     const first = privacyFilter().span(other);
     for (const clean of [first, privacyFilter().span(first)]) {
-      expect(clean.attributes["session.id"]).toBe(id);
+      expect(clean.attributes["session.id"]).toBe(kind === "cloned-context" ? "<redacted>" : id);
       expect(clean.attributes["control.label"]).toBe("h1-public-control");
     }
     expect(JSON.stringify(native.attributes)).toBe(before);

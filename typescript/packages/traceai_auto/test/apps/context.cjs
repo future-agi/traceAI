@@ -1,6 +1,8 @@
 const { context, trace, SpanKind } = require('@opentelemetry/api');
 const { suppressTracing } = require('@opentelemetry/core');
 const { FITracer, setSession, setUser } = require('@traceai/fi-core');
+// The application's own SDK, started after the agent's preload; its manual FI spans stay on it.
+require('./app-otel.cjs');
 (async () => {
   const tracer = new FITracer({ tracer: trace.getTracer('test-context') });
   const parent = tracer.startSpan('framework parent', { kind: SpanKind.INTERNAL, attributes: { 'gen_ai.span.kind': process.env.KIND || 'CHAIN' } });
@@ -13,5 +15,5 @@ const { FITracer, setSession, setUser } = require('@traceai/fi-core');
     await response.text();
   });
   parent.end();
-  console.log(parent.spanContext().spanId);
+  console.log(JSON.stringify({ spanId: parent.spanContext().spanId, traceId: parent.spanContext().traceId }));
 })().catch(e => { console.error(e); process.exitCode = 1; });

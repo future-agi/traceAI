@@ -1,0 +1,58 @@
+name: Zero-code Java agent tests
+
+# The agent ships byte copies of the shared privacy and wire catalogs, replays their fixtures and
+# bundles two core classes, so changes to any of them run its child-JVM suite here. The shared Java
+# workflow and the Java release build the agent but leave this suite to this workflow.
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-javaagent/**'
+      - 'java/traceai-java-core/**'
+      - 'spec/auto-instrumentation/**'
+      - 'java/pom.xml'
+      - '.github/workflows/auto-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-javaagent/**'
+      - 'java/traceai-java-core/**'
+      - 'spec/auto-instrumentation/**'
+      - 'java/pom.xml'
+      - '.github/workflows/auto-java-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-java-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  javaagent:
+    name: Zero-code agent (Java ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Test shared wire and privacy fixtures and the packaged agent in child JVMs
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify
+      - name: Upload agent test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: javaagent-java-${{ matrix.java }}
+          path: |
+            java/traceai-javaagent/target/surefire-reports/
+            java/traceai-javaagent/target/failsafe-reports/
+          if-no-files-found: warn

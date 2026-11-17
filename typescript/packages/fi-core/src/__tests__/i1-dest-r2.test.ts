@@ -4,7 +4,7 @@ import { FITracer } from "../trace/trace-config/FITracer";
 import { privacyFilter, rememberSpanValueLimit } from "../export-privacy";
 import { registerSecret } from "../secrets";
 
-// Authored before the production overlay. RED/GREEN has not been executed.
+// Written before the implementation.
 const saved = { ...process.env };
 beforeEach(() => { for (const key of Object.keys(process.env)) if (/^(FI_|OTEL_)/.test(key)) delete process.env[key]; });
 afterEach(() => { process.env = { ...saved }; });

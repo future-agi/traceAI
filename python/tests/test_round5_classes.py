@@ -1,4 +1,4 @@
-"""Round 5b additive controls. Authored RED-first; execution is a separate gate."""
+"""Additive controls for the round-5 privacy classes, written before the implementation."""
 
 import json
 

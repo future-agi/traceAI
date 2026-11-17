@@ -8,6 +8,31 @@ import { assertUnreachable, withSafety } from "../../utils";
 
 const safelyParseInt = withSafety({ fn: parseInt });
 
+const SWITCH_ON = ["true", "1", "yes", "on"];
+const SWITCH_OFF = ["false", "0", "no", "off"];
+const warnedSwitches = new Set<string>();
+
+/**
+ * Reads a privacy switch from the environment. A switch someone set must never silently do
+ * nothing: true, 1, yes and on turn it on, false, 0, no and off turn it off (any case,
+ * surrounding spaces ignored), and an empty value counts as unset. Any other value turns it
+ * on, with one warning per variable that names the accepted values and never the value.
+ * The export boundary reads its own two switches with the same function.
+ */
+export function parseSwitch(envValue: string, envKey: string): boolean | undefined {
+  const normalized = envValue.trim().toLowerCase();
+  if (normalized === "") return undefined;
+  if (SWITCH_ON.includes(normalized)) return true;
+  if (SWITCH_OFF.includes(normalized)) return false;
+  if (!warnedSwitches.has(envKey)) {
+    warnedSwitches.add(envKey);
+    diag.warn(
+      `${envKey} is not one of true, 1, yes, on, false, 0, no or off; treating it as on, so the content it controls is hidden.`,
+    );
+  }
+  return true;
+}
+
 type TraceConfigOptionMetadata = (typeof traceConfigMetadata)[TraceConfigKey];
 
 /**
@@ -51,18 +76,9 @@ function parseOption({
         return 0;
       }
       case "boolean":
-        return envValue.toLowerCase() === "true";
-      case "optionalBoolean": {
-        const normalized = envValue.trim().toLowerCase();
-        if (normalized === "true") return true;
-        if (normalized === "false") return false;
-        if (normalized !== "") {
-          diag.warn(
-            `Could not parse '${envValue}' as a boolean for the environment variable '${optionMetadata.envKey}'. Deriving the value instead.`,
-          );
-        }
-        return optionMetadata.default;
-      }
+        return parseSwitch(envValue, optionMetadata.envKey) ?? optionMetadata.default;
+      case "optionalBoolean":
+        return parseSwitch(envValue, optionMetadata.envKey) ?? optionMetadata.default;
       default:
         assertUnreachable(optionMetadata);
     }
