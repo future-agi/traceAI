@@ -53,15 +53,15 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(plan['skipped'][0]['name'], 'traceai-roast')
         self.assertIn('RubyGems publishing', plan['skipped'][0]['reason'])
 
-    def test_go_auto_is_inventoried_but_held_until_its_first_tag_is_approved(self):
+    def test_go_auto_is_inventoried_and_released_with_its_own_tag(self):
         root = release_plan.REPO_ROOT
         auto = [p for p in release_plan.other_packages(root) if p['dir'] == 'go/auto']
-        # Each release PR bumps the manifest version; the hold must not depend on it.
+        # Each release PR bumps the manifest version; the tag follows it.
         self.assertEqual([p['name'] for p in auto], ['github.com/future-agi/traceAI/go/auto'])
         self.assertEqual(auto[0]['tag'], f"go/auto/v{auto[0]['version']}")
         plan = release_plan.plan(auto, release_plan.load_config(), offline=True)
-        self.assertEqual(plan['go'], [])
-        self.assertEqual([p['name'] for p in plan['skipped']], ['github.com/future-agi/traceAI/go/auto'])
+        self.assertEqual([p['name'] for p in plan['go']], ['github.com/future-agi/traceAI/go/auto'])
+        self.assertEqual(plan['skipped'], [])
 
     def test_java_agent_is_built_but_held_from_central_until_its_first_release_is_approved(self):
         root = release_plan.REPO_ROOT
