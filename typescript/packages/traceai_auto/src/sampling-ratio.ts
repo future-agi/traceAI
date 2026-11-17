@@ -93,7 +93,7 @@ export function withSamplingRatio({ sampler, ratio }: SamplerSelection): Sampler
         ? ((parent.traceFlags & TraceFlags.SAMPLED) !== 0 ? parentRatio(parent.traceState?.get("fi")) : undefined)
         : rate;
       if (effectiveRate === undefined || !validRatio(effectiveRate)) return result;
-      const traceState = result.traceState ?? parent?.traceState ?? createTraceState();
+      const traceState = result.traceState ?? (parent && trace.isSpanContextValid(parent) ? parent.traceState : undefined) ?? createTraceState();
       return {
         ...result,
         attributes: { ...result.attributes, [ATTRIBUTE]: effectiveRate },
