@@ -32,6 +32,15 @@ public class SamplerTests : InitIsolation
     private static ActivityContext Parent(bool sampled,bool remote)=>new(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),
         sampled?ActivityTraceFlags.Recorded:ActivityTraceFlags.None,isRemote:remote);
 
+    private static ExportSampler FractionalSampler()
+    {
+        // Resolve through the private SDK factory, just as Agent does.
+        var factory=typeof(FIInstrumentation.TraceAI).Assembly.GetType("FIInstrumentation.SamplingConfiguration")!;
+        var selected=(Sampler)factory.GetMethod("Create",BindingFlags.Static|BindingFlags.NonPublic)!.Invoke(null,new object?[] { .25,null })!;
+        var wrapped=(Sampler)factory.GetMethod("Wrap",BindingFlags.Static|BindingFlags.NonPublic)!.Invoke(null,new object[] { selected })!;
+        return new ExportSampler(wrapped);
+    }
+
     [Fact]
     public void EnvironmentAlwaysOffDropsEvenWhenAnotherProviderRecords()
     {
@@ -171,6 +180,169 @@ public class SamplerTests : InitIsolation
         }
         using(TraceAIAuto.Source.StartActivity("after-agent")) { }
         Assert.Equal(sampled?2:0,hostExporter.Spans.Count);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void RatioMetadataSurvivesNormalAndPrivacyFallbackCopiesWithoutStampingRawSpans(bool fallback)
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var sampler=FractionalSampler();
+        var privacy=new AutoProcessor(Config(new MemoryExporter()),sampler:sampler);
+        using var provider=Sdk.CreateTracerProviderBuilder().AddSource("test.ratio.snapshot").SetSampler(sampler).AddProcessor(privacy).Build();
+        using var source=new ActivitySource("test.ratio.snapshot");
+        var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"vendor=opaque,fi=r:0.5",true);
+        using var span=source.StartActivity("chat",ActivityKind.Internal,parent);
+        Assert.NotNull(span); Assert.False(span.Recorded); Assert.Null(span.GetTagItem("fi.sampling.ratio"));
+        span.SetTag("output.value","private");
+        using(var child=source.StartActivity("child"))
+        {
+            Assert.NotNull(child); Assert.Null(child.GetTagItem("fi.sampling.ratio"));
+            child.SetTag("output.value","private child");
+            var context=privacy.SamplingContext(child);
+            Assert.Contains("fi=r:0.5",context.TraceState);
+            object? Safe(string key,object value,string? operation)=>fallback?throw new InvalidDataException():value;
+            var snapshot=ExportSnapshot.Create([child,span],OpenTelemetry.Resources.Resource.Empty,Safe,text=>text,
+                sampled:sampler.Export,samplingMetadata:sampler.ApplyMetadata);
+            Assert.Equal(2,snapshot.Spans.Length);
+            Assert.All(snapshot.Spans,copy=> {
+                Assert.True(copy.Recorded); Assert.Equal(.5,copy.GetTagItem("fi.sampling.ratio"));
+                Assert.Contains("fi=r:0.5",copy.TraceStateString);
+            });
+            Assert.False(child.Recorded); Assert.Null(child.GetTagItem("fi.sampling.ratio"));
+        }
+        Assert.False(span.Recorded); Assert.Null(span.GetTagItem("fi.sampling.ratio"));
+    }
+
+    [Theory]
+    [InlineData(false,0)] [InlineData(true,0)]
+    [InlineData(false,1)] [InlineData(true,1)]
+    [InlineData(false,3)] [InlineData(true,3)]
+    [InlineData(false,8)] [InlineData(false,9)] [InlineData(false,10)]
+    public void RatioReservesAnExportAttributeSlotWithoutSplittingContentGroups(bool fallback,int limit)
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var sampler=FractionalSampler();
+        var privacy=new AutoProcessor(Config(new MemoryExporter()),sampler:sampler);
+        using var provider=Sdk.CreateTracerProviderBuilder().AddSource("test.ratio.budget").SetSampler(sampler).AddProcessor(privacy).Build();
+        using var source=new ActivitySource("test.ratio.budget");
+        var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"vendor=opaque,fi=r:0.5",true);
+        using var span=source.StartActivity("chat",ActivityKind.Internal,parent);
+        Assert.NotNull(span);
+        span.SetCustomProperty(AutoProcessor.ContextProperty,null);
+        span.SetTag("gen_ai.operation.name","chat");
+        span.SetTag("gen_ai.provider.name","test");
+        span.SetTag("gen_ai.request.model","test-model");
+        span.SetTag("output.value","answer"); span.SetTag("output.mime_type","text/plain");
+        span.SetTag("input.value","question"); span.SetTag("input.mime_type","text/plain");
+        span.SetTag("fi.sampling.ratio",.9); // An application value must not replace the trusted ratio.
+        span.Stop();
+        object? Safe(string key,object value,string? operation)=>fallback&&key=="output.value"?throw new InvalidDataException():value;
+        var snapshot=ExportSnapshot.Create([span],OpenTelemetry.Resources.Resource.Empty,Safe,text=>text,attributeLimit:limit,
+            sampled:sampler.Export,samplingMetadata:sampler.ApplyMetadata);
+        var copy=Assert.Single(snapshot.Spans);
+        Assert.True(copy.Recorded); Assert.Contains("fi=r:0.5",copy.TraceStateString);
+        if(fallback) Assert.DoesNotContain("vendor=opaque",copy.TraceStateString);
+        Assert.InRange(copy.TagObjects.Count(),0,limit);
+        var encoded=Assert.Single(Otlp.Spans(CompatibilityOtlpTransport.Encode(snapshot.Resource,snapshot.Spans,limit)));
+        Assert.Equal(copy.TagObjects.Count(),encoded.Attributes.Count);
+        Assert.Equal(0UL,encoded.DroppedAttributes);
+        if(limit==0) { Assert.Empty(encoded.Attributes); Assert.Null(copy.GetTagItem("fi.sampling.ratio")); }
+        else { Assert.Equal(.5,copy.GetTagItem("fi.sampling.ratio")); Assert.Equal(.5,encoded.Attributes["fi.sampling.ratio"]); }
+        foreach(var direction in new[] { "input","output" })
+            Assert.Equal(encoded.Attributes.ContainsKey(direction+".value"),encoded.Attributes.ContainsKey(direction+".mime_type"));
+        if(!fallback&&limit is 8 or 9)
+        {
+            Assert.Equal(limit==8?4L:2L,encoded.Attributes[AttributeProjection.DroppedContent]);
+            Assert.Equal(limit==9,encoded.Attributes.ContainsKey("output.value"));
+            Assert.False(encoded.Attributes.ContainsKey("input.value"));
+        }
+        if(!fallback&&limit==10)
+        {
+            Assert.True(encoded.Attributes.ContainsKey("input.value")); Assert.True(encoded.Attributes.ContainsKey("output.value"));
+            Assert.False(encoded.Attributes.ContainsKey(AttributeProjection.DroppedContent));
+        }
+        Assert.False(span.Recorded); Assert.Equal(.9,span.GetTagItem("fi.sampling.ratio"));
+    }
+
+    [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public void SamplingContextMergesCachedRatioIntoCurrentVendorTraceState(bool ratioKnown)
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var sampler=FractionalSampler();
+        var privacy=new AutoProcessor(Config(new MemoryExporter()),sampler:sampler);
+        using var provider=Sdk.CreateTracerProviderBuilder().AddSource("test.ratio.state").SetSampler(sampler).AddProcessor(privacy).Build();
+        using var source=new ActivitySource("test.ratio.state");
+        var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,
+            ratioKnown?"vendor=old,fi=r:0.5":"vendor=old",true);
+        using var span=source.StartActivity("parent",ActivityKind.Internal,parent);
+        Assert.NotNull(span); Assert.False(span.Recorded);
+        // OnStart has cached the sampling decision; instrumentation subsequently updates vendors.
+        span.TraceStateString="vendor=new,other=added";
+        var context=privacy.SamplingContext(span);
+        string expected=ratioKnown?"fi=r:0.5,vendor=new,other=added":"vendor=new,other=added";
+        Assert.Equal(expected,context.TraceState); Assert.True((context.TraceFlags&ActivityTraceFlags.Recorded)!=0);
+        foreach(bool explicitContext in new[] { false,true })
+        {
+            using var child=explicitContext?source.StartActivity("deferred",ActivityKind.Internal,context):source.StartActivity("ambient");
+            Assert.NotNull(child); Assert.False(child.Recorded); Assert.Equal(span.SpanId,child.ParentSpanId);
+            Assert.Equal(expected,privacy.SamplingContext(child).TraceState);
+            var snapshot=ExportSnapshot.Create([child],OpenTelemetry.Resources.Resource.Empty,(_,value,_)=>value,text=>text,
+                sampled:sampler.Export,samplingMetadata:sampler.ApplyMetadata);
+            var copy=Assert.Single(snapshot.Spans);
+            Assert.Equal(ratioKnown?(object).5:null,copy.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal(expected,copy.TraceStateString);
+        }
+        Assert.Equal("vendor=new,other=added",span.TraceStateString);
+        Assert.False(span.Recorded); Assert.Null(span.GetTagItem("fi.sampling.ratio"));
+    }
+
+    [Fact]
+    public void AgentRatioRootAndLocalChildrenCarryMetadataOnlyOnExportCopies()
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var exporter=new MemoryExporter(); using var agent=new Agent(Config(exporter));
+        // Retry random roots until one is recorded; the decision remains the SDK's.
+        for(var attempt=0;attempt<1000;attempt++)
+        {
+            using var root=TraceAIAuto.Source.StartActivity("root",ActivityKind.Internal,default(ActivityContext));
+            if(root?.IsAllDataRequested!=true) continue;
+            Assert.False(root.Recorded); Assert.Null(root.GetTagItem("fi.sampling.ratio"));
+            using(var child=TraceAIAuto.Source.StartActivity("child"))
+            { Assert.NotNull(child); Assert.False(child.Recorded); Assert.Null(child.GetTagItem("fi.sampling.ratio")); }
+            break;
+        }
+        Assert.True(agent.Flush(3000)); Assert.Equal(2,exporter.Spans.Count);
+        Assert.All(exporter.Spans,span=> { Assert.True(span.Recorded); Assert.Equal(.25,span.GetTagItem("fi.sampling.ratio")); Assert.Contains("fi=r:0.25",span.TraceStateString); });
+    }
+
+    [Theory]
+    [InlineData("fi=r:0.5", .5)] [InlineData("vendor=opaque", null)]
+    [InlineData("fi=r:abc", null)] [InlineData("fi=r:2", null)]
+    public void AgentSampledRemoteParentsDoNotUseTheLocalConfiguredRatio(string state,double? expected)
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var exporter=new MemoryExporter(); using var agent=new Agent(Config(exporter));
+        var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,state,true);
+        using(TraceAIAuto.Source.StartActivity("child",ActivityKind.Internal,parent)) { }
+        Assert.True(agent.Flush(3000)); Assert.Equal(expected,Assert.Single(exporter.Spans).GetTagItem("fi.sampling.ratio"));
+    }
+
+    [Fact]
+    public void ApplicationOwnedProviderDoesNotAcquireRatioMetadata()
+    {
+        using var environment=new EnvironmentScope(rate:"0.25");
+        var exporter=new MemoryExporter(); var hostExporter=new MemoryExporter();
+        using var provider=Sdk.CreateTracerProviderBuilder().AddSource(TraceAIAuto.Source.Name).SetSampler(new AlwaysOnSampler())
+            .AddProcessor(new SimpleActivityExportProcessor(hostExporter)).Build();
+        using var agent=new Agent(Config(exporter,provider:provider));
+        var parent=new ActivityContext(ActivityTraceId.CreateRandom(),ActivitySpanId.CreateRandom(),ActivityTraceFlags.Recorded,"fi=r:0.5",true);
+        using(var activity=TraceAIAuto.Source.StartActivity("host",ActivityKind.Internal,parent))
+        { Assert.NotNull(activity); Assert.Null(activity.GetTagItem("fi.sampling.ratio")); }
+        Assert.True(agent.Flush(3000));
+        Assert.Null(Assert.Single(hostExporter.Spans).GetTagItem("fi.sampling.ratio"));
+        Assert.Null(Assert.Single(exporter.Spans).GetTagItem("fi.sampling.ratio"));
     }
 
     [Fact]

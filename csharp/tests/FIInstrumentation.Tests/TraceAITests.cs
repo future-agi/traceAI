@@ -147,6 +147,45 @@ public class TraceAITests : IDisposable
         AssertSampled(tracer, false); Assert.Equal(2, sampler.Calls);
     }
 
+    [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public void RegisterSamplerOptionStampsOnlyFactoryProducedRatios(bool known)
+    {
+        using var environment = new SamplerEnvironment("always_off");
+        Sampler sampler = known ? SamplingConfiguration.Create(.25) : new ParentBasedSampler(new TraceIdRatioBasedSampler(.25));
+        var tracer = RegisterForSampling(options => options.Sampler = sampler);
+        var parent = new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded, "fi=r:0.5,vendor=opaque", true);
+        using var span = tracer.ActivitySource.StartActivity("ratio", ActivityKind.Internal, parent);
+        try
+        {
+            Assert.NotNull(span); Assert.True(span.Recorded);
+            Assert.Equal(known ? (object).5 : null, span.GetTagItem("fi.sampling.ratio"));
+            Assert.Contains("vendor=opaque", span.TraceStateString);
+        }
+        finally { if (span != null) span.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
+    }
+
+    [Theory]
+    [InlineData("traceidratio", "0.25", true)]
+    [InlineData("parentbased_traceidratio", "0.25", false)]
+    [InlineData("traceidratio", "1", false)]
+    [InlineData("always_on", null, false)]
+    [InlineData("parentbased_always_on", null, false)]
+    public void RegisterEnvironmentStampsOnlyDecisionsMadeByOurRatio(string name, string? arg, bool stamped)
+    {
+        using var environment = new SamplerEnvironment(name, arg);
+        var tracer = RegisterForSampling();
+        var parent = new ActivityContext(ActivityTraceId.CreateFromString("00000000000000010000000000000001"), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded, "vendor=opaque", true);
+        using var span = tracer.ActivitySource.StartActivity("ratio", ActivityKind.Internal, parent);
+        try
+        {
+            Assert.NotNull(span); Assert.True(span.Recorded);
+            Assert.Equal(stamped ? (object).25 : null, span.GetTagItem("fi.sampling.ratio"));
+            Assert.Equal(stamped ? "fi=r:0.25,vendor=opaque" : "vendor=opaque", span.TraceStateString);
+        }
+        finally { if (span != null) span.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
+    }
+
     private sealed class CountingDropSampler : Sampler
     {
         internal int Calls;
