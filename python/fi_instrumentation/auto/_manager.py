@@ -5,6 +5,7 @@ import importlib
 import importlib.machinery
 import logging
 import os
+import re
 import sys
 import threading
 from collections import OrderedDict
@@ -18,7 +19,9 @@ from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
-from opentelemetry.sdk.trace.sampling import ParentBased, Sampler, TraceIdRatioBased, _get_from_env_or_default
+from opentelemetry.sdk.trace.sampling import (
+    Decision, ParentBased, Sampler, SamplingResult, TraceIdRatioBased, _get_from_env_or_default,
+)
 from opentelemetry.trace import Link, Status
 
 from fi_instrumentation.auto import _privacy, _registry
@@ -600,12 +603,15 @@ class _ResourceOverlayProcessor(SpanProcessor):
 
     def __init__(self, delegate: SpanProcessor, resource: Optional[Resource] = None,
                  sample_rate: float = 1.0, config: Any = None,
-                 value_limits: Tuple[Optional[int], Optional[int]] = (None, None)) -> None:
+                 value_limits: Tuple[Optional[int], Optional[int]] = (None, None),
+                 metadata_sampler: Optional["_RatioMetadataSampler"] = None) -> None:
         self._traceai_route = True
         self.borrowed = False
         self._delegate = delegate
         self._resource = resource
         self._config = config
+        # Only the sampler we installed on our own provider can restore export metadata.
+        self._metadata_sampler = metadata_sampler
         # The provider's attribute value length limits: for span attributes, then for event and link
         # attributes. A text the provider cut to its limit is checked as cut text.
         self._value_limits = value_limits
@@ -742,6 +748,12 @@ class _ResourceOverlayProcessor(SpanProcessor):
             attributes = mapper(attributes)
         if self.server_scopes and _scope_name(span).startswith(self.server_scopes):
             attributes = _without_request_details(attributes)
+        if self._metadata_sampler is not None:
+            rate = self._metadata_sampler.sampled_ratio(span.context)
+            if rate is not None:
+                # SDK limits may evict the attribute. Restore only on this detached export copy;
+                # the numeric value still goes through the usual masking and privacy sanitizer.
+                attributes["fi.sampling.ratio"] = rate
         events, links, status = list(span.events), list(span.links), span.status
         config = self._config
         if config is not None and config.hide_error_details:
@@ -962,6 +974,67 @@ def _filter_registered_export(provider: Any, config: Any) -> bool:
     return True
 
 
+def _parse_sampling_ratio(state: Optional[trace_api.TraceState]) -> Optional[float]:
+    """Read only a finite fractional keep probability from our W3C vendor entry."""
+    value = state.get("fi", "") if state is not None else ""
+    if not re.fullmatch(r"r:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value):
+        return None
+    rate = float(value[2:])
+    # Also rejects overflow, underflow and non-finite values.
+    return rate if 0.0 < rate < 1.0 else None
+
+
+class _RatioMetadataSampler(Sampler):
+    """Add trace-wide keep probability without changing the selected head sampler's decisions.
+
+    Only _head_sampler's selections reach this wrapper, never an application/custom sampler.
+    """
+
+    def __init__(self, sampler: Sampler) -> None:
+        self._sampler = sampler
+        self._parent_based = isinstance(sampler, ParentBased)
+        # The SDK exposes the ratio's rate, but ParentBased keeps its root delegate private.
+        root = sampler._root if self._parent_based else sampler
+        self._rate = root.rate if isinstance(root, TraceIdRatioBased) and 0.0 < root.rate < 1.0 else None
+
+    def sampled_ratio(self, context: Optional[trace_api.SpanContext]) -> Optional[float]:
+        """Recover metadata only for sampled spans under our fractional-ratio wrapper."""
+        if self._rate is None or context is None or not context.trace_flags.sampled:
+            return None
+        return _parse_sampling_ratio(context.trace_state)
+
+    def should_sample(self, parent_context, trace_id, name, kind=None, attributes=None,
+                      links=None, trace_state=None) -> SamplingResult:
+        result = self._sampler.should_sample(
+            parent_context, trace_id, name, kind, attributes, links, trace_state,
+        )
+        rate = self._rate
+        if result.decision is not Decision.RECORD_AND_SAMPLE or rate is None:
+            return result
+
+        state = result.trace_state
+        parent = trace_api.get_current_span(parent_context).get_span_context()
+        if self._parent_based and parent.is_valid:
+            # A sampled parent's decision is not ours: never substitute our configured rate.
+            rate = _parse_sampling_ratio(parent.trace_state)
+            if rate is None:
+                return result
+        else:
+            # repr(float) is Python's shortest round-trippable decimal representation.
+            # Keep vendor ordering; at W3C's 32-entry limit only the rightmost entry expires.
+            entries = [(key, value) for key, value in (state or trace_api.TraceState()).items() if key != "fi"]
+            state = trace_api.TraceState([("fi", "r:" + repr(float(rate))), *entries[:31]])
+
+        # First in means first evicted under SDK attribute limits: user attributes (especially
+        # the AI kind used for routing) retain their normal priority. Override stale caller values.
+        attributes = {"fi.sampling.ratio": float(rate), **result.attributes}
+        attributes["fi.sampling.ratio"] = float(rate)
+        return SamplingResult(result.decision, attributes, state)
+
+    def get_description(self) -> str:
+        return self._sampler.get_description()
+
+
 def _head_sampler(settings: AutoConfig) -> Sampler:
     """Select a sampler only for a provider the agent creates."""
     default = ParentBased(TraceIdRatioBased(settings.sample_rate))
@@ -1034,8 +1107,10 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
         return existing, False
 
     kwargs["span_exporter"] = selected
+    metadata_sampler = None
     if kwargs.get("sampler") is None:
-        kwargs["sampler"] = _head_sampler(settings)
+        metadata_sampler = _RatioMetadataSampler(_head_sampler(settings))
+        kwargs["sampler"] = metadata_sampler
     kwargs.setdefault("set_global_tracer_provider", True)
     kwargs.setdefault("project_name", settings.project_name)
     kwargs.setdefault("project_type", project_type)
@@ -1046,7 +1121,7 @@ def _build_provider(settings: AutoConfig, register_kwargs: Mapping[str, Any],
     active = provider._active_span_processor
     processors = tuple(active._span_processors)
     overlay = _ResourceOverlayProcessor(processors[0], config=settings.trace_config,
-                                        value_limits=_value_limits(provider))
+                                        value_limits=_value_limits(provider), metadata_sampler=metadata_sampler)
     active._span_processors = (overlay,) + processors[1:]
     _state.overlays[provider] = overlay
     # The agent flushes and closes its route at exit itself, bounded, and only once.
