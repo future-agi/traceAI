@@ -5,6 +5,7 @@ require_relative 'config'
 require_relative 'secrets'
 require_relative 'codec'
 require_relative 'bundler_hook'
+require_relative 'sampling'
 module TraceAI
   module Auto
     VERSION = '0.1.0'
@@ -560,7 +561,10 @@ module TraceAI
                when 'always_off' then samplers::ALWAYS_OFF
                when 'traceidratio' then samplers.trace_id_ratio_based(rate)
                end
-        name.start_with?('parentbased_') ? samplers.parent_based(root: root) : root
+        parent_based = name.start_with?('parentbased_')
+        sampler = parent_based ? samplers.parent_based(root: root) : root
+        return sampler unless name.end_with?('traceidratio') && SamplingRatio.fractional?(rate)
+        RatioSampler.new(sampler, rate, parent_based: parent_based)
       end
       def add_owned_processor(destination, ai_only: false)
         processor = OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(destination, exporter_timeout: 4000, max_queue_size: 512, max_export_batch_size: 64)
@@ -756,7 +760,13 @@ module TraceAI
         context_attrs = parent.value(@attributes_key) || {}
         attributes = Privacy.mask(Privacy.scrub_attributes(context_attrs.merge(result.attributes)), @config)
         description = Privacy.hide_errors?(@config) ? '__REDACTED__' : result.description.to_s
-        projection = AttributeProjection.project(attributes, projection_limit)
+        limit = projection_limit
+        # The SDK merges sampler attributes after the initial attributes and
+        # trims from the end. Reserve one slot on our ratio-sampled wire spans
+        # so a full content budget cannot discard the sampling probability.
+        ratio_sampler = @sdk ? (@provider.equal?(@own_provider) && @provider.sampler.is_a?(RatioSampler)) : SamplingRatio.fractional?(@local_sample_rate)
+        limit -= 1 if ratio_sampler && limit.positive?
+        projection = AttributeProjection.project(attributes, limit)
         attributes = projection.attributes
         if @sdk
           span = @tracer.start_span(result.name, with_parent: parent, kind: :client, start_timestamp: started, attributes: attributes)
@@ -776,10 +786,15 @@ module TraceAI
           else
             return unless Random.rand < @local_sample_rate
           end
+          tracestate = ''
+          if SamplingRatio.fractional?(@local_sample_rate)
+            attributes = attributes.merge(SamplingRatio::ATTRIBUTE => @local_sample_rate)
+            tracestate = "fi=#{SamplingRatio.state_value(@local_sample_rate)}"
+          end
           record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), "\0".b * 8,
                                     attributes.size + projection.dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
                                     attributes, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
-                                    Random.urandom(8), trace_id || Random.urandom(16), 1, '', false)
+                                    Random.urandom(8), trace_id || Random.urandom(16), 1, tracestate, false)
           @processor.enqueue(record)
         end
       rescue StandardError => e
