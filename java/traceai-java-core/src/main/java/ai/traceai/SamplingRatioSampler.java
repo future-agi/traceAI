@@ -78,9 +78,10 @@ final class SamplingRatioSampler implements Sampler {
             @Override public Attributes getAttributes() { return stamped; }
             @Override public TraceState getUpdatedTraceState(TraceState parentTraceState) {
                 TraceState updated = result.getUpdatedTraceState(invalidParent ? TraceState.getDefault() : parentTraceState);
-                // Retain delegate updates, and valid parents' other vendors and inherited fi.
+                // Retain delegate updates, and valid parents' other vendors and inherited fi. Remove our old
+                // entry first: the SDK builder refuses a put into a full (32-entry) state even for an existing key.
                 return ownDecision && effectiveRatio != null
-                    ? updated.toBuilder().put(STATE_KEY, "r:" + Double.toString(ratio)).build() : updated;
+                    ? updated.toBuilder().remove(STATE_KEY).put(STATE_KEY, "r:" + Double.toString(ratio)).build() : updated;
             }
         };
     }
