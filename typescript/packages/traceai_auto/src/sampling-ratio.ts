@@ -41,24 +41,30 @@ function withRatioState(state: TraceState, rate: number): TraceState {
  */
 export function samplingRatioAdmission(selection: SamplerSelection): { sampler: Sampler; onStart(span: ReadableSpan): void } {
   const delegate = withSamplingRatio(selection);
-  let pending: { traceId: string; rate: number } | undefined;
+  // SDK 2.x carries result.traceState by identity into spanContext. A unique,
+  // native state snapshot pairs each sampled construction with onStart, even
+  // when a diagnostic logger synchronously starts another same-trace span.
+  // Weak keys avoid retaining decisions if construction never reaches onStart.
+  const pending = new WeakMap<TraceState, { traceId: string; rate: number }>();
   return {
     sampler: delegate === selection.sampler ? delegate : {
       shouldSample(...args) {
-        pending = undefined;
         const result = delegate.shouldSample(...args);
         const rate = result.attributes?.[ATTRIBUTE];
-        if (result.decision === SamplingDecision.RECORD_AND_SAMPLED && typeof rate === "number" && validRatio(rate)) {
-          pending = { traceId: args[1], rate };
-        }
-        return result;
+        if (result.decision !== SamplingDecision.RECORD_AND_SAMPLED || typeof rate !== "number" || !validRatio(rate) || !result.traceState) return result;
+        // A native snapshot remains inspectable by mandatory export privacy and
+        // never retains ancestor states, including across different providers.
+        const traceState = createTraceState(result.traceState.serialize());
+        pending.set(traceState, { traceId: args[1], rate });
+        return { ...result, traceState };
       },
       toString: () => delegate.toString(),
     },
     onStart(span) {
-      const decided = pending;
-      pending = undefined;
-      if (!decided || span.spanContext().traceId !== decided.traceId || !(span.spanContext().traceFlags & TraceFlags.SAMPLED)) return;
+      const context = span.spanContext();
+      const decided = context.traceState && pending.get(context.traceState);
+      if (context.traceState) pending.delete(context.traceState);
+      if (!decided || context.traceId !== decided.traceId || !(context.traceFlags & TraceFlags.SAMPLED)) return;
       if (span.attributes[ATTRIBUTE] === decided.rate) return;
       const native = span as ReadableSpan & Span & {
         _attributeCountLimit?: number; _spanLimits?: { attributeCountLimit?: number }; _attributesCount?: number;
