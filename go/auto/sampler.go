@@ -25,9 +25,9 @@ func configuredSampler(c Config) sdktrace.Sampler {
 	case "":
 		return fallback
 	case "always_on":
-		return sdktrace.AlwaysSample()
+		return rootStateSampler{sdktrace.AlwaysSample()}
 	case "always_off":
-		return sdktrace.NeverSample()
+		return rootStateSampler{sdktrace.NeverSample()}
 	case "parentbased_always_on":
 		return withSamplingRatio(sdktrace.ParentBased(sdktrace.AlwaysSample()), 1, true)
 	case "parentbased_always_off":
@@ -42,6 +42,9 @@ func configuredSampler(c Config) sdktrace.Sampler {
 			ratio := sdktrace.TraceIDRatioBased(rate)
 			if name == "parentbased_traceidratio" {
 				return withSamplingRatio(sdktrace.ParentBased(ratio), rate, true)
+			}
+			if !validSamplingRatio(rate) {
+				return rootStateSampler{ratio}
 			}
 			return withSamplingRatio(ratio, rate, false)
 		}
@@ -59,6 +62,26 @@ func withSamplingRatio(delegate sdktrace.Sampler, rate float64, parentBased bool
 		return delegate
 	}
 	return ratioSampler{delegate: delegate, rate: rate, parentBased: parentBased}
+}
+
+// rootStateSampler handles the owned non-ratio selections without identifying
+// them as ratio samplers to wire admission. It never stamps an attribute.
+type rootStateSampler struct{ sdktrace.Sampler }
+
+func (s rootStateSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	return discardInvalidParentState(trace.SpanContextFromContext(p.ParentContext), s.Sampler.ShouldSample(p))
+}
+
+func discardInvalidParentState(parent trace.SpanContext, result sdktrace.SamplingResult) sdktrace.SamplingResult {
+	// The SDK delegates preserve even an invalid context's tracestate. Such a
+	// context is not a parent: discard all of its state before a local ratio
+	// can write its own fi entry. Keep the decision, attributes and invocation
+	// unchanged, including Drop and RecordOnly results. With no incoming state
+	// there is nothing inherited to discard (nor delegate-created state to erase).
+	if !parent.IsValid() && parent.TraceState().Len() != 0 {
+		result.Tracestate = trace.TraceState{}
+	}
+	return result
 }
 
 func validSamplingRatio(rate float64) bool {
@@ -92,12 +115,12 @@ func (s ratioSampler) ratioForParent(parent trace.SpanContext) (float64, bool) {
 }
 
 func (s ratioSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
-	result := s.delegate.ShouldSample(p)
+	parent := trace.SpanContextFromContext(p.ParentContext)
+	result := discardInvalidParentState(parent, s.delegate.ShouldSample(p))
 	if result.Decision != sdktrace.RecordAndSample {
 		return result
 	}
 
-	parent := trace.SpanContextFromContext(p.ParentContext)
 	rate, ok := s.ratioForParent(parent)
 	if !ok {
 		return result
