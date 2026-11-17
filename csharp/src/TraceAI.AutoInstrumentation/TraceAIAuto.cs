@@ -165,8 +165,8 @@ internal sealed class Agent : IDisposable
         _ownsProvider=config.Options.Provider==null;
         // A supplied provider owns sampling completely, including any FI destination
         // attached to it. Only resolve FI/OTel configuration for our own provider.
-        var sampler=_ownsProvider?new ExportSampler(SamplingConfiguration.Create(
-            config.HasSampleRate?config.SampleRate:null,message=>TraceAIAuto.Warn("sampler",message))):null;
+        var sampler=_ownsProvider?new ExportSampler(SamplingConfiguration.Wrap(SamplingConfiguration.Create(
+            config.HasSampleRate?config.SampleRate:null,message=>TraceAIAuto.Warn("sampler",message)))):null;
         var privacy=new AutoProcessor(config,()=>Volatile.Read(ref _disposed)==0,sampler);
         TracerProviderBuilder? builder=null;
         if(_ownsProvider)
@@ -436,28 +436,49 @@ internal sealed class ExportSampler(Sampler inner) : Sampler
     private readonly string _decisionKey="traceai.sampling."+Guid.NewGuid().ToString("N");
     private ActivityContext Parent(ActivityContext context,Activity? activity)
     {
+        // Vendor tracestate can change after OnStart. Restore only our cached ratio,
+        // never the decision's stale snapshot of the complete parent tracestate.
         if(!context.IsRemote && activity!=null && activity.TraceId==context.TraceId && activity.SpanId==context.SpanId &&
-            activity.GetCustomProperty(_decisionKey) is true)
-            return new ActivityContext(context.TraceId,context.SpanId,context.TraceFlags|ActivityTraceFlags.Recorded,context.TraceState);
+            activity.GetCustomProperty(_decisionKey) is SamplingResult { Decision: SamplingDecision.RecordAndSample } decision)
+            return new ActivityContext(context.TraceId,context.SpanId,context.TraceFlags|ActivityTraceFlags.Recorded,
+                Ratio(decision) is {} ratio?RatioSampler.WriteRatio(context.TraceState,ratio):context.TraceState);
         return context;
     }
     internal ActivityContext Context(Activity activity) => Parent(activity.Context,activity);
     public override SamplingResult ShouldSample(in SamplingParameters parameters)
     {
         var parent=Parent(parameters.ParentContext,Activity.Current);
-        var decision=inner.ShouldSample(new SamplingParameters(parent,parameters.TraceId,parameters.Name,parameters.Kind));
+        var decision=inner.ShouldSample(new SamplingParameters(parent,parameters.TraceId,parameters.Name,parameters.Kind,parameters.Tags,parameters.Links));
         return new(decision.Decision==SamplingDecision.RecordAndSample?SamplingDecision.RecordOnly:SamplingDecision.Drop);
     }
     internal void Record(Activity activity) => activity.SetCustomProperty(_decisionKey,Decide(activity));
-    internal bool Export(Activity activity) => activity.GetCustomProperty(_decisionKey) is bool sampled?sampled:Decide(activity);
-    private bool Decide(Activity activity)
+    private SamplingResult Decision(Activity activity) => activity.GetCustomProperty(_decisionKey) is SamplingResult result?result:Decide(activity);
+    internal bool Export(Activity activity) => Decision(activity).Decision==SamplingDecision.RecordAndSample;
+    private static double? Ratio(SamplingResult result)
+    {
+        if(result.Decision==SamplingDecision.RecordAndSample)
+            foreach(var pair in result.Attributes??[])
+                if(pair.Key==RatioSampler.Attribute && pair.Value is double ratio && RatioSampler.Valid(ratio)) return ratio;
+        return null;
+    }
+    // Return whether a trusted ratio was written so the projection can reserve its slot.
+    internal bool ApplyMetadata(Activity original,Activity copy)
+    {
+        if(!copy.Recorded || Ratio(Decision(original)) is not {} ratio) return false;
+        // Only trusted sampler metadata bypasses privacy sanitization. In particular,
+        // never restore arbitrary parent tracestate after the privacy fallback cleared it.
+        copy.SetTag(RatioSampler.Attribute,ratio);
+        copy.TraceStateString=RatioSampler.WriteRatio(copy.TraceStateString,ratio);
+        return true;
+    }
+    private SamplingResult Decide(Activity activity)
     {
         ActivityContext.TryParse(activity.ParentId,activity.TraceStateString,activity.HasRemoteParent,out var context);
         var parent=Parent(context,activity.Parent);
         // These six standard head samplers depend only on the trace id and parent.
         // Re-evaluate at start to retain our decision even when another listener records
         // a span we dropped. No sampling state is kept in a bounded trace-id cache.
-        return inner.ShouldSample(new SamplingParameters(parent,activity.TraceId,activity.DisplayName,activity.Kind)).Decision==SamplingDecision.RecordAndSample;
+        return inner.ShouldSample(new SamplingParameters(parent,activity.TraceId,activity.DisplayName,activity.Kind,activity.TagObjects,activity.Links));
     }
 }
 
@@ -602,7 +623,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
         return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails,
-            sampled:_sampler==null?null:_sampler.Export);
+            sampled:_sampler==null?null:_sampler.Export,samplingMetadata:_sampler==null?null:_sampler.ApplyMetadata);
     }
     internal Resource WithRouting(Resource resource)=>ResourceBuilder.CreateEmpty()
         .AddAttributes(new Dictionary<string,object> {

@@ -110,8 +110,8 @@ public static class TraceAI
         // Build TracerProvider
         var builder = Sdk.CreateTracerProviderBuilder()
             .SetResourceBuilder(resourceBuilder)
-            .SetSampler(options.Sampler ?? SamplingConfiguration.Create(
-                SamplingConfiguration.ParseRate(Environment.GetEnvironmentVariable("FI_SAMPLE_RATE"))))
+            .SetSampler(SamplingConfiguration.Wrap(options.Sampler ?? SamplingConfiguration.Create(
+                SamplingConfiguration.ParseRate(Environment.GetEnvironmentVariable("FI_SAMPLE_RATE")))))
             .AddSource(InstrumentationName)
             .AddProcessor(new FISpanProcessor());
 
