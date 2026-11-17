@@ -233,12 +233,19 @@ For fractional ratio sampling (`0 < r < 1`), kept spans carry the double attribu
 `fi.sampling.ratio` and roots propagate `fi=r:<ratio>` in W3C tracestate (also on
 SDK-free exports); non-parent-based ratio sampling sets the configured ratio on
 children too, preserving other tracestate entries.
-Parent-based children inherit a sampled parent's valid fractional `fi` ratio,
-including remote parents, and omit the attribute when that ratio is absent or
-invalid rather than substitute the local rate.
+Parent-based children inherit a sampled parent's valid fractional `fi` ratio
+and preserve its tracestate, including remote parents and their local descendants,
+regardless of the local root rate. This includes the default sampler (when neither
+`FI_SAMPLE_RATE` nor `OTEL_TRACES_SAMPLER` is set), `FI_SAMPLE_RATE=1`,
+`parentbased_always_on`, `parentbased_always_off`, and `parentbased_traceidratio`
+at any rate. When the parent's ratio is absent or invalid, children omit the
+attribute rather than substitute the local rate.
 An absent attribute means `1.0` for count/cost estimation; this metadata never
-changes sampling decisions and is not added for rate one, always-on/off samplers,
-dropped or record-only spans, or application-owned providers.
+changes sampling decisions. Roots decided locally at rate one add neither the
+attribute nor a new `fi` entry. Non-parent-based `always_on`/`always_off` samplers
+never copy an upstream ratio; non-parent-based `traceidratio` only stamps its own
+fractional rate. Dropped or record-only spans and application-owned providers
+are never stamped.
 
 ```toml
 # futureagi.toml

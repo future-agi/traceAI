@@ -40,7 +40,7 @@ module TraceAI
         if @parent_based && parent.valid?
           return unless parent.trace_flags.sampled?
           SamplingRatio.from_tracestate(parent.tracestate)
-        else
+        elsif SamplingRatio.fractional?(@rate)
           @rate
         end
       end
@@ -71,9 +71,11 @@ module TraceAI
         @provider = provider
       end
 
-      def on_start(span, _parent_context)
+      def on_start(span, parent_context)
         return unless @provider.sampler.is_a?(RatioSampler) && span.context.trace_flags.sampled?
-        rate = SamplingRatio.from_tracestate(span.context.tracestate)
+        # SDK delegates can preserve fi even from an invalid parent context.
+        # Restore only metadata eligible for this decision, not arbitrary state.
+        rate = @provider.sampler.ratio_for(OpenTelemetry::Trace.current_span(parent_context).context)
         return unless rate
         span.instance_variable_set(:@traceai_sampling_ratio, rate)
         span.singleton_class.prepend(RatioSpan)

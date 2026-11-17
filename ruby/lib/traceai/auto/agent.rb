@@ -566,7 +566,7 @@ module TraceAI
                end
         parent_based = name.start_with?('parentbased_')
         sampler = parent_based ? samplers.parent_based(root: root) : root
-        return sampler unless name.end_with?('traceidratio') && SamplingRatio.fractional?(rate)
+        return sampler unless parent_based || (name.end_with?('traceidratio') && SamplingRatio.fractional?(rate))
         RatioSampler.new(sampler, rate, parent_based: parent_based)
       end
       def add_owned_processor(destination, ai_only: false)
