@@ -210,6 +210,8 @@ The most-used settings are below. Set them **before** loading the agent; later `
 
 An explicit `sampleRate`, `FI_SAMPLE_RATE` or file `sample_rate` wins. Otherwise, agent-created providers honor `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`, defaulting to `ParentBased(TraceIdRatio(1))`; invalid settings fall back to that default with one agent warning. Parent-based samplers follow the parent's sampled flag, and dropped spans stay dropped. An application-owned provider always keeps its own sampler.
 
+On agent-created providers with a fractional ratio sampler, sampled spans carry the numeric attribute `fi.sampling.ratio` (`0 < r < 1`) when the agent makes the ratio decision or a parent-based sampler inherits a valid parent ratio; record-only spans, non-ratio samplers and application-owned providers are not stamped. An absent attribute is treated as `1.0` for dashboard weighting; on the agent's own provider, ratio metadata reserves one positive-budget attribute slot (displacing the last admitted ordinary attribute if necessary), but a zero budget, privacy redaction and fail-closed export refusal still take precedence. Local ratio decisions also write `fi=r:<ratio>` in W3C tracestate, preserving other vendors' entries except rightmost entries that must be evicted to fit W3C limits, so parent-based children can inherit the trace-wide ratio across process boundaries; explicit `FI_SAMPLE_RATE` / `sampleRate` keeps its existing local trace-id decision behavior.
+
 [Full configuration reference](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md) covers every `init()` option, environment setting, config/profile precedence, privacy flag and CLI command.
 
 ### Session, user and metadata for AI spans
