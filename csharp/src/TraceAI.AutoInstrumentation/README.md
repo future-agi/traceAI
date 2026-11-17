@@ -193,6 +193,15 @@ An application-owned provider keeps its own sampler, including for an added FI
 exporter. The agent never changes the application's sampled flag; only accepted
 detached exports are marked sampled, and parent-based choices honor parent flags.
 
+For agent-created providers, accepted exported copies carry `fi.sampling.ratio`, a
+double strictly between 0 and 1 when the head-sampling keep probability is known;
+absent means 1.0 for estimated counts and costs. Ratio decisions write
+`fi=r:<ratio>` in W3C `tracestate` while preserving other entries, and parent-based
+children inherit only a valid upstream `fi` ratio, not the local configured rate.
+The metadata survives privacy-fallback export copies (other tracestate content may
+be cleared for privacy), but is never stamped on raw record-only activities,
+dropped spans, full-rate sampling, or application-owned providers.
+
 All `FI_HIDE_*` switches from `FIInstrumentation.TraceConfig` are honored in this
 path, including flattened message attributes and audio transcript text. Their
 lower-case file equivalents work too (`hide_inputs = true`, etc.). A hide switch

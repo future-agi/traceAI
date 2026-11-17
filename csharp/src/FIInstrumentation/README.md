@@ -50,6 +50,15 @@ uses `ParentBased(TraceIdRatio(1.0))`, with one warning for invalid configuratio
 Repeated registration keeps the existing provider and sampler. Dropped spans do
 not interrupt the application's traced operations.
 
+On traceAI-created providers, sampled spans whose keep probability is known carry
+`fi.sampling.ratio`, a double strictly between 0 and 1; absent means 1.0 for estimated
+counts and costs (custom samplers, full-rate sampling, and dropped/record-only spans
+are not stamped). Ratio decisions propagate `fi=r:<ratio>` in W3C `tracestate`,
+preserving other entries; parent-based children inherit only a valid upstream `fi`
+ratio, never the local configured rate for an upstream decision. A register sampler
+option is recognized only when produced by traceAI's own ratio factory, and
+application-owned providers remain untouched.
+
 ## Hide sensitive content
 
 Configure masking before registering your tracer:
