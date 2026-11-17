@@ -5,7 +5,7 @@
     "rootDir": ".",
     "baseUrl": "./src"
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*", "test/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
   "references": [
     { "path": "../fi-core" },
