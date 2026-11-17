@@ -115,6 +115,56 @@ class AttributeProjectionTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(ints = {0, 1, 3})
+    void inheritedApplicationBudgetBoundsSamplerAttributesAtExport(int limit) {
+        var config = AutoConfig.resolve(Map.of(), Map.of("FI_SAMPLE_RATE", "0.5"));
+        var memory = InMemorySpanExporter.create();
+        var hostMemory = InMemorySpanExporter.create();
+        try (var host = SdkTracerProvider.builder()
+                .setSpanLimits(ContextApp.limits(limit))
+                .addSpanProcessor(SimpleSpanProcessor.create(hostMemory)).build();
+             var provider = SdkTracerProvider.builder().setSampler(TraceAIAuto.ownedSampler(config))
+                .setSpanLimits(SpanLimits.builder().setMaxNumberOfAttributes(10).build())
+                .addSpanProcessor(new WireResourceProcessor(SimpleSpanProcessor.create(memory))).build()) {
+            var remote = io.opentelemetry.api.trace.SpanContext.createFromRemoteParent(
+                "00000000000000000000000000000001", "0000000000000001",
+                io.opentelemetry.api.trace.TraceFlags.getSampled(),
+                io.opentelemetry.api.trace.TraceState.builder().put("vendor", "value").put("fi", "r:0.25").build());
+            var parent = host.get("application").spanBuilder("application-parent")
+                .setParent(Context.root().with(io.opentelemetry.api.trace.Span.wrap(remote))).startSpan();
+            parent.setAttribute("application.attribute", "unchanged");
+            var runtime = new TraceAIAuto.RuntimeState(config, provider, provider.get(TraceAIAuto.SCOPE), new OtlpJsonExporter(config));
+            try (var scope = parent.makeCurrent()) {
+                var snapshot = OtelBridge.snapshot();
+                assertEquals(limit, snapshot.attributeLimit());
+                var request = AdversarialTest.request("http://127.0.0.1/v1/chat/completions", Map.of("model", "m"));
+                var capture = new WireCapture(request, request.headers, WireCore.match(request.method, request.url), snapshot, 4194304, runtime);
+                capture.endEpochNanos = capture.startEpochNanos + 1;
+                TraceAIAuto.emit(capture, new WireCore.Result("ratio-budget", Map.of(
+                    "gen_ai.span.kind", "LLM", "output.mime_type", "text/plain", "output.value", "output"), true, null));
+            } finally { parent.end(); }
+            assertEquals(1, memory.getFinishedSpanItems().size(), "sampled parent must still keep the wire span");
+            var span = memory.getFinishedSpanItems().get(0);
+            assertTrue(span.getSpanContext().isSampled());
+            assertEquals(parent.getSpanContext().getTraceId(), span.getTraceId());
+            assertEquals(parent.getSpanContext().getSpanId(), span.getParentSpanId());
+            assertEquals(remote.getTraceState(), span.getSpanContext().getTraceState());
+            var resource = runtime.exporter().serialize(span);
+            var exported = WireCore.map(WireCore.list(WireCore.get(WireCore.list(resource.get("scopeSpans")).get(0), "spans")).get(0));
+            assertTrue(WireCore.list(exported.get("attributes")).size() <= limit, "export must respect the inherited budget, including sampler attributes");
+            assertEquals("fi=r:0.25,vendor=value", exported.get("traceState"));
+            assertTrue(span.getAttributes().size() <= limit);
+            assertEquals(limit == 0 ? null : 0.25, span.getAttributes().get(AttributeKey.doubleKey("fi.sampling.ratio")));
+            assertEquals(1, hostMemory.getFinishedSpanItems().size());
+            var hostSpan = hostMemory.getFinishedSpanItems().get(0);
+            assertNull(hostSpan.getAttributes().get(AttributeKey.doubleKey("fi.sampling.ratio")), "application provider must not be stamped");
+            assertEquals(limit == 0 ? null : "unchanged", hostSpan.getAttributes().get(AttributeKey.stringKey("application.attribute")));
+            assertEquals(remote.getTraceState(), hostSpan.getSpanContext().getTraceState());
+            assertEquals(limit, host.getSpanLimits().getMaxNumberOfAttributes());
+            assertEquals(10, provider.getSpanLimits().getMaxNumberOfAttributes());
+        }
+    }
+
     @ParameterizedTest @ValueSource(ints = {32, 128}) void emissionReservesOutcomeUsageAndNewestContentAtSdkLimit(int limit) {
         var memory = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().setSpanLimits(SpanLimits.builder().setMaxNumberOfAttributes(limit).build())

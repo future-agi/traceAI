@@ -8,10 +8,32 @@ import io.opentelemetry.sdk.trace.SdkTracerProvider;
 
 /** Uses the application's UNRELOCATED OTel API, not the agent's SDK. */
 public final class ContextApp {
+    // The pinned SDK builder rejects zero, but application-provided SpanLimits can expose it.
+    static io.opentelemetry.sdk.trace.SpanLimits limits(int attributes) {
+        var defaults = io.opentelemetry.sdk.trace.SpanLimits.getDefault();
+        return new io.opentelemetry.sdk.trace.SpanLimits() {
+            @Override public int getMaxNumberOfAttributes() { return attributes; }
+            @Override public int getMaxNumberOfEvents() { return defaults.getMaxNumberOfEvents(); }
+            @Override public int getMaxNumberOfLinks() { return defaults.getMaxNumberOfLinks(); }
+            @Override public int getMaxNumberOfAttributesPerEvent() { return defaults.getMaxNumberOfAttributesPerEvent(); }
+            @Override public int getMaxNumberOfAttributesPerLink() { return defaults.getMaxNumberOfAttributesPerLink(); }
+        };
+    }
     static void run(String[] args) throws Exception {
-        SdkTracerProvider provider = SdkTracerProvider.builder().build();
+        boolean ratioBudget = args[2].equals("framework_ratio_budget");
+        var builder = SdkTracerProvider.builder();
+        if (ratioBudget) builder.setSpanLimits(limits(Integer.parseInt(System.getenv("TRACEAI_TEST_ATTRIBUTE_LIMIT"))));
+        SdkTracerProvider provider = builder.build();
         OpenTelemetrySdk.builder().setTracerProvider(provider).buildAndRegisterGlobal();
-        Span parent = GlobalOpenTelemetry.getTracer("test-application").spanBuilder("application-parent").startSpan();
+        var parentBuilder = GlobalOpenTelemetry.getTracer("test-application").spanBuilder("application-parent");
+        if (ratioBudget) {
+            var remote = io.opentelemetry.api.trace.SpanContext.createFromRemoteParent(
+                "00000000000000000000000000000001", "0000000000000001",
+                io.opentelemetry.api.trace.TraceFlags.getSampled(),
+                io.opentelemetry.api.trace.TraceState.builder().put("vendor", "value").put("fi", "r:0.25").build());
+            parentBuilder.setParent(io.opentelemetry.context.Context.root().with(Span.wrap(remote)));
+        }
+        Span parent = parentBuilder.startSpan();
         parent.setAttribute("gen_ai.span.kind", args[2].startsWith("dedup") ? "LLM" : "CHAIN");
         System.out.println("PARENT=" + parent.getSpanContext().getSpanId());
         try (var scope = parent.makeCurrent(); var session = ContextAttributes.usingSession("e2e-session")) {

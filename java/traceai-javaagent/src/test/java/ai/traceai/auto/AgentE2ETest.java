@@ -173,6 +173,21 @@ class AgentE2ETest {
             assertEquals("routing-only", resource.get("project_name"));
         }
     }
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"jdk,0", "okhttp,0", "jdk,3", "okhttp,3"})
+    void inheritedApplicationBudgetIncludesSamplingRatio(String client, int limit) throws Exception {
+        String log = run(client, "framework_ratio_budget", Map.of("FI_SAMPLE_RATE", "0.5",
+            "OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "10", "TRACEAI_TEST_ATTRIBUTE_LIMIT", Integer.toString(limit)), true);
+        assertEquals(1, spans.size(), "only the agent's sampled wire span is exported");
+        var span = spans.get(0);
+        assertEquals(line(log, "PARENT="), span.get("parentSpanId"));
+        assertEquals("00000000000000000000000000000001", span.get("traceId"));
+        assertEquals("fi=r:0.25,vendor=value", span.get("traceState"));
+        var attrs = attributes(span);
+        assertTrue(attrs.size() <= limit, "sampler metadata must obey the inherited attribute budget");
+        assertEquals(limit == 0 ? null : 0.25, attrs.get("fi.sampling.ratio"));
+        assertEquals(1, ((Number)WireCore.get(span.get("status"), "code")).intValue());
+        assertFalse(WireCore.dump(collectorPayloads).contains("application-parent"));
+    }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void plainAppProducesSpan(String client) throws Exception { run(client, "basic", Map.of(), true); assertSpan(); }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"}) void streamingIsByteForByteUnchanged(String client) throws Exception {
         payload = STREAM.getBytes(StandardCharsets.UTF_8); type = "text/event-stream"; run(client, "stream", Map.of(), true); assertSpan(); assertEquals(true, attributes(spans.get(0)).get("gen_ai.request.stream")); assertTrue(attributes(spans.get(0)).containsKey("gen_ai.response.time_to_first_chunk"));
