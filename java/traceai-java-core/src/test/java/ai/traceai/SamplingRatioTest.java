@@ -203,6 +203,21 @@ class SamplingRatioTest {
         }
     }
 
+    @Test void nonParentBasedReplacesFiInAFullTraceState() throws Exception {
+        // W3C tracestate holds at most 32 entries; replacing an existing fi entry must not need a free slot.
+        var builder = TraceState.builder().put("fi", "r:0.5");
+        for (int i = 0; i < 31; i++) builder.put("vendor" + i, "v" + i);
+        TraceState incoming = builder.build();
+        assertEquals(32, incoming.size());
+        SamplingResult result = sample(ratio(0.25, false), parent(true, true, incoming), KEPT);
+        assertEquals(SamplingDecision.RECORD_AND_SAMPLE, result.getDecision());
+        assertEquals(Double.valueOf(0.25), result.getAttributes().get(RATIO));
+        TraceState updated = result.getUpdatedTraceState(incoming);
+        assertEquals("r:0.25", updated.get("fi"));
+        assertEquals(32, updated.size());
+        for (int i = 0; i < 31; i++) assertEquals("v" + i, updated.get("vendor" + i));
+    }
+
     private static Context invalidParent(boolean invalidTraceId, boolean remote, boolean sampled) {
         String traceId = invalidTraceId ? "00000000000000000000000000000000" : KEPT;
         String spanId = invalidTraceId ? SPAN_ID : "0000000000000000";
