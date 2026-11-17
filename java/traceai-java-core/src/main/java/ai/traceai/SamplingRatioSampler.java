@@ -27,7 +27,8 @@ final class SamplingRatioSampler implements Sampler {
     private final boolean parentBased;
 
     SamplingRatioSampler(Sampler delegate, double ratio, boolean parentBased) {
-        if (!validRatio(ratio)) throw new IllegalArgumentException("Sampling ratio must be finite and between zero and one");
+        if (!Double.isFinite(ratio) || ratio < 0 || ratio > 1)
+            throw new IllegalArgumentException("Root sampling ratio must be finite and between zero and one");
         this.delegate = delegate;
         this.ratio = ratio;
         this.parentBased = parentBased;
@@ -36,8 +37,13 @@ final class SamplingRatioSampler implements Sampler {
     /** The factory records provenance, but does not enable attributes on application-owned providers. */
     static Sampler ratioSampler(double ratio, boolean parentBased) {
         Sampler sampler = Sampler.traceIdRatioBased(ratio);
-        if (parentBased) sampler = Sampler.parentBased(sampler);
-        return validRatio(ratio) ? new KnownRatioSampler(sampler, ratio, parentBased) : sampler;
+        if (parentBased) return parentBasedSampler(sampler, ratio);
+        return validRatio(ratio) ? new KnownRatioSampler(sampler, ratio, false) : sampler;
+    }
+
+    /** Parent inheritance is known even when the root sampler has no partial ratio to stamp. */
+    static Sampler parentBasedSampler(Sampler rootSampler, double rootRatio) {
+        return new KnownRatioSampler(Sampler.parentBased(rootSampler), rootRatio, true);
     }
 
     static Sampler forOwnedProvider(Sampler sampler) {
@@ -54,7 +60,7 @@ final class SamplingRatioSampler implements Sampler {
 
         SpanContext parent = Span.fromContext(parentContext).getSpanContext();
         boolean ownDecision = !parentBased || !parent.isValid();
-        Double effectiveRatio = ownDecision ? Double.valueOf(ratio) : parentRatio(parent);
+        Double effectiveRatio = ownDecision ? (validRatio(ratio) ? Double.valueOf(ratio) : null) : parentRatio(parent);
         if (effectiveRatio == null) return result;
 
         Attributes stamped = result.getAttributes().toBuilder().put(RATIO, effectiveRatio).build();

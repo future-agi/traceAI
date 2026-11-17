@@ -75,13 +75,13 @@ public class TraceConfig {
             return SamplingRatioSampler.ratioSampler(rate, true);
         }
         String name = environment.get("OTEL_TRACES_SAMPLER");
-        if (name == null) return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
+        if (name == null) return SamplingRatioSampler.ratioSampler(1.0, true);
         try {
             switch (name) {
                 case "always_on": return Sampler.alwaysOn();
                 case "always_off": return Sampler.alwaysOff();
-                case "parentbased_always_on": return Sampler.parentBased(Sampler.alwaysOn());
-                case "parentbased_always_off": return Sampler.parentBased(Sampler.alwaysOff());
+                case "parentbased_always_on": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOn(), 1.0);
+                case "parentbased_always_off": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOff(), 0.0);
                 case "traceidratio":
                 case "parentbased_traceidratio":
                     String arg = environment.get("OTEL_TRACES_SAMPLER_ARG");
@@ -93,14 +93,15 @@ public class TraceConfig {
         } catch (IllegalArgumentException ignored) {
             // Do not echo configuration values: they may contain unrelated private data.
             System.err.println("[traceai] Invalid OTEL_TRACES_SAMPLER or OTEL_TRACES_SAMPLER_ARG; using default ParentBased(TraceIdRatio(1.0))");
-            return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
+            return SamplingRatioSampler.ratioSampler(1.0, true);
         }
     }
 
     /**
      * Enables sampling-ratio attributes only for a TraceAI-owned provider. Recognizes partial
-     * ratio samplers returned by {@link #samplerFromEnvironment(Map)}, including an explicit
-     * builder sampler obtained from that factory; all other samplers are returned unchanged.
+     * ratio and parent-based samplers returned by {@link #samplerFromEnvironment(Map)}, including
+     * an explicit builder sampler obtained from that factory. Parent-based samplers copy valid
+     * upstream ratios even at root rates zero or one; all other samplers are returned unchanged.
      * This must not be applied to an application-owned provider.
      *
      * @param sampler the selected sampler
