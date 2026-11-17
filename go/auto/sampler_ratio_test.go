@@ -431,8 +431,8 @@ func TestRatioSamplerRatioGuardAndFormatting(t *testing.T) {
 		ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceFlags: trace.FlagsSampled, TraceState: ratioTraceState(t, "vendor=preserved,fi=r:0.5")}))
 		result := sampler.ShouldSample(sdktrace.SamplingParameters{ParentContext: ctx, TraceID: trace.TraceID{1}})
 		checkRatioAttribute(t, result.Attributes, rate)
-		if result.Tracestate.Get("fi") != "r:"+strconv.FormatFloat(rate, 'g', -1, 64) || result.Tracestate.Get("vendor") != "preserved" {
-			t.Errorf("ratio %v not serialized losslessly or other state lost", rate)
+		if result.Tracestate.String() != "fi=r:"+strconv.FormatFloat(rate, 'g', -1, 64) {
+			t.Errorf("ratio %v not serialized losslessly or invalid-parent state retained", rate)
 		}
 	}
 }
