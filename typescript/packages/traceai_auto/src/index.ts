@@ -1,8 +1,6 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
-import { ExportResultCode, getStringFromEnv } from "@opentelemetry/core";
-import { ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
-// The SDK's environment factory is exported from config, not its package root.
-import { buildSamplerFromEnv } from "@opentelemetry/sdk-trace-base/build/src/config";
+import { ExportResultCode } from "@opentelemetry/core";
+import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
@@ -59,33 +57,32 @@ function environmentSampler(): SamplerSelection {
     sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) }),
     ratio: { rate: 1, parentBased: true },
   });
-  const name = getStringFromEnv("OTEL_TRACES_SAMPLER");
-  if (name === undefined) return fallback();
-  let ratio: SamplerSelection["ratio"];
+  // Filtered installs can resolve OTel 1.x. Use public sampler constructors
+  // shared by both majors and parse the environment once for decision and metadata.
+  const name = process.env.OTEL_TRACES_SAMPLER;
+  if (!name?.trim()) return fallback();
   switch (name) {
-    case "always_on": case "always_off":
-      break;
-    case "parentbased_always_on": case "parentbased_always_off":
-      ratio = { rate: name === "parentbased_always_on" ? 1 : 0, parentBased: true };
-      break;
+    case "always_on": return { sampler: new AlwaysOnSampler() };
+    case "always_off": return { sampler: new AlwaysOffSampler() };
+    case "parentbased_always_on": case "parentbased_always_off": {
+      const on = name === "parentbased_always_on";
+      return { sampler: new ParentBasedSampler({ root: on ? new AlwaysOnSampler() : new AlwaysOffSampler() }),
+        ratio: { rate: on ? 1 : 0, parentBased: true } };
+    }
     case "traceidratio": case "parentbased_traceidratio": {
-      const raw = getStringFromEnv("OTEL_TRACES_SAMPLER_ARG");
-      // Match the SDK's Number conversion and blank-as-unset semantics, but
-      // reject invalid values with one value-free warning and a parent-based fallback.
-      if (raw !== undefined && (!Number.isFinite(Number(raw)) || Number(raw) < 0 || Number(raw) > 1)) {
+      const raw = process.env.OTEL_TRACES_SAMPLER_ARG;
+      const rate = raw?.trim() ? Number(raw) : 1;
+      if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
         warn("sampler", "Invalid OTEL_TRACES_SAMPLER_ARG; using ParentBased(TraceIdRatio(1)).");
         return fallback();
       }
-      ratio = { rate: raw === undefined ? 1 : Number(raw), parentBased: name === "parentbased_traceidratio" };
-      break;
+      const root = new TraceIdRatioBasedSampler(rate), parentBased = name === "parentbased_traceidratio";
+      return { sampler: parentBased ? new ParentBasedSampler({ root }) : root, ratio: { rate, parentBased } };
     }
     default:
       warn("sampler", "Invalid or unsupported OTEL_TRACES_SAMPLER; using ParentBased(TraceIdRatio(1)).");
       return fallback();
   }
-  // Keep the SDK's six standard mappings and ratio-argument defaults. In
-  // particular, a plain ratio sampler is not wrapped in aiSampler/ParentBased.
-  return { sampler: buildSamplerFromEnv(), ratio };
 }
 // AI spans that the agent's sampler recorded with the sampled flag off (see aiSampler).
 const recordOnly = new WeakSet<object>();
