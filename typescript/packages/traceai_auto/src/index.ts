@@ -55,13 +55,18 @@ function warn(key: string, message: string): void {
 }
 /** Only called for a provider the agent creates; an application's sampler is never replaced. */
 function environmentSampler(): SamplerSelection {
-  const fallback = (): SamplerSelection => ({ sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) }) });
+  const fallback = (): SamplerSelection => ({
+    sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) }),
+    ratio: { rate: 1, parentBased: true },
+  });
   const name = getStringFromEnv("OTEL_TRACES_SAMPLER");
   if (name === undefined) return fallback();
   let ratio: SamplerSelection["ratio"];
   switch (name) {
     case "always_on": case "always_off":
+      break;
     case "parentbased_always_on": case "parentbased_always_off":
+      ratio = { rate: name === "parentbased_always_on" ? 1 : 0, parentBased: true };
       break;
     case "traceidratio": case "parentbased_traceidratio": {
       const raw = getStringFromEnv("OTEL_TRACES_SAMPLER_ARG");
@@ -317,9 +322,10 @@ export function init(options: Options = {}): TracerProvider | undefined {
     }
     if (!agent.provider) {
       // Resolve against the application's environment before constructing the SDK.
-      // Explicit rates retain aiSampler's record-only handling of unsampled parents.
+      // Explicit rates retain aiSampler's decisions, including record-only handling
+      // of unsampled parents, but sampled decisions inherit the parent's metadata.
       const admission = samplingRatioAdmission(config.sampleRateExplicit
-        ? { sampler: aiSampler(config.sampleRate), ratio: { rate: config.sampleRate, parentBased: false } }
+        ? { sampler: aiSampler(config.sampleRate), ratio: { rate: config.sampleRate, parentBased: true } }
         : environmentSampler());
       const { sampler } = admission;
       const ownedStart = processor.onStart.bind(processor);

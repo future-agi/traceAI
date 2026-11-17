@@ -78,8 +78,11 @@ export function samplingRatioAdmission(selection: SamplerSelection): { sampler: 
 
 /** Applied only at agent-owned provider creation; decisions remain the delegate's. */
 export function withSamplingRatio({ sampler, ratio }: SamplerSelection): Sampler {
-  if (!ratio || !validRatio(ratio.rate)) return sampler;
+  if (!ratio || !Number.isFinite(ratio.rate) || ratio.rate < 0 || ratio.rate > 1) return sampler;
   const { rate, parentBased } = ratio;
+  // Parent inheritance is independent of the root probability, including 0/1.
+  // Non-parent-based full-rate/disabled samplers need no metadata wrapper.
+  if (!parentBased && !validRatio(rate)) return sampler;
   return {
     shouldSample(ctx, traceId, spanName, spanKind, attributes, links) {
       const result = sampler.shouldSample(ctx, traceId, spanName, spanKind, attributes, links);
@@ -89,7 +92,7 @@ export function withSamplingRatio({ sampler, ratio }: SamplerSelection): Sampler
       const effectiveRate = followsParent
         ? ((parent.traceFlags & TraceFlags.SAMPLED) !== 0 ? parentRatio(parent.traceState?.get("fi")) : undefined)
         : rate;
-      if (effectiveRate === undefined) return result;
+      if (effectiveRate === undefined || !validRatio(effectiveRate)) return result;
       const traceState = result.traceState ?? parent?.traceState ?? createTraceState();
       return {
         ...result,
