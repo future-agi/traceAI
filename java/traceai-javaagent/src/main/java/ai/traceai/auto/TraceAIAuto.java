@@ -277,6 +277,8 @@ public final class TraceAIAuto {
             // A7 sanitizes the complete candidate context before bounded admission; S1 at
             // asynchronous export remains authoritative (including newly observed secrets).
             Resource resource = capture.context.resource() == null ? state.resource : withRouting(capture.context.resource(), state.resource);
+            int limit = Math.min(state.provider().getSpanLimits().getMaxNumberOfAttributes(),
+                capture.context.attributeLimit() == null ? Integer.MAX_VALUE : capture.context.attributeLimit());
             Span span = state.tracer().spanBuilder(bounded(result.name())).setSpanKind(SpanKind.CLIENT).setParent(capture.context.parent())
                 .setStartTimestamp(capture.startEpochNanos, TimeUnit.NANOSECONDS).startSpan();
             try {
@@ -285,8 +287,6 @@ public final class TraceAIAuto {
                 // both budgets so the SDK cannot truncate an atomically admitted content group.
                 int samplingSlots = span instanceof io.opentelemetry.sdk.trace.ReadableSpan readable
                     && readable.getAttribute(AttributeKey.doubleKey("fi.sampling.ratio")) != null ? 1 : 0;
-                int limit = Math.min(state.provider().getSpanLimits().getMaxNumberOfAttributes(),
-                    capture.context.attributeLimit() == null ? Integer.MAX_VALUE : capture.context.attributeLimit());
                 attrs = AttributeProjection.select(AttributeProjection.sanitize(attrs, state.config(), capture.match),
                     Math.max(0, limit - samplingSlots),
                     String.valueOf(capture.match.endpoint().get("operation")));
@@ -302,7 +302,7 @@ public final class TraceAIAuto {
                     else if (v instanceof List<?> list) span.setAttribute(AttributeKey.stringArrayKey(k), list.stream().map(item -> item instanceof String s ? s : item == null ? "null" : item.getClass().getName()).toList());
                 }
                 span.setStatus(result.ok() ? StatusCode.OK : StatusCode.ERROR, result.description() == null || hidesErrorText(state.config()) ? "" : result.description());
-            } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource); }
+            } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource, limit); }
         } catch (Throwable ignored) { }
     }
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }
