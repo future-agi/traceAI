@@ -664,6 +664,61 @@ def test_sampling_ratio_root_and_local_child(fresh_state, monkeypatch, source):
         assert span.context.trace_state.get("fi") == "r:0.25"
 
 
+@pytest.mark.parametrize("name,arg,rate,expected", [
+    pytest.param(None, None, None, 0.5, id="default"),
+    pytest.param("parentbased_always_on", None, None, 0.5, id="parentbased-always-on"),
+    pytest.param(None, None, "1", 0.5, id="fi-rate-one"),
+    pytest.param("parentbased_always_off", None, None, 0.5, id="parentbased-always-off"),
+    pytest.param("parentbased_traceidratio", "0", None, 0.5, id="parentbased-ratio-zero"),
+    pytest.param("parentbased_traceidratio", "0.25", None, 0.5, id="parentbased-ratio-fractional"),
+    pytest.param("parentbased_traceidratio", "1", None, 0.5, id="parentbased-ratio-one"),
+    pytest.param("always_on", None, None, None, id="nonparent-always-on"),
+    pytest.param("traceidratio", "1", None, None, id="nonparent-ratio-one"),
+])
+def test_sampling_ratio_remote_to_local_exports(fresh_state, monkeypatch, name, arg, rate, expected):
+    if name is not None:
+        monkeypatch.setenv("OTEL_TRACES_SAMPLER", name)
+    if arg is not None:
+        monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", arg)
+    if rate is not None:
+        monkeypatch.setenv("FI_SAMPLE_RATE", rate)
+    exporter = InMemorySpanExporter()
+    provider = _manager.init(span_exporter=exporter, batch=False)
+    tracer = provider.get_tracer(AI_SCOPE)
+    context = _ratio_parent("r:0.5")
+    parent = trace_api.get_current_span(context).get_span_context()
+    with tracer.start_as_current_span("remote-child", context=context) as child:
+        child_context = child.get_span_context()
+        assert child.attributes.get("fi.sampling.ratio") == expected
+        with tracer.start_as_current_span("local-child") as local_child:
+            assert local_child.attributes.get("fi.sampling.ratio") == expected
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["local-child", "remote-child"]
+    assert spans[0].parent == child_context
+    assert spans[1].parent == parent
+    for span in spans:
+        assert span.context.trace_id == parent.trace_id
+        assert span.attributes.get("fi.sampling.ratio") == expected
+        if expected is not None:
+            assert type(span.attributes["fi.sampling.ratio"]) is float
+        assert list(span.context.trace_state.items()) == list(parent.trace_state.items())
+
+
+def test_sampling_ratio_default_root_and_unsampled_parent(fresh_state):
+    exporter = InMemorySpanExporter()
+    provider = _manager.init(span_exporter=exporter, batch=False)
+    tracer = provider.get_tracer(AI_SCOPE)
+    with tracer.start_span("root", context=Context()):
+        pass
+    with tracer.start_span("unsampled", context=_ratio_parent("r:0.5", sampled=False)) as span:
+        assert not span.is_recording()
+    root, = exporter.get_finished_spans()
+    assert root.name == "root"
+    assert "fi.sampling.ratio" not in root.attributes
+    assert root.context.trace_state.get("fi") is None
+
+
+@pytest.mark.parametrize("rate", [0.25, 1.0])
 @pytest.mark.parametrize("remote", [False, True])
 @pytest.mark.parametrize("fi,expected", [
     ("r:0.5", 0.5), ("r:0.125", 0.125), ("r:1e-07", 1e-7),
@@ -672,9 +727,9 @@ def test_sampling_ratio_root_and_local_child(fresh_state, monkeypatch, source):
     ("r:1e-999", None), ("0.5", None), ("r:", None), ("r:0.2_5", None),
     ("r: 0.5", None),
 ])
-def test_sampling_ratio_parent_metadata(fresh_state, caplog, remote, fi, expected):
+def test_sampling_ratio_parent_metadata(fresh_state, caplog, remote, fi, expected, rate):
     exporter = InMemorySpanExporter()
-    provider = _manager.init(span_exporter=exporter, batch=False, sample_rate=0.25)
+    provider = _manager.init(span_exporter=exporter, batch=False, sample_rate=rate)
     context = _ratio_parent(fi, remote=remote)
     parent_state = trace_api.get_current_span(context).get_span_context().trace_state
     with caplog.at_level(logging.DEBUG, logger="fi_instrumentation.auto"):
@@ -710,7 +765,7 @@ def test_sampling_ratio_nonparent_replaces_parent_ratio(fresh_state, monkeypatch
     ("parentbased_traceidratio", "1"), ("traceidratio", "0"),
     ("unsupported", None), ("traceidratio", "nan"), (None, None),
 ])
-def test_sampling_ratio_disabled_does_not_stamp(fresh_state, monkeypatch, name, arg):
+def test_sampling_ratio_disabled_roots_only_inherit_for_parentbased(fresh_state, monkeypatch, name, arg):
     if name is not None:
         monkeypatch.setenv("OTEL_TRACES_SAMPLER", name)
     if arg is not None:
@@ -720,15 +775,19 @@ def test_sampling_ratio_disabled_does_not_stamp(fresh_state, monkeypatch, name, 
     for context in (Context(), _ratio_parent(), _ratio_parent("r:0.5")):
         expected_state = trace_api.get_current_span(context).get_span_context().trace_state
         result = provider.sampler.should_sample(context, 1, "test")
-        assert "fi.sampling.ratio" not in result.attributes
+        # Missing/invalid selections fall back to the default parent-based sampler.
+        parentbased = name not in ("always_on", "always_off", "traceidratio") or arg == "nan"
+        expected = 0.5 if parentbased and expected_state.get("fi") == "r:0.5" else None
+        assert result.attributes.get("fi.sampling.ratio") == expected
         assert dict((result.trace_state or TraceState()).items()) == dict(expected_state.items())
 
 
+@pytest.mark.parametrize("rate", [0.0, 0.25, 1.0])
 @pytest.mark.parametrize("parentbased", [False, True])
 @pytest.mark.parametrize("trace_id", [1, (1 << 128) - 1])
 @pytest.mark.parametrize("parent", ["root", "remote-on", "remote-off", "local-on", "local-off"])
-def test_sampling_ratio_decisions_match_delegate(parentbased, trace_id, parent):
-    delegate = TraceIdRatioBased(0.25)
+def test_sampling_ratio_decisions_match_delegate(parentbased, trace_id, parent, rate):
+    delegate = TraceIdRatioBased(rate)
     if parentbased:
         delegate = ParentBased(delegate)
     sampler = _manager._RatioMetadataSampler(delegate)
@@ -771,6 +830,24 @@ def test_sampling_ratio_preserves_delegate_result_and_inputs(monkeypatch, decisi
         assert actual is result
 
 
+@pytest.mark.parametrize("decision", list(Decision))
+@pytest.mark.parametrize("sampled", [False, True])
+def test_sampling_ratio_parentbased_only_inherits_sampled_decisions(monkeypatch, decision, sampled):
+    delegate = ParentBased(ALWAYS_ON)
+    state = TraceState([("vendor", "private-vendor-state"), ("fi", "r:0.5")])
+    result = SamplingResult(decision, {"existing": "value"}, state)
+    monkeypatch.setattr(delegate, "should_sample", lambda *args, **kwargs: result)
+    sampler = _manager._RatioMetadataSampler(delegate)
+    actual = sampler.should_sample(_ratio_parent("r:0.5", sampled=sampled), 1, "child")
+    assert actual.decision is decision
+    assert actual.trace_state is state
+    assert dict(result.attributes) == {"existing": "value"}
+    if decision is Decision.RECORD_AND_SAMPLE and sampled:
+        assert dict(actual.attributes) == {"fi.sampling.ratio": 0.5, "existing": "value"}
+    else:
+        assert actual is result
+
+
 @pytest.mark.parametrize("existing_fi", [False, True])
 def test_sampling_ratio_full_tracestate_keeps_most_recent_entries(existing_fi):
     entries = [(f"vendor{i}", f"opaque{i}") for i in range(32 - int(existing_fi))]
@@ -796,7 +873,10 @@ def test_sampling_ratio_shortest_round_trip_decimal(rate):
     assert float(result.trace_state.get("fi")[2:]) == rate
 
 
-@pytest.mark.parametrize("sampler", [TraceIdRatioBased(0.25), ParentBased(TraceIdRatioBased(0.25))])
+@pytest.mark.parametrize("sampler", [
+    TraceIdRatioBased(0.25), ParentBased(TraceIdRatioBased(0.25)),
+    ParentBased(TraceIdRatioBased(1.0)), ParentBased(ALWAYS_ON),
+])
 @pytest.mark.parametrize("ownership", ["custom", "supplied", "global"])
 def test_sampling_ratio_custom_and_application_samplers_untouched(fresh_state, sampler, ownership):
     exporter = InMemorySpanExporter()
@@ -869,13 +949,14 @@ def test_sampling_ratio_limit_one_preserves_initial_ai_classification(fresh_stat
     assert type(exported.attributes["fi.sampling.ratio"]) is float
 
 
+@pytest.mark.parametrize("rate", [0.25, 1.0])
 @pytest.mark.parametrize("limit", [0, 1, 2, 128])
-def test_sampling_ratio_export_restores_late_eviction_without_changing_sdk_limits(fresh_state, limit):
+def test_sampling_ratio_export_restores_late_eviction_without_changing_sdk_limits(fresh_state, limit, rate):
     from opentelemetry.sdk.trace import SpanLimits
     from fi_instrumentation import TraceConfig
 
     exporter, app_exporter = InMemorySpanExporter(), InMemorySpanExporter()
-    provider = _manager.init(span_exporter=exporter, batch=False, sample_rate=0.25,
+    provider = _manager.init(span_exporter=exporter, batch=False, sample_rate=rate,
                              span_limits=SpanLimits(max_span_attributes=limit),
                              config=TraceConfig(hide_inputs=True))
     provider.add_span_processor(SimpleSpanProcessor(app_exporter))
@@ -897,15 +978,16 @@ def test_sampling_ratio_export_restores_late_eviction_without_changing_sdk_limit
         assert original.attributes["input.value"] == "private input"
 
 
+@pytest.mark.parametrize("rate", [0.25, 1.0])
 @pytest.mark.parametrize("sampled,fi,expected", [
     (False, "r:0.5", None), (True, "r:0.5", 0.5), (True, "r:1e-07", 1e-7),
     (True, "r:2", None), (True, "r:nan", None), (True, "r:1e999", None),
     (True, "r:1e-999", None), (True, "r:0.2_5", None),
 ])
-def test_sampling_ratio_export_restoration_requires_sampled_valid_state(fresh_state, sampled, fi, expected):
+def test_sampling_ratio_export_restoration_requires_sampled_valid_state(fresh_state, sampled, fi, expected, rate):
     from opentelemetry.sdk.trace import ReadableSpan
 
-    provider = _manager.init(span_exporter=InMemorySpanExporter(), batch=False, sample_rate=0.25)
+    provider = _manager.init(span_exporter=InMemorySpanExporter(), batch=False, sample_rate=rate)
     route = _manager._state.overlays[provider]
     context = trace_api.get_current_span(_ratio_parent(fi, sampled=sampled)).get_span_context()
     original = ReadableSpan(name="snapshot", context=context, attributes={})
@@ -914,7 +996,7 @@ def test_sampling_ratio_export_restoration_requires_sampled_valid_state(fresh_st
     assert not original.attributes
 
 
-@pytest.mark.parametrize("ownership", ["custom", "borrowed", "application", "fullrate"])
+@pytest.mark.parametrize("ownership", ["custom", "borrowed", "application"])
 def test_sampling_ratio_export_does_not_restore_for_other_routes(fresh_state, ownership):
     from opentelemetry.sdk.trace import SpanLimits
     from fi_instrumentation import register
@@ -936,7 +1018,7 @@ def test_sampling_ratio_export_does_not_restore_for_other_routes(fresh_state, ow
         if ownership == "custom":
             kwargs["sampler"] = ParentBased(TraceIdRatioBased(0.25))
     try:
-        provider = _manager.init(sample_rate=1.0 if ownership == "fullrate" else 0.25, **kwargs)
+        provider = _manager.init(sample_rate=0.25, **kwargs)
         with provider.get_tracer(AI_SCOPE).start_span("other", context=_ratio_parent("r:0.5")) as span:
             span.set_attribute("late", "retained")
         exported, = exporter.get_finished_spans()
