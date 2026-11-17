@@ -78,8 +78,8 @@ public class TraceConfig {
         if (name == null) return SamplingRatioSampler.ratioSampler(1.0, true);
         try {
             switch (name) {
-                case "always_on": return Sampler.alwaysOn();
-                case "always_off": return Sampler.alwaysOff();
+                case "always_on": return SamplingRatioSampler.alwaysSampler(true);
+                case "always_off": return SamplingRatioSampler.alwaysSampler(false);
                 case "parentbased_always_on": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOn(), 1.0);
                 case "parentbased_always_off": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOff(), 0.0);
                 case "traceidratio":
@@ -98,11 +98,12 @@ public class TraceConfig {
     }
 
     /**
-     * Enables sampling-ratio attributes only for a TraceAI-owned provider. Recognizes partial
-     * ratio and parent-based samplers returned by {@link #samplerFromEnvironment(Map)}, including
+     * Enables sampling-ratio attributes and invalid-root state reset only for a TraceAI-owned
+     * provider. Recognizes samplers returned by {@link #samplerFromEnvironment(Map)}, including
      * an explicit builder sampler obtained from that factory. Parent-based samplers copy valid
-     * upstream ratios even at root rates zero or one; all other samplers are returned unchanged.
-     * This must not be applied to an application-owned provider.
+     * upstream ratios even at root rates zero or one. Known always-on/off and ratio boundary
+     * samplers only reset invalid-root state, without stamping. All other samplers are returned
+     * unchanged. This must not be applied to an application-owned provider.
      *
      * @param sampler the selected sampler
      * @return a decision-preserving sampler carrying ratio metadata when the ratio is known

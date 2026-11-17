@@ -38,7 +38,12 @@ final class SamplingRatioSampler implements Sampler {
     static Sampler ratioSampler(double ratio, boolean parentBased) {
         Sampler sampler = Sampler.traceIdRatioBased(ratio);
         if (parentBased) return parentBasedSampler(sampler, ratio);
-        return validRatio(ratio) ? new KnownRatioSampler(sampler, ratio, false) : sampler;
+        return new KnownRatioSampler(sampler, ratio, false);
+    }
+
+    /** Known boundary samplers still need invalid-root state reset, never ratio stamping. */
+    static Sampler alwaysSampler(boolean sampled) {
+        return new KnownRatioSampler(sampled ? Sampler.alwaysOn() : Sampler.alwaysOff(), sampled ? 1.0 : 0.0, false);
     }
 
     /** Parent inheritance is known even when the root sampler has no partial ratio to stamp. */
@@ -56,21 +61,26 @@ final class SamplingRatioSampler implements Sampler {
     public SamplingResult shouldSample(Context parentContext, String traceId, String name, SpanKind spanKind,
             Attributes attributes, List<LinkData> parentLinks) {
         SamplingResult result = delegate.shouldSample(parentContext, traceId, name, spanKind, attributes, parentLinks);
-        if (result.getDecision() != SamplingDecision.RECORD_AND_SAMPLE) return result;
-
         SpanContext parent = Span.fromContext(parentContext).getSpanContext();
-        boolean ownDecision = !parentBased || !parent.isValid();
-        Double effectiveRatio = ownDecision ? (validRatio(ratio) ? Double.valueOf(ratio) : null) : parentRatio(parent);
-        if (effectiveRatio == null) return result;
+        boolean invalidParent = !parent.isValid();
+        boolean ownDecision = !parentBased || invalidParent;
+        Double effectiveRatio = result.getDecision() == SamplingDecision.RECORD_AND_SAMPLE
+            ? (ownDecision ? (validRatio(ratio) ? Double.valueOf(ratio) : null) : parentRatio(parent)) : null;
+        // The SDK creates a new trace for an invalid parent, but still passes its original state
+        // to getUpdatedTraceState, even for DROP. Do not propagate that state into the new root.
+        boolean resetState = invalidParent && !parent.getTraceState().isEmpty();
+        if (effectiveRatio == null && !resetState) return result;
 
-        Attributes stamped = result.getAttributes().toBuilder().put(RATIO, effectiveRatio).build();
+        Attributes stamped = effectiveRatio == null ? result.getAttributes()
+            : result.getAttributes().toBuilder().put(RATIO, effectiveRatio).build();
         return new SamplingResult() {
             @Override public SamplingDecision getDecision() { return result.getDecision(); }
             @Override public Attributes getAttributes() { return stamped; }
             @Override public TraceState getUpdatedTraceState(TraceState parentTraceState) {
-                TraceState updated = result.getUpdatedTraceState(parentTraceState);
-                // Preserve the delegate's state updates and all other vendors; inherited fi is unchanged.
-                return ownDecision ? updated.toBuilder().put(STATE_KEY, "r:" + Double.toString(ratio)).build() : updated;
+                TraceState updated = result.getUpdatedTraceState(invalidParent ? TraceState.getDefault() : parentTraceState);
+                // Retain delegate updates, and valid parents' other vendors and inherited fi.
+                return ownDecision && effectiveRatio != null
+                    ? updated.toBuilder().put(STATE_KEY, "r:" + Double.toString(ratio)).build() : updated;
             }
         };
     }
