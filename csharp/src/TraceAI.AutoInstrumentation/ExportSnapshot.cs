@@ -34,9 +34,6 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         var copy=(Activity)Clone(original);
         foreach(var field in new[] { "_tags","_events","_links","_baggage","_customProperties","<Parent>k__BackingField" }) Set(copy,field,null);
         Set(copy,"_parentId",parentId);
-        // The agent asks only for recording, so a shared Activity's sampled flag stays the
-        // application's. Every span that reaches this point was sampled for Future AGI.
-        copy.ActivityTraceFlags|=ActivityTraceFlags.Recorded;
         // This reference is not exported, and must not retain an application's activity graph.
         RuntimeLayout.Field(typeof(Activity),"_previousActiveActivity")?.SetValue(copy,null);
         return copy;
@@ -117,13 +114,16 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
     }
     internal static ExportSnapshot Create(IEnumerable<Activity> batch,Resource resource,
         Func<string,object,string?,object?> safe,Func<string,string> redact,Func<string,string,string>? eventKey=null,int? attributeLimit=null,
-        bool hideErrorDetails=false)
+        bool hideErrorDetails=false,Func<Activity,bool>? sampled=null)
     {
         var spans=new List<Activity>();
         var shared=new Budget(65536,8*1024*1024);
         foreach(var original in batch)
         {
             if(original.GetCustomProperty("traceai.suppressed") is true) continue;
+            // A shared Activity may have been recorded by a different provider. Never
+            // export or promote it if our own head sampler rejected it.
+            if(sampled!=null && !sampled(original)) continue;
             Activity copy;
             try { copy=Shell(original); }
             catch { TraceAIAuto.Warn("snapshot","Unsupported DiagnosticSource layout; telemetry omitted."); continue; }
@@ -203,6 +203,9 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 }
                 foreach(var tag in AttributeProjection.Project(retained,attributeLimit??AttributeProjection.Limit())) copy.SetTag(tag.Key,tag.Value);
             }
+            // Our own head sampler accepted this span (the agent records it record-only), so it is sampled
+            // for Future AGI on both the normal and the privacy-fallback copy. Without our sampler, flags stay as recorded.
+            if(sampled!=null) copy.ActivityTraceFlags|=ActivityTraceFlags.Recorded;
             spans.Add(copy);
         }
         return new(spans.ToArray(),SanitizeResource(resource,(key,value)=>safe(key,value,null),redact));

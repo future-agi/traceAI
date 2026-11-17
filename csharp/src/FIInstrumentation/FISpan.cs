@@ -163,7 +163,13 @@ public class FISpan : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        if (!_recording) return;
+        if (!_recording)
+        {
+            // Dropped propagation-only activities still own an ambient scope. Suppressed
+            // placeholders have no Id and were never started, so leave those untouched.
+            if (_activity.Id != null) _activity.Dispose();
+            return;
+        }
 
         // Auto-set OK status if unset
         if (_activity.Status == ActivityStatusCode.Unset)

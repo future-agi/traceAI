@@ -106,7 +106,7 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
         var req=new RequestData { Method=request.Method.Method, Url=url, CredentialDiscoveryIncomplete=discoveryIncomplete };
         ReadRequest(request.Content,req,_config.MaxBody);
         foreach(var header in request.Headers) req.Headers[header.Key]=string.Join(",",header.Value);
-        var capture=new Capture(match,req,_config.MaxBody,parent?.Context??default,started,
+        var capture=new Capture(match,req,_config.MaxBody,_privacy.SamplingContext(parent),started,
             HostContext.Attributes(),()=>Volatile.Read(ref _disposed)==0,clock,_attributeLimit,_privacy);
         if(_pending.TryAdd(id,(request,capture)))
         {

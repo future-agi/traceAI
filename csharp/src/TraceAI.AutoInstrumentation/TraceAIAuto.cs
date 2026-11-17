@@ -162,9 +162,12 @@ internal sealed class Agent : IDisposable
     {
         _config=config; _installed=InstalledAssemblies();
         RuntimeLayout.Check();
-        var sampler=new ExportSampler(config.SampleRate);
-        var privacy=new AutoProcessor(config,()=>Volatile.Read(ref _disposed)==0);
         _ownsProvider=config.Options.Provider==null;
+        // A supplied provider owns sampling completely, including any FI destination
+        // attached to it. Only resolve FI/OTel configuration for our own provider.
+        var sampler=_ownsProvider?new ExportSampler(SamplingConfiguration.Create(
+            config.HasSampleRate?config.SampleRate:null,message=>TraceAIAuto.Warn("sampler",message))):null;
+        var privacy=new AutoProcessor(config,()=>Volatile.Read(ref _disposed)==0,sampler);
         TracerProviderBuilder? builder=null;
         if(_ownsProvider)
         {
@@ -173,7 +176,7 @@ internal sealed class Agent : IDisposable
             var resource=privacy.WithRouting(ResourceBuilder.CreateDefault().Build());
             builder=Sdk.CreateTracerProviderBuilder()
                 .SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(privacy.SanitizeResource(resource).Attributes))
-                .SetSampler(sampler).AddSource(TraceAIAuto.Source.Name).AddProcessor(privacy);
+                .SetSampler(sampler!).AddSource(TraceAIAuto.Source.Name).AddProcessor(privacy);
             foreach(var integration in Integrations.Where(i=>config.Enabled(i.Name))) foreach(var prefix in integration.Sources) builder.AddSource(integration.Exact?prefix:prefix+"*");
         }
         BaseExporter<Activity>? exporter=null;
@@ -424,29 +427,37 @@ internal sealed class ExportCompletion
     }
 }
 
-/// <summary>Future AGI sampling that never sets the application's sampled flag. It asks
-/// only for recording (AllData, not AllDataAndRecorded), so the application's own sampler
-/// alone decides the Recorded flag that its exporters, its parent-based child samplers and
-/// downstream services see. The Future AGI decision is the same for every span of a trace:
-/// an upstream service's sampled flag on a remote parent decides that trace, and any other
-/// trace uses the trace-id ratio. The batch processor applies the same decision at export.</summary>
-internal sealed class ExportSampler(double rate) : Sampler
+/// <summary>Apply the selected OTel sampler without setting the shared application's
+/// sampled flag. Accepted spans request recording only; only their detached export copies
+/// are marked sampled. Private per-Activity decisions preserve parent-based sampling for
+/// our own record-only local parents and cannot leak as span attributes.</summary>
+internal sealed class ExportSampler(Sampler inner) : Sampler
 {
-    private readonly TraceIdRatioBasedSampler _ratio=new(rate);
-    private readonly TraceMemory _upstream=new();
-    public override SamplingResult ShouldSample(in SamplingParameters parameters)=>
-        new(Export(parameters.TraceId,parameters.ParentContext)?SamplingDecision.RecordOnly:SamplingDecision.Drop);
-    internal bool Export(ActivityTraceId trace,ActivityContext parent=default)
+    private readonly string _decisionKey="traceai.sampling."+Guid.NewGuid().ToString("N");
+    private ActivityContext Parent(ActivityContext context,Activity? activity)
     {
-        if(parent.IsRemote && parent.TraceId==trace)
-        {
-            bool sampled=(parent.TraceFlags&ActivityTraceFlags.Recorded)!=0;
-            _upstream.Set(trace,sampled);
-            return sampled;
-        }
-        // Local parents carry the application's flag, not ours: remember the trace instead.
-        if(_upstream.TryGet(trace,out bool remembered)) return remembered;
-        return _ratio.ShouldSample(new SamplingParameters(default,trace,"",ActivityKind.Internal)).Decision==SamplingDecision.RecordAndSample;
+        if(!context.IsRemote && activity!=null && activity.TraceId==context.TraceId && activity.SpanId==context.SpanId &&
+            activity.GetCustomProperty(_decisionKey) is true)
+            return new ActivityContext(context.TraceId,context.SpanId,context.TraceFlags|ActivityTraceFlags.Recorded,context.TraceState);
+        return context;
+    }
+    internal ActivityContext Context(Activity activity) => Parent(activity.Context,activity);
+    public override SamplingResult ShouldSample(in SamplingParameters parameters)
+    {
+        var parent=Parent(parameters.ParentContext,Activity.Current);
+        var decision=inner.ShouldSample(new SamplingParameters(parent,parameters.TraceId,parameters.Name,parameters.Kind));
+        return new(decision.Decision==SamplingDecision.RecordAndSample?SamplingDecision.RecordOnly:SamplingDecision.Drop);
+    }
+    internal void Record(Activity activity) => activity.SetCustomProperty(_decisionKey,Decide(activity));
+    internal bool Export(Activity activity) => activity.GetCustomProperty(_decisionKey) is bool sampled?sampled:Decide(activity);
+    private bool Decide(Activity activity)
+    {
+        ActivityContext.TryParse(activity.ParentId,activity.TraceStateString,activity.HasRemoteParent,out var context);
+        var parent=Parent(context,activity.Parent);
+        // These six standard head samplers depend only on the trace id and parent.
+        // Re-evaluate at start to retain our decision even when another listener records
+        // a span we dropped. No sampling state is kept in a bounded trace-id cache.
+        return inner.ShouldSample(new SamplingParameters(parent,activity.TraceId,activity.DisplayName,activity.Kind)).Decision==SamplingDecision.RecordAndSample;
     }
 }
 
@@ -471,7 +482,7 @@ internal sealed class TraceMemory(int capacity=4096)
     internal bool TryGet(ActivityTraceId trace,out bool value)=>_values.TryGetValue(trace,out value);
 }
 
-internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,ExportSampler sampler,bool requireRecorded,Func<bool> enabled)
+internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,ExportSampler? sampler,bool requireRecorded,Func<bool> enabled)
     : BatchExportProcessor<Activity>(exporter,2048,1000,2500,512)
 {
     private long _submitted;
@@ -485,7 +496,7 @@ internal sealed class PrivacyBatchProcessor(BaseExporter<Activity> exporter,Expo
             // On a supplied provider the application's sampler owns every span. On the
             // agent's own provider the Recorded flag is the application's, never ours.
             if(requireRecorded && !data.Recorded) return;
-            if(!sampler.Export(data.TraceId)) return;
+            if(sampler!=null && !sampler.Export(data)) return;
             // A web request span is sent only when an AI span of the same trace was captured.
             // The AI spans a request causes end before the request does.
             if(data.Source.Name==Agent.WebRequestSource) { if(!_aiTraces.TryGet(data.TraceId,out _)) return; }
@@ -504,9 +515,10 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     private readonly AutoConfig _config;
     private readonly TraceConfig _mask;
     private readonly Func<bool> _enabled;
-    internal AutoProcessor(AutoConfig config,Func<bool>? enabled=null)
+    private readonly ExportSampler? _sampler;
+    internal AutoProcessor(AutoConfig config,Func<bool>? enabled=null,ExportSampler? sampler=null)
     {
-        _config=config; _enabled=enabled??(()=>true); KnownSecrets.Seed(config);
+        _config=config; _enabled=enabled??(()=>true); _sampler=sampler; KnownSecrets.Seed(config);
         // A TraceConfig supplied in code is used as given; the hide switches are read, and an
         // unrecognised value reported, only when they decide what is hidden.
         _mask=config.Options.TraceConfig??FromHideSwitches(config);
@@ -532,6 +544,9 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     }
     /// <summary>Error messages, stack traces and status descriptions are omitted; error types stay.</summary>
     internal bool HideErrorDetails=>_mask.HideErrorDetails;
+    // Deferred wire spans keep our local parent decision without changing application
+    // trace propagation or retaining the Activity until a response body is consumed.
+    internal ActivityContext SamplingContext(Activity? parent) => parent==null?default:_sampler?.Context(parent)??parent.Context;
     /// <summary>Custom property holding the FI context captured when an activity started.</summary>
     internal const string ContextProperty="traceai.context";
     public override void OnStart(Activity activity)
@@ -539,6 +554,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         try
         {
             if(!_enabled()) return;
+            _sampler?.Record(activity);
             if(InstrumentationSuppression.Active) { activity.SetCustomProperty("traceai.suppressed",true); return; }
             // Never write tags here: application providers can export this same Activity.
             // Only custom properties, which exporters do not read, are set. Mapping and the
@@ -585,7 +601,8 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
         object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
-        return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails);
+        return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails,
+            sampled:_sampler==null?null:_sampler.Export);
     }
     internal Resource WithRouting(Resource resource)=>ResourceBuilder.CreateEmpty()
         .AddAttributes(new Dictionary<string,object> {
