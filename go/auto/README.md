@@ -229,9 +229,9 @@ application did not set. An agent-owned provider uses normal OpenTelemetry
 resource detection (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, SDK identity,
 `unknown_service:<executable>` fallback); the FI project or its working-directory
 default is never used as `service.name`. If no SDK provider exists when the
-agent activates, it creates a private, parent-based ratio-sampled provider that
-only its wire spans use; it is never made global, and wire spans keep their
-request-time parent, so they stay in the application's traces. An installed
+agent activates, it creates a private provider using the sampling configuration
+below. Only its wire spans use this provider; it is never made global, and wire
+spans keep their request-time parent, so they stay in the application's traces. An installed
 third-party API provider is not replaced. A global provider installed *after*
 activation does not receive the agent's processor, and a second `Init` cannot
 attach it. Install your provider before the first AI call, or pass it with
@@ -298,7 +298,7 @@ can supply a complete profile pair through the environment.
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, else working-directory name, else `DEFAULT_PROJECT_NAME` | Future AGI routing project (`project_name`); never assigns or replaces `service.name` |
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment`; no experiment registration/startup request |
 | `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | `DEFAULT_PROJECT_VERSION_NAME` / generated UUID | Project resource keys |
-| `FI_SAMPLE_RATE` | `1` | Parent-based root ratio when the agent owns the SDK provider; existing SDK sampling wins |
+| `FI_SAMPLE_RATE` | unset (fallback `1`) | Explicit parent-based root ratio; overrides the OTEL sampler only for an agent-owned provider |
 | `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of `wire`, `openai`, `anthropic`, `genai`, `eino`, `a2a`, `bedrock`, `langchaingo`, `lambda` |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist; `wire` disables all transport capture |
 | `FI_WIRE_CAPTURE` | `true` | Wire-layer switch; `false` also keeps `http.DefaultTransport` an `*http.Transport` |
@@ -306,6 +306,15 @@ can supply a complete profile pair through the environment.
 | `FI_AUTO_DEBUG` | `false` | Print masked local coverage/config report at startup |
 | `FI_CONFIG_FILE` | `./futureagi.toml` | Flat config path |
 | `OTEL_SDK_DISABLED` | `false` | Disables the agent |
+
+For an agent-owned provider, `FI_SAMPLE_RATE` wins over `OTEL_TRACES_SAMPLER` /
+`OTEL_TRACES_SAMPLER_ARG`; `WithSampleRate`, `WithConfig`'s `SampleRate`, and a
+file's `sample_rate` likewise retain parent-based ratio sampling. Without an
+explicit rate, the six standard OpenTelemetry sampler names select the sampler
+(ratio arguments default to `1`). Unset configuration uses
+`ParentBased(TraceIDRatioBased(1))`; invalid or unsupported sampler settings use
+that same default with one warning. An application-owned provider always keeps
+its own sampler.
 
 Allow/deny lists report manual library integrations as disabled; they cannot
 remove middleware you explicitly added yourself. Provider-specific allowlists
