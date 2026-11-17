@@ -114,6 +114,156 @@ class SamplerTest < Minitest::Test
     [JSON.parse(stdout), stderr]
   end
 
+  def traceai_diagnostics(stderr)
+    stderr.lines.grep(/\Atraceai-auto:/)
+  end
+
+  def test_diagnostics_assertions_ignore_sdk_and_runtime_warnings
+    stderr = "SDK warning\nruby warning\ntraceai-auto: own warning\n"
+    assert_equal ["traceai-auto: own warning\n"], traceai_diagnostics(stderr)
+    assert_empty traceai_diagnostics("SDK warning\nruby warning\n")
+  end
+
+  def test_non_wire_owned_spans_protect_ratio_at_admission_and_after_setters
+    [1, 3].each do |limit|
+      code = <<~RUBY
+        require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+        OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
+        memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+        processor = OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)
+        starts = {}
+        processor.define_singleton_method(:on_start) { |span, _parent| starts[span.name] = span.attributes }
+        provider = TraceAI::Auto.init(sample_rate: 0.25, processor: processor)
+        tracer = provider.tracer('non-wire-ratio-test')
+        candidates = #{limit}.times.to_h { |i| ["existing_\#{i}", 'kept'] }.freeze
+        original = candidates.dup
+        root = tracer.start_span('root', with_parent: OpenTelemetry::Context.empty, attributes: candidates)
+        local = OpenTelemetry::Trace.context_with_span(root, parent_context: OpenTelemetry::Context.empty)
+        child = tracer.start_span('child', with_parent: local, attributes: candidates)
+        remote = OpenTelemetry::Trace::SpanContext.new(trace_id: ['01' * 16].pack('H*'),
+          span_id: ['02' * 8].pack('H*'), remote: true, trace_flags: OpenTelemetry::Trace::TraceFlags::SAMPLED,
+          tracestate: OpenTelemetry::Trace::Tracestate.from_string('other=kept,fi=r:0.5'))
+        context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(remote),
+          parent_context: OpenTelemetry::Context.empty)
+        inherited = tracer.start_span('inherited', with_parent: context, attributes: candidates)
+        [root, child, inherited].each do |span|
+          span.set_attribute('later', 'kept')
+          span['another'] = 'kept'
+          span.add_attributes('batch_one' => 1, 'batch_two' => 2)
+          span.finish
+        end
+        abort 'input attributes mutated' unless candidates == original
+        # An unrelated host provider still uses native SDK admission and setters.
+        host_memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+        host = OpenTelemetry::SDK::Trace::TracerProvider.new
+        host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(host_memory))
+        OpenTelemetry.tracer_provider = host
+        TraceAI::Auto.adopt_host_provider
+        abort 'host not adopted' unless TraceAI::Auto.provider.equal?(host)
+        span = host.tracer('host').start_span('host', with_parent: context, attributes: candidates)
+        span.set_attribute('later', 'kept')
+        span.add_attributes('batch_one' => 1, 'batch_two' => 2)
+        span.finish
+        abort 'flush failed' unless TraceAI::Auto.flush
+        puts JSON.generate(starts: starts, spans: memory.finished_spans.to_h { |record| [record.name,
+          {attributes: record.attributes, state: record.tracestate.to_s}] }, host: host_memory.finished_spans.first.attributes)
+      RUBY
+      stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil,
+        'OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT' => limit.to_s})
+      assert status.success?, stderr
+      result = JSON.parse(stdout)
+      {'root' => 0.25, 'child' => 0.25, 'inherited' => 0.5}.each do |name, rate|
+        assert_equal rate, result.fetch('starts').fetch(name)['fi.sampling.ratio'], "on_start #{name}/#{limit}"
+        values = result.fetch('spans').fetch(name)
+        assert_equal rate, values.fetch('attributes')['fi.sampling.ratio'], "finished #{name}/#{limit}"
+        assert_equal limit, values.fetch('attributes').size
+        assert_includes values.fetch('state').split(','), "fi=r:#{rate}"
+      end
+      assert_equal limit.times.to_h { |i| ["existing_#{i}", 'kept'] }, result.fetch('host')
+      assert_empty traceai_diagnostics(stderr)
+      assert_empty export_spans
+    end
+  end
+
+  def test_sanitized_export_recovers_ratio_when_an_oversized_event_fails_closed
+    code = <<~'RUBY'
+      require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+      OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      provider = TraceAI::Auto.init(sample_rate: 0.25, exporter: memory)
+      tracer = provider.tracer('ratio-fallback-test')
+      root = tracer.start_span('root', with_parent: OpenTelemetry::Context.empty,
+        attributes: {'gen_ai.usage.input_tokens' => 7, 'output.value' => 'PRIVATE_CONTENT'})
+      local = OpenTelemetry::Trace.context_with_span(root, parent_context: OpenTelemetry::Context.empty)
+      child = tracer.start_span('child', with_parent: local, attributes: {'gen_ai.usage.input_tokens' => 7})
+      huge = 'PRIVATE_EVENT' + 'x' * TraceAI::Auto::Privacy::CATALOG['limits']['max_text_chars']
+      [root, child].each do |span|
+        span.add_event('oversized', attributes: {'payload' => huge})
+        span.finish
+      end
+      abort 'flush failed' unless TraceAI::Auto.flush
+      # Recovery must not treat arbitrary values under the exact key as safe.
+      invalid = [0.0, 1.0, -0.25, 2.0, Float::NAN, Float::INFINITY, '0.25', 'PRIVATE_RATIO', true, [0.25]]
+      invalid_kept = invalid.map do |value|
+        TraceAI::Auto::Privacy.safe_metadata({'fi.sampling.ratio' => value}).key?('fi.sampling.ratio')
+      end
+      puts JSON.generate(spans: memory.finished_spans.map { |record|
+        {attributes: record.attributes, events: record.events, sampled: record.trace_flags.sampled?} }, invalid_kept: invalid_kept)
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil})
+    assert status.success?, stderr
+    result = JSON.parse(stdout)
+    assert_equal 2, result.fetch('spans').length
+    result.fetch('spans').each do |span|
+      assert_equal({'gen_ai.usage.input_tokens' => 7, 'fi.sampling.ratio' => 0.25}, span.fetch('attributes'))
+      assert_empty span.fetch('events')
+      assert span.fetch('sampled')
+    end
+    refute result.fetch('invalid_kept').any?
+    refute_includes stdout, 'PRIVATE_'
+    assert_empty traceai_diagnostics(stderr)
+    assert_empty export_spans
+  end
+
+  def test_sampled_parent_without_ratio_preserves_the_wire_projection_slot
+    [0.25, 1.0].each do |rate|
+      code = <<~RUBY
+        require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+        memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+        processor = OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)
+        TraceAI::Auto.init(sample_rate: #{rate}, processor: processor)
+        remote = OpenTelemetry::Trace::SpanContext.new(trace_id: ['01' * 16].pack('H*'),
+          span_id: ['02' * 8].pack('H*'), remote: true, trace_flags: OpenTelemetry::Trace::TraceFlags::SAMPLED,
+          tracestate: OpenTelemetry::Trace::Tracestate.from_string('other=kept'))
+        parent = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(remote),
+          parent_context: OpenTelemetry::Context.empty)
+        TraceAI::Auto.with_context(parent) do
+          TraceAI::Auto.with_attributes('traceai.capture.dropped_content_count' => 7) do
+            request = {method: 'POST', url: 'http://127.0.0.1:1234/v1/chat/completions',
+              headers: {'content-type' => 'application/json'}, body: '{"model":"m","messages":[]}'}
+            body = '{"choices":[{"message":{"role":"assistant","content":"answer"}}]}'
+            response = {status: 200, headers: {'content-type' => 'application/json'}, body: body, size: body.bytesize}
+            TraceAI::Auto.emit(request, response, TraceAI::Auto.current_context, Time.now)
+          end
+        end
+        abort 'flush failed' unless TraceAI::Auto.flush
+        puts JSON.generate(memory.finished_spans.map { |span| {attributes: span.attributes, state: span.tracestate.to_s} })
+      RUBY
+      stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil,
+        'OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT' => '1'})
+      assert status.success?, stderr
+      spans = JSON.parse(stdout)
+      assert_equal 1, spans.length
+      values = spans.first.fetch('attributes')
+      assert_equal 1, values.size
+      assert_operator values.fetch('traceai.capture.dropped_content_count'), :>=, 7
+      refute values.key?('fi.sampling.ratio')
+      assert_equal 'other=kept', spans.first.fetch('state')
+      assert_empty traceai_diagnostics(stderr)
+      assert_empty export_spans
+    end
+  end
+
   def test_fractional_parentbased_root_and_local_child_share_ratio
     spans, stderr = ratio_probe({}, options: {sample_rate: 0.25})
     %w[root local_child invalid_parent].each do |name|
@@ -127,7 +277,7 @@ class SamplerTest < Minitest::Test
       assert_equal 'kept', spans.fetch(name).fetch('attributes').fetch('existing')
     end
     refute spans.key?('remote_unsampled')
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_ratio_tracestate_uses_round_trip_decimal_without_truncation
@@ -136,7 +286,7 @@ class SamplerTest < Minitest::Test
     assert_equal rate, spans.fetch('root').fetch('attributes').fetch('fi.sampling.ratio')
     assert_equal "fi=r:#{rate}", spans.fetch('root').fetch('state')
     assert_equal rate, Float(spans.fetch('root').fetch('state').delete_prefix('fi=r:'))
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_parentbased_sampled_parent_without_valid_ratio_is_not_stamped
@@ -147,7 +297,7 @@ class SamplerTest < Minitest::Test
     end
     assert_equal 'other=kept,fi=r:2', spans.fetch('remote_large').fetch('state')
     assert_equal 'other=kept,fi=r:abc', spans.fetch('remote_text').fetch('state')
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_nonparent_ratio_uses_configured_rate_and_replaces_only_fi
@@ -159,7 +309,7 @@ class SamplerTest < Minitest::Test
       assert_includes span.fetch('state').split(','), 'other=kept' unless %w[root local_child].include?(name)
     end
     assert spans.key?('remote_unsampled')
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_ratio_one_and_nonratio_samplers_never_stamp
@@ -175,7 +325,7 @@ class SamplerTest < Minitest::Test
     spans.each_value { |span| refute span.fetch('attributes').key?('fi.sampling.ratio') }
     assert_equal '', spans.fetch('root').fetch('state')
     assert_equal 'other=kept,fi=r:0.5', spans.fetch('remote_half').fetch('state')
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_ratio_wrapper_preserves_delegate_result_and_arguments
@@ -212,7 +362,7 @@ class SamplerTest < Minitest::Test
     stdout, stderr, status = app(code, {'RUBYOPT' => nil})
     assert status.success?, stderr
     assert_equal "DELEGATED\n", stdout
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def assert_decisions(result, root:, sampled_parent:, unsampled_parent:)
@@ -226,52 +376,52 @@ class SamplerTest < Minitest::Test
   def test_env_always_off_drops_roots_and_sampled_parents_children
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'always_off')
     assert_decisions(result, root: false, sampled_parent: false, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_env_always_on_samples_even_an_unsampled_parents_child
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'always_on')
     assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: true)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_env_traceidratio_zero_drops_roots_and_sampled_parents_children
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0')
     assert_decisions(result, root: false, sampled_parent: false, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_env_parentbased_traceidratio_zero_keeps_sampled_parent_children
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0')
     assert_decisions(result, root: false, sampled_parent: true, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_env_parentbased_always_off_keeps_sampled_parent_children
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'parentbased_always_off')
     assert_decisions(result, root: false, sampled_parent: true, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_env_parentbased_always_on_and_unset_keep_default_parent_decisions
     [nil, '', 'parentbased_always_on'].each do |name|
       result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => name)
       assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: false)
-      assert_empty stderr
+      assert_empty traceai_diagnostics(stderr)
     end
   end
 
   def test_ratio_without_argument_defaults_to_one_and_ignores_parent_sampling
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'traceidratio')
     assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: true)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_explicit_fi_rate_wins_over_env_sampler_in_both_directions
     [['1', 'always_off', true], ['0', 'always_on', false]].each do |rate, name, sampled|
       result, stderr = sdk_probe('FI_SAMPLE_RATE' => rate, 'OTEL_TRACES_SAMPLER' => name)
       assert_decisions(result, root: sampled, sampled_parent: true, unsampled_parent: false)
-      assert_empty stderr
+      assert_empty traceai_diagnostics(stderr)
     end
   end
 
@@ -279,7 +429,7 @@ class SamplerTest < Minitest::Test
     result, stderr = sdk_probe({'FI_SAMPLE_RATE' => '0', 'OTEL_TRACES_SAMPLER' => 'unsupported',
                                'OTEL_TRACES_SAMPLER_ARG' => 'not-a-number'}, options: {sample_rate: 1.0})
     assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_config_file_rate_is_explicit_even_when_it_equals_default
@@ -287,7 +437,7 @@ class SamplerTest < Minitest::Test
     file.write("sample_rate = 1.0\n"); file.close
     result, stderr = sdk_probe('FI_CONFIG_FILE' => file.path, 'OTEL_TRACES_SAMPLER' => 'always_off')
     assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   ensure
     file&.unlink
   end
@@ -295,9 +445,9 @@ class SamplerTest < Minitest::Test
   def test_invalid_sampler_falls_back_with_one_warning_across_provisional_init
     result, stderr = sdk_probe({'OTEL_TRACES_SAMPLER' => 'unsupported'}, provisional: true)
     assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: false)
-    assert_equal 1, stderr.lines.length
-    assert_includes stderr, 'invalid OTEL_TRACES_SAMPLER'
-    refute_includes stderr, 'unsupported'
+    assert_equal 1, traceai_diagnostics(stderr).length
+    assert_includes traceai_diagnostics(stderr).join, 'invalid OTEL_TRACES_SAMPLER'
+    refute_includes traceai_diagnostics(stderr).join, 'unsupported'
   end
 
   def test_invalid_ratio_arguments_fall_back_to_parentbased_one_with_one_warning
@@ -305,9 +455,9 @@ class SamplerTest < Minitest::Test
       %w[not-a-number NaN Infinity -0.1 1.1].each do |argument|
         result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => argument)
         assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: false)
-        assert_equal 1, stderr.lines.length, "#{name}/#{argument}"
-        assert_includes stderr, 'OTEL_TRACES_SAMPLER_ARG'
-        refute_includes stderr, argument
+        assert_equal 1, traceai_diagnostics(stderr).length, "#{name}/#{argument}"
+        assert_includes traceai_diagnostics(stderr).join, 'OTEL_TRACES_SAMPLER_ARG'
+        refute_includes traceai_diagnostics(stderr).join, argument
       end
     end
   end
@@ -316,21 +466,21 @@ class SamplerTest < Minitest::Test
     %w[traceidratio parentbased_traceidratio].each do |name|
       result, stderr = sdk_probe({'OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => ''}, provisional: true)
       assert_decisions(result, root: true, sampled_parent: true, unsampled_parent: false)
-      assert_equal 1, stderr.lines.length, name
-      assert_includes stderr, 'OTEL_TRACES_SAMPLER_ARG'
+      assert_equal 1, traceai_diagnostics(stderr).length, name
+      assert_includes traceai_diagnostics(stderr).join, 'OTEL_TRACES_SAMPLER_ARG'
     end
   end
 
   def test_non_ratio_sampler_ignores_its_argument
     result, stderr = sdk_probe('OTEL_TRACES_SAMPLER' => 'always_off', 'OTEL_TRACES_SAMPLER_ARG' => 'not-a-number')
     assert_decisions(result, root: false, sampled_parent: false, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_supplied_exporter_receives_only_chosen_sampled_spans
     result, stderr = sdk_probe({'OTEL_TRACES_SAMPLER' => 'parentbased_traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0'}, exporter: true)
     assert_decisions(result, root: false, sampled_parent: true, unsampled_parent: false)
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_application_owned_sampler_is_untouched_for_explicit_global_and_late_providers
@@ -362,7 +512,7 @@ class SamplerTest < Minitest::Test
                                          'OTEL_TRACES_SAMPLER' => 'always_on'})
       assert status.success?, "#{mode}: #{stderr}"
       assert_equal "HOST_UNCHANGED\n", stdout
-      assert_empty stderr
+      assert_empty traceai_diagnostics(stderr)
       assert_empty export_spans
     end
   end
@@ -380,7 +530,7 @@ class SamplerTest < Minitest::Test
                                        'OTEL_TRACES_SAMPLER' => 'unsupported'})
     assert status.success?, stderr
     assert_equal "HOST_UNCHANGED\n", stdout
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   # The standalone path must keep working without selecting any SDK gems.
@@ -420,7 +570,7 @@ class SamplerTest < Minitest::Test
     %w[always_off traceidratio parentbased_always_off parentbased_traceidratio].each do |name|
       spans, stderr = local_probe('OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => '0')
       assert_empty spans, name
-      assert_empty stderr
+      assert_empty traceai_diagnostics(stderr)
     end
   end
 
@@ -432,6 +582,16 @@ class SamplerTest < Minitest::Test
     assert_equal "fi=r:#{ratio}", span.trace_state
   end
 
+  def test_standalone_zero_attribute_limit_keeps_only_ratio_tracestate
+    spans, stderr = local_probe({'OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT' => '0'},
+                               options: {sample_rate: 0.25}, trace_id: '01' * 16, random_draw: 0.1)
+    assert_equal 1, spans.length
+    assert_empty spans.first.attributes
+    assert_equal 'fi=r:0.25', spans.first.trace_state
+    assert_equal 1, spans.first.flags & 1
+    assert_empty traceai_diagnostics(stderr)
+  end
+
   def test_wire_ratio_survives_a_saturated_positive_attribute_limit
     [false, true].each do |sdk|
       spans, stderr = local_probe({'OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT' => '1'},
@@ -440,7 +600,7 @@ class SamplerTest < Minitest::Test
       assert_equal 1, spans.length
       assert_exported_ratio(spans.first, 0.25)
       assert_equal 1, spans.first.attributes.length
-      assert_empty stderr
+      assert_empty traceai_diagnostics(stderr)
     end
   end
 
@@ -462,7 +622,7 @@ class SamplerTest < Minitest::Test
           assert_equal 1, spans.first.flags & 1
           assert_exported_ratio(spans.first, 0.5)
         end
-        assert_empty stderr
+        assert_empty traceai_diagnostics(stderr)
       end
     end
   end
@@ -479,7 +639,7 @@ class SamplerTest < Minitest::Test
           refute attrs(spans.first.attributes).key?('fi.sampling.ratio')
           assert_equal '', spans.first.trace_state
         end
-        assert_empty stderr
+        assert_empty traceai_diagnostics(stderr)
       end
     end
   end
@@ -497,7 +657,7 @@ class SamplerTest < Minitest::Test
           assert_equal 1, spans.first.flags & 1
           assert_exported_ratio(spans.first, 0.5)
         end
-        assert_empty stderr
+        assert_empty traceai_diagnostics(stderr)
       end
     end
   end
@@ -508,7 +668,7 @@ class SamplerTest < Minitest::Test
       assert_equal 1, spans.length
       refute attrs(spans.first.attributes).key?('fi.sampling.ratio')
       assert_equal '', spans.first.trace_state
-      assert_empty stderr
+      assert_empty traceai_diagnostics(stderr)
     end
   end
 
@@ -516,10 +676,10 @@ class SamplerTest < Minitest::Test
     spans, stderr = local_probe({'OTEL_TRACES_SAMPLER' => 'always_off'}, options: {sample_rate: 1.0})
     assert_equal 1, spans.length
     assert_equal 1, spans.first.flags & 1
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
     spans, stderr = local_probe('OTEL_TRACES_SAMPLER' => 'always_on', 'FI_SAMPLE_RATE' => '0')
     assert_empty spans
-    assert_empty stderr
+    assert_empty traceai_diagnostics(stderr)
   end
 
   def test_standalone_empty_ratio_argument_warns_once_and_uses_default
@@ -527,8 +687,8 @@ class SamplerTest < Minitest::Test
       spans, stderr = local_probe('OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => '')
       assert_equal 1, spans.length
       assert_equal 1, spans.first.flags & 1
-      assert_equal 1, stderr.lines.length
-      assert_includes stderr, 'OTEL_TRACES_SAMPLER_ARG'
+      assert_equal 1, traceai_diagnostics(stderr).length
+      assert_includes traceai_diagnostics(stderr).join, 'OTEL_TRACES_SAMPLER_ARG'
     end
   end
 
@@ -536,7 +696,7 @@ class SamplerTest < Minitest::Test
     spans, stderr = local_probe('OTEL_TRACES_SAMPLER' => 'unsupported')
     assert_equal 1, spans.length
     assert_equal 1, spans.first.flags & 1
-    assert_equal 1, stderr.lines.length
-    assert_includes stderr, 'invalid OTEL_TRACES_SAMPLER'
+    assert_equal 1, traceai_diagnostics(stderr).length
+    assert_includes traceai_diagnostics(stderr).join, 'invalid OTEL_TRACES_SAMPLER'
   end
 end
