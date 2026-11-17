@@ -244,8 +244,13 @@ An absent attribute means `1.0` for count/cost estimation; this metadata never
 changes sampling decisions. Roots decided locally at rate one add neither the
 attribute nor a new `fi` entry. Non-parent-based `always_on`/`always_off` samplers
 never copy an upstream ratio; non-parent-based `traceidratio` only stamps its own
-fractional rate. Dropped or record-only spans and application-owned providers
-are never stamped.
+fractional rate. Only a parent with non-zero trace and span IDs counts as a
+parent. For an agent-created provider, absent or invalid parents start a locally
+decided root with no inherited tracestate, including other vendors' entries:
+a kept fractional root writes only its own `fi`, and a full-rate root stays
+empty. Valid parents' vendor entries are unchanged. Dropped or record-only spans
+are never stamped (invalid inherited state is still cleared); application-owned
+providers and their samplers are never wrapped or stamped.
 
 ```toml
 # futureagi.toml

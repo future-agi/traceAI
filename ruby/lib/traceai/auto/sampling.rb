@@ -48,18 +48,29 @@ module TraceAI
       def should_sample?(**arguments)
         result = @delegate.should_sample?(**arguments)
         samplers = OpenTelemetry::SDK::Trace::Samplers
-        return result unless result.sampled?
-
         parent = OpenTelemetry::Trace.current_span(arguments[:parent_context]).context
-        # A sampled parent's probability belongs to that trace, not to this
+        # SDK delegates can retain an invalid parent's entire state even when
+        # allocating a new trace. None of that state belongs to this local root:
+        # full-rate roots start empty; fractional roots add only their own fi.
+        # Also clear inherited invalid state on DROP/RECORD_ONLY, without changing
+        # those decisions or replacing an otherwise unchanged delegate result.
+        reset_state = !parent.valid? && (result.sampled? || !parent.tracestate.empty?)
+        state = reset_state ? OpenTelemetry::Trace::Tracestate::DEFAULT : result.tracestate
+        # A valid sampled parent's probability belongs to that trace, not to this
         # process's root sampler. Missing/invalid metadata stays unknown.
-        rate = ratio_for(parent)
-        return result unless rate
-        state = result.tracestate
-        state = state.set_value('fi', SamplingRatio.state_value(rate)) unless @parent_based && parent.valid?
-        samplers::Result.new(decision: samplers::Decision::RECORD_AND_SAMPLE,
-                             attributes: (result.attributes || {}).merge(SamplingRatio::ATTRIBUTE => rate),
-                             tracestate: state)
+        rate = ratio_for(parent) if result.sampled?
+        return result unless rate || state != result.tracestate
+
+        state = state.set_value('fi', SamplingRatio.state_value(rate)) if rate && !(@parent_based && parent.valid?)
+        decision = if result.sampled?
+                     samplers::Decision::RECORD_AND_SAMPLE
+                   elsif result.recording?
+                     samplers::Decision::RECORD_ONLY
+                   else
+                     samplers::Decision::DROP
+                   end
+        attributes = rate ? (result.attributes || {}).merge(SamplingRatio::ATTRIBUTE => rate) : result.attributes
+        samplers::Result.new(decision: decision, attributes: attributes, tracestate: state)
       end
     end
 

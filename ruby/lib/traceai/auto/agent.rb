@@ -566,7 +566,9 @@ module TraceAI
                end
         parent_based = name.start_with?('parentbased_')
         sampler = parent_based ? samplers.parent_based(root: root) : root
-        return sampler unless parent_based || (name.end_with?('traceidratio') && SamplingRatio.fractional?(rate))
+        # Every known owned delegate needs the invalid-parent root boundary,
+        # including unweighted nonparent samplers. The wrapper never resamples
+        # and adds no probability metadata for full-rate/always-on decisions.
         RatioSampler.new(sampler, rate, parent_based: parent_based)
       end
       def add_owned_processor(destination, ai_only: false)
