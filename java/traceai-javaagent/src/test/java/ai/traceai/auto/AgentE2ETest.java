@@ -425,17 +425,46 @@ class AgentE2ETest {
             assertErrorTextWithheld(run("jdk", "basic", Map.of("FI_CONFIG_FILE", file.toAbsolutePath().toString()), true));
         } finally { Files.deleteIfExists(file); }
     }
-    /**
-     * The agent's AI spans are sampled by trace id at FI_SAMPLE_RATE. The application's own sampling decision does not
-     * drop them: here the application's SDK samples nothing, and the call under its span still reaches Future AGI as
-     * a child of that span, while the application's own span stays unsampled and never leaves the application.
-     */
+    /** ParentBased keeps the application's W3C sampled decision without changing its provider. */
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
-    void aCallUnderAnApplicationSpanThatTheApplicationDoesNotSampleIsStillTraced(String client) throws Exception {
+    void defaultSamplerDropsACallUnderAnUnsampledApplicationSpan(String client) throws Exception {
         String log = run(client, "unsampled_app", Map.of(), true);
+        assertTrue(log.contains("APP_SPAN_SAMPLED=false"), log); assertTrue(log.contains("APP_SPAN_STAYED_UNSAMPLED=true"), log);
+        assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty());
+    }
+    @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
+    void alwaysOnCanTraceAChildWithoutChangingTheApplicationSampler(String client) throws Exception {
+        String log = run(client, "unsampled_app", Map.of("OTEL_TRACES_SAMPLER", "always_on"), true);
         assertTrue(log.contains("APP_SPAN_SAMPLED=false"), log); assertTrue(log.contains("APP_SPAN_STAYED_UNSAMPLED=true"), log);
         assertSpan(); assertEquals(line(log, "APP_SPAN="), spans.get(0).get("parentSpanId"));
         assertFalse(WireCore.dump(collectorPayloads).contains("application-unsampled-span"));
+    }
+    @ParameterizedTest @ValueSource(strings = {"always_off", "parentbased_always_off", "traceidratio", "parentbased_traceidratio"})
+    void standardEnvironmentDropsRootsWhenRateIsUnset(String sampler) throws Exception {
+        run("jdk", "basic", Map.of("OTEL_TRACES_SAMPLER", sampler, "OTEL_TRACES_SAMPLER_ARG", "0"), true);
+        assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty());
+    }
+    @Test void ratioZeroDropsEvenUnderSampledParent() throws Exception {
+        run("jdk", "framework", Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"), true);
+        assertTrue(spans.isEmpty(), spans.toString());
+    }
+    @Test void parentBasedRatioZeroKeepsASampledParentsChild() throws Exception {
+        String log = run("jdk", "framework", Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"), true);
+        assertSpan(); assertEquals(line(log, "PARENT="), spans.get(0).get("parentSpanId"));
+    }
+    @Test void explicitFiRateWinsOverAlwaysOffEnvironment() throws Exception {
+        run("jdk", "basic", Map.of("FI_SAMPLE_RATE", "1", "OTEL_TRACES_SAMPLER", "always_off"), true);
+        assertSpan();
+    }
+    @Test void explicitZeroRateStillKeepsASampledParentsChild() throws Exception {
+        String log = run("jdk", "framework", Map.of("FI_SAMPLE_RATE", "0", "OTEL_TRACES_SAMPLER", "always_off"), true);
+        assertSpan(); assertEquals(line(log, "PARENT="), spans.get(0).get("parentSpanId"));
+    }
+    @Test void invalidSamplerEnvironmentFallsBackAndWarnsOnce() throws Exception {
+        String log = run("jdk", "basic", Map.of("OTEL_TRACES_SAMPLER", "unsupported-sampler"), true);
+        assertSpan();
+        assertEquals(1, log.lines().filter(line -> line.contains("OTEL_TRACES_SAMPLER") && line.contains("default")).count(), log);
+        assertFalse(log.contains("unsupported-sampler"), log);
     }
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
     void sampleRateZeroDropsEvenACallUnderAnUnsampledApplicationSpan(String client) throws Exception {
