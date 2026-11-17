@@ -98,6 +98,7 @@ public final class TraceAI {
 
             // Build tracer provider
             SdkTracerProviderBuilder providerBuilder = SdkTracerProvider.builder()
+                .setSampler(config.getSampler() != null ? config.getSampler() : TraceConfig.samplerFromEnvironment(System.getenv()))
                 .setResource(resource);
 
             // Add OTLP exporter if configured
@@ -153,7 +154,7 @@ public final class TraceAI {
      * hook is created. The caller retains responsibility for configuring export,
      * resource attributes, flushing and shutdown. Only FITracer options such as
      * input/output and error-detail hiding are used from {@code config}; export and
-     * resource options are ignored. This method does not change global OpenTelemetry.</p>
+     * resource and sampler options are ignored. This method does not change global OpenTelemetry.</p>
      *
      * <p>Like {@link #init(TraceConfig)}, the first initialization wins until
      * {@link #shutdown()}. Shutdown only detaches a borrowed instance; it never

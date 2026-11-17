@@ -1,5 +1,8 @@
 package ai.traceai;
 
+import io.opentelemetry.sdk.trace.samplers.Sampler;
+import java.util.Map;
+
 /**
  * Configuration options for TraceAI tracing.
  * Use the builder pattern to create instances.
@@ -29,6 +32,7 @@ public class TraceConfig {
     private boolean enableConsoleExporter = false;
     private int batchSize = 512;
     private long exportIntervalMs = 5000;
+    private Sampler sampler;
 
     /**
      * Creates a new builder for TraceConfig.
@@ -49,6 +53,49 @@ public class TraceConfig {
             .secretKey(System.getenv("FI_SECRET_KEY"))
             .projectName(System.getenv("FI_PROJECT_NAME"))
             .build();
+    }
+
+    /**
+     * Resolves sampling for a TraceAI-owned provider. Shared with the shaded auto agent;
+     * application-owned providers must not use this to replace their sampler.
+     * An explicit FI_SAMPLE_RATE wins; otherwise the six standard OTel sampler names apply.
+     * Invalid standard settings produce one value-free warning and the parent-based default.
+     *
+     * @param environment sampling environment (or resolved auto configuration without synthetic defaults)
+     * @return the selected sampler
+     */
+    public static Sampler samplerFromEnvironment(Map<String, String> environment) {
+        String explicitRate = environment.get("FI_SAMPLE_RATE");
+        if (explicitRate != null) {
+            double rate = 1.0;
+            try {
+                rate = Double.parseDouble(explicitRate);
+                if (!Double.isFinite(rate) || rate < 0 || rate > 1) rate = 1.0;
+            } catch (NumberFormatException ignored) { }
+            return Sampler.parentBased(Sampler.traceIdRatioBased(rate));
+        }
+        String name = environment.get("OTEL_TRACES_SAMPLER");
+        if (name == null) return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
+        try {
+            switch (name) {
+                case "always_on": return Sampler.alwaysOn();
+                case "always_off": return Sampler.alwaysOff();
+                case "parentbased_always_on": return Sampler.parentBased(Sampler.alwaysOn());
+                case "parentbased_always_off": return Sampler.parentBased(Sampler.alwaysOff());
+                case "traceidratio":
+                case "parentbased_traceidratio":
+                    String arg = environment.get("OTEL_TRACES_SAMPLER_ARG");
+                    double rate = arg == null || arg.isEmpty() ? 1.0 : Double.parseDouble(arg);
+                    if (!Double.isFinite(rate) || rate < 0 || rate > 1) throw new IllegalArgumentException();
+                    Sampler ratio = Sampler.traceIdRatioBased(rate);
+                    return name.equals("traceidratio") ? ratio : Sampler.parentBased(ratio);
+                default: throw new IllegalArgumentException();
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Do not echo configuration values: they may contain unrelated private data.
+            System.err.println("[traceai] Invalid OTEL_TRACES_SAMPLER or OTEL_TRACES_SAMPLER_ARG; using default ParentBased(TraceIdRatio(1.0))");
+            return Sampler.parentBased(Sampler.traceIdRatioBased(1.0));
+        }
     }
 
     /**
@@ -175,6 +222,19 @@ public class TraceConfig {
         }
 
         /**
+         * Sets the sampler used only when TraceAI creates its own provider.
+         * This takes precedence over FI_SAMPLE_RATE and OTEL_TRACES_SAMPLER/_ARG.
+         * A null or absent option uses those environment settings; it never changes
+         * an application-owned provider passed to TraceAI.init(config, openTelemetry).
+         * @param sampler the sampler, or null for environment/default selection
+         * @return this builder
+         */
+        public Builder sampler(Sampler sampler) {
+            config.sampler = sampler;
+            return this;
+        }
+
+        /**
          * Sets the batch size for span export.
          * @param size the batch size
          * @return this builder
@@ -244,4 +304,6 @@ public class TraceConfig {
     public boolean isEnableConsoleExporter() { return enableConsoleExporter; }
     public int getBatchSize() { return batchSize; }
     public long getExportIntervalMs() { return exportIntervalMs; }
+    /** @return the explicit owned-provider sampler, or null for environment/default selection */
+    public Sampler getSampler() { return sampler; }
 }

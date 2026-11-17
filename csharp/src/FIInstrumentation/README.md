@@ -41,6 +41,15 @@ remain the application's responsibility. Use `TraceAI.Register` to configure
 tracing in code, and `TraceConfig` to control sensitive attribute capture.
 `TraceAI.Shutdown()` flushes pending telemetry when the application exits.
 
+`TraceAI.Register(options => options.Sampler = new OpenTelemetry.Trace.AlwaysOffSampler())`
+selects a custom OpenTelemetry sampler for the provider that registration creates.
+Without this option, `FI_SAMPLE_RATE` selects parent-based ratio sampling (clamped
+to 0–1) and wins over `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`. Otherwise,
+the six standard OTel sampler names are supported; unset or invalid configuration
+uses `ParentBased(TraceIdRatio(1.0))`, with one warning for invalid configuration.
+Repeated registration keeps the existing provider and sampler. Dropped spans do
+not interrupt the application's traced operations.
+
 ## Hide sensitive content
 
 Configure masking before registering your tracer:

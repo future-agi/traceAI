@@ -9,7 +9,6 @@ import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import io.opentelemetry.sdk.trace.samplers.Sampler;
 import net.bytebuddy.agent.ByteBuddyAgent;
 import java.lang.instrument.Instrumentation;
 import java.util.*;
@@ -111,9 +110,8 @@ public final class TraceAIAuto {
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
             Resource resource = resource(config);
-            // The agent's AI spans are sampled by trace id alone. The application's own sampling decision, which the
-            // parent's flags carry, does not drop them; the span still takes the application's span as its parent.
-            SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(Sampler.traceIdRatioBased(config.sampleRate))
+            // Configure only our isolated provider. ParentBased samplers preserve the application's parent flags.
+            SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(config.sampler())
                 .setSpanLimits(io.opentelemetry.sdk.trace.SpanLimits.builder().setMaxNumberOfAttributes(attributeLimit(config)).build())
                 .setResource(resource)
                 .addSpanProcessor(new WireResourceProcessor(processor)).build();

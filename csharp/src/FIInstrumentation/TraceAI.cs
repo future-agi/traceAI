@@ -110,6 +110,8 @@ public static class TraceAI
         // Build TracerProvider
         var builder = Sdk.CreateTracerProviderBuilder()
             .SetResourceBuilder(resourceBuilder)
+            .SetSampler(options.Sampler ?? SamplingConfiguration.Create(
+                SamplingConfiguration.ParseRate(Environment.GetEnvironmentVariable("FI_SAMPLE_RATE"))))
             .AddSource(InstrumentationName)
             .AddProcessor(new FISpanProcessor());
 
@@ -227,6 +229,9 @@ public class RegisterOptions
     public string? ApiKey { get; set; }
     public string? SecretKey { get; set; }
     public TraceConfig? TraceConfig { get; set; }
+    /// <summary>Sampler for the provider created by Register. Overrides FI_SAMPLE_RATE and
+    /// OTEL_TRACES_SAMPLER. A repeated Register call leaves the existing provider unchanged.</summary>
+    public Sampler? Sampler { get; set; }
     public bool Verbose { get; set; } = true;
     public bool EnableConsoleExporter { get; set; }
 }

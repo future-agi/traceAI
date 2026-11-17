@@ -12,7 +12,7 @@ module TraceAI
                          hide_input_images hide_embedding_vectors hide_llm_invocation_parameters hide_error_details].freeze
       HIDE_VALUES = {'true' => true, '1' => true, 'yes' => true, 'on' => true,
                      'false' => false, '0' => false, 'no' => false, 'off' => false}.freeze
-      attr_reader :values, :warnings, :credential_values
+      attr_reader :values, :warnings, :credential_values, :sample_rate_explicit, :otel_sampler, :otel_sampler_arg
       # Config values are UTF-8 whatever the process locale. Under LANG=C, Ruby
       # tags environment values and paths as US-ASCII even when they hold UTF-8.
       def self.utf8(value)
@@ -40,6 +40,13 @@ module TraceAI
           out[name.delete_prefix('FI_').downcase] = Config.utf8(v) if name.start_with?('FI_')
         end
         explicit = arguments.to_h { |k, v| [Config.utf8(k.to_s), v] }
+        # An explicitly supplied 1.0 must still override the OTel environment.
+        # Snapshot the OTel inputs without loading the SDK or parsing settings
+        # that may not be used (an application provider owns its sampler).
+        @sample_rate_explicit = [explicit, environment, file_values].any? { |source| source.key?('sample_rate') }
+        @otel_sampler = Config.utf8(env['OTEL_TRACES_SAMPLER']).to_s.dup.freeze
+        # Nil means absent; an explicitly empty ratio argument is invalid.
+        @otel_sampler_arg = Config.utf8(env['OTEL_TRACES_SAMPLER_ARG'])&.to_s&.dup&.freeze
         # A blank hide switch is not set, so it does not replace a lower source's value.
         set = ->(source) { source.reject { |key, value| HIDE_SWITCHES.include?(key) && Config.blank?(value) } }
         @values = DEFAULTS.merge(file_values).merge(set.call(environment)).merge(set.call(explicit))

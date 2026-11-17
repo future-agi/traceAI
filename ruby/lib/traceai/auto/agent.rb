@@ -463,8 +463,7 @@ module TraceAI
             # the application's own OpenTelemetry configuration stays in charge,
             # and adopt_host_provider moves to the application's provider once
             # the application sets one.
-            sampler = OpenTelemetry::SDK::Trace::Samplers.parent_based(root: OpenTelemetry::SDK::Trace::Samplers.trace_id_ratio_based(@config['sample_rate']))
-            @provider = @own_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default, sampler: sampler)
+            @provider = @own_provider = OpenTelemetry::SDK::Trace::TracerProvider.new(resource: OpenTelemetry::SDK::Resources::Resource.default, sampler: configured_sampler)
           end
           attached = @provider.instance_variable_get(:@span_processors)
           supplied_processor = destinations[:processor]
@@ -493,6 +492,12 @@ module TraceAI
           @capture_key = :capture; @attributes_key = :attributes
           resource = ExportResource.new(resource_attributes)
           @provider = LocalProvider.new(resource)
+          # Without an SDK every emitted span is a root. OTel ratio samplers
+          # use the SDK's trace-ID cutoff; explicit rates retain random sampling.
+          name, @local_sample_rate = sampling_options
+          @local_ratio_bound = if !@config.sample_rate_explicit && name.end_with?('traceidratio')
+                                 (@local_sample_rate * (2**64 - 1)).ceil
+                               end
           @exporter = ResourceExporter.new(WireExporter.new, resource)
           @processor = LocalProcessor.new(@exporter)
           @owned_processors << @processor; @owned_exporters << @exporter
@@ -519,6 +524,43 @@ module TraceAI
         @active = false
         warn_once("initialization failed (#{e.class.name}); application left running")
         self
+      end
+      # Resolve only for providers the agent creates. An explicit rate keeps its
+      # existing parent-based ratio semantics; an OTel ratio is never clamped.
+      def sampling_options
+        return ['parentbased_traceidratio', @config['sample_rate']] if @config.sample_rate_explicit
+        name = @config.otel_sampler
+        return ['parentbased_traceidratio', 1.0] if name.empty?
+        rate = case name
+               when 'always_on', 'parentbased_always_on' then 1.0
+               when 'always_off', 'parentbased_always_off' then 0.0
+               when 'traceidratio', 'parentbased_traceidratio'
+                 argument = @config.otel_sampler_arg
+                 value = Float(argument.nil? ? 1.0 : argument)
+                 raise ArgumentError unless value.finite? && (0.0..1.0).cover?(value)
+                 value
+               else
+                 raise ArgumentError
+               end
+        [name, rate]
+      rescue ArgumentError, TypeError
+        # Separate from general initialization/export warnings, and deduplicated
+        # even if an explicit init replaces a provisional start. Never echo values.
+        unless @sampler_warned
+          @sampler_warned = true
+          warn 'traceai-auto: invalid OTEL_TRACES_SAMPLER or OTEL_TRACES_SAMPLER_ARG; using ParentBased(TraceIdRatio(1.0))'
+        end
+        ['parentbased_traceidratio', 1.0]
+      end
+      def configured_sampler
+        name, rate = sampling_options
+        samplers = OpenTelemetry::SDK::Trace::Samplers
+        root = case name.delete_prefix('parentbased_')
+               when 'always_on' then samplers::ALWAYS_ON
+               when 'always_off' then samplers::ALWAYS_OFF
+               when 'traceidratio' then samplers.trace_id_ratio_based(rate)
+               end
+        name.start_with?('parentbased_') ? samplers.parent_based(root: root) : root
       end
       def add_owned_processor(destination, ai_only: false)
         processor = OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(destination, exporter_timeout: 4000, max_queue_size: 512, max_export_batch_size: 64)
@@ -724,11 +766,20 @@ module TraceAI
           end
           span.status = result.ok ? OpenTelemetry::Trace::Status.ok : OpenTelemetry::Trace::Status.error(description)
           span.finish(end_timestamp: finished)
-        elsif Random.rand < @config['sample_rate']
+        else
+          trace_id = nil
+          if @local_ratio_bound
+            # Match Ruby SDK TraceIdRatioBased on the same ID we export, including
+            # its probability-one special case and unsigned low-64-bit comparison.
+            trace_id = Random.urandom(16)
+            return unless @local_sample_rate == 1.0 || trace_id[8, 8].unpack1('Q>') < @local_ratio_bound
+          else
+            return unless Random.rand < @local_sample_rate
+          end
           record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), "\0".b * 8,
                                     attributes.size + projection.dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
                                     attributes, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
-                                    Random.urandom(8), Random.urandom(16), 1, '', false)
+                                    Random.urandom(8), trace_id || Random.urandom(16), 1, '', false)
           @processor.enqueue(record)
         end
       rescue StandardError => e

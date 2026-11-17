@@ -7,10 +7,13 @@ import sys
 
 import pytest
 from opentelemetry import trace as trace_api
+from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF, ALWAYS_ON, ParentBased, TraceIdRatioBased
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.util._once import Once
 
 from auto_mock_server import MockServer, decode_spans
@@ -201,6 +204,7 @@ _ENVIRONMENT = (
     "FI_API_KEY", "FI_SECRET_KEY", "FI_INSTRUMENTATIONS", "FI_DISABLED_INSTRUMENTATIONS",
     "FI_CONFIG_FILE", "OTEL_SDK_DISABLED", "FI_SAMPLE_RATE", "FI_PROJECT_NAME", "FI_PROJECT_TYPE",
     "FI_PROJECT_VERSION_NAME", "OTEL_SERVICE_NAME", "FI_AUTO_DEBUG", "FI_HIDE_INPUTS",
+    "OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG",
 )
 
 # Stand-ins that single tests write; removed from sys.modules around every test.
@@ -451,6 +455,167 @@ def test_sample_rate_applies_to_the_agent_provider(fresh_state):
     assert not tracer.start_span("dropped").is_recording()
     # Once configured, even invalid later arguments are ignored without side effects.
     assert _manager.init(sample_rate=3) is provider
+
+
+def _assert_head_sampling(provider, exporter, root, unsampled_parent, sampled_parent):
+    tracer = provider.get_tracer(AI_SCOPE)
+    propagator = TraceContextTextMapPropagator()
+    contexts = (
+        ("root", Context(), root),
+        ("unsampled-parent", propagator.extract({
+            "traceparent": "00-ffffffffffffffffffffffffffffffff-ffffffffffffffff-00",
+        }), unsampled_parent),
+        ("sampled-parent", propagator.extract({
+            "traceparent": "00-ffffffffffffffffffffffffffffffff-ffffffffffffffff-01",
+        }), sampled_parent),
+    )
+    for name, context, sampled in contexts:
+        with tracer.start_span(name, context=context) as span:
+            assert span.is_recording() is sampled
+            assert span.get_span_context().trace_flags.sampled is sampled
+            parent = trace_api.get_current_span(context).get_span_context()
+            if parent.is_valid:
+                assert span.get_span_context().trace_id == parent.trace_id
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == [name for name, _, sampled in contexts if sampled]
+    assert all(span.context.trace_flags.sampled for span in spans)
+
+
+@pytest.mark.parametrize("name,arg,decisions", [
+    pytest.param("always_on", None, (True, True, True), id="always-on"),
+    pytest.param("always_off", None, (False, False, False), id="always-off"),
+    pytest.param("traceidratio", "0", (False, False, False), id="ratio-zero"),
+    pytest.param("traceidratio", "1", (True, True, True), id="ratio-one"),
+    pytest.param("traceidratio", None, (True, True, True), id="ratio-default-arg"),
+    pytest.param("parentbased_always_on", None, (True, False, True), id="parentbased-on"),
+    pytest.param("parentbased_always_off", None, (False, False, True), id="parentbased-off"),
+    pytest.param("parentbased_traceidratio", "0", (False, False, True), id="parentbased-ratio-zero"),
+    pytest.param("parentbased_traceidratio", None, (True, False, True), id="parentbased-ratio-default-arg"),
+    pytest.param("ALWAYS_OFF", None, (False, False, False), id="sdk-case-insensitive-name"),
+    pytest.param("always_off", "ignored", (False, False, False), id="non-ratio-ignores-arg"),
+])
+def test_auto_sampler_uses_otel_environment(fresh_state, monkeypatch, caplog, name, arg, decisions):
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", name)
+    if arg is not None:
+        monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", arg)
+    exporter = InMemorySpanExporter()
+    with caplog.at_level(logging.WARNING):
+        provider = _manager.init(span_exporter=exporter, batch=False)
+    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    if name in ("traceidratio", "parentbased_traceidratio") and arg is None:
+        # The SDK warns once for a missing ratio argument and defaults to 1.0. Newer SDKs append
+        # "Using default rate 1.0." to the message, so match its stable prefix.
+        assert [record.name for record in warnings] == ["opentelemetry.sdk.trace.sampling"]
+        assert warnings[0].getMessage().startswith("Could not convert TRACES_SAMPLER_ARG to float.")
+    else:
+        assert not warnings
+    _assert_head_sampling(provider, exporter, *decisions)
+
+
+@pytest.mark.parametrize("source", ["argument", "environment", "file"])
+@pytest.mark.parametrize("rate,otel_sampler", [(0.0, "always_on"), (1.0, "always_off")])
+def test_explicit_sample_rate_wins_over_otel_environment(
+    fresh_state, monkeypatch, source, rate, otel_sampler,
+):
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", otel_sampler)
+    kwargs = {}
+    if source == "argument":
+        kwargs["sample_rate"] = rate
+    elif source == "environment":
+        monkeypatch.setenv("FI_SAMPLE_RATE", str(rate))
+    else:
+        (fresh_state / "futureagi.toml").write_text(f"sample_rate = {rate}\n")
+    exporter = InMemorySpanExporter()
+    provider = _manager.init(span_exporter=exporter, batch=False, **kwargs)
+    _assert_head_sampling(provider, exporter, bool(rate), False, True)
+
+
+def test_none_sampler_does_not_hide_explicit_sample_rate(fresh_state, monkeypatch):
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", "always_on")
+    exporter = InMemorySpanExporter()
+    provider = _manager.init(span_exporter=exporter, batch=False, sampler=None, sample_rate=0.0)
+    _assert_head_sampling(provider, exporter, False, False, True)
+
+
+@pytest.mark.parametrize("name,arg", [
+    pytest.param("unsupported", None, id="unsupported-name"),
+    pytest.param("", None, id="empty-name"),
+    pytest.param(" always_on ", None, id="untrimmed-name"),
+    *[
+        pytest.param(name, arg, id=f"{name}-{label}")
+        for name in ("traceidratio", "parentbased_traceidratio")
+        for label, arg in (
+            ("non-numeric", "not-a-number"), ("empty", ""), ("negative", "-0.1"),
+            ("above-one", "1.1"), ("nan", "nan"), ("infinity", "inf"), ("negative-infinity", "-inf"),
+        )
+    ],
+])
+def test_invalid_otel_sampler_falls_back_with_one_warning(fresh_state, monkeypatch, caplog, name, arg):
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", name)
+    if arg is not None:
+        monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", arg)
+    exporter = InMemorySpanExporter()
+    with caplog.at_level(logging.WARNING):
+        provider = _manager.init(span_exporter=exporter, batch=False)
+        assert _manager.init(span_exporter=exporter, batch=False) is provider
+    warnings = [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+    assert len(warnings) == 1, warnings
+    assert "OTEL_TRACES_SAMPLER" in warnings[0]
+    assert provider.sampler.get_description() == ParentBased(TraceIdRatioBased(1.0)).get_description()
+    _assert_head_sampling(provider, exporter, True, False, True)
+
+
+def test_unset_otel_sampler_keeps_default_without_warning(fresh_state, monkeypatch, caplog):
+    # The argument is irrelevant unless a ratio sampler is selected.
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "ignored")
+    exporter = InMemorySpanExporter()
+    with caplog.at_level(logging.WARNING):
+        provider = _manager.init(span_exporter=exporter, batch=False)
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert provider.sampler.get_description() == ParentBased(TraceIdRatioBased(1.0)).get_description()
+    _assert_head_sampling(provider, exporter, True, False, True)
+
+
+@pytest.mark.parametrize("explicit", ["rate", "sampler"])
+def test_explicit_sampling_skips_invalid_otel_environment(fresh_state, monkeypatch, caplog, explicit):
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", "traceidratio")
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "not-a-number")
+    kwargs = {"sample_rate": 0.0} if explicit == "rate" else {"sampler": ALWAYS_OFF, "sample_rate": 1.0}
+    exporter = InMemorySpanExporter()
+    with caplog.at_level(logging.WARNING):
+        provider = _manager.init(span_exporter=exporter, batch=False, **kwargs)
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    if explicit == "sampler":
+        assert provider.sampler is ALWAYS_OFF
+    _assert_head_sampling(provider, exporter, False, False, explicit == "rate")
+
+
+@pytest.mark.parametrize("supplied", [False, True], ids=["global", "supplied"])
+@pytest.mark.parametrize("sampler,sampled", [(ALWAYS_ON, True), (ALWAYS_OFF, False)], ids=["on", "off"])
+@pytest.mark.parametrize("otel_sampler", ["always_on", "always_off", "unsupported"])
+def test_auto_keeps_application_owned_sampler(
+    fresh_state, monkeypatch, caplog, supplied, sampler, sampled, otel_sampler,
+):
+    app_exporter = InMemorySpanExporter()
+    application = TracerProvider(sampler=sampler)
+    application.add_span_processor(SimpleSpanProcessor(app_exporter))
+    if not supplied:
+        trace_api.set_tracer_provider(application)
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", otel_sampler)
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "not-a-number")
+    try:
+        with caplog.at_level(logging.WARNING):
+            provider = _manager.init(
+                tracer_provider=application if supplied else None,
+                span_exporter=InMemorySpanExporter(), batch=False, sample_rate=float(not sampled),
+            )
+        assert provider is application
+        assert provider.sampler is sampler
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+        _assert_head_sampling(provider, app_exporter, sampled, sampled, sampled)
+    finally:
+        _manager.shutdown()
+        application.shutdown()
 
 
 def test_sample_rate_on_an_application_provider_thins_only_the_future_agi_route(fresh_state):

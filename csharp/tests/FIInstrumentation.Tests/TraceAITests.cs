@@ -1,5 +1,12 @@
+using System.Diagnostics;
+using OpenTelemetry.Trace;
+
 namespace FIInstrumentation.Tests;
 
+[CollectionDefinition("Sampler environment", DisableParallelization = true)]
+public class SamplerEnvironmentCollection { }
+
+[Collection("Sampler environment")]
 public class TraceAITests : IDisposable
 {
     public TraceAITests()
@@ -93,5 +100,130 @@ public class TraceAITests : IDisposable
 
         Assert.True(tracer.Config.HideInputs);
         Assert.True(tracer.Config.HideOutputs);
+    }
+
+    private sealed class SamplerEnvironment : IDisposable
+    {
+        private readonly Dictionary<string,string?> _previous = new();
+        internal SamplerEnvironment(string? name = null, string? arg = null, string? rate = null)
+        {
+            Set("OTEL_TRACES_SAMPLER", name); Set("OTEL_TRACES_SAMPLER_ARG", arg); Set("FI_SAMPLE_RATE", rate);
+        }
+        private void Set(string name, string? value)
+        { _previous[name] = Environment.GetEnvironmentVariable(name); Environment.SetEnvironmentVariable(name, value); }
+        public void Dispose()
+        { foreach (var pair in _previous) Environment.SetEnvironmentVariable(pair.Key, pair.Value); }
+    }
+
+    private static FITracer RegisterForSampling(Action<RegisterOptions>? configure = null) => TraceAI.Register(options =>
+    {
+        options.Verbose = false;
+        options.Endpoint = "http://127.0.0.1:1";
+        configure?.Invoke(options);
+    });
+
+    // Clear Recorded before stopping so these provider tests never send an OTLP request.
+    private static void AssertSampled(FITracer tracer, bool expected, ActivityContext parent = default)
+    {
+        using var activity = tracer.ActivitySource.StartActivity("sampling", ActivityKind.Internal, parent);
+        try { Assert.Equal(expected, activity?.Recorded ?? false); }
+        finally { if (activity != null) activity.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
+    }
+
+    [Fact]
+    public void Register_CustomSamplerOverridesFiAndOtelEnvironment()
+    {
+        using var environment = new SamplerEnvironment("always_on", rate: "1");
+        var sampler = new CountingDropSampler();
+        var tracer = RegisterForSampling(options =>
+        {
+            // Reflection keeps the RED test compilable against the base without this option.
+            var property = typeof(RegisterOptions).GetProperty("Sampler");
+            Assert.NotNull(property); Assert.Equal(typeof(Sampler), property.PropertyType);
+            property.SetValue(options, sampler);
+        });
+        AssertSampled(tracer, false); Assert.Equal(1, sampler.Calls);
+        Assert.Same(tracer, TraceAI.Register(_ => throw new InvalidOperationException("already initialized")));
+        AssertSampled(tracer, false); Assert.Equal(2, sampler.Calls);
+    }
+
+    private sealed class CountingDropSampler : Sampler
+    {
+        internal int Calls;
+        public override SamplingResult ShouldSample(in SamplingParameters parameters)
+        { Calls++; return new SamplingResult(SamplingDecision.Drop); }
+    }
+
+    [Theory]
+    [InlineData("always_off", null)]
+    [InlineData("traceidratio", "0")]
+    [InlineData("parentbased_traceidratio", "0")]
+    public void Register_AbsentSamplerHonoursEnvironment(string name, string? arg)
+    {
+        using var environment = new SamplerEnvironment(name, arg);
+        AssertSampled(RegisterForSampling(), false);
+    }
+
+    [Fact]
+    public void Register_AbsentSamplerKeepsDefaultParentBasedOne()
+    {
+        using var environment = new SamplerEnvironment();
+        var tracer = RegisterForSampling();
+        AssertSampled(tracer, true);
+        foreach (var remote in new[] { true, false })
+        {
+            AssertSampled(tracer, false, new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.None, isRemote: remote));
+            AssertSampled(tracer, true, new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded, isRemote: remote));
+        }
+    }
+
+    [Theory]
+    [InlineData("always_on", "0", false)]
+    [InlineData("always_off", "1", true)]
+    public void Register_FiSampleRateWinsOverOtel(string name, string rate, bool expected)
+    {
+        using var environment = new SamplerEnvironment(name, rate: rate);
+        AssertSampled(RegisterForSampling(), expected);
+    }
+
+    [Theory]
+    [InlineData("unknown-sampler")]
+    [InlineData(" always_off ")]
+    public void Register_InvalidEnvironmentFallsBackWithOneWarning(string name)
+    {
+        using var environment = new SamplerEnvironment(name);
+        using var errors = new StringWriter(); var previous = Console.Error;
+        try
+        {
+            Console.SetError(errors);
+            var tracer = RegisterForSampling(); AssertSampled(tracer, true); AssertSampled(tracer, true);
+            foreach (var remote in new[] { true, false })
+            {
+                AssertSampled(tracer, false, new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.None, isRemote: remote));
+                AssertSampled(tracer, true, new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded, isRemote: remote));
+            }
+            Assert.Single(errors.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries), line => line.Contains("OTEL_TRACES_SAMPLER"));
+            Assert.DoesNotContain(name, errors.ToString());
+        }
+        finally { Console.SetError(previous); }
+    }
+
+    [Fact]
+    public void Register_DroppedSpansDoNotInterruptApplicationOrCaptureAttributes()
+    {
+        using var environment = new SamplerEnvironment("always_off");
+        var tracer = RegisterForSampling();
+        var result = tracer.Chain("dropped", span =>
+        {
+            try
+            {
+                Assert.False(span.Activity.Recorded);
+                span.SetInput("not recorded");
+                Assert.Empty(span.Activity.TagObjects);
+                return 42;
+            }
+            finally { span.Activity.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded; }
+        });
+        Assert.Equal(42, result);
     }
 }
