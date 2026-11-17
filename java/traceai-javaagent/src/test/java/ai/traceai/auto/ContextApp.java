@@ -20,6 +20,7 @@ public final class ContextApp {
         };
     }
     static void run(String[] args) throws Exception {
+        if (args[2].startsWith("framework_ratio_remote")) { remoteRatio(args); return; }
         boolean ratioBudget = args[2].equals("framework_ratio_budget");
         var builder = SdkTracerProvider.builder();
         if (ratioBudget) builder.setSpanLimits(limits(Integer.parseInt(System.getenv("TRACEAI_TEST_ATTRIBUTE_LIMIT"))));
@@ -53,5 +54,30 @@ public final class ContextApp {
             // A control call outside every application span: the agent is running and traces it.
             if (args[2].startsWith("dedup")) PlainApp.call(args);
         } finally { provider.shutdown(); }
+    }
+
+    /** Cross the shaded bridge with a remote parent, then with its application-owned local child. */
+    private static void remoteRatio(String[] args) throws Exception {
+        boolean sampled = !args[2].endsWith("unsampled");
+        var state = io.opentelemetry.api.trace.TraceState.builder().put("vendor", "value").put("fi", "r:0.5").build();
+        var remote = io.opentelemetry.api.trace.SpanContext.createFromRemoteParent(
+            "00000000000000000000000000000001", "0000000000000001",
+            sampled ? io.opentelemetry.api.trace.TraceFlags.getSampled() : io.opentelemetry.api.trace.TraceFlags.getDefault(), state);
+        var context = io.opentelemetry.context.Context.root().with(Span.wrap(remote));
+        var memory = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+        try (var provider = SdkTracerProvider.builder()
+                .addSpanProcessor(io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.create(memory)).build()) {
+            try (var scope = context.makeCurrent()) { PlainApp.call(args); }
+            Span local = provider.get("test-application").spanBuilder("application-parent").setParent(context).startSpan();
+            System.out.println("LOCAL_PARENT=" + local.getSpanContext().getSpanId());
+            try (var scope = local.makeCurrent()) { PlainApp.call(args); } finally { local.end(); }
+            if (!remote.getTraceState().equals(state) || !local.getSpanContext().getTraceState().equals(state)
+                    || local.getSpanContext().isSampled() != sampled) throw new AssertionError("Application parent changed");
+            if (memory.getFinishedSpanItems().size() != (sampled ? 1 : 0)) throw new AssertionError("Application sampling changed");
+            if (sampled && memory.getFinishedSpanItems().get(0).getAttributes()
+                    .get(io.opentelemetry.api.common.AttributeKey.doubleKey("fi.sampling.ratio")) != null)
+                throw new AssertionError("Application provider was stamped");
+            System.out.println("APPLICATION_PARENT_UNCHANGED=true");
+        }
     }
 }

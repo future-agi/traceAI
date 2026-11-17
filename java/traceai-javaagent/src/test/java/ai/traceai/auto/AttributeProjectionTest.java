@@ -80,8 +80,8 @@ class AttributeProjectionTest {
     }
     @ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"false,true", "true,true", "false,false", "true,false"})
-    void samplingMetadataCountsAgainstProviderAndContextBudgets(boolean contextLimit, boolean sampledRatio) {
-        var config = AutoConfig.resolve(Map.of(), Map.of("FI_SAMPLE_RATE", sampledRatio ? "0.25" : "1"));
+    void samplingMetadataCountsAgainstProviderAndContextBudgets(boolean contextLimit, boolean fractionalRootRate) {
+        var config = AutoConfig.resolve(Map.of(), Map.of("FI_SAMPLE_RATE", fractionalRootRate ? "0.25" : "1"));
         var memory = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().setSampler(TraceAIAuto.ownedSampler(config))
                 .setSpanLimits(SpanLimits.builder().setMaxNumberOfAttributes(contextLimit ? 10 : 3).build())
@@ -101,23 +101,18 @@ class AttributeProjectionTest {
                 "gen_ai.span.kind", "LLM", "output.mime_type", "text/plain", "output.value", "output"), true, null));
             assertEquals(1, memory.getFinishedSpanItems().size());
             var attrs = memory.getFinishedSpanItems().get(0).getAttributes();
-            assertEquals(sampledRatio ? 0.25 : null, attrs.get(AttributeKey.doubleKey("fi.sampling.ratio")));
+            assertEquals(0.25, attrs.get(AttributeKey.doubleKey("fi.sampling.ratio")), "full-rate local sampling must still budget copied metadata");
             assertTrue(attrs.size() <= 3);
-            if (sampledRatio) {
-                assertNull(attrs.get(AttributeKey.stringKey("output.mime_type")));
-                assertNull(attrs.get(AttributeKey.stringKey("output.value")));
-                assertEquals(2L, attrs.get(AttributeKey.longKey(AttributeProjection.DROPPED)));
-            } else {
-                assertEquals("text/plain", attrs.get(AttributeKey.stringKey("output.mime_type")));
-                assertEquals("output", attrs.get(AttributeKey.stringKey("output.value")));
-                assertNull(attrs.get(AttributeKey.longKey(AttributeProjection.DROPPED)));
-            }
+            assertNull(attrs.get(AttributeKey.stringKey("output.mime_type")));
+            assertNull(attrs.get(AttributeKey.stringKey("output.value")));
+            assertEquals(2L, attrs.get(AttributeKey.longKey(AttributeProjection.DROPPED)));
         }
     }
 
-    @ParameterizedTest @ValueSource(ints = {0, 1, 3})
-    void inheritedApplicationBudgetBoundsSamplerAttributesAtExport(int limit) {
-        var config = AutoConfig.resolve(Map.of(), Map.of("FI_SAMPLE_RATE", "0.5"));
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"0,default", "1,default", "3,default", "0,1", "1,1", "3,1", "0,0.5", "1,0.5", "3,0.5"})
+    void inheritedApplicationBudgetBoundsSamplerAttributesAtExport(int limit, String rate) {
+        var config = AutoConfig.resolve(Map.of(), rate.equals("default") ? Map.of() : Map.of("FI_SAMPLE_RATE", rate));
         var memory = InMemorySpanExporter.create();
         var hostMemory = InMemorySpanExporter.create();
         try (var host = SdkTracerProvider.builder()

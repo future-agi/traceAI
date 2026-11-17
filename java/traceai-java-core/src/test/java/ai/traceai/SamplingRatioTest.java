@@ -85,15 +85,100 @@ class SamplingRatioTest {
         }
     }
 
+    private static List<Map<String, String>> parentBasedEnvironments() {
+        return List.of(Map.<String, String>of(), Map.of("FI_SAMPLE_RATE", "1"), Map.of("FI_SAMPLE_RATE", "0"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_on"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_off"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0.25"),
+            Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "1"));
+    }
+
+    @Test void everyOwnedParentBasedSamplerExportsUpstreamRatioAndLocalChild() throws Exception {
+        for (Map<String, String> environment : parentBasedEnvironments()) {
+            for (boolean remote : new boolean[]{false, true}) {
+                InMemorySpanExporter exporter = InMemorySpanExporter.create();
+                TraceState incoming = state("r:0.5");
+                Sampler selected = TraceConfig.samplerFromEnvironment(environment);
+                // Provenance alone must not activate stamping on application-owned providers.
+                assertNull(sample(selected, parent(remote, true, incoming), KEPT).getAttributes().get(RATIO));
+                try (SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(owned(selected))
+                        .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+                    Span first = provider.get("test").spanBuilder("upstream-child")
+                        .setParent(parent(remote, true, incoming)).startSpan();
+                    Span child = provider.get("test").spanBuilder("local-child")
+                        .setParent(Context.root().with(first)).startSpan();
+                    child.end(); first.end();
+                    assertEquals(2, exporter.getFinishedSpanItems().size(), environment.toString());
+                    exporter.getFinishedSpanItems().forEach(span -> {
+                        assertEquals(Double.valueOf(0.5), span.getAttributes().get(RATIO), environment.toString());
+                        assertEquals(incoming, span.getSpanContext().getTraceState());
+                        assertEquals(KEPT, span.getTraceId());
+                    });
+                    assertEquals(first.getSpanContext().getSpanId(), exporter.getFinishedSpanItems().get(0).getParentSpanId());
+                }
+            }
+        }
+    }
+
+    @Test void parentBasedBoundaryRootsNeverInventRatioAndUnsampledParentsNeverExport() throws Exception {
+        for (Map<String, String> environment : parentBasedEnvironments()) {
+            Sampler sampler = owned(TraceConfig.samplerFromEnvironment(environment));
+            boolean fractional = "0.25".equals(environment.get("OTEL_TRACES_SAMPLER_ARG"));
+            if (!fractional) {
+                SamplingResult root = sample(sampler, Context.root(), KEPT);
+                assertNull(root.getAttributes().get(RATIO), environment.toString());
+                assertNull(root.getUpdatedTraceState(TraceState.getDefault()).get("fi"));
+            }
+            for (boolean remote : new boolean[]{false, true}) {
+                InMemorySpanExporter exporter = InMemorySpanExporter.create();
+                try (SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(sampler)
+                        .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+                    Span span = provider.get("test").spanBuilder("unsampled-child")
+                        .setParent(parent(remote, false, state("r:0.5"))).startSpan();
+                    assertFalse(span.isRecording()); assertFalse(span.getSpanContext().isSampled());
+                    span.end();
+                    assertTrue(exporter.getFinishedSpanItems().isEmpty(), environment.toString());
+                }
+                SamplingResult noMetadata = sample(sampler, parent(remote, true, state(null)), KEPT);
+                assertNull(noMetadata.getAttributes().get(RATIO));
+                assertEquals(state(null), noMetadata.getUpdatedTraceState(state(null)));
+            }
+        }
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {"r:2", "r:abc", "r:0", "r:1", "r:-0.1", "r:NaN", "r:Infinity", "r:-Infinity", "other:0.5", "r:", "r: 0.5", "r:0x1.0p-1", "r:0.5d"})
+    @ValueSource(strings = {"r:2", "r:abc", "r:0", "r:1", "r:-0.1", "r:NaN", "r:Infinity", "r:-Infinity", "other:0.5", "r:", "r: 0.5", "r:0x1.0p-1", "r:0.5d", "r:1e999", "r:1e-999", "r:0.5:extra"})
     void malformedParentRatioIsNotStamped(String value) throws Exception {
-        for (boolean remote : new boolean[]{false, true}) {
+        for (Map<String, String> environment : parentBasedEnvironments()) for (boolean remote : new boolean[]{false, true}) {
             TraceState incoming = state(value);
-            SamplingResult result = sample(ratio(0.25, true), parent(remote, true, incoming), KEPT);
+            SamplingResult result = sample(owned(TraceConfig.samplerFromEnvironment(environment)), parent(remote, true, incoming), KEPT);
             assertEquals(SamplingDecision.RECORD_AND_SAMPLE, result.getDecision());
             assertNull(result.getAttributes().get(RATIO));
             assertEquals(incoming, result.getUpdatedTraceState(incoming));
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"r:0.5", "r:.5", "r:5e-1", "r:0.12345678901234568", "r:1e-10"})
+    void defaultParentBasedCopiesOnlyValidPartialRatios(String value) throws Exception {
+        for (boolean remote : new boolean[]{false, true}) {
+            TraceState incoming = state(value);
+            SamplingResult result = sample(owned(TraceConfig.samplerFromEnvironment(Map.of())), parent(remote, true, incoming), KEPT);
+            assertEquals(Double.valueOf(value.substring(2)), result.getAttributes().get(RATIO));
+            assertEquals(incoming, result.getUpdatedTraceState(incoming));
+        }
+    }
+
+    @Test void copyOnlyWrapperPreservesDropAndRecordOnlyResults() throws Exception {
+        for (SamplingResult original : List.of(SamplingResult.drop(), SamplingResult.recordOnly())) {
+            for (boolean remote : new boolean[]{false, true}) {
+                TraceState incoming = state("r:0.5");
+                SamplingResult result = sample(wrapper(delegate(original), 1, true), parent(remote, true, incoming), KEPT);
+                assertSame(original, result);
+                assertNull(result.getAttributes().get(RATIO));
+                assertEquals(incoming, result.getUpdatedTraceState(incoming));
+            }
         }
     }
 
@@ -127,11 +212,10 @@ class SamplingRatioTest {
         assertEquals("preserved", result.getUpdatedTraceState(incoming).get("vendor"));
     }
 
-    @Test void disabledDefaultAndUnknownSamplersAreNotWrappedOrStamped() throws Exception {
-        for (Map<String, String> environment : List.of(Map.<String, String>of(),
-                Map.of("FI_SAMPLE_RATE", "1"), Map.of("FI_SAMPLE_RATE", "0"),
+    @Test void nonParentBasedFullRateDisabledAndUnknownSamplersAreNotWrappedOrStamped() throws Exception {
+        for (Map<String, String> environment : List.of(
                 Map.of("OTEL_TRACES_SAMPLER", "always_on"), Map.of("OTEL_TRACES_SAMPLER", "always_off"),
-                Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_on"), Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_off"),
+                Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0"),
                 Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "1"))) {
             Sampler selected = TraceConfig.samplerFromEnvironment(environment);
             assertSame(selected, owned(selected));

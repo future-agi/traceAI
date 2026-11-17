@@ -68,7 +68,32 @@ class AutoSamplerTest {
         }
     }
 
-    @Test void ownedAgentNonParentBasedUsesOwnRatioButDefaultDoesNotStamp() throws Exception {
+    @Test void ownedAgentCopyOnlySamplersExportRemoteRatioAndLocalChild() throws Exception {
+        for (AutoConfig config : java.util.List.of(
+                resolve(Map.of(), Map.of()),
+                resolve(Map.of(), Map.of("OTEL_TRACES_SAMPLER", "parentbased_always_on")),
+                resolve(Map.of(), Map.of("FI_SAMPLE_RATE", "1")),
+                resolve(Map.of("sample_rate", 1), Map.of()),
+                resolve(Map.of(), Map.of("OTEL_TRACES_SAMPLER", "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0")))) {
+            var memory = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+            try (var provider = SdkTracerProvider.builder().setSampler(ownedSampler(config))
+                    .addSpanProcessor(io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.create(memory)).build()) {
+                TraceState incoming = TraceState.builder().put("fi", "r:0.5").put("vendor", "preserved").build();
+                SpanContext remote = SpanContext.createFromRemoteParent("00000000000000000000000000000001",
+                    "0000000000000001", TraceFlags.getSampled(), incoming);
+                Span first = provider.get("test").spanBuilder("remote-child").setParent(Context.root().with(Span.wrap(remote))).startSpan();
+                Span child = provider.get("test").spanBuilder("local-child").setParent(Context.root().with(first)).startSpan();
+                child.end(); first.end();
+                assertEquals(2, memory.getFinishedSpanItems().size());
+                memory.getFinishedSpanItems().forEach(span -> {
+                    assertEquals(0.5, span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.doubleKey("fi.sampling.ratio")));
+                    assertEquals(incoming, span.getSpanContext().getTraceState());
+                });
+            }
+        }
+    }
+
+    @Test void ownedAgentNonParentBasedUsesOwnRatioButDefaultRootDoesNotStamp() throws Exception {
         TraceState incoming = TraceState.builder().put("fi", "r:0.5").put("vendor", "preserved").build();
         SpanContext parent = SpanContext.createFromRemoteParent("00000000000000000000000000000001", "0000000000000001", TraceFlags.getSampled(), incoming);
         Sampler sampler = ownedSampler(resolve(Map.of(), Map.of("OTEL_TRACES_SAMPLER", "traceidratio", "OTEL_TRACES_SAMPLER_ARG", "0.25")));

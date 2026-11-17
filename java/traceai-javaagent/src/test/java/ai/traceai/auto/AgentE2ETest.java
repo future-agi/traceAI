@@ -445,6 +445,48 @@ class AgentE2ETest {
             assertErrorTextWithheld(run("jdk", "basic", Map.of("FI_CONFIG_FILE", file.toAbsolutePath().toString()), true));
         } finally { Files.deleteIfExists(file); }
     }
+    @ParameterizedTest @ValueSource(strings = {"default", "parentbased_always_on", "fi_one"})
+    void copyOnlySamplerExportsRemoteAndLocalParentRatios(String setting) throws Exception {
+        Map<String, String> options = setting.equals("default") ? Map.of()
+            : setting.equals("fi_one") ? Map.of("FI_SAMPLE_RATE", "1") : Map.of("OTEL_TRACES_SAMPLER", setting);
+        String log = run("jdk", "framework_ratio_remote", options, true);
+        assertEquals(2, spans.size(), spans.toString());
+        assertEquals(Set.of("0000000000000001", line(log, "LOCAL_PARENT=")),
+            spans.stream().map(span -> span.get("parentSpanId")).collect(java.util.stream.Collectors.toSet()));
+        for (var span : spans) {
+            assertWireSpan(span);
+            assertEquals("00000000000000000000000000000001", span.get("traceId"));
+            assertEquals("fi=r:0.5,vendor=value", span.get("traceState"));
+            assertEquals(0.5, attributes(span).get("fi.sampling.ratio"));
+        }
+        assertTrue(log.contains("APPLICATION_PARENT_UNCHANGED=true"), log);
+        assertFalse(WireCore.dump(collectorPayloads).contains("application-parent"));
+    }
+
+    @Test void nonParentBasedAlwaysOnDoesNotCopyRemoteOrLocalRatio() throws Exception {
+        String log = run("jdk", "framework_ratio_remote", Map.of("OTEL_TRACES_SAMPLER", "always_on"), true);
+        assertEquals(2, spans.size());
+        spans.forEach(span -> {
+            assertWireSpan(span);
+            assertNull(attributes(span).get("fi.sampling.ratio"));
+            assertEquals("fi=r:0.5,vendor=value", span.get("traceState"));
+        });
+        assertTrue(log.contains("APPLICATION_PARENT_UNCHANGED=true"), log);
+    }
+
+    @Test void defaultRootDoesNotInventRatio() throws Exception {
+        run("jdk", "basic", Map.of(), true); assertSpan();
+        assertNull(attributes(spans.get(0)).get("fi.sampling.ratio"));
+        assertEquals("", spans.get(0).get("traceState"));
+    }
+
+    @Test void defaultUnsampledRemoteRatioProducesNoExports() throws Exception {
+        String log = run("jdk", "framework_ratio_remote_unsampled", Map.of(), true);
+        assertTrue(spans.isEmpty(), spans.toString()); assertTrue(collectorPayloads.isEmpty());
+        assertEquals(2, uploads.get(), "sampling must not suppress either application request");
+        assertTrue(log.contains("APPLICATION_PARENT_UNCHANGED=true"), log);
+    }
+
     /** ParentBased keeps the application's W3C sampled decision without changing its provider. */
     @ParameterizedTest @ValueSource(strings = {"jdk", "okhttp"})
     void defaultSamplerDropsACallUnderAnUnsampledApplicationSpan(String client) throws Exception {
