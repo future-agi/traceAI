@@ -33,7 +33,10 @@ export interface Config {
   apiKey?: string; secretKey?: string; baseUrl: string; projectName: string;
   projectType: "observe" | "experiment"; instrumentations: string[];
   disabledInstrumentations: string[]; wireCapture: boolean; wireMaxBodyBytes: number;
-  sampleRate: number; debug: boolean; configFile: string; sdkDisabled: boolean;
+  sampleRate: number;
+  /** True only when code, FI_SAMPLE_RATE or the config file supplied a rate. */
+  sampleRateExplicit?: boolean;
+  debug: boolean; configFile: string; sdkDisabled: boolean;
   traceConfig: TraceConfigOptions;
   mastraSpanProducer: "exporter" | "bridge";
 }
@@ -149,7 +152,8 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
   ];
   const { pair, incomplete } = credentialPair(credentialSources);
   const value =(code: keyof Options, key: string, envName = `FI_${key.toUpperCase()}`): any => options[code] ?? env[envName] ?? file[key];
-  const sample = Number(value("sampleRate", "sample_rate") ?? 1), max = Number(value("wireMaxBodyBytes", "wire_max_body_bytes") ?? 4194304);
+  const rawSample = value("sampleRate", "sample_rate");
+  const sample = Number(rawSample ?? 1), max = Number(value("wireMaxBodyBytes", "wire_max_body_bytes") ?? 4194304);
   const traceConfig: TraceConfigOptions = {};
   for (const key of ["hideInputs", "hideOutputs", "hideInputMessages", "hideOutputMessages", "hideInputImages", "hideInputText", "hideOutputText", "hideEmbeddingVectors", "hideLLMInvocationParameters", "base64ImageMaxLength", "piiRedaction", "hideErrorDetails"] as (keyof TraceConfigOptions)[]) {
     const snake = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/([A-Z])([A-Z][a-z])/g, "$1_$2").toLowerCase();
@@ -193,6 +197,7 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
     wireCapture: bool(value("wireCapture", "wire_capture"), true),
     wireMaxBodyBytes: Number.isFinite(max) && max >= 0 ? Math.floor(max) : 4194304,
     sampleRate: Number.isFinite(sample) ? Math.min(1, Math.max(0, sample)) : 1,
+    sampleRateExplicit: rawSample != null,
     mastraSpanProducer: mastraProducer(value("mastraSpanProducer", "mastra_span_producer")),
     debug: bool(value("debug", "debug", "FI_AUTO_DEBUG"), false), configFile,
     sdkDisabled: bool(env.OTEL_SDK_DISABLED, false), traceConfig,

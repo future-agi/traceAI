@@ -1,6 +1,8 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
-import { ExportResultCode } from "@opentelemetry/core";
-import { TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { ExportResultCode, getStringFromEnv } from "@opentelemetry/core";
+import { ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
+// The SDK's environment factory is exported from config, not its package root.
+import { buildSamplerFromEnv } from "@opentelemetry/sdk-trace-base/build/src/config";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
@@ -49,6 +51,33 @@ const warned = new Set<string>();
 function warn(key: string, message: string): void {
   if (warned.has(key)) return; warned.add(key);
   try { console.warn(`[traceai:auto] ${message}`); } catch { /* Host logger may throw. */ }
+}
+/** Only called for a provider the agent creates; an application's sampler is never replaced. */
+function environmentSampler(): Sampler {
+  const fallback = () => new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(1) });
+  const name = getStringFromEnv("OTEL_TRACES_SAMPLER");
+  if (name === undefined) return fallback();
+  switch (name) {
+    case "always_on": case "always_off":
+    case "parentbased_always_on": case "parentbased_always_off":
+      break;
+    case "traceidratio": case "parentbased_traceidratio": {
+      const raw = getStringFromEnv("OTEL_TRACES_SAMPLER_ARG");
+      // Match the SDK's Number conversion and blank-as-unset semantics, but
+      // reject invalid values with one value-free warning and a parent-based fallback.
+      if (raw !== undefined && (!Number.isFinite(Number(raw)) || Number(raw) < 0 || Number(raw) > 1)) {
+        warn("sampler", "Invalid OTEL_TRACES_SAMPLER_ARG; using ParentBased(TraceIdRatio(1)).");
+        return fallback();
+      }
+      break;
+    }
+    default:
+      warn("sampler", "Invalid or unsupported OTEL_TRACES_SAMPLER; using ParentBased(TraceIdRatio(1)).");
+      return fallback();
+  }
+  // Keep the SDK's six standard mappings and ratio-argument defaults. In
+  // particular, a plain ratio sampler is not wrapped in aiSampler/ParentBased.
+  return buildSamplerFromEnv();
 }
 // AI spans that the agent's sampler recorded with the sampled flag off (see aiSampler).
 const recordOnly = new WeakSet<object>();
@@ -284,12 +313,25 @@ export function init(options: Options = {}): TracerProvider | undefined {
       else warn("provider", "Existing provider cannot accept processors; using an isolated AI provider without replacing it.");
     }
     if (!agent.provider) {
-      agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
-        setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor],
-        // AI spans are sampled by trace id at FI_SAMPLE_RATE and keep the application's
-        // parent ids. Its sampling decision never drops them, and under an unsampled
-        // parent they leave the sampled flag off (aiSampler).
-        sampler: aiSampler(config.sampleRate) });
+      // Resolve against the application's environment before constructing the SDK.
+      // Explicit rates retain aiSampler's record-only handling of unsampled parents.
+      const sampler = config.sampleRateExplicit ? aiSampler(config.sampleRate) : environmentSampler();
+      const samplerName = process.env.OTEL_TRACES_SAMPLER, samplerArg = process.env.OTEL_TRACES_SAMPLER_ARG;
+      try {
+        // BasicTracerProvider evaluates its env defaults even with a sampler supplied.
+        // Hide only these already-resolved inputs during synchronous construction to
+        // avoid duplicate diagnostics for rejected/overridden values. Do not change
+        // the application's diagnostic logger or suppress unrelated SDK diagnostics.
+        delete process.env.OTEL_TRACES_SAMPLER;
+        delete process.env.OTEL_TRACES_SAMPLER_ARG;
+        agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
+          setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor], sampler });
+      } finally {
+        if (samplerName === undefined) delete process.env.OTEL_TRACES_SAMPLER;
+        else process.env.OTEL_TRACES_SAMPLER = samplerName;
+        if (samplerArg === undefined) delete process.env.OTEL_TRACES_SAMPLER_ARG;
+        else process.env.OTEL_TRACES_SAMPLER_ARG = samplerArg;
+      }
       agent.ownsProvider = true;
       if (forwarding && !host) forwardLater(agent, processor);
     }
