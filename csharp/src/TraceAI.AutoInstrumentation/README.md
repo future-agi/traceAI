@@ -197,11 +197,13 @@ For agent-created providers, accepted exported copies carry `fi.sampling.ratio`,
 double strictly between 0 and 1 when the head-sampling keep probability is known;
 absent means 1.0 for estimated counts and costs. Export copies and the explicit
 propagation context below carry `fi=r:<ratio>` in W3C `tracestate` while preserving
-other entries. Parent-based children inherit only a valid upstream `fi` ratio, not
-the local configured rate. The metadata survives privacy-fallback export copies
+other entries. Parent-based children of sampled local or remote parents inherit only
+a valid upstream `fi` ratio, regardless of the local root rate (including 0 or 1).
+This includes the default and `parentbased_always_on`/`parentbased_always_off`.
+Non-parent-based samplers never copy upstream ratios; fractional `traceidratio`
+decisions stamp their own rate. The metadata survives privacy-fallback export copies
 (other tracestate content may be cleared for privacy), but is never stamped on raw
-record-only activities, dropped spans, full-rate sampling, or application-owned
-providers.
+record-only activities, dropped spans, full-rate roots, or application-owned providers.
 
 ### Explicit agent-owned propagation (in-process entry point)
 

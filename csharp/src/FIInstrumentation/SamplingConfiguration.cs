@@ -18,16 +18,18 @@ internal static class SamplingConfiguration
     // Identity, not descriptions or reflection over SDK internals, establishes provenance.
     private sealed record Ratio(double Rate, bool ParentBased);
     private static readonly ConditionalWeakTable<Sampler, Ratio> Ratios = new();
-    private static Sampler CreateRatio(double rate, bool parentBased)
+    private static Sampler CreateRatio(double rate, bool parentBased) =>
+        CreateKnown(new TraceIdRatioBasedSampler(rate), rate, parentBased);
+
+    private static Sampler CreateKnown(Sampler sampler, double rate, bool parentBased)
     {
-        Sampler sampler = new TraceIdRatioBasedSampler(rate);
         if (parentBased) sampler = new ParentBasedSampler(sampler);
         Ratios.Add(sampler, new(rate, parentBased));
         return sampler;
     }
 
     internal static Sampler Wrap(Sampler sampler) =>
-        Ratios.TryGetValue(sampler, out var ratio) && RatioSampler.Valid(ratio.Rate)
+        Ratios.TryGetValue(sampler, out var ratio) && (ratio.ParentBased || RatioSampler.Valid(ratio.Rate))
             ? new RatioSampler(sampler, ratio.Rate, ratio.ParentBased) : sampler;
 
     internal static Sampler Create(double? rate = null, Action<string>? warn = null)
@@ -41,8 +43,8 @@ internal static class SamplingConfiguration
         {
             case "always_on": return new AlwaysOnSampler();
             case "always_off": return new AlwaysOffSampler();
-            case "parentbased_always_on": return new ParentBasedSampler(new AlwaysOnSampler());
-            case "parentbased_always_off": return new ParentBasedSampler(new AlwaysOffSampler());
+            case "parentbased_always_on": return CreateKnown(new AlwaysOnSampler(), 1, true);
+            case "parentbased_always_off": return CreateKnown(new AlwaysOffSampler(), 0, true);
             case "traceidratio" or "parentbased_traceidratio":
                 var arg = Environment.GetEnvironmentVariable("OTEL_TRACES_SAMPLER_ARG");
                 double probability = 1;
@@ -73,14 +75,15 @@ internal sealed class RatioSampler(Sampler inner, double rate, bool parentBased)
     public override SamplingResult ShouldSample(in SamplingParameters parameters)
     {
         var result = inner.ShouldSample(in parameters);
-        if (result.Decision != SamplingDecision.RecordAndSample || !Valid(rate)) return result;
+        if (result.Decision != SamplingDecision.RecordAndSample) return result;
 
-        double? effective = rate;
+        double? effective = Valid(rate) ? rate : null;
         if (parentBased && parameters.ParentContext.TraceId != default)
         {
-            // A parent-based child did not win our local ratio lottery. Only the
-            // probability propagated by the upstream decision is meaningful.
-            effective = ReadRatio(parameters.ParentContext.TraceState);
+            // A parent-based child did not win our local ratio lottery. Inherit a
+            // sampled parent's probability even when the local root rate is 0 or 1.
+            effective = (parameters.ParentContext.TraceFlags & System.Diagnostics.ActivityTraceFlags.Recorded) != 0
+                ? ReadRatio(parameters.ParentContext.TraceState) : null;
         }
         if (!effective.HasValue) return result;
         var attributes = (result.Attributes ?? []).Where(pair => pair.Key != Attribute).ToList();
