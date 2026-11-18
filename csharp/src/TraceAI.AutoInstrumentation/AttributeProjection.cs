@@ -77,9 +77,12 @@ internal static class AttributeProjection
     }
     private static string PathKey(string key)=>string.Join('.',key.Split(new[] { '.','[',']' },StringSplitOptions.RemoveEmptyEntries));
     private static bool Within(string key,string parent)=>parent.Length==0||key==parent||key.StartsWith(parent+".",StringComparison.Ordinal);
-    internal static KeyValuePair<string,object?>[] Project(IEnumerable<KeyValuePair<string,object?>> candidates,int limit)
+    internal static KeyValuePair<string,object?>[] Project(IEnumerable<KeyValuePair<string,object?>> candidates,int limit,int reserved=0)
     {
-        limit=Math.Max(0,limit);
+        int configuredLimit=Math.Max(0,limit);
+        // Metadata reservations consume budget, not configuration. In particular,
+        // reserving the sole slot must not diagnose a configured limit of zero.
+        limit=Math.Max(0,configuredLimit-Math.Max(0,reserved));
         var tags=candidates.Where(pair=>pair.Value!=null).ToDictionary(pair=>pair.Key,pair=>pair.Value,StringComparer.Ordinal);
         long prior=tags.GetValueOrDefault(DroppedContent) switch { long n when n>0=>n,int n when n>0=>n,_=>0 };
         tags.Remove(DroppedContent);
@@ -147,7 +150,7 @@ internal static class AttributeProjection
         if(protectedTags.Count>limit)
         {
             // Select() admitted no content when protected fields did not fit.
-            if(limit==0) TraceAIAuto.Warn("attribute-limit-zero","Span attribute limit is zero; semantic and degradation attributes cannot be retained.");
+            if(configuredLimit==0) TraceAIAuto.Warn("attribute-limit-zero","Span attribute limit is zero; semantic and degradation attributes cannot be retained.");
             return Order(protectedTags).Take(limit).ToArray();
         }
         return Order(protectedTags).Concat(selected).ToArray();

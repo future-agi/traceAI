@@ -58,6 +58,7 @@
 
 ## Unreleased
 
+- Honor `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` in core-owned and auto-agent providers when no explicit `FI_SAMPLE_RATE` / `sample_rate` is set; explicit rates use parent-based trace-id sampling. Add `TraceConfig.Builder.sampler(Sampler)` for manual initialization without changing application-owned providers. Invalid standard settings warn once and use the parent-based rate-one default; parent-based choices now respect unsampled application parents.
 - Prepare Maven Central coordinates under `com.futureagi`; Java packages remain `ai.traceai.*`.
 - Add a BOM covering all instrumentation modules and an opt-in release profile for sources, Javadocs, signing, and Central publishing.
 - Read the runtime SDK version from the parent Maven version instead of a separate hard-coded value.

@@ -44,6 +44,7 @@ internal sealed class AutoConfig
 {
     internal readonly Dictionary<string, string> Values;
     internal readonly AutoOptions Options;
+    internal readonly bool HasSampleRate;
     // Authentication chooses one complete pair, but privacy covers every FI value
     // supplied at initialization, including incomplete and overridden sources.
     internal readonly string[] CredentialValues;
@@ -92,6 +93,7 @@ internal sealed class AutoConfig
         Values.TryAdd("FI_PROJECT_VERSION_ID",Guid.NewGuid().ToString());
         Values.TryAdd("FI_EVAL_TAGS","[]"); Values.TryAdd("FI_METADATA","{}");
         Values.TryAdd("FI_PROJECT_TYPE","observe"); Values.TryAdd("FI_WIRE_CAPTURE","true"); Values.TryAdd("FI_WIRE_MAX_BODY_BYTES","4194304");
+        HasSampleRate=Values.ContainsKey("FI_SAMPLE_RATE");
         Values.TryAdd("FI_SAMPLE_RATE","1.0"); Values.TryAdd("FI_AUTO_DEBUG","false");
         Values.TryAdd("FI_INSTRUMENTATIONS",""); Values.TryAdd("FI_DISABLED_INSTRUMENTATIONS","");
         Values["FI_SAMPLE_RATE"]=SampleRate.ToString(CultureInfo.InvariantCulture);

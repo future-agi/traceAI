@@ -8,6 +8,8 @@ export const PROJECTION_METADATA = "traceai.attribute_projection.metadata";
 export const LEGACY_DROPPED_COUNT = "traceai.attribute_projection.dropped_count";
 /** Spec A7: number of candidate CONTENT attribute keys the projection omitted. */
 export const DROPPED_CONTENT_COUNT = "traceai.capture.dropped_content_count";
+export const SAMPLING_RATIO = "fi.sampling.ratio";
+export const isSamplingRatio = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1;
 // Bounded, canonical telemetry that is exempt from the arbitrary-base64 heuristic at export.
 // Deliberately narrower than the A7 protected set: widening it would weaken S6.
 export const isProjectionMetadata = (key: string) => /^(?:gen_ai\.(?:span\.kind|operation\.name|provider\.name|request\.model|response\.(?:model|id|finish_reasons)|usage\.[a-z0-9_.]+)|fi\.span\.kind|error\.type|traceai\.(?:capture\.(?:layer|dropped_content_count)|wire\.(?:incomplete|truncated|body_unavailable|undecoded_encoding|timing_incomplete)|attribute_projection\.dropped_count))$/.test(key);
@@ -36,6 +38,10 @@ const USAGE_FAMILY = 4;
 export function protectedFamily(key: string): number | undefined {
   return FAMILY.get(key) ?? (key.startsWith("gen_ai.usage.") || key.startsWith("llm.token_count.") ? USAGE_FAMILY : undefined);
 }
+
+// Retention is not a privacy exemption: only an already-present numeric ratio
+// reserves capacity, and the caller/exporter still applies its full value policy.
+const protectedValue = (key: string, value: unknown) => protectedFamily(key) !== undefined || key === SAMPLING_RATIO && isSamplingRatio(value);
 
 const MESSAGE = /^(gen_ai\.(input|output)\.messages|llm\.(input|output)_messages)\.(\d+)\./;
 const INDEXED = /^(gen_ai\.tool\.definitions|gen_ai\.embeddings|embedding\.embeddings|retrieval\.documents|gen_ai\.retrieval\.documents)\.(\d+)\./;
@@ -101,10 +107,10 @@ export function projectAttributes(attributes: Attributes, countLimit: number, op
   const items = Object.entries(attributes).filter(([, value]) => value !== undefined);
   if (items.length > 4096) {
     // Sibling recognition would be cropped: fail closed for content, keep protected fields.
-    const values: Attributes = Object.fromEntries(items.filter(([key]) => key !== DROPPED_CONTENT_COUNT && protectedFamily(key) !== undefined));
+    const values: Attributes = Object.fromEntries(items.filter(([key, value]) => key !== DROPPED_CONTENT_COUNT && protectedValue(key, value)));
     const previous = attributes[DROPPED_CONTENT_COUNT];
     // Unclassified keys may carry content (prompt variables, errors): count them all.
-    const content = items.filter(([key]) => key !== DROPPED_CONTENT_COUNT && protectedFamily(key) === undefined).length;
+    const content = items.filter(([key, value]) => key !== DROPPED_CONTENT_COUNT && !protectedValue(key, value)).length;
     return select(values, limit, typeof previous === "number" && Number.isInteger(previous) && previous > 0 ? previous : 0, [], [], content, items.filter(([key]) => key !== DROPPED_CONTENT_COUNT).length);
   }
   // Project only after consulting the COMPLETE sibling set: projection must never
@@ -128,7 +134,7 @@ export function projectAttributes(attributes: Attributes, countLimit: number, op
   const op = operation ?? (typeof values["gen_ai.operation.name"] === "string" ? values["gen_ai.operation.name"] : "");
   const protectedKeys: Attributes = {}, metadata: string[] = [], content = new Map<string, { group: Group; keys: string[] }>();
   for (const key of Object.keys(values)) {
-    if (protectedFamily(key) !== undefined) { protectedKeys[key] = values[key]; continue; }
+    if (protectedValue(key, values[key])) { protectedKeys[key] = values[key]; continue; }
     const group = contentGroup(key, op);
     if (!group) { metadata.push(key); continue; }
     const id = `${group[0]}\u0000${group[1]}\u0000${group[2]}`;
@@ -142,7 +148,7 @@ export function projectAttributes(attributes: Attributes, countLimit: number, op
 /** `candidates` counts candidate keys other than a pre-existing content-count marker. */
 function select(values: Attributes, capacity: number, previous: number, groups: { group: Group; keys: string[] }[], metadata: string[], contentKeys: number, candidates: number,
   protectedNames: string[] = Object.keys(values)): { attributes: Attributes; dropped: number } {
-  let protectedOrder = protectedNames.map(key => [protectedFamily(key)!, key] as const).sort((a, b) => a[0] - b[0] || lexical(a[1], b[1])).map(([, key]) => key);
+  let protectedOrder = protectedNames.map(key => [protectedFamily(key) ?? -1, key] as const).sort((a, b) => a[0] - b[0] || lexical(a[1], b[1])).map(([, key]) => key);
   const canonical = groups.find(item => item.group[2] === "output.value" && item.keys.includes("output.value"));
   const choose = (room: number): [string[], number] => {
     const chosen: string[] = [];
@@ -188,7 +194,10 @@ function select(values: Attributes, capacity: number, previous: number, groups: 
   if (room <= 0) {
     // Protected semantics plus the reserved marker fill (or exceed) capacity:
     // no content, family-ordered protected prefix including the leading marker.
-    const kept = [...(marker ? [DROPPED_CONTENT_COUNT] : []), ...protectedOrder].slice(0, capacity);
+    // A valid sampling weight must survive even a one-slot positive budget.
+    const ratio = protectedOrder.includes(SAMPLING_RATIO) && isSamplingRatio(values[SAMPLING_RATIO]);
+    const kept = [...(ratio ? [SAMPLING_RATIO] : []), ...(marker ? [DROPPED_CONTENT_COUNT] : []),
+      ...protectedOrder.filter(key => !ratio || key !== SAMPLING_RATIO)].slice(0, capacity);
     for (const key of kept) selected[key] = key === DROPPED_CONTENT_COUNT ? previous + contentKeys : values[key];
     return { attributes: selected, dropped: candidates - kept.filter(key => key !== DROPPED_CONTENT_COUNT).length };
   }

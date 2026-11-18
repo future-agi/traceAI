@@ -1,6 +1,7 @@
 package ai.traceai.auto;
 
 import ai.traceai.TraceConfig;
+import io.opentelemetry.sdk.trace.samplers.Sampler;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -19,6 +20,7 @@ public final class AutoConfig {
     /** The hide switches that are on. */
     private final Set<String> hidden;
     final double sampleRate;
+    private final boolean sampleRateConfigured;
     final int maxBodyBytes;
     // Even ignored/incomplete FI credentials remain private; never expose this list in diagnostics.
     final List<String> credentialValues;
@@ -67,7 +69,7 @@ public final class AutoConfig {
         } catch (Exception ignored) { }
         Map<String, String> file = new LinkedHashMap<>(result), explicit = new LinkedHashMap<>();
         // A blank hide switch is not set, so it does not replace the value of a lower source.
-        environment.forEach((k, v) -> { if (blankHide(k, v)) return; if (k.startsWith("FI_") || k.equals("OTEL_SDK_DISABLED") || k.equals("OTEL_SERVICE_NAME") || k.equals("OTEL_RESOURCE_ATTRIBUTES") || k.equals("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT") || k.equals("OTEL_ATTRIBUTE_COUNT_LIMIT")) result.put(k, v); });
+        environment.forEach((k, v) -> { if (blankHide(k, v)) return; if (k.startsWith("FI_") || k.equals("OTEL_SDK_DISABLED") || k.equals("OTEL_SERVICE_NAME") || k.equals("OTEL_RESOURCE_ATTRIBUTES") || k.equals("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT") || k.equals("OTEL_ATTRIBUTE_COUNT_LIMIT") || k.equals("OTEL_TRACES_SAMPLER") || k.equals("OTEL_TRACES_SAMPLER_ARG")) result.put(k, v); });
         overrides.forEach((k, v) -> {
             if (v == null) return;
             String key = envKey(k);
@@ -96,7 +98,7 @@ public final class AutoConfig {
         result.putIfAbsent("FI_PROJECT_VERSION_NAME", "DEFAULT_PROJECT_VERSION_NAME");
         result.putIfAbsent("FI_EVAL_TAGS", "[]"); result.putIfAbsent("FI_METADATA", "{}");
         result.putIfAbsent("FI_PROJECT_TYPE", "observe"); result.putIfAbsent("FI_WIRE_CAPTURE", "true");
-        result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_SAMPLE_RATE", "1.0"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
+        result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
         result.put("FI_CONFIG_FILE", path);
         AutoConfig built = new AutoConfig(result, credentialValues);
         if (unusable != null) built.reportUnusableFile(path, unusable);
@@ -165,6 +167,7 @@ public final class AutoConfig {
     }
     private AutoConfig(Map<String, String> resolved, List<String> credentials) {
         credentialValues = List.copyOf(credentials);
+        sampleRateConfigured = resolved.containsKey("FI_SAMPLE_RATE");
         Map<String, String> normalized = new LinkedHashMap<>(resolved);
         values = Collections.unmodifiableMap(normalized);
         double rate = 1; int limit = 4 * 1024 * 1024;
@@ -179,6 +182,12 @@ public final class AutoConfig {
         // The five hide switches the core builder would otherwise read from the environment itself are passed explicitly.
         masking = TraceConfig.builder().hideInputs(hides("FI_HIDE_INPUTS")).hideOutputs(hides("FI_HIDE_OUTPUTS"))
             .hideInputMessages(hides("FI_HIDE_INPUT_MESSAGES")).hideOutputMessages(hides("FI_HIDE_OUTPUT_MESSAGES")).hideErrorDetails(hides("FI_HIDE_ERROR_DETAILS")).build();
+    }
+    /** Resolve only when creating our provider; the diagnostic 1.0 default is not an explicit rate. */
+    Sampler sampler() {
+        Map<String, String> sampling = new LinkedHashMap<>(values);
+        if (!sampleRateConfigured) sampling.remove("FI_SAMPLE_RATE");
+        return TraceConfig.samplerFromEnvironment(sampling);
     }
     private static boolean blankHide(String key, String value) { return key.startsWith("FI_HIDE_") && (value == null || value.isBlank()); }
     /**

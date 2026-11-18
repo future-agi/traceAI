@@ -164,9 +164,13 @@ public class FITracer
             return new FISpan(new Activity(name) { IsAllDataRequested = false }, _config, recording: false);
         }
 
-        var activity = _activitySource.StartActivity(name, ActivityKind.Internal)
-            ?? throw new InvalidOperationException(
-                "Failed to create activity. Ensure a TracerProvider with a listener is configured.");
+        var activity = _activitySource.StartActivity(name, ActivityKind.Internal);
+        // A head sampler may drop the span or request propagation only. Neither is
+        // an application error, and neither should capture FI attributes or content.
+        if (activity == null)
+            return new FISpan(new Activity(name) { IsAllDataRequested = false }, _config, recording: false);
+        if (!activity.IsAllDataRequested)
+            return new FISpan(activity, _config, recording: false);
 
         activity.SetTag(SemanticConventions.FiSpanKind, kind.ToValue());
         ApplyContextAttributes(activity);

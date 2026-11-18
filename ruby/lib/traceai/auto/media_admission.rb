@@ -63,6 +63,7 @@ module TraceAI
       end
 
       def trim_span_attributes(attributes)
+        return super if @traceai_ratio_restoring
         if traceai_media_enabled?
           begin
             @traceai_attribute_media = Privacy.media_admission(attributes,

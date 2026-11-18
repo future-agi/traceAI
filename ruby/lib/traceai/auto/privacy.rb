@@ -3,6 +3,7 @@ require_relative 'codec'
 require_relative 'secrets'
 require_relative 'privacy_catalog'
 require_relative 'projection'
+require_relative 'sampling'
 module TraceAI
   module Auto
     module Privacy
@@ -317,9 +318,16 @@ module TraceAI
       end
       # A malformed content value must fail closed without erasing safe outcome,
       # usage, timing or projection-loss metadata. Never infer that arbitrary
-      # application attributes are safe; only the protected A7 families qualify.
+      # application attributes are safe; only protected A7 families and an exact,
+      # finite fractional sampling double qualify.
       def safe_metadata(attributes, secrets = nil, lossy: false)
         return {} unless Codec.type(attributes) == Hash
+        ratio = attributes.fetch(SamplingRatio::ATTRIBUTE, nil)
+        safe_ratio = if Codec.type(ratio) == Float && SamplingRatio.fractional?(ratio)
+                       {SamplingRatio::ATTRIBUTE => ratio}
+                     else
+                       {}
+                     end
         begin
           known = Auto.secret_values
           known += secrets if Codec.type(secrets) == Array
@@ -327,7 +335,7 @@ module TraceAI
         rescue StandardError
           known = nil
         end
-        result = {}; budget = Budget.new; key_budget = Budget.new
+        result = safe_ratio.dup; budget = Budget.new; key_budget = Budget.new
         # Recovery must use the same complete sibling context as the normal walk.
         # If indexing fails, no protected-prefix value is safe to recover.
         hints = index_hints(attributes)
@@ -353,7 +361,9 @@ module TraceAI
         end
         result
       rescue StandardError
-        {}
+        # Unlike content prefixes, the fixed numeric ratio needs no sibling
+        # context or secret registry, even if indexing the content itself fails.
+        safe_ratio || {}
       end
       def scrub_attributes(attributes)
         scrub(attributes, Auto.secret_values)

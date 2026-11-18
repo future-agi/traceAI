@@ -108,7 +108,8 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_DISABLED_INSTRUMENTATIONS` | None. Denylist wins. `wire` turns HTTP tracing off; `okhttp` or `java.net.http` turns off one client. |
 | `FI_WIRE_CAPTURE` | `true`. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304`; per-direction body buffering bound. |
-| `FI_SAMPLE_RATE` | `1.0`; the agent's spans are sampled by trace id at this rate. The application's own sampling decision does not drop them: a call under an application span that the application does not sample is still traced (the span keeps that span as its parent, but the application's span is not sent). `0` traces nothing. |
+| `FI_SAMPLE_RATE` | When set, `ParentBased(TraceIdRatio(rate))`; `0` drops roots but retains children of sampled parents. Without a rate or OTel sampler setting, defaults to `ParentBased(TraceIdRatio(1.0))`. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Used when `FI_SAMPLE_RATE` / `sample_rate` is unset; see sampling below. |
 | `FI_AUTO_DEBUG` | `false`; prints the masked configuration and integration statuses at startup. |
 | `FI_CONFIG_FILE` | `./futureagi.toml`. |
 | `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` | `false`; omit input or output values and messages. |
@@ -118,6 +119,10 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_HIDE_INPUT_IMAGES` | `false`; omit image and file inputs while keeping text parts. |
 | `FI_HIDE_ERROR_DETAILS` | `false`; omit the provider's error text: the status description, `exception.message`, `exception.stacktrace`, `error.message`, `error.stack`, and the `output.value` and `output.mime_type` of a failed call. Partial output messages of a stream that failed partway stay under the output switches (`FI_HIDE_OUTPUTS`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_OUTPUT_TEXT`). Any of the other hide switches in this table (inputs, outputs, messages, text, input images or invocation parameters) hides the error text too. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent. |
+
+An explicit `FI_SAMPLE_RATE` (or `sample_rate` in code/config) wins over `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`; otherwise the agent accepts `always_on`, `always_off`, `traceidratio`, `parentbased_always_on`, `parentbased_always_off`, and `parentbased_traceidratio`. Ratio samplers use `_ARG` in `[0, 1]` (default `1.0`); invalid names or ratio arguments fall back to `ParentBased(TraceIdRatio(1.0))` with one warning. Parent-based choices keep the W3C parent's sampled flag: an unsampled parent's child is dropped. An application-owned provider always keeps its own sampler; these settings affect only the agent's isolated provider.
+
+On the agent's own provider, sampled spans carry the double attribute `fi.sampling.ratio` for a known partial keep probability (`0 < r < 1`), allowing estimated counts and cost weighted by `1/r`; absence means `1.0`. A partial ratio decision writes W3C tracestate `fi=r:<ratio>` and preserves other entries from valid parents; parent-based children inherit only a valid ratio from a sampled parent's `fi` entry (local or remote), retaining that entry. Only a valid span context counts as a parent: an invalid or absent parent makes a locally decided root and its inherited tracestate is reset (all vendors, including stale `fi`), even on a dropped root; a kept partial root writes only its own `fi`, while a full-rate root stays empty. This includes the default sampler, `parentbased_always_on/off`, and parent-based root rates `0` or `1` (including `FI_SAMPLE_RATE=1`). Roots at rate `1` do not gain an attribute or `fi` entry, and upstream sampled parents without valid metadata never get an invented ratio. Non-parent-based always-on/off samplers never copy ratios; non-parent-based `traceidratio` uses only its own partial ratio. Dropped/record-only spans and application-owned providers are not stamped. Sampling metadata counts against the effective attribute budget, including an inherited zero budget.
 
 Each `FI_HIDE_*` switch in the table above, its `init` option or its
 `futureagi.toml` setting (`hide_inputs` and so on) reads `true`, `1`, `yes` or

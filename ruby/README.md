@@ -215,8 +215,42 @@ content, and a file that does not exist prints nothing.
 | `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Allow or deny integrations. `wire` covers both transports; `net_http` or `httpx` alone enables the wire layer for that transport only; `rack` controls server spans. An allowlist must name every integration you want, for example `wire,rack`. |
 | `FI_WIRE_CAPTURE` | `false` turns off wire capture. |
 | `FI_WIRE_MAX_BODY_BYTES` | Body capture limit, default 4 MiB, at most 64 MiB. |
-| `FI_SAMPLE_RATE` | Ratio sampler for an agent-created provider. |
+| `FI_SAMPLE_RATE` | Parent-based ratio sampler for an agent-created provider. |
 | `FI_AUTO_DEBUG` | Print a startup report. |
+
+For an agent-created provider, `FI_SAMPLE_RATE` (or an explicit `sample_rate`
+init/config-file option) wins over `OTEL_TRACES_SAMPLER` and
+`OTEL_TRACES_SAMPLER_ARG`. Otherwise those standard OpenTelemetry variables
+select the sampler; an absent ratio argument defaults to `1.0`, but an explicitly
+empty argument is invalid. Invalid or unsupported settings fall back to
+`ParentBased(TraceIdRatio(1.0))` with one warning, without interrupting the
+application. The standalone, SDK-free path emits only roots and applies OTel
+ratio sampling to the exported trace ID using the Ruby SDK's cutoff; explicit
+rates retain their existing random sampling. An application-owned provider always
+keeps its own sampler, including its parent sampled-flag decisions.
+
+For fractional ratio sampling (`0 < r < 1`), kept spans carry the double attribute
+`fi.sampling.ratio` and roots propagate `fi=r:<ratio>` in W3C tracestate (also on
+SDK-free exports); non-parent-based ratio sampling sets the configured ratio on
+children too, preserving other tracestate entries.
+Parent-based children inherit a sampled parent's valid fractional `fi` ratio
+and preserve its tracestate, including remote parents and their local descendants,
+regardless of the local root rate. This includes the default sampler (when neither
+`FI_SAMPLE_RATE` nor `OTEL_TRACES_SAMPLER` is set), `FI_SAMPLE_RATE=1`,
+`parentbased_always_on`, `parentbased_always_off`, and `parentbased_traceidratio`
+at any rate. When the parent's ratio is absent or invalid, children omit the
+attribute rather than substitute the local rate.
+An absent attribute means `1.0` for count/cost estimation; this metadata never
+changes sampling decisions. Roots decided locally at rate one add neither the
+attribute nor a new `fi` entry. Non-parent-based `always_on`/`always_off` samplers
+never copy an upstream ratio; non-parent-based `traceidratio` only stamps its own
+fractional rate. Only a parent with non-zero trace and span IDs counts as a
+parent. For an agent-created provider, absent or invalid parents start a locally
+decided root with no inherited tracestate, including other vendors' entries:
+a kept fractional root writes only its own `fi`, and a full-rate root stays
+empty. Valid parents' vendor entries are unchanged. Dropped or record-only spans
+are never stamped (invalid inherited state is still cleared); application-owned
+providers and their samplers are never wrapped or stamped.
 
 ```toml
 # futureagi.toml
