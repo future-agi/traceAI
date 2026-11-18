@@ -1,8 +1,6 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // Vite's default TypeScript filter excludes .cts modules.
-  esbuild: { include: /\.(?:[cm]?ts|[jt]sx)$/ },
   test: {
     globals: true,
     environment: "node",

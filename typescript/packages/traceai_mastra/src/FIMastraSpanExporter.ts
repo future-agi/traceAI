@@ -14,7 +14,7 @@ import { sanitizeSpan } from "./privacy.js";
 import { NativeToolErrorHistory } from "./toolErrorHistory.js";
 import { toolErrorLifecycle } from "./toolErrorLifecycle.js";
 import { VERSION } from "./version.js";
-import { converterFormat } from "./converterFormat.cjs";
+import { converterFormat } from "./converterFormat.js";
 
 function runtimeEmitsInference(): boolean {
   // Use the emitting runtime, NOT the converter's potentially nested dependency.
