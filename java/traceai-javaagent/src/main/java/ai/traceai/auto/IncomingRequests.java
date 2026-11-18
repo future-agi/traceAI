@@ -19,8 +19,8 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
 /**
  * Joins the caller's trace on incoming servlet requests.
  *
- * <p>While {@code HttpServlet#service} runs (jakarta.servlet and javax.servlet, so Spring MVC on
- * Tomcat, Jetty and Undertow too), the request's W3C {@code traceparent} and {@code tracestate}
+ * <p>While {@code HttpServlet#service} or a subclass's override of it runs (jakarta.servlet and
+ * javax.servlet, so Spring MVC, Jersey and CXF on Tomcat, Jetty and Undertow too), the request's W3C {@code traceparent} and {@code tracestate}
  * become the agent's current context on the request thread. AI calls made there take the remote
  * span as their parent, and the agent's parent-based sampler applies the caller's sampled flag and
  * {@code fi=r:} ratio exactly as for any other remote parent. No SERVER span is created or exported.
@@ -81,16 +81,19 @@ public final class IncomingRequests {
                 .or(any(), loader -> loader != null && loader.getClass().getName().startsWith(OtelJavaAgent.PREFIX))
                 .with(new AgentBuilder.Listener.Adapter() {
                     @Override public void onTransformation(TypeDescription type, ClassLoader loader, JavaModule module, boolean loaded, DynamicType dynamicType) {
-                        TraceAIAuto.integrationInstrumented(INTEGRATION);
+                        // Once the agent is off beside the OpenTelemetry Java agent, keep its doctor status.
+                        if (!TraceAIAuto.besideOtelJavaAgent()) TraceAIAuto.integrationInstrumented(INTEGRATION);
                     }
                     @Override public void onError(String type, ClassLoader loader, JavaModule module, boolean loaded, Throwable error) {
                         TraceAIAuto.integrationFailed(INTEGRATION);
                         TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                     }
                 })
-                // Only the servlet base classes: every container calls the public service method,
-                // and frameworks (Spring's FrameworkServlet) override the protected one beneath it.
-                .type(namedOneOf(SERVLETS.toArray(String[]::new)))
+                // HttpServlet and every servlet built on it. Containers call the public service method;
+                // Spring's FrameworkServlet overrides only the protected one beneath it, while Jersey's
+                // ServletContainer and CXF override the public one without calling HttpServlet's. Each
+                // declared public service method is advised; nested calls through super change nothing.
+                .type(hasSuperType(namedOneOf(SERVLETS.toArray(String[]::new))).and(not(isInterface())))
                 .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(ServiceAdvice.class).on(named("service").and(isPublic())
                     .and(takesArguments(2)).and(takesArgument(0, namedOneOf("jakarta.servlet.ServletRequest", "javax.servlet.ServletRequest"))))))
                 .installOn(instrumentation);
