@@ -49,8 +49,6 @@ interface CallCell {
   readonly active: WeakMap<Context, Context>;
   // For each span in the cell: what was active where it started, to go back to once it ends.
   readonly before: WeakMap<object, Context>;
-  // Dropped incoming SERVER spans never record, even before end().
-  liveDropped?: WeakSet<Span>;
   // The spans this call was opened for. Any other span started in the call makes nothing active.
   readonly accepts?: AcceptSpan;
 }
@@ -67,23 +65,35 @@ function callCell(ctx: Context): CallCell | undefined {
   return cell && cell.active instanceof WeakMap && cell.before instanceof WeakMap && (cell.accepts === undefined || typeof cell.accepts === "function") ? cell : undefined;
 }
 
-// The context that is active where ctx is current: inside an integration call, the
-// span the integration started there, until it ends; otherwise ctx itself.
+// A derived context can carry the span itself, even after losing/replacing its
+// call cell. Track only spans whose end we observe, by identity across package copies.
+interface DroppedRequest { ended: boolean; before: CallCell["before"] }
+const DROPPED = Symbol.for("traceai.auto.dropped-requests.v1");
+const host = globalThis as typeof globalThis & { [DROPPED]?: WeakMap<Span, DroppedRequest> };
+const droppedRequests = host[DROPPED] ?? new WeakMap<Span, DroppedRequest>();
+if (!host[DROPPED]) Object.defineProperty(host, DROPPED, { value: droppedRequests });
+
 function inCall(ctx: Context): Context {
   try {
     const cell = callCell(ctx);
-    if (!cell) return ctx;
-    let active = cell.active.get(ctx);
-    for (let depth = 0; active && active !== ctx && depth < 128; depth++) {
+    let active = cell?.active.get(ctx) ?? ctx, before = cell?.before;
+    let derived: Context | undefined;
+    for (let depth = 0; depth < 128; depth++) {
       const span = trace.getSpan(active);
-      try {
-        if (span && (cell.liveDropped?.has(span) || span.isRecording())) return active;
-      } catch { /* Treat as ended. */ }
-      // The span has ended: go back to what was active where it started.
-      active = span ? cell.before.get(span) : undefined;
+      if (!span) return derived ? trace.deleteSpan(derived) : active;
+      const request = droppedRequests.get(span);
+      if (request?.ended) {
+        // For a directly carried span, replace just the span: session attributes,
+        // suppression and any nested call cell belong to the derived context.
+        if (active === ctx || !before?.has(span)) derived ??= active;
+        before = request.before;
+      } else if (active === ctx || !before?.has(span) || request || span.isRecording()) {
+        return derived ? trace.setSpan(derived, span) : active;
+      }
+      active = before?.get(span) ?? ROOT_CONTEXT;
     }
-  } catch { /* Parent links are best effort. */ }
-  return ctx;
+    return trace.deleteSpan(derived ?? ctx);
+  } catch { return ctx; /* Parent links are best effort. */ }
 }
 
 // Inside an integration call, a span the call was opened for is active for the rest
@@ -102,10 +112,10 @@ function activateInCall(parent: Context, span: Span, start: SpanStart): void {
           !trace.isSpanContextValid(local) || local.traceId !== remote.traceId) return;
       // isRecording() cannot distinguish a live dropped span from an ended one.
       // Observe end only on this request's span, not on the tracer or prototype.
-      const live = cell.liveDropped ??= new WeakSet<Span>();
+      const request = { ended: false, before: cell.before };
       const end = span.end;
-      span.end = function(...args) { live.delete(span); return end.apply(this, args); };
-      live.add(span);
+      span.end = function(...args) { request.ended = true; return end.apply(this, args); };
+      droppedRequests.set(span, request);
     }
     // Keep what is active now, not an ended span, so ended spans are not retained.
     cell.before.set(span, inCall(current));
