@@ -1,6 +1,7 @@
 ## [1.4.0] - pending release
 
 ### Added
+- `FI_TRACES_URL` sends span exports to a trace collector separate from the platform API. Self-hosted Docker installs serve them on different ports (often 8100 for the API and 4318 for traces), so an app can set `FI_TRACES_URL` to the traces address while `FI_BASE_URL` and the `fagi` CLI keep using the API. When it is unset or blank, exports go to `FI_BASE_URL` as before; custom eval API calls always use `FI_BASE_URL`.
 - Zero-code auto-instrumentation. Start an unchanged app with `FI_AUTO_INSTRUMENT=true python app.py` (or under `opentelemetry-instrument`), or call `fi_instrumentation.init()` once in code: every installed traceAI integration turns on when the app first imports its library, and Future AGI receives only AI spans while your other OpenTelemetry exporters keep every span.
 - `fi-instrument` command: `fi-instrument doctor` shows which libraries are covered, and `fi-instrument bootstrap --install` adds the missing traceAI packages.
 

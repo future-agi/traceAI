@@ -1,6 +1,7 @@
 ## [1.3.0] - pending release
 
 ### Added
+- `FI_TRACES_URL` sends HTTP span exports to a trace collector separate from the platform API in `FI_BASE_URL` (self-hosted Docker installs serve them on different ports). It is a base URL like `FI_BASE_URL`; when unset or blank, exports keep their current destination. An explicit exporter `endpoint` still wins, and platform API calls keep using `FI_BASE_URL`.
 - Three supported public functions. `rememberFITracerSpan(span)` marks a span as traceAI's own, so an integration that exports converted copies of its framework's spans keeps their session, user and session-name ids. `runInFIContext(ctx, fn)` runs work with `ctx` active for traceAI, and `activeFIContext()` returns the context traceAI treats as active. Both work in an app with no OpenTelemetry context manager and register nothing with OpenTelemetry.
 
 ### Changed

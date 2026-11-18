@@ -412,6 +412,13 @@ function constructFullEndpoint(customEndpoint?: string): string {
     }
   }
 
+  // FI_TRACES_URL names the trace collector separately from the platform API in
+  // FI_BASE_URL (self-hosted Docker installs serve them on different ports). It
+  // is a base origin like FI_BASE_URL. Platform API calls keep using FI_BASE_URL.
+  const tracesUrl = getEnv("FI_TRACES_URL")?.trim();
+  if (tracesUrl) {
+    return `${tracesUrl.replace(/\/$/, "")}${FI_COLLECTOR_PATH}`;
+  }
   const baseUrl = getEnv("FI_BASE_URL");
   const collectorEndpoint = getEnv("FI_COLLECTOR_ENDPOINT");
   if (baseUrl === undefined && collectorEndpoint !== undefined) {
