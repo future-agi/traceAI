@@ -214,7 +214,7 @@ class SamplerTest < Minitest::Test
                          ''
                        end
       if expected_ratio && !(parent_based && fixture[:valid])
-        expected_state = fixture[:valid] ? "other=kept,fi=r:#{expected_ratio},another=retained" : "fi=r:#{expected_ratio}"
+        expected_state = fixture[:valid] ? "fi=r:#{expected_ratio},other=kept,another=retained" : "fi=r:#{expected_ratio}"
       end
       [name, name + '_child'].each do |span_name|
         assert_equal [kept, kept], result.fetch('decisions').fetch(span_name), span_name
@@ -622,6 +622,7 @@ class SamplerTest < Minitest::Test
         'full_without_fi' => members,
         'full_with_fi' => members.first(5) + ['fi=r:0.5'] + members[5...31],
         'almost_full' => members.first(31),
+        'short_with_fi' => members.first(3) + ['fi=r:0.5'] + members[3...6],
         'invalid_full' => members
       }.each do |name, state|
         parent = OpenTelemetry::Trace::SpanContext.new(
@@ -654,17 +655,16 @@ class SamplerTest < Minitest::Test
       assert_equal 0.25, spans.fetch(name).fetch('attributes').fetch('fi.sampling.ratio'), name
       assert_equal full.join(','), spans.fetch(name).fetch('state'), name
     end
-    replaced = members.first(5) + ['fi=r:0.25'] + members[5...31]
-    %w[full_with_fi full_with_fi_child].each do |name|
+    # W3C: a modified key MUST move to the left and a new key SHOULD be added
+    # at the left, so fi is always first and the other members keep their order.
+    %w[full_with_fi full_with_fi_child almost_full almost_full_child].each do |name|
       assert_equal 0.25, spans.fetch(name).fetch('attributes').fetch('fi.sampling.ratio'), name
-      assert_equal replaced.sort, spans.fetch(name).fetch('state').split(',').sort, name
-      assert_equal members.first(31), spans.fetch(name).fetch('state').split(',') - ['fi=r:0.25'], name
+      assert_equal full.join(','), spans.fetch(name).fetch('state'), name
     end
-    %w[almost_full almost_full_child].each do |name|
-      almost = spans.fetch(name).fetch('state').split(',')
-      assert_equal 32, almost.size, name
-      assert_equal 1, almost.count('fi=r:0.25'), name
-      assert_equal members.first(31), almost - ['fi=r:0.25'], name
+    short = ['fi=r:0.25'] + members.first(6)
+    %w[short_with_fi short_with_fi_child].each do |name|
+      assert_equal 0.25, spans.fetch(name).fetch('attributes').fetch('fi.sampling.ratio'), name
+      assert_equal short.join(','), spans.fetch(name).fetch('state'), name
     end
     assert_equal 'fi=r:0.25', spans.fetch('invalid_full').fetch('state')
     assert_equal 'fi=r:0.25', spans.fetch('invalid_full_child').fetch('state')
