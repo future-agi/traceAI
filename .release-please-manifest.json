@@ -122,7 +122,7 @@
   "java": "1.2.0",
   "go/a2a": "0.1.1",
   "go/anthropic": "0.1.0",
-  "go/auto": "0.1.0",
+  "go/auto": "0.2.0",
   "go/eino": "0.1.0",
   "go/genai": "0.1.1",
   "go/lambda": "0.1.1",
