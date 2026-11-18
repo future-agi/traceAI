@@ -71,12 +71,89 @@ final class ToolSpans {
         // already this tool call (traceai-spring-ai's filter marks it TOOL when it stops): no second span.
         // An agent tool span already open under that same application span means this call is nested in
         // another tool, not the observed invocation itself.
-        if (SPRING_AI.equals(framework) && !openUnder(context.external()) && springAiObserved(target, name, context.external())) return null;
+        // The agent marks that span TOOL itself, with the content its own span would carry, so the call keeps
+        // a TOOL span without traceai-spring-ai. If the span cannot be marked, the agent span is kept.
+        if (SPRING_AI.equals(framework) && !openUnder(context.external())) {
+            Observed top = OBSERVED.get().peek();
+            // A wrapper callback delegating inside the observed invocation is that same invocation.
+            if (top != null && top.external.equals(context.external()) && top.name.equals(name)) return null;
+            if (springAiObserved(target, name, context.external())) {
+                Observed observed = Observed.mark(state, name, arguments, context.external());
+                if (observed != null) { OBSERVED.get().push(observed); return observed; }
+            }
+            if (OBSERVED.get().isEmpty()) OBSERVED.remove();
+        }
         Span span = state.tracer().spanBuilder(bounded(OPERATION + " " + name, 32000)).setSpanKind(SpanKind.INTERNAL).setParent(context.parent())
             .setStartTimestamp(context.startEpochNanos(), TimeUnit.NANOSECONDS).startSpan();
         Frame frame = new Frame(framework, target, name, callId, arguments, span, state, context);
         FRAMES.get().push(frame);
         return frame;
+    }
+
+    /** A Spring AI tool call whose own tool_call observation span (the application's current span) the agent marked TOOL. */
+    static final class Observed {
+        final TraceAIAuto.RuntimeState state;
+        final String name, arguments, external;
+        final Object span;
+        final Class<?> spanApi;
+        private Observed(TraceAIAuto.RuntimeState state, String name, String arguments, String external, Object span, Class<?> spanApi) {
+            this.state = state; this.name = name; this.arguments = arguments; this.external = external; this.span = span; this.spanApi = spanApi;
+        }
+        /** Marks the application's current span TOOL, or returns null so that the agent keeps its own span. */
+        static Observed mark(TraceAIAuto.RuntimeState state, String name, String arguments, String external) {
+            try {
+                ClassLoader loader = Thread.currentThread().getContextClassLoader();
+                // Build the prefix dynamically so Maven Shade does not rewrite the application API name.
+                String prefix = String.join(".", "io", "opentelemetry");
+                Class<?> spanApi = Class.forName(prefix + ".api.trace.Span", false, loader);
+                Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
+                Object span = spanApi.getMethod("current").invoke(null);
+                Object sc = spanApi.getMethod("getSpanContext").invoke(span);
+                if (!external.equals(scApi.getMethod("getTraceId").invoke(sc) + "/" + scApi.getMethod("getSpanId").invoke(sc))) return null;
+                if (!Boolean.TRUE.equals(spanApi.getMethod("isRecording").invoke(span))) return null;
+                Map<String, Object> identity = project(state.config(), name, null, null, null, null, null, Map.of());
+                if (!"TOOL".equals(identity.get("gen_ai.span.kind")) || !name.equals(identity.get("gen_ai.tool.name"))) return null;
+                Observed observed = new Observed(state, name, arguments, external, span, spanApi);
+                observed.set(identity);
+                return observed;
+            } catch (Throwable ignored) { return null; }
+        }
+        /** Spring AI's own convention names the operation when the observation stops; the agent adds the rest. */
+        void set(Map<String, Object> attributes) throws ReflectiveOperationException {
+            for (Map.Entry<String, Object> entry : attributes.entrySet()) {
+                String key = entry.getKey(); Object value = entry.getValue();
+                if (key.equals("gen_ai.operation.name")) continue;
+                if (value instanceof Boolean flag) spanApi.getMethod("setAttribute", String.class, boolean.class).invoke(span, key, flag);
+                else if (value instanceof Double || value instanceof Float) spanApi.getMethod("setAttribute", String.class, double.class).invoke(span, key, ((Number)value).doubleValue());
+                else if (value instanceof Number number) spanApi.getMethod("setAttribute", String.class, long.class).invoke(span, key, number.longValue());
+                else spanApi.getMethod("setAttribute", String.class, String.class).invoke(span, key, String.valueOf(value));
+            }
+        }
+        /** Content and failure, as on the agent's own span. Spring AI ends the span when the observation stops. */
+        void finish(Object returned, Throwable thrown) {
+            try {
+                AutoConfig config = state.config();
+                Throwable failure = thrown == null ? null : unwrap(thrown);
+                Map<String, Object> attributes = project(config, name, null, arguments, returned, failure, null, Map.of());
+                set(attributes);
+                if (failure != null) {
+                    Class<?> statusApi = Class.forName(spanApi.getName().substring(0, spanApi.getName().lastIndexOf('.')) + ".StatusCode", false, spanApi.getClassLoader());
+                    Object error = null;
+                    for (Object constant : statusApi.getEnumConstants()) if ("ERROR".equals(((Enum<?>)constant).name())) error = constant;
+                    String description = TraceAIAuto.hidesErrorText(config) ? "" : String.valueOf(failure.getMessage() == null ? "" : failure.getMessage());
+                    spanApi.getMethod("setStatus", statusApi, String.class).invoke(span, error, bounded(description, 32000));
+                }
+            } catch (Throwable ignored) { }
+        }
+    }
+    private static final ThreadLocal<ArrayDeque<Observed>> OBSERVED = ThreadLocal.withInitial(ArrayDeque::new);
+    /** True when the agent marked this application span ("traceId/spanId") TOOL for an observed Spring AI call. */
+    static boolean markedByAgent(String external) {
+        if (external == null) return false;
+        ArrayDeque<Observed> observed = OBSERVED.get();
+        if (observed.isEmpty()) { OBSERVED.remove(); return false; }
+        for (Observed entry : observed) if (entry.external.equals(external)) return true;
+        return false;
     }
 
     private static boolean openUnder(String external) {
@@ -117,6 +194,13 @@ final class ToolSpans {
     }
 
     static void exit(Object token, Object returned, Throwable thrown) {
+        if (token instanceof Observed observed) {
+            ArrayDeque<Observed> stack = OBSERVED.get();
+            if (stack.peek() == observed) stack.pop(); else stack.remove(observed);
+            if (stack.isEmpty()) OBSERVED.remove();
+            observed.finish(returned, thrown);
+            return;
+        }
         if (!(token instanceof Frame frame)) return;
         ArrayDeque<Frame> frames = FRAMES.get();
         if (frames.peek() == frame) frames.pop(); else frames.remove(frame);
@@ -136,43 +220,16 @@ final class ToolSpans {
             frame.context.attributeLimit() == null ? Integer.MAX_VALUE : frame.context.attributeLimit());
         Span span = frame.span;
         try {
-            String result = null; boolean error = false;
             Throwable failure = thrown != null ? unwrap(thrown) : frame.failure;
-            if (returned instanceof String text) result = text;
-            else if (returned != null) {
-                result = string(call(returned, LANGCHAIN4J_RESULT, "resultText"));
-                error = Boolean.TRUE.equals(call(returned, LANGCHAIN4J_RESULT, "isError"));
-            }
-            if (failure == null && frame.failure != null) failure = frame.failure;
-            error |= failure != null;
             AutoConfig config = state.config();
-            Map<String, Object> attrs = new LinkedHashMap<>();
-            attrs.put("gen_ai.span.kind", "TOOL"); attrs.put("gen_ai.operation.name", OPERATION);
-            attrs.put("gen_ai.tool.name", frame.name);
-            if (error) attrs.put("error.type", failure == null ? "tool_error" : failure.getClass().getName());
-            if (frame.callId != null && !frame.callId.isEmpty()) attrs.put("gen_ai.tool.call.id", frame.callId);
-            attrs.put("gen_ai.tool.type", "function");
-            Map<String, Object> context = new LinkedHashMap<>(frame.context.attributes());
-            Map<String, Object> content = new LinkedHashMap<>();
-            if (frame.arguments != null) {
-                String arguments = bounded(frame.arguments, config.maxBodyBytes);
-                content.put("gen_ai.tool.call.arguments", arguments); content.put("input.value", arguments); content.put("input.mime_type", "application/json");
-            }
-            // The text a failed tool returns is the framework's error message, not a result.
-            if (result != null && !error) {
-                String output = bounded(result, config.maxBodyBytes);
-                content.put("gen_ai.tool.call.result", output); content.put("output.value", output); content.put("output.mime_type", "text/plain");
-            }
-            Map<String, Object> candidates = new LinkedHashMap<>(attrs); candidates.putAll(context); candidates.putAll(content);
-            Map<String, Object> clean = AttributeProjection.sanitize(candidates, config, MATCH);
+            Map<String, Object> projected = project(config, frame.name, frame.callId, frame.arguments, returned, failure, frame.failure, frame.context.attributes());
+            boolean error = projected.containsKey("error.type") || failure != null;
             int samplingSlots = span instanceof io.opentelemetry.sdk.trace.ReadableSpan readable
                 && readable.getAttribute(AttributeKey.doubleKey("fi.sampling.ratio")) != null ? 1 : 0;
             int budget = Math.max(0, limit - samplingSlots), written = 0;
-            List<String> order = new ArrayList<>(ORDER); order.addAll(context.keySet()); order.addAll(content.keySet());
-            for (String key : order) {
-                Object value = clean.get(key);
-                if (value == null || TraceAIAuto.hidden(key, MATCH, config)) continue;
+            for (Map.Entry<String, Object> entry : projected.entrySet()) {
                 if (written == budget) break;
+                String key = entry.getKey(); Object value = entry.getValue();
                 if (value instanceof String text) span.setAttribute(key, text);
                 else if (value instanceof Boolean flag) span.setAttribute(key, flag);
                 else if (value instanceof Double || value instanceof Float) span.setAttribute(key, ((Number)value).doubleValue());
@@ -184,6 +241,46 @@ final class ToolSpans {
             span.setStatus(error ? StatusCode.ERROR : StatusCode.OK, error ? bounded(description, 32000) : "");
         } catch (Throwable ignored) {
         } finally { WireResourceProcessor.end(span, end, resource, limit); }
+    }
+
+    /** The tool span's attributes in export priority order (identity, context, content), after redaction and
+     * the hide switches. failure is the unwrapped thrown exception; recorded is a failure the framework handled. */
+    static Map<String, Object> project(AutoConfig config, String name, String callId, String arguments, Object returned, Throwable failure,
+                                       Throwable recorded, Map<String, ?> context) {
+        String result = null; boolean error = false;
+        if (returned instanceof String text) result = text;
+        else if (returned != null) {
+            result = string(call(returned, LANGCHAIN4J_RESULT, "resultText"));
+            error = Boolean.TRUE.equals(call(returned, LANGCHAIN4J_RESULT, "isError"));
+        }
+        if (failure == null && recorded != null) failure = recorded;
+        error |= failure != null;
+        Map<String, Object> attrs = new LinkedHashMap<>();
+        attrs.put("gen_ai.span.kind", "TOOL"); attrs.put("gen_ai.operation.name", OPERATION);
+        attrs.put("gen_ai.tool.name", name);
+        if (error) attrs.put("error.type", failure == null ? "tool_error" : failure.getClass().getName());
+        if (callId != null && !callId.isEmpty()) attrs.put("gen_ai.tool.call.id", callId);
+        attrs.put("gen_ai.tool.type", "function");
+        Map<String, Object> contextAttrs = new LinkedHashMap<>(context);
+        Map<String, Object> content = new LinkedHashMap<>();
+        if (arguments != null) {
+            String input = bounded(arguments, config.maxBodyBytes);
+            content.put("gen_ai.tool.call.arguments", input); content.put("input.value", input); content.put("input.mime_type", "application/json");
+        }
+        // The text a failed tool returns is the framework's error message, not a result.
+        if (result != null && !error) {
+            String output = bounded(result, config.maxBodyBytes);
+            content.put("gen_ai.tool.call.result", output); content.put("output.value", output); content.put("output.mime_type", "text/plain");
+        }
+        Map<String, Object> candidates = new LinkedHashMap<>(attrs); candidates.putAll(contextAttrs); candidates.putAll(content);
+        Map<String, Object> clean = AttributeProjection.sanitize(candidates, config, MATCH);
+        List<String> order = new ArrayList<>(ORDER); order.addAll(contextAttrs.keySet()); order.addAll(content.keySet());
+        Map<String, Object> projected = new LinkedHashMap<>();
+        for (String key : order) {
+            Object value = clean.get(key);
+            if (value != null && !TraceAIAuto.hidden(key, MATCH, config)) projected.putIfAbsent(key, value);
+        }
+        return projected;
     }
 
     /** Wrapper exceptions name the framework's plumbing; the tool's own exception is the cause. */

@@ -35,6 +35,7 @@ final class OtelBridge {
         Integer attributeLimit = null;
         io.opentelemetry.sdk.resources.Resource resource = null;
         String external = null;
+        boolean applicationKind = false;
         Map<String, String> attrs = new LinkedHashMap<>(ContextAttributes.getAttributesFromContext());
         try {
             ClassLoader loader = Thread.currentThread().getContextClassLoader();
@@ -51,7 +52,7 @@ final class OtelBridge {
                     for (String name : List.of("gen_ai.span.kind", "fi.span.kind")) {
                         Object key = keyApi.getMethod("stringKey", String.class).invoke(null, name);
                         Object value = readable.getMethod("getAttribute", keyApi).invoke(applicationSpan, key);
-                        suppressed |= kind(kinds, value == null ? null : String.valueOf(value));
+                        applicationKind |= kind(kinds, value == null ? null : String.valueOf(value));
                     }
                 }
             } catch (ReflectiveOperationException ignored) { }
@@ -77,6 +78,11 @@ final class OtelBridge {
                 if (data instanceof Map<?, ?> map) map.forEach((k, v) -> attrs.put(String.valueOf(k), String.valueOf(v)));
             } catch (ReflectiveOperationException ignored) { }
         } catch (Throwable ignored) { }
+        // A Spring AI tool_call span that the agent itself marked TOOL is the observed tool invocation, not
+        // a wrapper's tool span: tools that invocation calls directly still get their own spans.
+        try {
+            if (applicationKind && !(kinds == TOOL && ToolSpans.markedByAgent(external))) suppressed = true;
+        } catch (Throwable ignored) { suppressed |= applicationKind; }
         // Work a tool does on this thread, while the application's current span is still the one the
         // tool started under, belongs to the agent's tool span.
         try {
