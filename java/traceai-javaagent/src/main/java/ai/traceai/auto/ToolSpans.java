@@ -66,11 +66,39 @@ final class ToolSpans {
         if (outer != null && outer.framework.equals(framework) && outer.name.equals(name)) { outer.delegates.add(target); return null; }
         OtelBridge.Snapshot context = OtelBridge.toolSnapshot();
         if (context.suppressed()) return null;
+        // Spring AI's DefaultToolCallingManager wraps the call in its own tool_call observation. When
+        // Micrometer Tracing bridges that observation to the application's current span, the span is
+        // already this tool call (traceai-spring-ai's filter marks it TOOL when it stops): no second span.
+        if (SPRING_AI.equals(framework) && springAiObserved(target, name, context.external())) return null;
         Span span = state.tracer().spanBuilder(bounded(OPERATION + " " + name, 32000)).setSpanKind(SpanKind.INTERNAL).setParent(context.parent())
             .setStartTimestamp(context.startEpochNanos(), TimeUnit.NANOSECONDS).startSpan();
         Frame frame = new Frame(framework, target, name, callId, arguments, span, state, context);
         FRAMES.get().push(frame);
         return frame;
+    }
+
+    private static final String SPRING_AI_OBSERVATION = "org.springframework.ai.tool.observation.ToolCallingObservationContext";
+    /** True when the current Micrometer observation is Spring AI's tool_call for this tool and its tracing
+     * span is the application's current span (external, "traceId/spanId"). Reflective; false when unsure. */
+    static boolean springAiObserved(Object callback, String name, String external) {
+        if (external == null) return false;
+        try {
+            ClassLoader loader = callback.getClass().getClassLoader();
+            Class<?> registryApi = Class.forName("io.micrometer.observation.ObservationRegistry", false, loader);
+            // The current observation is held per thread by Micrometer and is the same for every registry.
+            Object observation = registryApi.getMethod("getCurrentObservation").invoke(registryApi.getMethod("create").invoke(null));
+            if (observation == null) return false;
+            Object observed = Class.forName("io.micrometer.observation.Observation", false, loader).getMethod("getContext").invoke(observation);
+            if (!name.equals(string(call(call(observed, SPRING_AI_OBSERVATION, "getToolDefinition"), SPRING_AI_DEFINITION, "name")))) return false;
+            Class<?> contextApi = Class.forName("io.micrometer.observation.Observation$Context", false, loader);
+            Class<?> tracingContext = Class.forName("io.micrometer.tracing.handler.TracingObservationHandler$TracingContext", false, loader);
+            Object tracing = contextApi.getMethod("get", Object.class).invoke(observed, tracingContext);
+            Object span = call(tracing, tracingContext.getName(), "getSpan");
+            Object spanContext = call(span, "io.micrometer.tracing.Span", "context");
+            Object traceId = call(spanContext, "io.micrometer.tracing.TraceContext", "traceId");
+            Object spanId = call(spanContext, "io.micrometer.tracing.TraceContext", "spanId");
+            return traceId != null && spanId != null && external.equals(traceId + "/" + spanId);
+        } catch (Throwable ignored) { return false; }
     }
 
     /** A tool failure that the framework handles itself (for example LangChain4j returning the error text to the model). */

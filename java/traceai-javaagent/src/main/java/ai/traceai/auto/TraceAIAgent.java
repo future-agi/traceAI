@@ -77,7 +77,8 @@ public final class TraceAIAgent {
         if (config != null && config.enabled(ToolSpans.SPRING_AI)) agent = agent
             .type(hasSuperType(named(ToolSpans.SPRING_AI_CALLBACK)))
             .transform((builder, type, loader, module, domain) -> transforming(ToolSpans.SPRING_AI, builder.visit(Advice.to(SpringAiToolAdvice.class).on(not(isAbstract())
-                .and(named("call")).and(takesArgument(0, String.class)).and(takesArguments(1).or(takesArguments(2)))))));
+                .and(named("call")).and(takesArgument(0, String.class))
+                .and(takesArguments(1).or(takesArguments(2).and(takesArgument(1, named("org.springframework.ai.chat.model.ToolContext")))))))));
         agent.installOn(instrumentation);
     }
     /** The tool integration whose transformer last ran on this thread; cleared when the type completes. */
