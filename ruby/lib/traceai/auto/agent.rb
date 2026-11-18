@@ -6,12 +6,13 @@ require_relative 'secrets'
 require_relative 'codec'
 require_relative 'bundler_hook'
 require_relative 'sampling'
+require_relative 'ruby_llm_chat'
 module TraceAI
   module Auto
     VERSION = '0.1.0'
     INIT_MUTEX = Mutex.new
     BUNDLER_BOOT_MUTEX = Mutex.new
-    TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester].freeze
+    TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester RubyLLM::Chat].freeze
     MODEL_KINDS = %w[LLM EMBEDDING RERANKER GUARDRAIL].freeze
     AI_MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
     # Seconds the startup hooks may run after the agent loads (see load_hook).
@@ -169,6 +170,8 @@ module TraceAI
         names.concat(%w[Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest]) if transport_enabled?('net_http')
         names << 'OpenAI::Internal::Transport::PooledNetRequester' if @sdk && gem_possible?('openai')
         names.concat(%w[HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1]) if (@sdk || transport_enabled?('httpx')) && gem_possible?('httpx')
+        # Zeitwerk defines RubyLLM::Chat at its first use, often after startup.
+        names << 'RubyLLM::Chat' if ruby_llm_wanted? && gem_possible?('ruby_llm')
         names
       end
       def gem_possible?(name)
@@ -270,6 +273,8 @@ module TraceAI
             prepend_once(target('HTTPX::Session'), LazyHTTPX)
             prepend_once(target('HTTPX::StreamResponse'), LazyHTTPXStream)
             prepend_once(target('OpenAI::Internal::Transport::PooledNetRequester'), LazySDKRequest)
+            # Its first completion starts the agent (see ruby_llm_complete).
+            prepend_once(target('RubyLLM::Chat'), RubyLLMChat) if ruby_llm_wanted?
           end
         end
         sync_hooks
@@ -762,6 +767,7 @@ module TraceAI
         return unless result
         adopt_host_provider if @own_provider && @provider.equal?(@own_provider)
         install_server_instrumentation if @sdk && !%w[instrumented failed].include?(@rack_status)
+        install_ruby_llm(settled: true) unless @ruby_llm_installed
         context_attrs = parent.value(@attributes_key) || {}
         attributes = Privacy.mask(Privacy.scrub_attributes(context_attrs.merge(result.attributes)), @config)
         description = Privacy.hide_errors?(@config) ? '__REDACTED__' : result.description.to_s
@@ -769,8 +775,12 @@ module TraceAI
         # Reserve a slot only for known local/inherited probability metadata.
         # A sampled parent without valid fi state keeps the entire wire budget.
         sampler = @provider.sampler if @sdk && @provider.equal?(@own_provider)
+        # A local parent span (see RubyLLMChat) owns the trace and its decision.
+        local = local_parent(parent)
         ratio = if @sdk
                   sampler.ratio_for(OpenTelemetry::Trace.current_span(parent).context) if sampler.is_a?(RatioSampler)
+                elsif local
+                  local.ratio
                 elsif SamplingRatio.fractional?(@local_sample_rate)
                   @local_sample_rate
                 end
@@ -785,28 +795,34 @@ module TraceAI
           span.status = result.ok ? OpenTelemetry::Trace::Status.ok : OpenTelemetry::Trace::Status.error(description)
           span.finish(end_timestamp: finished)
         else
-          trace_id = nil
-          if @local_ratio_bound
-            # Match Ruby SDK TraceIdRatioBased on the same ID we export, including
-            # its probability-one special case and unsigned low-64-bit comparison.
-            trace_id = Random.urandom(16)
-            return unless @local_sample_rate == 1.0 || trace_id[8, 8].unpack1('Q>') < @local_ratio_bound
-          else
-            return unless Random.rand < @local_sample_rate
-          end
+          trace_id, sampled = local ? [local.trace_id, local.sampled] : local_root
+          return unless sampled
           tracestate = ''
           if ratio
             attributes = attributes.merge(SamplingRatio::ATTRIBUTE => ratio) if limit.positive?
             tracestate = "fi=#{SamplingRatio.state_value(ratio)}"
           end
-          record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), "\0".b * 8,
+          record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), local ? local.span_id : "\0".b * 8,
                                     attributes.size + projection.dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
                                     attributes, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
-                                    Random.urandom(8), trace_id || Random.urandom(16), 1, tracestate, false)
+                                    Random.urandom(8), trace_id, 1, tracestate, false)
           @processor.enqueue(record)
         end
       rescue StandardError => e
         debug(e)
+      end
+      # A new local root: [trace_id, sampled, ratio]. Match Ruby SDK
+      # TraceIdRatioBased on the same ID we export, including its probability-one
+      # special case and unsigned low-64-bit comparison; an explicit rate keeps
+      # random sampling.
+      def local_root
+        trace_id = Random.urandom(16)
+        sampled = if @local_ratio_bound
+                    @local_sample_rate == 1.0 || trace_id[8, 8].unpack1('Q>') < @local_ratio_bound
+                  else
+                    Random.rand < @local_sample_rate
+                  end
+        [trace_id, sampled, SamplingRatio.fractional?(@local_sample_rate) ? @local_sample_rate : nil]
       end
       # The session id set through using_session or with_attributes in a
       # request's context. A request body that repeats exactly this value is
@@ -899,6 +915,7 @@ module TraceAI
         false
       end
       def install_transports
+        install_ruby_llm
         return unless active? && (wire_enabled? || @sdk)
         require_relative 'transports'
         # Disabling wire spans must not disable request-credential discovery for
@@ -956,6 +973,7 @@ module TraceAI
                   elsif name == 'rack' && @rack_status then @rack_status
                   elsif !installed?(gem) then 'not_installed'
                   elsif name == 'httpx' then @httpx_installed ? 'instrumented' : 'pending'
+                  elsif name == 'ruby_llm' then ruby_llm_status
                   else 'missing_instrumentor'
                   end
           integrations[name] = {status: state}
