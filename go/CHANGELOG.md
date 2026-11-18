@@ -1,16 +1,6 @@
 # Go SDK changelog
 
-## go/auto 0.2.0 (pending release)
-
-Released with the tag `go/auto/v0.2.0`.
-
-### Added
-
-- On agent-owned providers, sampled spans carry the trace's keep probability as the double attribute `fi.sampling.ratio` when it is strictly between 0 and 1, and a local fractional ratio decision writes `fi=r:<ratio>` to W3C tracestate (#713). Parent-based samplers copy a valid ratio from a sampled local or remote parent's `fi` entry at any root rate. An absent attribute means `1.0`. Roots decided at `0` or `1`, dropped or record-only spans and application-owned providers get no ratio; an invalid or absent parent starts a root without carrying its tracestate forward. Wire admission reserves one attribute slot for the ratio, and export privacy recovery keeps a valid ratio without restoring hidden content.
-
-### Fixed
-
-- Go auto instrumentation honors `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` when it creates a provider without an explicit sample rate (#711). Explicit FI rates keep parent-based ratio sampling; application-owned samplers remain unchanged, and invalid OTEL sampler settings fall back to the default with one warning.
+Released modules keep their release history in their own folder: `go/auto` in [`go/auto/CHANGELOG.md`](auto/CHANGELOG.md).
 
 ## Unreleased
 
