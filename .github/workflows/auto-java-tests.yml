@@ -1,13 +1,15 @@
 name: Zero-code Java agent tests
 
 # The agent ships byte copies of the shared privacy and wire catalogs, replays their fixtures and
-# bundles two core classes, so changes to any of them run its child-JVM suite here. The shared Java
+# bundles two core classes, so changes to any of them run its child-JVM suite here. Its Spring AI
+# tool tests use traceai-spring-ai's observation filter and handler, so changes there run it too. The shared Java
 # workflow and the Java release build the agent but leave this suite to this workflow.
 on:
   pull_request:
     paths:
       - 'java/traceai-javaagent/**'
       - 'java/traceai-java-core/**'
+      - 'java/traceai-spring-ai/**'
       - 'spec/auto-instrumentation/**'
       - 'java/pom.xml'
       - '.github/workflows/auto-java-tests.yml'
@@ -16,6 +18,7 @@ on:
     paths:
       - 'java/traceai-javaagent/**'
       - 'java/traceai-java-core/**'
+      - 'java/traceai-spring-ai/**'
       - 'spec/auto-instrumentation/**'
       - 'java/pom.xml'
       - '.github/workflows/auto-java-tests.yml'

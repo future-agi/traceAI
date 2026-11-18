@@ -69,7 +69,9 @@ final class ToolSpans {
         // Spring AI's DefaultToolCallingManager wraps the call in its own tool_call observation. When
         // Micrometer Tracing bridges that observation to the application's current span, the span is
         // already this tool call (traceai-spring-ai's filter marks it TOOL when it stops): no second span.
-        if (SPRING_AI.equals(framework) && springAiObserved(target, name, context.external())) return null;
+        // An agent tool span already open under that same application span means this call is nested in
+        // another tool, not the observed invocation itself.
+        if (SPRING_AI.equals(framework) && !openUnder(context.external()) && springAiObserved(target, name, context.external())) return null;
         Span span = state.tracer().spanBuilder(bounded(OPERATION + " " + name, 32000)).setSpanKind(SpanKind.INTERNAL).setParent(context.parent())
             .setStartTimestamp(context.startEpochNanos(), TimeUnit.NANOSECONDS).startSpan();
         Frame frame = new Frame(framework, target, name, callId, arguments, span, state, context);
@@ -77,6 +79,10 @@ final class ToolSpans {
         return frame;
     }
 
+    private static boolean openUnder(String external) {
+        for (Frame frame : FRAMES.get()) if (Objects.equals(frame.external, external)) return true;
+        return false;
+    }
     private static final String SPRING_AI_OBSERVATION = "org.springframework.ai.tool.observation.ToolCallingObservationContext";
     /** True when the current Micrometer observation is Spring AI's tool_call for this tool and its tracing
      * span is the application's current span (external, "traceId/spanId"). Reflective; false when unsure. */
