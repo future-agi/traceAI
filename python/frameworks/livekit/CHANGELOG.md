@@ -1,6 +1,6 @@
 
 
-## [0.2.1] - pending release
+## [0.2.1] - 2026-11-09
 
 ### Fixed
 - The wheel and sdist now include the Apache-2.0 `LICENSE` file.

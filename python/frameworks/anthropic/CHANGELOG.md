@@ -1,4 +1,4 @@
-## [0.1.14] - pending release
+## [0.1.14] - 2026-11-12
 
 ### Fixed
 - Traced messages.create and messages.count_tokens calls whose messages are a generator or other single-use iterable send those messages to Anthropic instead of an emptied iterable, and the span still records them. Spans also record tool call IDs from the model output, for streamed and non-streamed responses.

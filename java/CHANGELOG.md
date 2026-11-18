@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0 (pending release)
+## 1.3.0 (2026-11-18)
 
 ### Features
 
