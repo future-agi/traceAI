@@ -65,6 +65,8 @@ Content hiding covers both native Mastra attributes and Future AGI input/output 
 
 The supported minimum pairing is `@mastra/core@1.16.0`, `@mastra/observability@1.0.0`, and `@mastra/otel-exporter@1.0.0`. Prefer the current pairing above: the minimum observability runtime lacks cancellation outcomes and some real-agent error signals, so an exporter cannot recover those missing signals. Current runtime outcomes and stop reasons are preserved; cancelled or interrupted executions are never labeled successful when the runtime supplies that outcome.
 
+The integration selects the GenAI schema from the installed `@mastra/otel-exporter` version, not the observability runtime. If the converter's version is missing, unreadable, or invalid, it uses `GenAI_v1_38_0` to preserve the minimum pairing's output.
+
 ## Shut down cleanly
 
 After all agent or workflow runs finish, await shutdown before a short-lived script exits:
