@@ -7,6 +7,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "
 import { FITracer, runInFIContext } from "@traceai/fi-core";
 import { activeContext, applicationContextManager, contextBoundProvider, incomingServerSpan, runIntegrationCall } from "../src/agent-context";
 import { HTTP_SCOPE, readIncomingParent } from "../src/incoming-parent";
+import { withSession } from "../src";
 import type { Config } from "../src/config";
 import { enableLibraries, type IntegrationStatus } from "../src/libraries";
 
@@ -189,6 +190,33 @@ test("ending a dropped SERVER span restores the previous live span in its reques
     previous.end();
   }, incomingServerSpan);
   expect(parentOf("after-request")).toBe(idOf("previous"));
+});
+
+test.each([false, true])("withSession after a dropped request ends (previous live span: %s)", async hasPrevious => {
+  await runIntegrationCall(async () => {
+    const previous = hasPrevious ? httpTracer.startSpan("previous", { kind: SpanKind.SERVER }) : undefined;
+    const server = startDroppedRequest();
+    const continuation = withSession("late-session", async () => {
+      const explicitParent = activeContext();
+      expect(trace.getSpan(explicitParent)).toBe(server);
+      // New private call cells and explicit provider parents must both forget the
+      // ended request, without losing the session that was set while it was live.
+      await runIntegrationCall(async () => {
+        await tick();
+        expect(trace.getSpan(activeContext())).toBe(previous);
+        httpTracer.startSpan("late-implicit", { kind: SpanKind.CLIENT }).end();
+      });
+      httpTracer.startSpan("late-explicit", { kind: SpanKind.CLIENT }, explicitParent).end();
+    });
+    server.end();
+    await continuation;
+    previous?.end();
+  }, incomingServerSpan);
+  for (const name of ["late-implicit", "late-explicit"]) {
+    expect(parentOf(name)).toBe(hasPrevious ? idOf("previous") : undefined);
+    expect(finished(name).spanContext().traceId).not.toBe(incomingTraceId);
+  }
+  expect(finished("late-implicit").attributes["session.id"]).toBe("late-session");
 });
 
 test("the launcher keeps no context store of its own and never enters a context for the caller's flow", () => {
