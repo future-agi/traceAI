@@ -119,7 +119,7 @@
   "typescript/packages/traceai_voltagent": "0.1.0",
   "typescript/packages/traceai_weaviate": "0.1.3",
   "typescript/packages/traceai_xai": "0.1.1",
-  "java": "1.2.0",
+  "java": "1.3.0",
   "go/a2a": "0.1.1",
   "go/anthropic": "0.1.0",
   "go/auto": "0.2.0",
