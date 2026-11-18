@@ -245,7 +245,10 @@ public final class TraceAIAuto {
     static void warn(String text) { if (WARNED.compareAndSet(false, true)) System.err.println("[traceai-auto] " + text); }
     static void debug(String text) { if (config != null && config.flag("FI_AUTO_DEBUG")) System.err.println("[traceai-auto] " + text); }
     static boolean transportEnabled(String name) { return config != null && config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains(name); }
-    static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
+    static void integrationInstrumented(String name) {
+        if (name.equals(ToolSpans.LANGCHAIN4J) || name.equals(ToolSpans.SPRING_AI)) { STATUS.put(name, "instrumented (execute_tool spans; chat calls traced by wire)"); return; }
+        STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled");
+    }
     static void integrationFailed(String name) {
         STATUS.put(name, "failed");
         // An OpenTelemetry Java agent listed after this one rewrites the same classes once its own
@@ -312,6 +315,12 @@ public final class TraceAIAuto {
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
         boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
+        if (match != null && ToolSpans.OPERATION.equals(match.endpoint().get("operation"))) {
+            // An execute_tool span: the tool's name, call id and type identify the step and are not content.
+            if (key.equals("gen_ai.tool.name") || key.equals("gen_ai.tool.call.id") || key.equals("gen_ai.tool.type")) return false;
+            // The tool's result is its output.
+            if (key.equals("gen_ai.tool.call.result")) return outputText || outputMessages;
+        }
         if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || key.startsWith("gen_ai.tool.") || key.equals("gen_ai.request.parameters")
             || key.equals("cohere.preamble") || key.equals("embedding.input_text") || key.startsWith("embedding.input_text.") || key.equals("gen_ai.reranker.query"))) return true;
         // Existing wrappers also emit generated tool calls outside gen_ai.output.messages.
@@ -378,6 +387,12 @@ public final class TraceAIAuto {
     public static void requestOkHttp(Object call) {
         try { if (active) OkHttpTransport.requestContext(call); } catch (Throwable ignored) { }
     }
+    // Called reflectively from advice in framework tool classes (LangChain4j, Spring AI); only JDK types cross that boundary.
+    public static Object toolEnter(String framework, Object target, Object argument) {
+        try { return active ? ToolSpans.enter(framework, target, argument) : null; } catch (Throwable ignored) { return null; }
+    }
+    public static void toolFailed(Object executor, Throwable error) { try { ToolSpans.failed(executor, error); } catch (Throwable ignored) { } }
+    public static void toolExit(Object token, Object returned, Throwable error) { try { ToolSpans.exit(token, returned, error); } catch (Throwable ignored) { } }
     public static void installOkHttp(Object builder) {
         try { if (transportEnabled("okhttp") && !besideOtelJavaAgent()) OkHttpTransport.install(builder); } catch (Throwable ignored) { integrationFailed("okhttp"); }
     }

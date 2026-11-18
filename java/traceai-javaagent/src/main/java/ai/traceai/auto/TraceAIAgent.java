@@ -20,7 +20,7 @@ public final class TraceAIAgent {
     static void install(Instrumentation instrumentation) {
         // Shade relocates this property along with ByteBuddy: it cannot alter an application's copy.
         if (Runtime.version().feature() > 24) System.setProperty("net.bytebuddy.experimental", "true");
-        new AgentBuilder.Default().disableClassFormatChanges()
+        AgentBuilder agent = new AgentBuilder.Default().disableClassFormatChanges()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .ignore(nameStartsWith("ai.traceai.auto.").and(not(hasSuperType(namedOneOf("okio.Source", "okhttp3.ResponseBody"))))
                 // Built at runtime: Shade would rewrite the literal to the agent's own relocated package.
@@ -30,10 +30,11 @@ public final class TraceAIAgent {
             .or(any(), loader -> loader != null && loader.getClass().getName().startsWith(OtelJavaAgent.PREFIX))
             .with(new AgentBuilder.Listener.Adapter() {
                 @Override public void onTransformation(TypeDescription type, ClassLoader loader, JavaModule module, boolean loaded, DynamicType dynamicType) {
-                    TraceAIAuto.integrationInstrumented(type.getName().startsWith("okhttp3") ? "okhttp" : "java.net.http");
+                    TraceAIAuto.integrationInstrumented(integration(type.getName(), type));
                 }
+                @Override public void onComplete(String type, ClassLoader loader, JavaModule module, boolean loaded) { TRANSFORMING.remove(); }
                 @Override public void onError(String type, ClassLoader loader, JavaModule module, boolean loaded, Throwable error) {
-                    TraceAIAuto.integrationFailed(type.startsWith("okhttp3") ? "okhttp" : "java.net.http");
+                    TraceAIAuto.integrationFailed(integration(type, null));
                     TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                 }
             })
@@ -59,8 +60,66 @@ public final class TraceAIAgent {
             .type(namedOneOf("okhttp3.RealCall", "okhttp3.internal.connection.RealCall"))
             .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpCallAdvice.class).on(namedOneOf("execute", "enqueue"))))
             .type(named("okhttp3.OkHttpClient"))
-            .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))))
-            .installOn(instrumentation);
+            .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))));
+        AutoConfig config = TraceAIAuto.config();
+        // Framework tool executions: one execute_tool span each. Lambda implementations cannot be
+        // retransformed; LangChain4j 1.x still reaches them through the interface's default method.
+        if (config != null && config.enabled(ToolSpans.LANGCHAIN4J)) agent = agent
+            .type(hasSuperType(named(ToolSpans.LANGCHAIN4J_EXECUTOR)))
+            .transform((builder, type, loader, module, domain) -> transforming(ToolSpans.LANGCHAIN4J, builder.visit(Advice.to(LangChain4jToolAdvice.class).on(not(isAbstract())
+                .and(takesArguments(2)).and(takesArgument(0, named("dev.langchain4j.agent.tool.ToolExecutionRequest")))
+                // executeAsync serves async and streaming AI services on 1.x; its interface default only reports "not supported".
+                .and(namedOneOf("execute", "executeWithContext").or(named("executeAsync").and(not(isDefaultMethod()))))))))
+            // LangChain4j's executor reports a failing @Tool method to the model instead of throwing; observe the method call it makes.
+            .type(named(ToolSpans.LANGCHAIN4J_DEFAULT_EXECUTOR))
+            .transform((builder, type, loader, module, domain) -> transforming(ToolSpans.LANGCHAIN4J, builder.visit(Advice.to(ToolFailureAdvice.class).on(isPrivate()
+                .and(namedOneOf("execute", "invokeMethod")).and(takesArguments(Object[].class))))));
+        if (config != null && config.enabled(ToolSpans.SPRING_AI)) agent = agent
+            .type(hasSuperType(named(ToolSpans.SPRING_AI_CALLBACK)))
+            .transform((builder, type, loader, module, domain) -> transforming(ToolSpans.SPRING_AI, builder.visit(Advice.to(SpringAiToolAdvice.class).on(not(isAbstract())
+                .and(named("call")).and(takesArgument(0, String.class)).and(takesArguments(1).or(takesArguments(2)))))));
+        agent.installOn(instrumentation);
+    }
+    /** The tool integration whose transformer last ran on this thread; cleared when the type completes. */
+    private static final ThreadLocal<String> TRANSFORMING = new ThreadLocal<>();
+    private static <T> T transforming(String integration, T builder) { TRANSFORMING.set(integration); return builder; }
+    /** The integration a transformed type belongs to, for doctor statuses. */
+    static String integration(String name, TypeDescription type) {
+        String tool = TRANSFORMING.get();
+        if (tool != null) return tool;
+        if (name.startsWith("okhttp3") || name.startsWith("okio")) return "okhttp";
+        if (name.startsWith("jdk.internal.net.http")) return "java.net.http";
+        if (name.startsWith("dev.langchain4j.") || type != null && hasSuperType(named(ToolSpans.LANGCHAIN4J_EXECUTOR)).matches(type)) return ToolSpans.LANGCHAIN4J;
+        if (name.startsWith("org.springframework.ai.") || type != null && hasSuperType(named(ToolSpans.SPRING_AI_CALLBACK)).matches(type)) return ToolSpans.SPRING_AI;
+        return "java.net.http";
+    }
+    public static class LangChain4jToolAdvice {
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static Object enter(@Advice.This Object executor, @Advice.Argument(0) Object request) throws Exception {
+            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("toolEnter", String.class, Object.class, Object.class).invoke(null, "langchain4j", executor, request);
+        }
+        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
+        public static void exit(@Advice.Enter Object token, @Advice.Return(typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,
+                                @Advice.Thrown Throwable error) throws Exception {
+            if (token != null) ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("toolExit", Object.class, Object.class, Throwable.class).invoke(null, token, returned, error);
+        }
+    }
+    public static class SpringAiToolAdvice {
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static Object enter(@Advice.This Object callback, @Advice.Argument(0) Object input) throws Exception {
+            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("toolEnter", String.class, Object.class, Object.class).invoke(null, "spring-ai", callback, input);
+        }
+        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
+        public static void exit(@Advice.Enter Object token, @Advice.Return(typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,
+                                @Advice.Thrown Throwable error) throws Exception {
+            if (token != null) ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("toolExit", Object.class, Object.class, Throwable.class).invoke(null, token, returned, error);
+        }
+    }
+    public static class ToolFailureAdvice {
+        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
+        public static void exit(@Advice.This Object executor, @Advice.Thrown Throwable error) throws Exception {
+            if (error != null) ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("toolFailed", Object.class, Throwable.class).invoke(null, executor, error);
+        }
     }
     public static class JdkHeaderAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)
