@@ -7,6 +7,7 @@ import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.IdGenerator;
@@ -20,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -216,6 +219,87 @@ class SamplingRatioTest {
         assertEquals("r:0.25", updated.get("fi"));
         assertEquals(32, updated.size());
         for (int i = 0; i < 31; i++) assertEquals("v" + i, updated.get("vendor" + i));
+    }
+
+    // Wire-level helpers: W3C header order makes "right-most" unambiguous.
+    private static List<String> members(int count, boolean withFi) {
+        List<String> members = new ArrayList<>();
+        for (int i = 0; i < count; i++) members.add("vendor" + i + "=v" + i);
+        if (withFi) members.add(count / 2, "fi=r:0.5");
+        return members;
+    }
+
+    private static Context extract(List<String> members) {
+        Map<String, String> carrier = Map.of(
+            "traceparent", "00-" + KEPT + "-" + SPAN_ID + "-01", "tracestate", String.join(",", members));
+        Context context = W3CTraceContextPropagator.getInstance().extract(Context.root(), carrier, new io.opentelemetry.context.propagation.TextMapGetter<Map<String, String>>() {
+            @Override public Iterable<String> keys(Map<String, String> c) { return c.keySet(); }
+            @Override public String get(Map<String, String> c, String key) { return c == null ? null : c.get(key); }
+        });
+        assertEquals(members.size(), Span.fromContext(context).getSpanContext().getTraceState().size());
+        return context;
+    }
+
+    private static List<String> exportedMembers(Sampler sampler, Context incoming) {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        try (SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(sampler).setIdGenerator(ids(KEPT))
+                .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            Span span = provider.get("test").spanBuilder("span").setParent(incoming).startSpan();
+            assertTrue(span.getSpanContext().isSampled());
+            Map<String, String> carrier = new HashMap<>();
+            W3CTraceContextPropagator.getInstance().inject(Context.root().with(span), carrier, Map::put);
+            span.end();
+            assertEquals(Double.valueOf(0.25), exporter.getFinishedSpanItems().get(0).getAttributes().get(RATIO));
+            String header = carrier.get("tracestate");
+            return header == null ? List.of() : List.of(header.split(","));
+        }
+    }
+
+    @Test void ownDecisionEvictsTheRightMostMemberToAddFiToAFullTraceState() throws Exception {
+        List<String> incoming = members(32, false);
+        List<String> expected = new ArrayList<>();
+        expected.add("fi=r:0.25");
+        expected.addAll(incoming.subList(0, 31));
+        assertEquals(expected, exportedMembers(ratio(0.25, false), extract(incoming)));
+    }
+
+    @Test void ownDecisionReplacesFiInAFullTraceStateWithoutEviction() throws Exception {
+        List<String> incoming = members(31, true);
+        assertEquals(32, incoming.size());
+        List<String> exported = exportedMembers(ratio(0.25, false), extract(incoming));
+        assertEquals(32, exported.size());
+        assertTrue(exported.contains("fi=r:0.25"));
+        List<String> others = new ArrayList<>(exported);
+        others.remove("fi=r:0.25");
+        assertEquals(members(31, false), others, "every other member is kept, in order");
+    }
+
+    @Test void ownDecisionAddsFiToA31MemberTraceStateWithoutEviction() throws Exception {
+        List<String> incoming = members(31, false);
+        List<String> expected = new ArrayList<>();
+        expected.add("fi=r:0.25");
+        expected.addAll(incoming);
+        assertEquals(expected, exportedMembers(ratio(0.25, false), extract(incoming)));
+    }
+
+    @Test void parentBasedRootWithAFullInvalidParentStateWritesOnlyFi() throws Exception {
+        TraceState full = Span.fromContext(extract(members(32, false))).getSpanContext().getTraceState();
+        Context invalid = Context.root().with(Span.wrap(SpanContext.createFromRemoteParent(
+            "00000000000000000000000000000000", SPAN_ID, TraceFlags.getSampled(), full)));
+        assertEquals(List.of("fi=r:0.25"), exportedMembers(ratio(0.25, true), invalid));
+    }
+
+    @Test void parentBasedChildCopiesAFullParentStateUnchanged() throws Exception {
+        List<String> incoming = members(31, true);
+        Context parent = extract(incoming);
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        try (SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(ratio(0.25, true)).setIdGenerator(ids(KEPT))
+                .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            Span span = provider.get("test").spanBuilder("child").setParent(parent).startSpan();
+            span.end();
+            assertEquals(Span.fromContext(parent).getSpanContext().getTraceState(), span.getSpanContext().getTraceState());
+            assertEquals(Double.valueOf(0.5), exporter.getFinishedSpanItems().get(0).getAttributes().get(RATIO));
+        }
     }
 
     private static Context invalidParent(boolean invalidTraceId, boolean remote, boolean sampled) {
