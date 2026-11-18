@@ -17,6 +17,8 @@
         <agent.okhttp.version>3.14.9</agent.okhttp.version>
         <!-- Test only: a child JVM runs the OpenTelemetry Java agent beside this one. -->
         <otel-javaagent.version>2.10.0</otel-javaagent.version>
+        <!-- Test only: the Spring AI release traceai-spring-ai builds against. -->
+        <agent.test.spring-ai.version>1.1.8</agent.test.spring-ai.version>
         <!-- The child-JVM suite gates its own workflow. Full-reactor runs (shared Java CI and the
              Java release) pass -Dtraceai.javaagent.skipITs=true to skip it for this module only;
              -DskipITs still works as usual. -->
@@ -106,6 +108,27 @@
             <groupId>io.opentelemetry.proto</groupId>
             <artifactId>opentelemetry-proto</artifactId>
             <version>1.11.1-alpha</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Test only: child JVMs run real LangChain4j AiServices and Spring AI tool callbacks
+             (the versions the traceai-langchain4j and traceai-spring-ai modules build against). -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>${langchain4j.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-model</artifactId>
+            <version>${agent.test.spring-ai.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Aligns jackson-core with the jackson-databind that Spring AI brings (jsonschema-generator would pull an older core). -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>2.21.4</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
