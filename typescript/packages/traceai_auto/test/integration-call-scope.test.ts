@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import { ProxyTracerProvider, ROOT_CONTEXT, SpanKind, trace } from "@opentelemetry/api";
 import { InstrumentationBase, type InstrumentationConfig } from "@opentelemetry/instrumentation";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { FITracer, runInFIContext } from "@traceai/fi-core";
-import { activeContext, applicationContextManager, contextBoundProvider, runIntegrationCall } from "../src/agent-context";
+import { activeContext, applicationContextManager, contextBoundProvider, incomingServerSpan, runIntegrationCall } from "../src/agent-context";
+import { HTTP_SCOPE, readIncomingParent } from "../src/incoming-parent";
+import { withSession, withUser } from "../src";
 import type { Config } from "../src/config";
 import { enableLibraries, type IntegrationStatus } from "../src/libraries";
 
@@ -155,6 +157,145 @@ test("inside the call, a span that has ended is no longer active", async () => {
   });
   expect(ended).toBeUndefined();
   expect(parentOf("after-end")).toBeUndefined();
+});
+
+const incomingTraceId = "11111111111111111111111111111111";
+const httpTracer = contextBoundProvider(provider).getTracer(HTTP_SCOPE);
+function startDroppedRequest() {
+  readIncomingParent({ headers: { traceparent: `00-${incomingTraceId}-2222222222222222-00` } });
+  return httpTracer.startSpan("request", { kind: SpanKind.SERVER }, ROOT_CONTEXT);
+}
+
+test("a non-recording AI child keeps the incoming request's trace ID across an await", async () => {
+  await runIntegrationCall(async () => {
+    const server = startDroppedRequest();
+    await tick();
+    // Inspect the child directly: a dropped span never reaches a processor or exporter.
+    const ai = other.startSpan("chat probe", { kind: SpanKind.CLIENT }, activeContext());
+    expect(activeSpanId()).toBe(server.spanContext().spanId);
+    expect(ai.spanContext().traceId).toBe(incomingTraceId);
+    expect(ai.isRecording()).toBe(false);
+    ai.end(); server.end();
+  }, incomingServerSpan);
+  expect(exporter.getFinishedSpans()).toHaveLength(0);
+});
+
+test("ending a dropped SERVER span restores the previous live span in its request cell", async () => {
+  await runIntegrationCall(async () => {
+    const previous = httpTracer.startSpan("previous", { kind: SpanKind.SERVER });
+    const dropped = startDroppedRequest();
+    dropped.end();
+    await tick();
+    other.startSpan("after-request", {}, activeContext()).end();
+    previous.end();
+  }, incomingServerSpan);
+  expect(parentOf("after-request")).toBe(idOf("previous"));
+});
+
+test.each([false, true])("withSession after a dropped request ends (previous live span: %s)", async hasPrevious => {
+  await runIntegrationCall(async () => {
+    const previous = hasPrevious ? httpTracer.startSpan("previous", { kind: SpanKind.SERVER }) : undefined;
+    const server = startDroppedRequest();
+    const continuation = withSession("late-session", async () => {
+      const explicitParent = activeContext();
+      expect(trace.getSpan(explicitParent)).toBe(server);
+      // New private call cells and explicit provider parents must both forget the
+      // ended request, without losing the session that was set while it was live.
+      await runIntegrationCall(async () => {
+        await tick();
+        expect(trace.getSpan(activeContext())).toBe(previous);
+        httpTracer.startSpan("late-implicit", { kind: SpanKind.CLIENT }).end();
+      });
+      httpTracer.startSpan("late-explicit", { kind: SpanKind.CLIENT }, explicitParent).end();
+    });
+    server.end();
+    await continuation;
+    previous?.end();
+  }, incomingServerSpan);
+  for (const name of ["late-implicit", "late-explicit"]) {
+    expect(parentOf(name)).toBe(hasPrevious ? idOf("previous") : undefined);
+    expect(finished(name).spanContext().traceId).not.toBe(incomingTraceId);
+  }
+  expect(finished("late-implicit").attributes["session.id"]).toBe("late-session");
+});
+
+test("late work skips ended spans in outer cells without losing outer or derived attributes", async () => {
+  const base = other.startSpan("base");
+  await runInFIContext(trace.setSpan(ROOT_CONTEXT, base), () => withSession("outer-session", () =>
+    runIntegrationCall(() => {
+      const outer = httpTracer.startSpan("outer");
+      return runIntegrationCall(async () => {
+        const request = startDroppedRequest();
+        const late = withUser("inner-user", async () => {
+          const explicit = activeContext();
+          await tick();
+          httpTracer.startSpan("late-after-both").end();
+          httpTracer.startSpan("explicit-after-both", {}, explicit).end();
+        });
+        request.end(); outer.end();
+        await late;
+      }, incomingServerSpan);
+    })));
+  base.end();
+  expect(parentOf("late-after-both")).toBe(idOf("base"));
+  expect(parentOf("explicit-after-both")).toBe(idOf("base"));
+  expect(finished("late-after-both").attributes).toMatchObject({ "session.id": "outer-session", "user.id": "inner-user" });
+});
+
+test("late work in a recording-only nested call retains its entry parent and session", async () => {
+  const tracer = contextBoundProvider(provider).getTracer("integration");
+  await runIntegrationCall(() => {
+    const outer = tracer.startSpan("outer");
+    return withSession("nested-session", () => runIntegrationCall(async () => {
+      tracer.startSpan("inner").end();
+      outer.end();
+      await tick();
+      tracer.startSpan("late").end();
+    }));
+  });
+  // No dropped request: the inner cell falls back to the context captured at entry.
+  expect(parentOf("inner")).toBe(idOf("outer"));
+  expect(parentOf("late")).toBe(idOf("outer"));
+  expect(finished("late").spanContext().traceId).toBe(finished("outer").spanContext().traceId);
+  expect(finished("late").attributes["session.id"]).toBe("nested-session");
+});
+
+test("unwinding a dropped request to a live grandparent keeps the session set before the request", async () => {
+  const tracer = contextBoundProvider(provider).getTracer("integration");
+  await runIntegrationCall(async () => {
+    const grandparent = tracer.startSpan("grandparent"), outer = tracer.startSpan("outer");
+    await withSession("request-session", () => runIntegrationCall(async () => {
+      const server = startDroppedRequest();
+      expect(trace.getSpan(activeContext())).toBe(server);
+      expect(server.isRecording()).toBe(false);
+      server.end(); outer.end();
+      await tick();
+      tracer.startSpan("late").end();
+    }, incomingServerSpan));
+    grandparent.end();
+  });
+  expect(parentOf("late")).toBe(idOf("grandparent"));
+  expect(finished("late").spanContext().traceId).toBe(finished("grandparent").spanContext().traceId);
+  expect(finished("late").attributes["session.id"]).toBe("request-session");
+});
+
+test("a supplied no-op HTTP tracer cannot displace a live sampled parent", async () => {
+  const noop = new ProxyTracerProvider().getDelegate();
+  const supplied = contextBoundProvider({ getTracer: (name, version, options) =>
+    (name === HTTP_SCOPE ? noop : provider).getTracer(name, version, options) });
+  const ambient = other.startSpan("ambient");
+  await runInFIContext(trace.setSpan(ROOT_CONTEXT, ambient), () => runIntegrationCall(async () => {
+    readIncomingParent({ headers: { traceparent: `00-${incomingTraceId}-2222222222222222-00` } });
+    const server = supplied.getTracer(HTTP_SCOPE).startSpan("request", { kind: SpanKind.SERVER }, ROOT_CONTEXT);
+    // The API no-op tracer echoes the remote identity instead of creating a local child.
+    expect(server.spanContext()).toMatchObject({ traceId: incomingTraceId, spanId: "2222222222222222", isRemote: true, traceFlags: 0 });
+    await tick();
+    await runIntegrationCall(() => supplied.getTracer("ai").startSpan("model").end());
+    server.end();
+  }, incomingServerSpan));
+  ambient.end();
+  expect(parentOf("model")).toBe(idOf("ambient"));
+  expect(finished("model").spanContext().traceId).toBe(ambient.spanContext().traceId);
 });
 
 test("the launcher keeps no context store of its own and never enters a context for the caller's flow", () => {
