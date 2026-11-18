@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gunzipSync, inflateSync } from "node:zlib";
 
-// Prerequisites: build @traceai/auto and its workspace dependencies, and pip install
-// the local python/ wheel into TRACEAI_TEST_PYTHON's interpreter (default python3).
-// Deliberately no prerequisite skip: missing zero-code bootstrap must fail loudly.
-const python = process.env.TRACEAI_TEST_PYTHON || "python3";
+// Opt in with TRACEAI_TEST_PYTHON=/absolute/path/to/venv/bin/python after building
+// @traceai/auto and installing the ratio-enabled Python wheel into that venv.
+// Once opted in, an incompatible interpreter or missing bootstrap is a test failure.
+const python = process.env.TRACEAI_TEST_PYTHON;
 const root = resolve(__dirname, ".."), apps = resolve(__dirname, "apps/ratio-cross-language");
 const keys = ["ratio-fi-api-PLACEHOLDER", "ratio-fi-secret-PLACEHOLDER"];
 const ratioKey = "fi.sampling.ratio";
@@ -83,7 +83,12 @@ function spans(envelopes: any[]): any[] {
       ({ ...span, project: attributes(resource.resource).project_name }))));
 }
 
-test.each(cases)("Python zero-code -> Node default sampler: $label trace", async ({ traceId, sampled }) => {
+const suite = python ? describe : describe.skip;
+suite(python ? "Python zero-code -> Node default sampler" : "Cross-language ratio tests require TRACEAI_TEST_PYTHON", () => {
+  test.each(cases)("$label trace", ({ traceId, sampled }) => checkTrace(python!, traceId, sampled), 90000);
+});
+
+async function checkTrace(python: string, traceId: string, sampled: boolean) {
   const cwd = mkdtempSync(join(tmpdir(), "traceai-ratio-cross-language-"));
   const children: Child[] = [];
   const collected: { type: string; body: Buffer }[] = [], errors: string[] = [];
@@ -199,4 +204,4 @@ test.each(cases)("Python zero-code -> Node default sampler: $label trace", async
     await new Promise<void>(resolveClose => server.close(() => resolveClose()));
     rmSync(cwd, { recursive: true, force: true });
   }
-}, 90000);
+}
