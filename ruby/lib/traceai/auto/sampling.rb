@@ -13,6 +13,16 @@ module TraceAI
 
       def self.state_value(rate) = "r:#{rate}"
 
+      # W3C: adding a key to a full (32-member) list evicts the right-most
+      # member and puts the new key at the left. The SDK's set_value would
+      # instead drop the left-most member and append fi at the right.
+      def self.with_state(state, rate)
+        value = state_value(rate)
+        hash = state.to_h
+        return state.set_value('fi', value) if hash.key?('fi') || hash.size < 32
+        OpenTelemetry::Trace::Tracestate.create({'fi' => value}.merge(hash.first(31).to_h))
+      end
+
       def self.from_tracestate(state)
         value = state['fi']
         return unless value&.start_with?('r:')
@@ -61,7 +71,7 @@ module TraceAI
         rate = ratio_for(parent) if result.sampled?
         return result unless rate || state != result.tracestate
 
-        state = state.set_value('fi', SamplingRatio.state_value(rate)) if rate && !(@parent_based && parent.valid?)
+        state = SamplingRatio.with_state(state, rate) if rate && !(@parent_based && parent.valid?)
         decision = if result.sampled?
                      samplers::Decision::RECORD_AND_SAMPLE
                    elsif result.recording?
