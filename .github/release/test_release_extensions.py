@@ -16,6 +16,7 @@ import release_plan
 import workflow_plan
 import github_release
 import complete_release
+import release_notes
 
 
 class ExtensionTests(unittest.TestCase):
@@ -154,6 +155,26 @@ class ExtensionTests(unittest.TestCase):
         plan = release_plan.plan(auto, release_plan.load_config(), offline=True)
         self.assertEqual([p['name'] for p in plan['go']], ['github.com/future-agi/traceAI/go/auto'])
         self.assertEqual(plan['skipped'], [])
+
+    def test_go_module_changelog_is_listed_only_when_the_module_has_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ('with', 'without'):
+                mod = root / 'go' / name / 'go.mod'
+                mod.parent.mkdir(parents=True)
+                mod.write_text(f'module example.com/{name}\n\ngo 1.26.0\n')
+            (root / 'go/with/CHANGELOG.md').write_text('# Changelog\n\n## [0.1.0] - 2026-11-18\n\n- First.\n')
+            go = {p['dir']: p for p in release_plan.other_packages(root) if p['ecosystem'] == 'go'}
+            self.assertEqual(go['go/with']['changelog'], 'go/with/CHANGELOG.md')
+            self.assertIsNone(go['go/without']['changelog'])
+
+    def test_go_auto_release_notes_come_from_its_own_changelog(self):
+        root = release_plan.REPO_ROOT
+        auto = [p for p in release_plan.other_packages(root) if p['dir'] == 'go/auto'][0]
+        self.assertEqual(auto['changelog'], 'go/auto/CHANGELOG.md')
+        text = (root / auto['changelog']).read_text()
+        # The GitHub release for the manifest version must carry that version's section.
+        self.assertTrue(release_notes.section(text, auto['version']))
 
     def test_java_agent_is_released_with_the_reactor(self):
         root = release_plan.REPO_ROOT
