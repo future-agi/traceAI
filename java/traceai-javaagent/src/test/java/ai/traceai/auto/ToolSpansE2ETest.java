@@ -205,6 +205,47 @@ class ToolSpansE2ETest {
         assertEquals(observation, forecast.get("parentSpanId"), "forecast runs under the observed weather call");
         assertEquals(forecast.get("spanId"), weather.get("parentSpanId"), "the direct weather call runs under forecast");
     }
+    /** Zero-code Spring Boot: the tool_call observation is traced by Micrometer Tracing's default handler and
+     * traceai-spring-ai is absent. The call still has exactly one TOOL span, with the tool's name and content. */
+    @ParameterizedTest @ValueSource(strings = {"spring_observed_nofilter", "spring_observed_nofilter_error"})
+    void springAiObservedWithoutTheTraceaiFilterKeepsExactlyOneToolSpan(String scenario) throws Exception {
+        String log = run(scenario, Map.of());
+        boolean error = scenario.endsWith("_error");
+        List<String[]> application = applicationSpans(log);
+        List<String[]> applicationTools = application.stream().filter(s -> tool(s[1]) || tool(s[2])).toList();
+        List<Map<String, Object>> agentTools = spans.stream().filter(s -> {
+            Map<String, Object> attrs = attributes(s);
+            return tool(String.valueOf(attrs.get("gen_ai.span.kind"))) || tool(String.valueOf(attrs.get("fi.span.kind")));
+        }).toList();
+        assertEquals(1, applicationTools.size() + agentTools.size(), "exactly one TOOL span per tool call: application "
+            + application.stream().map(s -> String.join("|", s)).toList() + ", agent " + spans);
+        String name, arguments, result, errorType;
+        if (agentTools.isEmpty()) {
+            String[] observation = applicationTools.get(0);
+            name = observation[5]; arguments = observation[6]; result = observation[7]; errorType = observation[8];
+            assertFalse(String.join("|", observation).contains(ToolApp.SECRET), "credential values in tool arguments are redacted");
+        } else {
+            Map<String, Object> attrs = attributes(agentTools.get(0));
+            name = String.valueOf(attrs.get("gen_ai.tool.name")); arguments = String.valueOf(attrs.get("gen_ai.tool.call.arguments"));
+            result = String.valueOf(attrs.get("gen_ai.tool.call.result")); errorType = String.valueOf(attrs.get("error.type"));
+        }
+        assertEquals("weather", name);
+        assertTrue(arguments.contains(ToolApp.CITY), arguments);
+        if (error) {
+            assertEquals(IllegalStateException.class.getName(), errorType);
+            assertEquals("null", result, "a failed tool's error text is not exported as its result");
+        } else {
+            assertEquals("\"" + ToolApp.RESULT + "\"", result);
+            assertEquals("null", errorType);
+        }
+        assertNoRawSecret();
+    }
+    /** The agent traces call(String) and call(String, ToolContext) only; another two-argument overload is not a tool call. */
+    @Test void springAiCallOverloadWithoutToolContextIsNotTraced() throws Exception {
+        String log = run("spring_overload", Map.of());
+        assertEquals("overload:not a ToolContext", line(log, "RESULT="));
+        assertTrue(named("execute_tool").isEmpty(), spans.toString());
+    }
     /** CONTROL: observations without a tracing handler start no span, so the agent's span is the tool span. */
     @Test void springAiUntracedObservationKeepsTheAgentToolSpan() throws Exception {
         String log = run("spring_observed_untraced", Map.of());
