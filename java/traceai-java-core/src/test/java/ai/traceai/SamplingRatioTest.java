@@ -269,6 +269,7 @@ class SamplingRatioTest {
         List<String> exported = exportedMembers(ratio(0.25, false), extract(incoming));
         assertEquals(32, exported.size());
         assertTrue(exported.contains("fi=r:0.25"));
+        assertEquals("fi=r:0.25", exported.get(0), "the replaced fi moves to the left");
         List<String> others = new ArrayList<>(exported);
         others.remove("fi=r:0.25");
         assertEquals(members(31, false), others, "every other member is kept, in order");
