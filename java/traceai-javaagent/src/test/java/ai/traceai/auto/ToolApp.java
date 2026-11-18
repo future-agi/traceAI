@@ -9,10 +9,28 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.service.AiServices;
+import ai.traceai.spring.SpringAIObservationFilter;
+import ai.traceai.spring.SpringAITracingObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.otel.bridge.OtelCurrentTraceContext;
+import io.micrometer.tracing.otel.bridge.OtelTracer;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.DefaultToolCallingManager;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import java.net.URI;
 import java.net.http.*;
@@ -23,7 +41,11 @@ import java.util.function.Function;
  * A plain application that runs real framework tool loops: no agent API calls, no tracer calls.
  * Each tool makes one provider call of its own, and the application makes one more control call
  * after the tool loop. Everything runs under an application-owned span.
- * Scenarios: lc4j, lc4j_error, spring, spring_error.
+ * Scenarios: lc4j, lc4j_error, spring, spring_error, spring_wrapper (a ToolCallback decorating
+ * another one), spring_observed (DefaultToolCallingManager with Spring AI's tool_call observation
+ * bridged to the application's OpenTelemetry SDK by Micrometer Tracing and traceai-spring-ai),
+ * spring_observed_untraced (the same observations without a tracing handler).
+ * The application's own spans are exported in memory and printed as APP_SPAN lines.
  */
 public final class ToolApp {
     /** Arguments carry a credential-shaped value that must never be exported raw. */
@@ -59,6 +81,14 @@ public final class ToolApp {
 
     public record WeatherRequest(String city, String apiKey) { }
 
+    /** A decorator that delegates every call to the callback it wraps, as tool-filtering wrappers do. */
+    static final class WrappingCallback implements ToolCallback {
+        final ToolCallback delegate;
+        WrappingCallback(ToolCallback delegate) { this.delegate = delegate; }
+        @Override public ToolDefinition getToolDefinition() { return delegate.getToolDefinition(); }
+        @Override public String call(String input) { return delegate.call(input); }
+    }
+
     static void chat() throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint)).header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(PlainApp.REQUEST)).build();
@@ -67,7 +97,8 @@ public final class ToolApp {
 
     public static void main(String[] args) throws Exception {
         endpoint = args[0]; String scenario = args[1];
-        SdkTracerProvider provider = SdkTracerProvider.builder().build();
+        InMemorySpanExporter applicationSpans = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(applicationSpans)).build();
         Span parent = provider.get("tool-app").spanBuilder("application-request").startSpan();
         try (Scope ignored = parent.makeCurrent()) {
             System.out.println("PARENT=" + parent.getSpanContext().getSpanId());
@@ -86,16 +117,39 @@ public final class ToolApp {
                     return "sunny in " + input.city();
                 };
                 ToolCallback callback = FunctionToolCallback.builder("weather", weather).description("Looks up the weather").inputType(WeatherRequest.class).build();
-                try { System.out.println("RESULT=" + callback.call("{\"city\":\"" + CITY + "\",\"apiKey\":\"" + SECRET + "\"}")); }
+                String input = "{\"city\":\"" + CITY + "\",\"apiKey\":\"" + SECRET + "\"}";
+                if (scenario.equals("spring_wrapper")) callback = new WrappingCallback(callback);
+                try {
+                    if (scenario.startsWith("spring_observed")) System.out.println("RESULT=" + observed(provider, callback, input, !scenario.endsWith("_untraced")));
+                    else System.out.println("RESULT=" + callback.call(input));
+                }
                 catch (RuntimeException error) {
                     System.out.println("THROWN=" + error.getClass().getName() + "|" + error.getMessage()
                         + "|" + (error.getCause() == null ? "" : error.getCause().getClass().getName() + ":" + error.getCause().getMessage()));
                 }
             }
         } finally { parent.end(); }
+        for (SpanData span : applicationSpans.getFinishedSpanItems())
+            System.out.println("APP_SPAN=" + span.getName() + "|" + span.getAttributes().get(AttributeKey.stringKey("fi.span.kind"))
+                + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.span.kind")) + "|" + span.getSpanId() + "|" + span.getParentSpanId());
         // Control: a provider call outside every tool.
         chat();
         System.out.println("DONE");
+    }
+    /** One model-requested tool call through Spring AI's tool calling manager, observed and bridged to the application's SDK. */
+    static String observed(SdkTracerProvider provider, ToolCallback callback, String input, boolean traced) {
+        ObservationRegistry registry = ObservationRegistry.create();
+        // Untraced: observations run (for example for metrics) but no tracing handler turns them into spans.
+        registry.observationConfig().observationHandler(context -> true).observationFilter(new SpringAIObservationFilter(true, true));
+        if (traced) registry.observationConfig().observationHandler(
+            new SpringAITracingObservationHandler(new OtelTracer(provider.get("spring-ai"), new OtelCurrentTraceContext(), event -> { })));
+        DefaultToolCallingManager manager = DefaultToolCallingManager.builder().observationRegistry(registry).build();
+        Prompt prompt = new Prompt(List.of(new UserMessage("What is the weather?")), ToolCallingChatOptions.builder().toolCallbacks(callback).build());
+        AssistantMessage request = AssistantMessage.builder().content("")
+            .toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "weather", input))).build();
+        ToolExecutionResult result = manager.executeToolCalls(prompt, new ChatResponse(List.of(new Generation(request))));
+        List<org.springframework.ai.chat.messages.Message> history = result.conversationHistory();
+        return ((org.springframework.ai.chat.messages.ToolResponseMessage)history.get(history.size() - 1)).getResponses().get(0).responseData();
     }
     private ToolApp() {}
 }

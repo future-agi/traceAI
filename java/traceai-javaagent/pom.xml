@@ -124,6 +124,20 @@
             <version>${agent.test.spring-ai.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Test only: Spring AI's tool_call observation bridged to OpenTelemetry through Micrometer
+             Tracing, with the traceai-spring-ai filter and handler, in a child JVM. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+            <version>1.5.12</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-spring-ai</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Aligns jackson-core with the jackson-databind that Spring AI brings (jsonschema-generator would pull an older core). -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

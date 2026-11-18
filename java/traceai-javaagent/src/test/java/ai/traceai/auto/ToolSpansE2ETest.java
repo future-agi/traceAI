@@ -161,6 +161,56 @@ class ToolSpansE2ETest {
         assertFalse(attrs.containsKey("gen_ai.tool.call.result"));
         assertNoRawSecret();
     }
+    /** Application spans the child printed: name, fi.span.kind, gen_ai.span.kind, span id, parent span id. */
+    static List<String[]> applicationSpans(String log) {
+        return log.lines().filter(l -> l.startsWith("APP_SPAN=")).map(l -> l.substring("APP_SPAN=".length()).split("\\|", -1)).toList();
+    }
+    static boolean tool(String kind) { return "TOOL".equals(kind); }
+
+    /** Spring AI's own tool_call observation span, bridged to OpenTelemetry and marked TOOL by
+     * traceai-spring-ai, already traces the call: the agent adds no second TOOL span. */
+    @Test void springAiObservedToolCallHasExactlyOneToolSpan() throws Exception {
+        String log = run("spring_observed", Map.of());
+        assertEquals(ToolApp.RESULT, line(log, "RESULT=").replace("\"", ""), log);
+        List<String[]> application = applicationSpans(log);
+        List<String[]> applicationTools = application.stream().filter(s -> tool(s[1]) || tool(s[2])).toList();
+        List<Map<String, Object>> agentTools = spans.stream().filter(s -> {
+            Map<String, Object> attrs = attributes(s);
+            return tool(String.valueOf(attrs.get("gen_ai.span.kind"))) || tool(String.valueOf(attrs.get("fi.span.kind")));
+        }).toList();
+        assertEquals(1, applicationTools.size() + agentTools.size(), "exactly one TOOL span per tool call: application "
+            + application.stream().map(s -> String.join("|", s)).toList() + ", agent " + spans);
+        assertEquals(1, applicationTools.size(), log);
+        String[] observation = applicationTools.get(0);
+        assertEquals("tool_call weather", observation[0]);
+        assertEquals(line(log, "PARENT="), observation[4], "the observation span is a child of the application span");
+        assertTrue(named("execute_tool").isEmpty(), spans.toString());
+        // The tool's own provider call is still traced, under the observation's span.
+        List<Map<String, Object>> chats = named("chat ");
+        assertEquals(2, chats.size(), spans.toString());
+        assertEquals(1, chats.stream().filter(c -> observation[3].equals(c.get("parentSpanId"))).count(), chats.toString());
+        assertNoRawSecret();
+    }
+    /** CONTROL: observations without a tracing handler start no span, so the agent's span is the tool span. */
+    @Test void springAiUntracedObservationKeepsTheAgentToolSpan() throws Exception {
+        String log = run("spring_observed_untraced", Map.of());
+        assertEquals(ToolApp.RESULT, line(log, "RESULT=").replace("\"", ""), log);
+        assertTrue(applicationSpans(log).stream().noneMatch(s -> tool(s[1]) || tool(s[2])), log);
+        Map<String, Object> tool = toolSpan(); assertToolShape(tool, log, "weather", null);
+        assertEquals(1, statusCode(tool));
+        assertNoRawSecret();
+        assertChatSpans(log, tool);
+    }
+    /** A wrapper ToolCallback that delegates to the callback it decorates is one tool invocation. */
+    @Test void springAiWrapperCallbackDelegatingToARealOneGivesOneToolSpan() throws Exception {
+        String log = run("spring_wrapper", Map.of());
+        assertEquals("\"" + ToolApp.RESULT + "\"", line(log, "RESULT="));
+        Map<String, Object> tool = toolSpan(); assertToolShape(tool, log, "weather", null);
+        assertEquals(1, statusCode(tool));
+        assertEquals("\"" + ToolApp.RESULT + "\"", attributes(tool).get("gen_ai.tool.call.result"));
+        assertNoRawSecret();
+        assertChatSpans(log, tool);
+    }
     @ParameterizedTest @ValueSource(strings = {"lc4j", "lc4j_error", "spring", "spring_error"})
     void captureOffExportsNoToolContent(String scenario) throws Exception {
         String log = run(scenario, Map.of("FI_HIDE_INPUTS", "true", "FI_HIDE_OUTPUTS", "true"));
