@@ -607,6 +607,88 @@ class SamplerTest < Minitest::Test
     assert_empty traceai_diagnostics(stderr)
   end
 
+  # W3C caps tracestate at 32 members; a vendor adding its key to a full list
+  # evicts the right-most member. Exercised through real SDK spans and parents.
+  def full_tracestate_probe(env = {}, options: {})
+    code = <<~'RUBY'.sub('OPTIONS', options.inspect)
+      require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
+      OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
+      memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      processor = OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)
+      provider = TraceAI::Auto.init(**OPTIONS.merge(processor: processor))
+      tracer = provider.tracer('ratio-test')
+      members = (0...32).map { |i| "v#{i}=x#{i}" }
+      {
+        'full_without_fi' => members,
+        'full_with_fi' => members.first(5) + ['fi=r:0.5'] + members[5...31],
+        'almost_full' => members.first(31),
+        'invalid_full' => members
+      }.each do |name, state|
+        parent = OpenTelemetry::Trace::SpanContext.new(
+          trace_id: name == 'invalid_full' ? "\0".b * 16 : ['01' * 16].pack('H*'),
+          span_id: ['02' * 8].pack('H*'), remote: true,
+          trace_flags: OpenTelemetry::Trace::TraceFlags::SAMPLED,
+          tracestate: OpenTelemetry::Trace::Tracestate.from_string(state.join(',')))
+        context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent),
+          parent_context: OpenTelemetry::Context.empty)
+        span = tracer.start_span(name, with_parent: context)
+        child = OpenTelemetry::Trace.context_with_span(span, parent_context: OpenTelemetry::Context.empty)
+        tracer.start_span(name + '_child', with_parent: child).finish
+        span.finish
+      end
+      TraceAI::Auto.flush
+      puts JSON.generate(memory.finished_spans.to_h { |span| [span.name,
+        {attributes: span.attributes, state: span.tracestate.to_s}] })
+    RUBY
+    stdout, stderr, status = app(code, {'RUBYOPT' => nil, 'FI_API_KEY' => nil, 'FI_SECRET_KEY' => nil}.merge(env))
+    assert status.success?, stderr
+    assert_empty export_spans
+    [JSON.parse(stdout), stderr]
+  end
+
+  def test_nonparent_ratio_evicts_only_the_right_most_member_to_add_fi_to_a_full_tracestate
+    spans, stderr = full_tracestate_probe({'OTEL_TRACES_SAMPLER' => 'traceidratio', 'OTEL_TRACES_SAMPLER_ARG' => '0.25'})
+    members = (0...32).map { |i| "v#{i}=x#{i}" }
+    full = ['fi=r:0.25'] + members.first(31)
+    %w[full_without_fi full_without_fi_child].each do |name|
+      assert_equal 0.25, spans.fetch(name).fetch('attributes').fetch('fi.sampling.ratio'), name
+      assert_equal full.join(','), spans.fetch(name).fetch('state'), name
+    end
+    replaced = members.first(5) + ['fi=r:0.25'] + members[5...31]
+    %w[full_with_fi full_with_fi_child].each do |name|
+      assert_equal 0.25, spans.fetch(name).fetch('attributes').fetch('fi.sampling.ratio'), name
+      assert_equal replaced.sort, spans.fetch(name).fetch('state').split(',').sort, name
+      assert_equal members.first(31), spans.fetch(name).fetch('state').split(',') - ['fi=r:0.25'], name
+    end
+    %w[almost_full almost_full_child].each do |name|
+      almost = spans.fetch(name).fetch('state').split(',')
+      assert_equal 32, almost.size, name
+      assert_equal 1, almost.count('fi=r:0.25'), name
+      assert_equal members.first(31), almost - ['fi=r:0.25'], name
+    end
+    assert_equal 'fi=r:0.25', spans.fetch('invalid_full').fetch('state')
+    assert_equal 'fi=r:0.25', spans.fetch('invalid_full_child').fetch('state')
+    assert_empty traceai_diagnostics(stderr)
+  end
+
+  def test_parentbased_ratio_resets_full_invalid_parent_state_and_copies_full_valid_parent_state
+    spans, stderr = full_tracestate_probe({}, options: {sample_rate: 0.25})
+    members = (0...32).map { |i| "v#{i}=x#{i}" }
+    assert_equal 'fi=r:0.25', spans.fetch('invalid_full').fetch('state')
+    assert_equal 'fi=r:0.25', spans.fetch('invalid_full_child').fetch('state')
+    assert_equal 0.25, spans.fetch('invalid_full').fetch('attributes').fetch('fi.sampling.ratio')
+    with_fi = (members.first(5) + ['fi=r:0.5'] + members[5...31]).join(',')
+    %w[full_with_fi full_with_fi_child].each do |name|
+      assert_equal 0.5, spans.fetch(name).fetch('attributes').fetch('fi.sampling.ratio'), name
+      assert_equal with_fi, spans.fetch(name).fetch('state'), name
+    end
+    %w[full_without_fi full_without_fi_child].each do |name|
+      refute spans.fetch(name).fetch('attributes').key?('fi.sampling.ratio'), name
+      assert_equal members.join(','), spans.fetch(name).fetch('state'), name
+    end
+    assert_empty traceai_diagnostics(stderr)
+  end
+
   def test_nonparent_full_rate_and_off_samplers_never_copy_upstream_ratio
     %w[traceidratio always_on always_off].each do |name|
       spans, stderr = ratio_probe('OTEL_TRACES_SAMPLER' => name, 'OTEL_TRACES_SAMPLER_ARG' => '1')
