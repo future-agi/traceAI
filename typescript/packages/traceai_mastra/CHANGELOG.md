@@ -1,3 +1,7 @@
+## [0.2.3] - pending release
+### Fixed
+- Exports use the GenAI semantic-convention format of the installed `@mastra/otel-exporter`, not of the observability runtime: `GenAI_v1_41_0` from 1.6 (including its prereleases), otherwise `GenAI_v1_38_0` (#714). If the converter's version is missing, unreadable or invalid, `GenAI_v1_38_0` keeps the minimum pairing's output. The version is also read safely in bundled Node apps.
+
 ## [0.2.0] - 2026-06-03
 ### Feature
 - Support Mastra v1 observability: `createFIObservability` / `createFIMastraExporter` wire Future AGI into the new `@mastra/observability` pipeline (Mastra v1 removed the `telemetry:` config the previous exporter relied on).

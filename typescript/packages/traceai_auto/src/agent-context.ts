@@ -1,5 +1,5 @@
-import { context, createContextKey, ROOT_CONTEXT, SpanKind, trace, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
-import { suppressTracing } from "@opentelemetry/core";
+import { context, createContextKey, ROOT_CONTEXT, SpanKind, trace, TraceFlags, type Context, type Span, type SpanOptions, type Tracer, type TracerProvider } from "@opentelemetry/api";
+import { isTracingSuppressed, suppressTracing } from "@opentelemetry/core";
 import { activeFIContext, getAttributesFromContext, runInFIContext, setMetadata, setSession, setUser } from "@traceai/fi-core";
 import { HTTP_SCOPE, incomingParent } from "./incoming-parent";
 
@@ -49,6 +49,8 @@ interface CallCell {
   readonly active: WeakMap<Context, Context>;
   // For each span in the cell: what was active where it started, to go back to once it ends.
   readonly before: WeakMap<object, Context>;
+  // Older copies of the helper consult this cell-local liveness set.
+  liveDropped?: WeakSet<Span>;
   // The spans this call was opened for. Any other span started in the call makes nothing active.
   readonly accepts?: AcceptSpan;
 }
@@ -65,23 +67,54 @@ function callCell(ctx: Context): CallCell | undefined {
   return cell && cell.active instanceof WeakMap && cell.before instanceof WeakMap && (cell.accepts === undefined || typeof cell.accepts === "function") ? cell : undefined;
 }
 
-// The context that is active where ctx is current: inside an integration call, the
-// span the integration started there, while it still records; otherwise ctx itself.
+// A derived context can carry a span directly and a nested call replaces its
+// call cell. Remember the owning cell's links by span, across package copies.
+interface CallLink { before: CallCell["before"]; droppedEnded?: boolean }
+const LINKS = Symbol.for("traceai.auto.call-links.v1");
+const host = globalThis as typeof globalThis & { [LINKS]?: WeakMap<Span, CallLink> };
+const callLinks = host[LINKS] ?? new WeakMap<Span, CallLink>();
+if (!host[LINKS]) Object.defineProperty(host, LINKS, { value: callLinks });
+
+function isRecording(span: Span): boolean {
+  try { return span.isRecording(); } catch { return false; }
+}
+
+// Only an ended, dropped request warrants following links into older cells.
+// Keep the context that carried the request (session, suppression, call cell);
+// replace just its span with the nearest surviving parent, or remove it.
+function afterDroppedRequest(ctx: Context): Context {
+  const request = trace.getSpan(ctx), link = request && callLinks.get(request);
+  if (!request || !link?.droppedEnded) return ctx;
+  const seen = new Set<Span>([request]);
+  let before = link.before.get(request);
+  while (before) {
+    const span = trace.getSpan(before);
+    if (!span || seen.has(span)) break;
+    const owner = callLinks.get(span);
+    if (!owner || (owner.droppedEnded === undefined ? isRecording(span) : !owner.droppedEnded)) {
+      return trace.setSpan(ctx, span);
+    }
+    seen.add(span);
+    before = owner.before.get(span);
+  }
+  return trace.deleteSpan(ctx);
+}
+
 function inCall(ctx: Context): Context {
   try {
     const cell = callCell(ctx);
-    if (!cell) return ctx;
-    let active = cell.active.get(ctx);
+    // Ordinary call spans unwind only within this cell, then fall back to its
+    // entry context. Do not reinterpret the parent selected by an outer scope.
+    let active = cell?.active.get(ctx);
     for (let depth = 0; active && active !== ctx && depth < 128; depth++) {
       const span = trace.getSpan(active);
-      let recording = false;
-      try { recording = span?.isRecording() === true; } catch { /* Treat as ended. */ }
-      if (recording) return active;
-      // The span has ended: go back to what was active where it started.
-      active = span ? cell.before.get(span) : undefined;
+      if (!span) break;
+      if (callLinks.get(span)?.droppedEnded !== undefined) return afterDroppedRequest(active);
+      if (isRecording(span) || cell?.liveDropped?.has(span)) return active;
+      active = cell?.before.get(span);
     }
-  } catch { /* Parent links are best effort. */ }
-  return ctx;
+    return afterDroppedRequest(ctx);
+  } catch { return ctx; /* Parent links are best effort. */ }
 }
 
 // Inside an integration call, a span the call was opened for is active for the rest
@@ -89,12 +122,31 @@ function inCall(ctx: Context): Context {
 // span outside a call, makes nothing active: the caller's next work never runs under it.
 function activateInCall(parent: Context, span: Span, start: SpanStart): void {
   try {
-    if (!span.isRecording()) return;
     const current = activeFIContext(), cell = callCell(current);
     if (!cell || (cell.accepts && !cell.accepts(start))) return;
-    // Keep what is active now, not an ended span, so ended spans are not retained.
-    cell.before.set(span, inCall(current));
-    cell.active.set(current, trace.setSpan(parent, span));
+    const link: CallLink = { before: cell.before };
+    if (!span.isRecording()) {
+      // Only the incoming HTTP request needs a dropped span installed as its
+      // parent. A no-op/suppressed span must not displace the current context.
+      if (cell.accepts !== incomingServerSpan || isTracingSuppressed(current) || isTracingSuppressed(parent)) return;
+      const remote = trace.getSpanContext(parent), local = span.spanContext();
+      if (!remote?.isRemote || !trace.isSpanContextValid(remote) || (remote.traceFlags & TraceFlags.SAMPLED) ||
+          !trace.isSpanContextValid(local) || local.isRemote || (local.traceFlags & TraceFlags.SAMPLED) ||
+          local.traceId !== remote.traceId || local.spanId === remote.spanId) return;
+      // isRecording() cannot distinguish a live dropped span from an ended one.
+      // Observe end only on this request's span, not on the tracer or prototype.
+      const live = cell.liveDropped ??= new WeakSet<Span>();
+      link.droppedEnded = false;
+      const end = span.end;
+      span.end = function(...args) { link.droppedEnded = true; live.delete(span); return end.apply(this, args); };
+      live.add(span);
+    }
+    const before = inCall(current);
+    cell.before.set(span, before);
+    callLinks.set(span, link);
+    // The remote parent supplied the dropped span's identity, not the session
+    // or user values of the private scope in which the request runs.
+    cell.active.set(current, trace.setSpan(link.droppedEnded === false ? before : parent, span));
   } catch { /* Parent links are best effort and never change the application. */ }
 }
 
@@ -215,7 +267,7 @@ function startActiveSpan(tracer: Tracer, args: unknown[]): unknown {
 /**
  * Tracers from this provider start spans on the given provider, mark them as
  * agent spans and keep parent links without a global context manager. SDK
- * pipeline slots stay visible through the prototype; nothing native is patched.
+ * pipeline slots stay visible through the prototype; the provider and tracer are not patched.
  */
 export function contextBoundProvider(provider: TracerProvider): TracerProvider {
   const tracers = new WeakMap<object, Tracer>();

@@ -1,13 +1,14 @@
 {
   "extends": "../../tsconfig.base.esm.json",
   "compilerOptions": {
+    "allowJs": true,
     "outDir": "dist/esm",
     "rootDir": "src",
     "tsBuildInfoFile": "dist/esm/tsconfig.esm.tsbuildinfo",
     "baseUrl": "./src"
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*"
   ],
   "references": [],
   "exclude": [

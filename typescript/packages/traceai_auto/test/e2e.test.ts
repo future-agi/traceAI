@@ -44,7 +44,8 @@ beforeEach(() => { collected = []; requests = 0; });
 async function child(app = "plain.cjs", args = ["--import", "@traceai/auto/register"], extra: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith("FI_") || key.startsWith("OTEL_") || ["NODE_OPTIONS", "KIND", "MODE", "SUPPRESS"].includes(key)) delete env[key];
-  Object.assign(env, { FI_API_KEY: "mock-fi-api-key", FI_SECRET_KEY: "mock-fi-secret-key", FI_BASE_URL: url, MOCK_URL: url, FI_PROJECT_NAME: "auto-test", FI_INSTRUMENTATIONS: "wire" }, extra);
+  // Children run in the package root; a developer's futureagi.toml must not change the sampler.
+  Object.assign(env, { FI_CONFIG_FILE: resolve(apps, "empty.toml"), FI_API_KEY: "mock-fi-api-key", FI_SECRET_KEY: "mock-fi-secret-key", FI_BASE_URL: url, MOCK_URL: url, FI_PROJECT_NAME: "auto-test", FI_INSTRUMENTATIONS: "wire" }, extra);
   return new Promise<{ stdout: string; stderr: string }>((resolveResult, reject) => {
     const process = spawn(global.process.execPath, [...args, resolve(apps, app)], { cwd: root, env });
     let stdout = "", stderr = "";
@@ -367,14 +368,20 @@ test("without application OpenTelemetry, incoming HTTP joins the remote W3C pare
   expect(JSON.parse(output.stdout.trim())).toEqual({ context: "NoopContextManager", propagation: "NoopTextMapPropagator" });
 });
 test("an application sampler that drops its own spans does not drop AI spans, which keep the application's parent ids", async () => {
-  const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "app-after", APP_SAMPLER: "off" });
+  // Explicit rate retains legacy AI-only sampling; an unset rate now follows ParentBased.
+  const output = await child("own-provider.cjs", ["--import", "@traceai/auto/register"], { MODE: "app-after", APP_SAMPLER: "off", FI_SAMPLE_RATE: "1" });
   const info = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
   expect(info.appSpans).toEqual([]);
   expect(allSpans()).toHaveLength(1); expect(wireSpans()).toHaveLength(1);
   expect(wireSpans()[0].traceId).toBe(info.work.traceId); expect(wireSpans()[0].parentSpanId).toBe(info.work.spanId);
 });
-test("an unsampled incoming traceparent does not drop the SERVER span or its AI call", async () => {
+test("the default parent-based sampler exports neither the unsampled incoming request nor its AI call", async () => {
   await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-00" });
+  expect(requests).toBe(1);
+  expect(allSpans()).toEqual([]);
+});
+test("an explicit full sample rate keeps the SERVER span and AI call for an unsampled incoming traceparent", async () => {
+  await child("incoming.cjs", undefined, { FI_INSTRUMENTATIONS: "wire,http", FI_SAMPLE_RATE: "1", REMOTE_PARENT: "00-11111111111111111111111111111111-2222222222222222-00" });
   const serverSpan = allSpans().find(s => s.kind === 2), wire = wireSpans()[0];
   expect(allSpans()).toHaveLength(2);
   expect(serverSpan.traceId).toBe("11111111111111111111111111111111"); expect(serverSpan.parentSpanId).toBe("2222222222222222");
@@ -422,7 +429,7 @@ test("an application span created inside an AI call keeps the AI trace id and ha
 test("under a parent-based application sampler, a trace the application did not sample stays unsampled inside an AI call, and Future AGI still receives the AI span", async () => {
   // ParentBased(TraceIdRatioBased(0)): the application samples no new trace, and its child
   // spans follow their parent's sampled flag. The control runs without the preload.
-  const run = async (args: string[]) => JSON.parse((await child("inside-ai-call.cjs", args, { FI_INSTRUMENTATIONS: "openai", APP_SAMPLER: "parentbased-zero" })).stdout.trim().split("\n").at(-1)!);
+  const run = async (args: string[]) => JSON.parse((await child("inside-ai-call.cjs", args, { FI_INSTRUMENTATIONS: "openai", APP_SAMPLER: "parentbased-zero", FI_SAMPLE_RATE: "1" })).stdout.trim().split("\n").at(-1)!);
   const sampledFlag = (traceparent: string | null) => traceparent?.split("-")[3];
   const control = await run([]);
   expect(allSpans()).toHaveLength(0);
@@ -495,7 +502,7 @@ test("under a parent-based application sampler, an AI call whose request runs in
   // of its own and no parent id, so nothing links it to the AI span. Matching it by trace id
   // alone could drop a separate AI request in the same trace (next test), so the same request
   // is also sent as a wire span.
-  const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero" });
+  const output = await child("inside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero", FI_SAMPLE_RATE: "1" });
   const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
   expect(requests).toBe(1);
   // The application's backend receives nothing for this trace.
@@ -520,7 +527,7 @@ test("under a parent-based application sampler, a plain fetch AI request beside 
   // ParentBased(TraceIdRatioBased(0)) with wire capture on. In one trace the application did
   // not sample, it starts one OpenAI call and, in the same tick, one plain fetch to the same
   // chat route. The plain fetch has no AI integration, so its wire span is its only record.
-  const output = await child("beside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero" });
+  const output = await child("beside-ai-call.cjs", ["--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai,wire", APP_SAMPLER: "parentbased-zero", FI_SAMPLE_RATE: "1" });
   const app = JSON.parse(output.stdout.trim().split("\n").at(-1)!);
   expect(requests).toBe(2);
   // The application's backend receives nothing for this trace.
@@ -759,7 +766,7 @@ test.each(["sigterm-idle", "sigterm-failed", "sigterm-record-only"])("SIGTERM re
   expect(output.stdout.trim().split("\n")).toEqual(["application-once", "application-handler"]);
 });
 test("SIGTERM waits to send an AI span made under a parent the application did not sample", async () => {
-  const output = await child("review.cjs", [], { MODE: "sigterm-unsampled-parent" });
+  const output = await child("review.cjs", [], { MODE: "sigterm-unsampled-parent", FI_SAMPLE_RATE: "1" });
   expect(output.stdout.trim().split("\n")).toEqual(["flush-start", "flush-finished", "application-once", "application-handler", "exported:1"]);
 });
 test("shutdown removes the promise hook and gives back process.emit", async () => {

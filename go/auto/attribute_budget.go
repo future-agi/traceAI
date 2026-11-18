@@ -58,13 +58,21 @@ func providerAttributeLimit(provider *sdktrace.TracerProvider) int {
 
 // protectedAttributePriority is the spec's closed A7 protected set: exact
 // identity, outcome, provider/model/operation, timing, provenance and
-// degradation keys, plus numeric gen_ai.usage.* counters. It is deliberately not prefix-based: an
+// degradation keys, plus numeric gen_ai.usage.* counters and a valid fractional
+// double fi.sampling.ratio. It is deliberately not prefix-based: an
 // application attribute such as project_metadata.media.data, a string under
 // gen_ai.usage.* or server.media.* is ordinary metadata, so it keeps the joint
 // capture-time media scrub and the projection's MIME-companion pin.
 func protectedAttributePriority(kv attribute.KeyValue) int {
 	key := string(kv.Key)
 	switch key {
+	case "fi.sampling.ratio":
+		// Weighting metadata is safe only in its exact SDK double form. Never
+		// recover a string, collection, nonfinite value or probability endpoint.
+		if kv.Value.Type() == attribute.FLOAT64 && validSamplingRatio(kv.Value.AsFloat64()) {
+			return 4
+		}
+		return -1
 	case "traceai.capture.dropped_content_count", "traceai.wire.attributes_truncated", "traceai.wire.truncated", "traceai.wire.incomplete", "traceai.wire.body_unavailable", "traceai.wire.undecoded_encoding", "traceai.wire.privacy_degraded":
 		return 0
 	case "user.id", "session.id", "gen_ai.span.kind", "gen_ai.response.id", "traceai.capture.layer", "project_name", "project_type", "project_version_name", "project_version_id":

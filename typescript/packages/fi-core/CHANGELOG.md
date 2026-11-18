@@ -1,3 +1,9 @@
+## [1.4.0] - pending release
+
+### Added
+- `FI_TRACES_URL` sends HTTP span exports to a trace collector separate from the platform API in `FI_BASE_URL` (self-hosted Docker installs serve them on different ports) (#710). It is a base URL like `FI_BASE_URL`; when unset or blank, exports keep their current destination. An explicit exporter `endpoint` still wins, and platform API calls keep using `FI_BASE_URL`.
+- Exports keep a valid `fi.sampling.ratio` sampling weight, a number strictly between 0 and 1 (#713). It keeps a slot under attribute-count limits, down to a one-attribute budget, and is kept, instead of being replaced by the host-truncation marker, when the host's span limits dropped other attributes. A value of any other type or range is still treated as content, and a registered secret is still redacted.
+
 ## [1.3.0] - pending release
 
 ### Added

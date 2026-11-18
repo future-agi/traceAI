@@ -177,9 +177,65 @@ debug = false
 | `FI_DISABLED_INSTRUMENTATIONS` | Empty; denylist takes priority. `wire` disables HTTP capture. |
 | `FI_WIRE_CAPTURE` | `true`. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` (4 MiB), separately for request/response capture. |
-| `FI_SAMPLE_RATE` | `1`; share of traces sent to Future AGI, clamped to 0–1. The decision is per trace: an upstream service's sampled flag decides its trace, other traces use this ratio on the trace id. It never changes the application's own sampling. |
+| `FI_SAMPLE_RATE` | When set, `ParentBased(TraceIdRatio(rate))`, clamped to 0–1; otherwise standard OTel sampler configuration below. It never changes the application's own sampler. |
 | `FI_AUTO_DEBUG` | `false`; print masked configuration/integration diagnostics at startup. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent entirely, without missing-key warnings. |
+
+An explicit `AutoOptions.SampleRate`, `FI_SAMPLE_RATE`, or file `sample_rate`
+keeps parent-based ratio sampling and wins over `OTEL_TRACES_SAMPLER`; existing
+option > environment > file precedence is unchanged. Otherwise, an agent-created
+provider honors `OTEL_TRACES_SAMPLER` (`always_on`, `always_off`, `traceidratio`,
+`parentbased_always_on`, `parentbased_always_off`, `parentbased_traceidratio`) and
+`OTEL_TRACES_SAMPLER_ARG` (a finite ratio from 0 to 1; omitted means 1). Unset
+configuration defaults to `ParentBased(TraceIdRatio(1.0))`; invalid or unsupported
+configuration falls back to that default with one warning, without echoing values.
+An application-owned provider keeps its own sampler, including for an added FI
+exporter. The agent never changes the application's sampled flag; only accepted
+detached exports are marked sampled, and parent-based choices honor parent flags.
+
+For agent-created providers, accepted exported copies carry `fi.sampling.ratio`, a
+double strictly between 0 and 1 when the head-sampling keep probability is known;
+absent means 1.0 for estimated counts and costs. Export copies and the explicit
+propagation context below carry `fi=r:<ratio>` in W3C `tracestate` while preserving
+other entries. Parent-based children of sampled local or remote parents inherit only
+a valid upstream `fi` ratio, regardless of the local root rate (including 0 or 1).
+This includes the default and `parentbased_always_on`/`parentbased_always_off`.
+Non-parent-based samplers never copy upstream ratios; fractional `traceidratio`
+decisions stamp their own rate. The metadata survives privacy-fallback export copies
+(other tracestate content may be cleared for privacy), but is never stamped on raw
+record-only activities, dropped spans, full-rate roots, or application-owned providers.
+
+### Explicit agent-owned propagation (in-process entry point)
+
+The zero-code hook deliberately leaves `Activity.Context`, automatic HTTP header
+injection, and application-owned propagation unchanged. **Export metadata alone
+does not propagate a new ratio across processes.** To carry the agent's decision
+on a handoff you own, use the in-process project reference described above and
+explicitly inject `TraceAIAuto.GetPropagationContext()` instead of `Activity.Current.Context`:
+
+```csharp
+using OpenTelemetry.Context.Propagation;
+using TraceAI.AutoInstrumentation;
+
+// Run inside an active activity observed by the agent's owned provider.
+// Use an agent-owned carrier/transport, not one whose headers the host injects.
+var headers = new Dictionary<string, string>();
+new TraceContextPropagator().Inject(
+    new PropagationContext(TraceAIAuto.GetPropagationContext(), default),
+    headers, static (carrier, key, value) => carrier[key] = value);
+// Send these traceparent/tracestate headers. The receiver extracts them with its
+// standard W3C propagator and uses that remote context when starting its activity.
+```
+
+The returned value carries the owned agent's sampled decision and valid ratio,
+merged into the activity's current vendor tracestate, without mutating its tags,
+tracestate, sampled bit, or ambient context. You can pass an explicit `Activity`
+instead of using the current one. With a supplied provider, an unobserved activity,
+a rejected decision, or an inactive agent, the API returns the ordinary activity
+context unchanged (or the default context when no activity exists). It does not
+replace a process-global propagator or override existing headers. The hook-only
+NuGet package has no compile asset for this API; zero-code applications need this
+explicit in-process integration for agent-owned cross-process ratio propagation.
 
 All `FI_HIDE_*` switches from `FIInstrumentation.TraceConfig` are honored in this
 path, including flattened message attributes and audio transcript text. Their
@@ -574,9 +630,9 @@ follows, activities its sampler did not sample are created with `IsAllDataReques
 set, so the application's processors and instrumentation callbacks (such as `Filter`
 and `Enrich`) also run for them; its export processors skip them because they are
 not sampled. The
-agent's batch processor makes the Future AGI decision itself, the same for every span
-of a trace. With a supplied provider, the application's sampled flag also gates the
-agent's added destination.
+agent's batch processor enforces the selected head sampler's decision, including
+when another listener records a span the agent dropped. With a supplied provider,
+only the application's sampled flag gates the agent's added destination.
 
 ## Tests
 
@@ -716,7 +772,7 @@ invented as zero; absent optional additions use provider-schema defaults.
 - **Web request spans:** a request span is sent only when an AI span of its trace
   ended before the request did. An AI call that the request starts but does not wait
   for is sent without its request span. The set of traces with AI spans is bounded
-  (4,096 recent traces), as is the set of upstream sampling decisions.
+  (4,096 recent traces). Sampling decisions live on their Activities, not in that cache.
 - **2026-10-31 — Attribute limits:** no implementation can retain protected fields
   beyond a host limit smaller than that protected set. Such limits deliberately
   drop content and retain the A7 family/lexical prefix; zero emits no attributes

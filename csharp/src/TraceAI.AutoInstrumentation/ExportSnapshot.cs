@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using FIInstrumentation;
 using OpenTelemetry;
 using OpenTelemetry.Resources;
 using TraceAI.AutoInstrumentation.Wire;
@@ -34,9 +35,6 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         var copy=(Activity)Clone(original);
         foreach(var field in new[] { "_tags","_events","_links","_baggage","_customProperties","<Parent>k__BackingField" }) Set(copy,field,null);
         Set(copy,"_parentId",parentId);
-        // The agent asks only for recording, so a shared Activity's sampled flag stays the
-        // application's. Every span that reaches this point was sampled for Future AGI.
-        copy.ActivityTraceFlags|=ActivityTraceFlags.Recorded;
         // This reference is not exported, and must not retain an application's activity graph.
         RuntimeLayout.Field(typeof(Activity),"_previousActiveActivity")?.SetValue(copy,null);
         return copy;
@@ -117,13 +115,32 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
     }
     internal static ExportSnapshot Create(IEnumerable<Activity> batch,Resource resource,
         Func<string,object,string?,object?> safe,Func<string,string> redact,Func<string,string,string>? eventKey=null,int? attributeLimit=null,
-        bool hideErrorDetails=false)
+        bool hideErrorDetails=false,Func<Activity,bool>? sampled=null,Func<Activity,Activity,bool>? samplingMetadata=null)
     {
+        void Project(Activity original,Activity copy)
+        {
+            // Accepted spans are record-only on the shared Activity. Stamp only the
+            // detached copy, after sanitization, on both normal and fallback paths.
+            if(sampled!=null) copy.ActivityTraceFlags|=ActivityTraceFlags.Recorded;
+            bool trustedRatio=sampled!=null && samplingMetadata?.Invoke(original,copy)==true;
+            var ratio=trustedRatio?copy.GetTagItem(RatioSampler.Attribute):null;
+            int limit=Math.Max(0,attributeLimit??AttributeProjection.Limit());
+            // Reserve a slot before atomic content selection, not after it. Application
+            // tags cannot claim this reservation, and a zero limit still means no tags.
+            var candidates=trustedRatio?copy.TagObjects.Where(tag=>tag.Key!=RatioSampler.Attribute):copy.TagObjects;
+            var projected=AttributeProjection.Project(candidates,limit,reserved:trustedRatio&&limit>0?1:0);
+            Set(copy,"_tags",null);
+            foreach(var tag in projected) copy.SetTag(tag.Key,tag.Value);
+            if(trustedRatio&&limit>0) copy.SetTag(RatioSampler.Attribute,ratio);
+        }
         var spans=new List<Activity>();
         var shared=new Budget(65536,8*1024*1024);
         foreach(var original in batch)
         {
             if(original.GetCustomProperty("traceai.suppressed") is true) continue;
+            // A shared Activity may have been recorded by a different provider. Never
+            // export or promote it if our own head sampler rejected it.
+            if(sampled!=null && !sampled(original)) continue;
             Activity copy;
             try { copy=Shell(original); }
             catch { TraceAIAuto.Warn("snapshot","Unsupported DiagnosticSource layout; telemetry omitted."); continue; }
@@ -167,9 +184,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 // Mapping appends derived identity/usage. Sanitize before selecting
                 // atomic groups so dropping MIME hints cannot expose their payload.
                 // The projection's content count is separate from SDK eviction counts.
-                var projected=AttributeProjection.Project(copy.TagObjects,attributeLimit??AttributeProjection.Limit());
-                Set(copy,"_tags",null);
-                foreach(var tag in projected) copy.SetTag(tag.Key,tag.Value);
+                Project(original,copy);
             }
             catch
             {
@@ -201,7 +216,8 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                     catch { value=ClosedValue(value); }
                     retained[key]=value;
                 }
-                foreach(var tag in AttributeProjection.Project(retained,attributeLimit??AttributeProjection.Limit())) copy.SetTag(tag.Key,tag.Value);
+                foreach(var tag in retained) copy.SetTag(tag.Key,tag.Value);
+                Project(original,copy);
             }
             spans.Add(copy);
         }

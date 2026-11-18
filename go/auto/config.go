@@ -36,6 +36,10 @@ type Config struct {
 	Disabled                 bool        `json:"disabled"`
 	ConfigFile               string      `json:"config_file"`
 	TraceConfig              TraceConfig `json:"trace_config"`
+
+	// Distinguish the default rate from an explicit environment, file or option
+	// value (including zero and one) without changing the public JSON shape.
+	sampleRateSet bool
 }
 
 // otelResource is normal OpenTelemetry resource detection (A6): the
@@ -138,6 +142,9 @@ func readConfigWithOverrides(ignore map[string]bool, overrides ...func(*Config))
 		apiKey, secretKey = credentialPair("config file", values["API_KEY"], values["SECRET_KEY"])
 	}
 	c := Config{APIKey: apiKey, SecretKey: secretKey, BaseURL: get("BASE_URL", "https://api.futureagi.com"), ProjectName: get("PROJECT_NAME", service), ProjectType: get("PROJECT_TYPE", "observe"), ProjectVersionName: get("PROJECT_VERSION_NAME", "DEFAULT_PROJECT_VERSION_NAME"), ProjectVersionID: get("PROJECT_VERSION_ID", ""), ServiceName: otelServiceName(), SampleRate: 1, WireCapture: boolValue(get("WIRE_CAPTURE", "true")), WireMaxBodyBytes: 4194304, Debug: boolValue(get("AUTO_DEBUG", "false")), Disabled: boolValue(os.Getenv("OTEL_SDK_DISABLED")), ConfigFile: path, Instrumentations: splitList(get("INSTRUMENTATIONS", "")), DisabledInstrumentations: splitList(get("DISABLED_INSTRUMENTATIONS", ""))}
+	_, envSampleRate := os.LookupEnv("FI_SAMPLE_RATE")
+	_, fileSampleRate := values["SAMPLE_RATE"]
+	c.sampleRateSet = envSampleRate || fileSampleRate
 	if s := get("SAMPLE_RATE", "1"); s != "" {
 		c.SampleRate, err = strconv.ParseFloat(s, 64)
 		if err != nil {

@@ -15,6 +15,18 @@ def get_env_collector_endpoint() -> Optional[str]:
     return os.getenv("FI_BASE_URL", "https://api.futureagi.com")
 
 
+def get_env_traces_endpoint() -> Optional[str]:
+    """Base URL that HTTP span exports go to.
+
+    FI_TRACES_URL, when set, names the trace collector separately from the
+    platform API in FI_BASE_URL (self-hosted Docker installs serve them on
+    different ports). Otherwise exports go to FI_BASE_URL as before. Platform
+    API calls (custom eval configs) always use FI_BASE_URL.
+    """
+    traces = (os.getenv("FI_TRACES_URL") or "").strip()
+    return traces or get_env_collector_endpoint()
+
+
 def get_env_grpc_collector_endpoint() -> Optional[str]:
     return os.getenv("FI_GRPC_URL", "https://grpc.futureagi.com")
 

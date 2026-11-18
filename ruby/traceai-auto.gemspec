@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 Gem::Specification.new do |s|
   s.name = 'traceai-auto'
-  s.version = '0.1.0'
+  s.version = '0.1.0' # x-release-please-version
   s.summary = 'Zero-code, privacy-aware AI wire tracing for Ruby'
   s.authors = ['Future AGI']
   s.license = 'Apache-2.0'

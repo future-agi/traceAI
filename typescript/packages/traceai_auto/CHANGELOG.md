@@ -1,3 +1,17 @@
+## [0.3.0] - pending release
+
+### If you upgrade from 0.2.x
+- **Without an explicit sample rate, the agent's own provider follows `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`** (#711). When no `sampleRate`, `FI_SAMPLE_RATE` or file `sample_rate` is set, the default is `ParentBased(TraceIdRatio(1))`, so AI spans under an unsampled parent are now dropped with it. To keep 0.2.0's behaviour, set `FI_SAMPLE_RATE` (for example `1`). Invalid sampler names or ratio arguments produce one agent warning and use the default. Application-owned samplers and explicit-rate record-only flags are unchanged.
+
+### Added
+- Sampled spans on agent-created providers carry the numeric `fi.sampling.ratio` attribute (`0 < r < 1`) when the agent makes a fractional local ratio decision or inherits a valid ratio from a sampled parent's `fi=r:<ratio>` tracestate entry (#713). Local fractional decisions also write `fi=r:<ratio>` in W3C tracestate, so children in other processes inherit the trace-wide ratio. An absent attribute means `1.0`. Roots sampled locally at `1`, record-only spans, unsampled parents, invalid parent ratios and application-owned providers are not stamped.
+
+### Changed
+- `@traceai/auto` depends on exactly `@traceai/fi-core` 1.4.0, which keeps `fi.sampling.ratio` on exported spans under attribute limits.
+
+### Fixed
+- An AI call made while your app handles an incoming request that its sampler dropped (a non-recording server span under an unsampled remote parent) keeps that request's trace ID and parent, so it no longer starts a separate orphan trace (#715). Once the request's span ends, later work goes back to the parent that was active before it.
+
 ## [0.2.0] - pending release
 
 ### If you upgrade from 0.1.x

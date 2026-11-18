@@ -9,7 +9,6 @@ import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import io.opentelemetry.sdk.trace.samplers.Sampler;
 import net.bytebuddy.agent.ByteBuddyAgent;
 import java.lang.instrument.Instrumentation;
 import java.util.*;
@@ -111,9 +110,8 @@ public final class TraceAIAuto {
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
             Resource resource = resource(config);
-            // The agent's AI spans are sampled by trace id alone. The application's own sampling decision, which the
-            // parent's flags carry, does not drop them; the span still takes the application's span as its parent.
-            SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(Sampler.traceIdRatioBased(config.sampleRate))
+            // Configure only our isolated provider. ParentBased samplers preserve the application's parent flags.
+            SdkTracerProvider provider = SdkTracerProvider.builder().setSampler(ownedSampler(config))
                 .setSpanLimits(io.opentelemetry.sdk.trace.SpanLimits.builder().setMaxNumberOfAttributes(attributeLimit(config)).build())
                 .setResource(resource)
                 .addSpanProcessor(new WireResourceProcessor(processor)).build();
@@ -205,6 +203,9 @@ public final class TraceAIAuto {
         state.close(java.time.Duration.ZERO, false);
         Lifecycle.run(() -> state.termination, timeout, true);
     }
+    static io.opentelemetry.sdk.trace.samplers.Sampler ownedSampler(AutoConfig config) {
+        return ai.traceai.TraceConfig.samplerForOwnedProvider(config.sampler());
+    }
     static int attributeLimit(AutoConfig config) {
         for (String key : List.of("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "OTEL_ATTRIBUTE_COUNT_LIMIT")) {
             String value = config.values.get(key);
@@ -276,12 +277,18 @@ public final class TraceAIAuto {
             // A7 sanitizes the complete candidate context before bounded admission; S1 at
             // asynchronous export remains authoritative (including newly observed secrets).
             Resource resource = capture.context.resource() == null ? state.resource : withRouting(capture.context.resource(), state.resource);
+            int limit = Math.min(state.provider().getSpanLimits().getMaxNumberOfAttributes(),
+                capture.context.attributeLimit() == null ? Integer.MAX_VALUE : capture.context.attributeLimit());
             Span span = state.tracer().spanBuilder(bounded(result.name())).setSpanKind(SpanKind.CLIENT).setParent(capture.context.parent())
                 .setStartTimestamp(capture.startEpochNanos, TimeUnit.NANOSECONDS).startSpan();
             try {
                 Map<String, Object> attrs = new LinkedHashMap<>(capture.context.attributes()); attrs.putAll(result.attributes());
+                // Sampling attributes are already installed by startSpan. Reserve their slot in
+                // both budgets so the SDK cannot truncate an atomically admitted content group.
+                int samplingSlots = span instanceof io.opentelemetry.sdk.trace.ReadableSpan readable
+                    && readable.getAttribute(AttributeKey.doubleKey("fi.sampling.ratio")) != null ? 1 : 0;
                 attrs = AttributeProjection.select(AttributeProjection.sanitize(attrs, state.config(), capture.match),
-                    Math.min(state.provider().getSpanLimits().getMaxNumberOfAttributes(), capture.context.attributeLimit() == null ? Integer.MAX_VALUE : capture.context.attributeLimit()),
+                    Math.max(0, limit - samplingSlots),
                     String.valueOf(capture.match.endpoint().get("operation")));
                 for (Map.Entry<String, Object> e : attrs.entrySet()) {
                     String k = e.getKey(); Object v = e.getValue();
@@ -295,7 +302,7 @@ public final class TraceAIAuto {
                     else if (v instanceof List<?> list) span.setAttribute(AttributeKey.stringArrayKey(k), list.stream().map(item -> item instanceof String s ? s : item == null ? "null" : item.getClass().getName()).toList());
                 }
                 span.setStatus(result.ok() ? StatusCode.OK : StatusCode.ERROR, result.description() == null || hidesErrorText(state.config()) ? "" : result.description());
-            } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource); }
+            } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource, limit); }
         } catch (Throwable ignored) { }
     }
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Type
 
 from fi_instrumentation.settings import (
     get_custom_eval_template,
-    get_env_collector_endpoint,
+    get_env_traces_endpoint,
 )
 import logging
 logger = logging.getLogger(__name__)
@@ -993,7 +993,7 @@ class ToolAttributes:
 
 class Endpoints(Enum):
     FUTURE_AGI = (
-        f"{get_env_collector_endpoint()}/tracer/v1/traces"
+        f"{get_env_traces_endpoint()}/tracer/v1/traces"
     )
 
 

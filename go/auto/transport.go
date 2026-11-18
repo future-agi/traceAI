@@ -568,7 +568,29 @@ func (t *wireTransport) finish(ctx context.Context, start, end time.Time, m *wir
 	if id, ok := ctx.Value(sessionKey).(string); ok {
 		values = withSessionID(values, id, cfg, operation)
 	}
-	values = budgetAttributes(values, t.state.attributeLimit)
+	if t.state.ownedRatio != nil {
+		// Start attributes override sampler attributes in the SDK. Only the
+		// owned ratio sampler may supply this key, even when a sampled parent
+		// has no valid ratio to inherit. Filter before admission so a caller
+		// override cannot consume budget or invent sampling metadata.
+		filtered := values[:0]
+		for _, kv := range values {
+			if kv.Key != "fi.sampling.ratio" {
+				filtered = append(filtered, kv)
+			}
+		}
+		values = filtered
+	}
+	limit := t.state.attributeLimit
+	if limit > 0 && t.state.ownedRatio != nil {
+		if _, stamp := t.state.ownedRatio.ratioForParent(trace.SpanContextFromContext(ctx)); stamp {
+			// The SDK inserts sampler attributes before these wire values. Reserve
+			// that slot so SDK eviction cannot split an admitted content/MIME group
+			// or lose its degradation marker. Zero/unlimited limits stay unchanged.
+			limit--
+		}
+	}
+	values = budgetAttributes(values, limit)
 	spanContext := context.WithoutCancel(ctx)
 	_, span := t.state.tracer().Start(spanContext, captureString(result.Name, cfg), trace.WithTimestamp(start), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(values...))
 	if _, ok := ctx.Value(sessionKey).(string); ok {

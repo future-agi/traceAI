@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.2.0 (pending release)
+## 1.3.0 (pending release)
+
+### Features
+
+* **java-core, javaagent:** honor `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` in core-owned and auto-agent providers when no explicit `FI_SAMPLE_RATE` / `sample_rate` is set; explicit rates use parent-based trace-id sampling. Add `TraceConfig.Builder.sampler(Sampler)` for manual initialization without changing application-owned providers. Invalid standard settings warn once and use the parent-based rate-one default; parent-based choices now respect unsampled application parents ([#711](https://github.com/future-agi/traceAI/pull/711)).
+* **java-core, javaagent:** on TraceAI-owned providers, sampled spans carry the double attribute `fi.sampling.ratio` for a known partial keep probability (`0 < r < 1`), and partial ratio decisions write `fi=r:<ratio>` in W3C tracestate, replacing an existing `fi` entry even in a full tracestate. Parent-based children copy a valid ratio from a sampled local or remote parent's `fi` entry, at any root rate. An absent attribute means `1.0`. Roots at rate `1`, dropped or record-only spans, unknown custom samplers and application-owned providers are not stamped ([#713](https://github.com/future-agi/traceAI/pull/713)).
+
+## 1.2.0 (2026-11-17)
 
 ### Features
 

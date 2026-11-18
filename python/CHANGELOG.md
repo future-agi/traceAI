@@ -1,4 +1,13 @@
-## [1.4.0] - pending release
+## [1.5.0] - pending release
+
+### Added
+- `FI_TRACES_URL` sends span exports to a trace collector separate from the platform API (#710). Self-hosted Docker installs serve them on different ports (often 8100 for the API and 4318 for traces), so an app can set `FI_TRACES_URL` to the traces address while `FI_BASE_URL` and the `fagi` CLI keep using the API. When it is unset or blank, exports go to `FI_BASE_URL` as before; custom eval API calls always use `FI_BASE_URL`.
+- Sampled spans on agent-created providers carry the trace's keep probability as the numeric `fi.sampling.ratio` attribute when it is strictly between 0 and 1, and a local fractional decision writes `fi=r:<ratio>` in W3C tracestate so services downstream inherit it (#713). Parent-based samplers copy a sampled parent's valid ratio at any local root rate. An absent attribute means `1.0`. Roots decided at rate 1, dropped or record-only spans, explicit custom samplers and application-owned providers get no sampling metadata.
+
+### Fixed
+- Agent-owned providers honour `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` when no explicit sample rate is set (#711). Explicit rates still win; invalid sampler settings warn once and use the parent-based default. Application-owned providers keep their sampler unchanged.
+
+## [1.4.0] - 2026-11-17
 
 ### Added
 - Zero-code auto-instrumentation. Start an unchanged app with `FI_AUTO_INSTRUMENT=true python app.py` (or under `opentelemetry-instrument`), or call `fi_instrumentation.init()` once in code: every installed traceAI integration turns on when the app first imports its library, and Future AGI receives only AI spans while your other OpenTelemetry exporters keep every span.

@@ -56,13 +56,13 @@ func WithConfig(config Config) Option {
 	if config.APIKey == "" || config.SecretKey == "" {
 		keys = append(keys, "credential_fallback")
 	}
-	return configOption(func(c *Config) { *c = config }, keys...)
+	return configOption(func(c *Config) { *c = config; c.sampleRateSet = true }, keys...)
 }
 func WithProject(name, kind string) Option {
 	return configOption(func(c *Config) { c.ProjectName = name; c.ProjectType = kind }, "PROJECT_NAME", "PROJECT_TYPE")
 }
 func WithSampleRate(rate float64) Option {
-	return configOption(func(c *Config) { c.SampleRate = rate }, "SAMPLE_RATE")
+	return configOption(func(c *Config) { c.SampleRate = rate; c.sampleRateSet = true }, "SAMPLE_RATE")
 }
 func WithWireCapture(enabled bool) Option {
 	return configOption(func(c *Config) { c.WireCapture = enabled }, "WIRE_CAPTURE")
@@ -188,6 +188,7 @@ type agentState struct {
 	flushing       atomic.Bool
 	nativeHooks    nativeCredentialHooks
 	attributeLimit int
+	ownedRatio     *ratioSampler // Only the known wrapper installed on our private provider.
 }
 
 // retire stops an armed wrapper that will not be activated. Inside an
@@ -343,7 +344,11 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 		if owned == nil {
 			owned = res
 		}
-		state.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(owned), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.SampleRate))), sdktrace.WithSpanProcessor(state.registration))
+		sampler := configuredSampler(c)
+		if ratio, ok := sampler.(ratioSampler); ok {
+			state.ownedRatio = &ratio
+		}
+		state.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(owned), sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(state.registration))
 		state.owned = true
 	}
 	state.attributeLimit = providerAttributeLimit(state.provider)
