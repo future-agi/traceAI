@@ -44,7 +44,8 @@ import java.util.function.Function;
  * Scenarios: lc4j, lc4j_error, spring, spring_error, spring_wrapper (a ToolCallback decorating
  * another one), spring_observed (DefaultToolCallingManager with Spring AI's tool_call observation
  * bridged to the application's OpenTelemetry SDK by Micrometer Tracing and traceai-spring-ai),
- * spring_observed_untraced (the same observations without a tracing handler).
+ * spring_observed_untraced (the same observations without a tracing handler), spring_observed_nested
+ * (the observed tool calls a different tool, which calls a second weather callback directly).
  * The application's own spans are exported in memory and printed as APP_SPAN lines.
  */
 public final class ToolApp {
@@ -119,6 +120,16 @@ public final class ToolApp {
                 ToolCallback callback = FunctionToolCallback.builder("weather", weather).description("Looks up the weather").inputType(WeatherRequest.class).build();
                 String input = "{\"city\":\"" + CITY + "\",\"apiKey\":\"" + SECRET + "\"}";
                 if (scenario.equals("spring_wrapper")) callback = new WrappingCallback(callback);
+                if (scenario.equals("spring_observed_nested")) {
+                    // weather (observed) -> forecast (direct) -> weather (direct, a different callback): the
+                    // two direct calls are not the observed invocation and keep their own agent spans.
+                    Function<WeatherRequest, String> inner = request -> "sunny in " + request.city();
+                    ToolCallback innerWeather = FunctionToolCallback.builder("weather", inner).description("Looks up the weather").inputType(WeatherRequest.class).build();
+                    Function<WeatherRequest, String> forecastTool = request -> innerWeather.call("{\"city\":\"" + request.city() + "\"}");
+                    ToolCallback forecast = FunctionToolCallback.builder("forecast", forecastTool).description("Forecast").inputType(WeatherRequest.class).build();
+                    Function<WeatherRequest, String> outer = request -> forecast.call("{\"city\":\"" + request.city() + "\"}");
+                    callback = FunctionToolCallback.builder("weather", outer).description("Looks up the weather").inputType(WeatherRequest.class).build();
+                }
                 try {
                     if (scenario.startsWith("spring_observed")) System.out.println("RESULT=" + observed(provider, callback, input, !scenario.endsWith("_untraced")));
                     else System.out.println("RESULT=" + callback.call(input));

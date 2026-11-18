@@ -191,6 +191,20 @@ class ToolSpansE2ETest {
         assertEquals(1, chats.stream().filter(c -> observation[3].equals(c.get("parentSpanId"))).count(), chats.toString());
         assertNoRawSecret();
     }
+    /** Only the observed invocation itself is skipped: a different tool called directly inside it, and a
+     * same-named tool called again under that one, each keep their own execute_tool span. */
+    @Test void springAiObservedToolCallingOtherToolsDirectlyKeepsTheirSpans() throws Exception {
+        String log = run("spring_observed_nested", Map.of());
+        List<String[]> applicationTools = applicationSpans(log).stream().filter(s -> tool(s[1]) || tool(s[2])).toList();
+        assertEquals(1, applicationTools.size(), log);
+        String observation = applicationTools.get(0)[3];
+        List<Map<String, Object>> tools = named("execute_tool");
+        assertEquals(List.of("execute_tool forecast", "execute_tool weather"), tools.stream().map(t -> String.valueOf(t.get("name"))).sorted().toList(), spans.toString());
+        Map<String, Object> forecast = tools.stream().filter(t -> "execute_tool forecast".equals(t.get("name"))).findFirst().orElseThrow();
+        Map<String, Object> weather = tools.stream().filter(t -> "execute_tool weather".equals(t.get("name"))).findFirst().orElseThrow();
+        assertEquals(observation, forecast.get("parentSpanId"), "forecast runs under the observed weather call");
+        assertEquals(forecast.get("spanId"), weather.get("parentSpanId"), "the direct weather call runs under forecast");
+    }
     /** CONTROL: observations without a tracing handler start no span, so the agent's span is the tool span. */
     @Test void springAiUntracedObservationKeepsTheAgentToolSpan() throws Exception {
         String log = run("spring_observed_untraced", Map.of());
