@@ -6,6 +6,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.api.trace.TraceStateBuilder;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.sdk.trace.data.LinkData;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
@@ -19,6 +20,7 @@ import java.util.regex.Pattern;
 final class SamplingRatioSampler implements Sampler {
     private static final AttributeKey<Double> RATIO = AttributeKey.doubleKey("fi.sampling.ratio");
     private static final String STATE_KEY = "fi";
+    private static final int MAX_STATE_MEMBERS = 32;
     // Double.parseDouble alone also accepts Java hex literals, suffixes and surrounding whitespace.
     private static final Pattern DECIMAL = Pattern.compile("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?");
 
@@ -80,8 +82,15 @@ final class SamplingRatioSampler implements Sampler {
                 TraceState updated = result.getUpdatedTraceState(invalidParent ? TraceState.getDefault() : parentTraceState);
                 // Retain delegate updates, and valid parents' other vendors and inherited fi. Remove our old
                 // entry first: the SDK builder refuses a put into a full (32-entry) state even for an existing key.
-                return ownDecision && effectiveRatio != null
-                    ? updated.toBuilder().remove(STATE_KEY).put(STATE_KEY, "r:" + Double.toString(ratio)).build() : updated;
+                if (!ownDecision || effectiveRatio == null) return updated;
+                TraceStateBuilder builder = updated.toBuilder().remove(STATE_KEY);
+                // W3C: a vendor adding its key to a full list removes the right-most member.
+                if (updated.get(STATE_KEY) == null && updated.size() >= MAX_STATE_MEMBERS) {
+                    String[] rightMost = new String[1];
+                    updated.forEach((key, value) -> rightMost[0] = key);
+                    builder.remove(rightMost[0]);
+                }
+                return builder.put(STATE_KEY, "r:" + Double.toString(ratio)).build();
             }
         };
     }
