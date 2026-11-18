@@ -13,14 +13,13 @@ module TraceAI
 
       def self.state_value(rate) = "r:#{rate}"
 
-      # W3C: adding a key to a full (32-member) list evicts the right-most
-      # member and puts the new key at the left. The SDK's set_value would
-      # instead drop the left-most member and append fi at the right.
+      # W3C: a modified key MUST move to the left and a new key SHOULD be added
+      # at the left; a full (32-member) list evicts its right-most member. The
+      # SDK's set_value keeps an existing key in place and appends new keys at
+      # the right, so fi would be the next member evicted downstream.
       def self.with_state(state, rate)
-        value = state_value(rate)
-        hash = state.to_h
-        return state.set_value('fi', value) if hash.key?('fi') || hash.size < 32
-        OpenTelemetry::Trace::Tracestate.create({'fi' => value}.merge(hash.first(31).to_h))
+        others = state.to_h.reject { |key, _| key == 'fi' }.first(31).to_h
+        OpenTelemetry::Trace::Tracestate.create({'fi' => state_value(rate)}.merge(others))
       end
 
       def self.from_tracestate(state)
