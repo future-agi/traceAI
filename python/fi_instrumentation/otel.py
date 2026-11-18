@@ -27,10 +27,19 @@ from fi_instrumentation.settings import (
     get_env_collector_endpoint,
     get_env_fi_auth_header,
     get_env_grpc_collector_endpoint,
-    get_env_traces_endpoint,
     get_env_project_name,
     get_env_project_version_name,
 )
+
+try:
+    from fi_instrumentation.settings import get_env_traces_endpoint
+except ImportError:
+    # An older fi_instrumentation.settings beside this module (the published-core
+    # compatibility checks import this file next to a released package).
+    def get_env_traces_endpoint() -> Optional[str]:
+        traces = (os.getenv("FI_TRACES_URL") or "").strip()
+        return traces or get_env_collector_endpoint()
+
 from jsonschema import ValidationError
 from opentelemetry import trace as trace_api
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
