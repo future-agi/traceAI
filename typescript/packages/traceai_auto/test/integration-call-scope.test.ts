@@ -7,7 +7,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "
 import { FITracer, runInFIContext } from "@traceai/fi-core";
 import { activeContext, applicationContextManager, contextBoundProvider, incomingServerSpan, runIntegrationCall } from "../src/agent-context";
 import { HTTP_SCOPE, readIncomingParent } from "../src/incoming-parent";
-import { withSession } from "../src";
+import { withSession, withUser } from "../src";
 import type { Config } from "../src/config";
 import { enableLibraries, type IntegrationStatus } from "../src/libraries";
 
@@ -217,6 +217,29 @@ test.each([false, true])("withSession after a dropped request ends (previous liv
     expect(finished(name).spanContext().traceId).not.toBe(incomingTraceId);
   }
   expect(finished("late-implicit").attributes["session.id"]).toBe("late-session");
+});
+
+test("late work skips ended spans in outer cells without losing outer or derived attributes", async () => {
+  const base = other.startSpan("base");
+  await runInFIContext(trace.setSpan(ROOT_CONTEXT, base), () => withSession("outer-session", () =>
+    runIntegrationCall(() => {
+      const outer = httpTracer.startSpan("outer");
+      return runIntegrationCall(async () => {
+        const request = startDroppedRequest();
+        const late = withUser("inner-user", async () => {
+          const explicit = activeContext();
+          await tick();
+          httpTracer.startSpan("late-after-both").end();
+          httpTracer.startSpan("explicit-after-both", {}, explicit).end();
+        });
+        request.end(); outer.end();
+        await late;
+      }, incomingServerSpan);
+    })));
+  base.end();
+  expect(parentOf("late-after-both")).toBe(idOf("base"));
+  expect(parentOf("explicit-after-both")).toBe(idOf("base"));
+  expect(finished("late-after-both").attributes).toMatchObject({ "session.id": "outer-session", "user.id": "inner-user" });
 });
 
 test("the launcher keeps no context store of its own and never enters a context for the caller's flow", () => {

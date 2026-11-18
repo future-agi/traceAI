@@ -49,6 +49,8 @@ interface CallCell {
   readonly active: WeakMap<Context, Context>;
   // For each span in the cell: what was active where it started, to go back to once it ends.
   readonly before: WeakMap<object, Context>;
+  // Older copies of the helper consult this cell-local liveness set.
+  liveDropped?: WeakSet<Span>;
   // The spans this call was opened for. Any other span started in the call makes nothing active.
   readonly accepts?: AcceptSpan;
 }
@@ -65,34 +67,44 @@ function callCell(ctx: Context): CallCell | undefined {
   return cell && cell.active instanceof WeakMap && cell.before instanceof WeakMap && (cell.accepts === undefined || typeof cell.accepts === "function") ? cell : undefined;
 }
 
-// A derived context can carry the span itself, even after losing/replacing its
-// call cell. Track only spans whose end we observe, by identity across package copies.
-interface DroppedRequest { ended: boolean; before: CallCell["before"] }
-const DROPPED = Symbol.for("traceai.auto.dropped-requests.v1");
-const host = globalThis as typeof globalThis & { [DROPPED]?: WeakMap<Span, DroppedRequest> };
-const droppedRequests = host[DROPPED] ?? new WeakMap<Span, DroppedRequest>();
-if (!host[DROPPED]) Object.defineProperty(host, DROPPED, { value: droppedRequests });
+// A derived context can carry a span directly and a nested call replaces its
+// call cell. Remember the owning cell's links by span, across package copies.
+interface CallLink { before: CallCell["before"]; droppedEnded?: boolean }
+const LINKS = Symbol.for("traceai.auto.call-links.v1");
+const host = globalThis as typeof globalThis & { [LINKS]?: WeakMap<Span, CallLink> };
+const callLinks = host[LINKS] ?? new WeakMap<Span, CallLink>();
+if (!host[LINKS]) Object.defineProperty(host, LINKS, { value: callLinks });
 
 function inCall(ctx: Context): Context {
   try {
-    const cell = callCell(ctx);
-    let active = cell?.active.get(ctx) ?? ctx, before = cell?.before;
-    let derived: Context | undefined;
-    for (let depth = 0; depth < 128; depth++) {
+    const cell = callCell(ctx), override = cell?.active.get(ctx);
+    if (!override) {
+      const span = trace.getSpan(ctx);
+      // Leave explicitly carried application spans alone. Only a dropped
+      // request whose end we actually observed needs its parent replaced.
+      if (!span || !callLinks.get(span)?.droppedEnded) return ctx;
+    }
+    let active = override ?? ctx, derived: Context | undefined, seen: Set<Span> | undefined;
+    for (;;) {
       const span = trace.getSpan(active);
       if (!span) return derived ? trace.deleteSpan(derived) : active;
-      const request = droppedRequests.get(span);
-      if (request?.ended) {
-        // For a directly carried span, replace just the span: session attributes,
-        // suppression and any nested call cell belong to the derived context.
-        if (active === ctx || !before?.has(span)) derived ??= active;
-        before = request.before;
-      } else if (active === ctx || !before?.has(span) || request || span.isRecording()) {
-        return derived ? trace.setSpan(derived, span) : active;
-      }
-      active = before?.get(span) ?? ROOT_CONTEXT;
+      const link = callLinks.get(span), before = (link?.before ?? cell?.before)?.get(span);
+      // No owner means we reached the ambient parent, not another call span.
+      if (!before) return derived ? trace.setSpan(derived, span) : active;
+      try {
+        const live = link?.droppedEnded !== undefined ? !link.droppedEnded : cell?.liveDropped?.has(span) || span.isRecording();
+        if (live) {
+          return derived ? trace.setSpan(derived, span) : active;
+        }
+      } catch { /* Treat a failing span as ended and continue unwinding. */ }
+      // Keep the session, suppression, and call cell of a context carrying the
+      // ended request. Only its span is stale, not the rest of that context.
+      if (link?.droppedEnded && active !== override) derived ??= active;
+      seen ??= new Set<Span>();
+      if (seen.has(span)) return trace.deleteSpan(derived ?? ctx);
+      seen.add(span);
+      active = before;
     }
-    return trace.deleteSpan(derived ?? ctx);
   } catch { return ctx; /* Parent links are best effort. */ }
 }
 
@@ -103,6 +115,7 @@ function activateInCall(parent: Context, span: Span, start: SpanStart): void {
   try {
     const current = activeFIContext(), cell = callCell(current);
     if (!cell || (cell.accepts && !cell.accepts(start))) return;
+    const link: CallLink = { before: cell.before };
     if (!span.isRecording()) {
       // Only the incoming HTTP request needs a dropped span installed as its
       // parent. A no-op/suppressed span must not displace the current context.
@@ -112,14 +125,18 @@ function activateInCall(parent: Context, span: Span, start: SpanStart): void {
           !trace.isSpanContextValid(local) || local.traceId !== remote.traceId) return;
       // isRecording() cannot distinguish a live dropped span from an ended one.
       // Observe end only on this request's span, not on the tracer or prototype.
-      const request = { ended: false, before: cell.before };
+      const live = cell.liveDropped ??= new WeakSet<Span>();
+      link.droppedEnded = false;
       const end = span.end;
-      span.end = function(...args) { request.ended = true; return end.apply(this, args); };
-      droppedRequests.set(span, request);
+      span.end = function(...args) { link.droppedEnded = true; live.delete(span); return end.apply(this, args); };
+      live.add(span);
     }
-    // Keep what is active now, not an ended span, so ended spans are not retained.
-    cell.before.set(span, inCall(current));
-    cell.active.set(current, trace.setSpan(parent, span));
+    const before = inCall(current);
+    cell.before.set(span, before);
+    callLinks.set(span, link);
+    // The remote parent supplied the dropped span's identity, not the session
+    // or user values of the private scope in which the request runs.
+    cell.active.set(current, trace.setSpan(link.droppedEnded === false ? before : parent, span));
   } catch { /* Parent links are best effort and never change the application. */ }
 }
 
