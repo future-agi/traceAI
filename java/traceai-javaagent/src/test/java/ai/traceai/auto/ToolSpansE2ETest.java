@@ -223,7 +223,10 @@ class ToolSpansE2ETest {
         if (agentTools.isEmpty()) {
             String[] observation = applicationTools.get(0);
             name = observation[5]; arguments = observation[6]; result = observation[7]; errorType = observation[8];
-            assertFalse(String.join("|", observation).contains(ToolApp.SECRET), "credential values in tool arguments are redacted");
+            assertEquals("function", observation[9]);
+            assertEquals(error, "ERROR".equals(observation[10]), "only a failed tool's span has ERROR status: " + observation[10]);
+            if (error) assertTrue(observation[11].startsWith(ToolApp.ERROR), "the status description is the tool's error: " + observation[11]);
+            assertFalse(String.join("|", observation).contains(ToolApp.SECRET), "credential values in tool arguments and errors are redacted");
         } else {
             Map<String, Object> attrs = attributes(agentTools.get(0));
             name = String.valueOf(attrs.get("gen_ai.tool.name")); arguments = String.valueOf(attrs.get("gen_ai.tool.call.arguments"));

@@ -108,7 +108,8 @@ public final class ToolApp {
                 boolean fail = scenario.endsWith("_error");
                 Function<WeatherRequest, String> weather = input -> {
                     try { chat(); } catch (Exception error) { throw new IllegalStateException(error); }
-                    if (fail) throw new IllegalStateException(ERROR);
+                    // The observed failure's message also carries a credential, which must never be exported raw.
+                    if (fail) throw new IllegalStateException(scenario.startsWith("spring_observed") ? ERROR + " with " + SECRET : ERROR);
                     return "sunny in " + input.city();
                 };
                 ToolCallback callback = FunctionToolCallback.builder("weather", weather).description("Looks up the weather").inputType(WeatherRequest.class).build();
@@ -140,7 +141,8 @@ public final class ToolApp {
             System.out.println("APP_SPAN=" + span.getName() + "|" + span.getAttributes().get(AttributeKey.stringKey("fi.span.kind"))
                 + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.span.kind")) + "|" + span.getSpanId() + "|" + span.getParentSpanId()
                 + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.name")) + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.call.arguments"))
-                + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.call.result")) + "|" + span.getAttributes().get(AttributeKey.stringKey("error.type")));
+                + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.call.result")) + "|" + span.getAttributes().get(AttributeKey.stringKey("error.type"))
+                + "|" + span.getAttributes().get(AttributeKey.stringKey("gen_ai.tool.type")) + "|" + span.getStatus().getStatusCode() + "|" + span.getStatus().getDescription());
         // Control: a provider call outside every tool.
         chat();
         System.out.println("DONE");
