@@ -75,36 +75,45 @@ const host = globalThis as typeof globalThis & { [LINKS]?: WeakMap<Span, CallLin
 const callLinks = host[LINKS] ?? new WeakMap<Span, CallLink>();
 if (!host[LINKS]) Object.defineProperty(host, LINKS, { value: callLinks });
 
+function isRecording(span: Span): boolean {
+  try { return span.isRecording(); } catch { return false; }
+}
+
+// Only an ended, dropped request warrants following links into older cells.
+// Keep the context that carried the request (session, suppression, call cell);
+// replace just its span with the nearest surviving parent, or remove it.
+function afterDroppedRequest(ctx: Context): Context {
+  const request = trace.getSpan(ctx), link = request && callLinks.get(request);
+  if (!request || !link?.droppedEnded) return ctx;
+  const seen = new Set<Span>([request]);
+  let before = link.before.get(request);
+  while (before) {
+    const span = trace.getSpan(before);
+    if (!span || seen.has(span)) break;
+    const owner = callLinks.get(span);
+    if (!owner || (owner.droppedEnded === undefined ? isRecording(span) : !owner.droppedEnded)) {
+      return trace.setSpan(ctx, span);
+    }
+    seen.add(span);
+    before = owner.before.get(span);
+  }
+  return trace.deleteSpan(ctx);
+}
+
 function inCall(ctx: Context): Context {
   try {
-    const cell = callCell(ctx), override = cell?.active.get(ctx);
-    if (!override) {
-      const span = trace.getSpan(ctx);
-      // Leave explicitly carried application spans alone. Only a dropped
-      // request whose end we actually observed needs its parent replaced.
-      if (!span || !callLinks.get(span)?.droppedEnded) return ctx;
-    }
-    let active = override ?? ctx, derived: Context | undefined, seen: Set<Span> | undefined;
-    for (;;) {
+    const cell = callCell(ctx);
+    // Ordinary call spans unwind only within this cell, then fall back to its
+    // entry context. Do not reinterpret the parent selected by an outer scope.
+    let active = cell?.active.get(ctx);
+    for (let depth = 0; active && active !== ctx && depth < 128; depth++) {
       const span = trace.getSpan(active);
-      if (!span) return derived ? trace.deleteSpan(derived) : active;
-      const link = callLinks.get(span), before = (link?.before ?? cell?.before)?.get(span);
-      // No owner means we reached the ambient parent, not another call span.
-      if (!before) return derived ? trace.setSpan(derived, span) : active;
-      try {
-        const live = link?.droppedEnded !== undefined ? !link.droppedEnded : cell?.liveDropped?.has(span) || span.isRecording();
-        if (live) {
-          return derived ? trace.setSpan(derived, span) : active;
-        }
-      } catch { /* Treat a failing span as ended and continue unwinding. */ }
-      // Keep the session, suppression, and call cell of a context carrying the
-      // ended request. Only its span is stale, not the rest of that context.
-      if (link?.droppedEnded && active !== override) derived ??= active;
-      seen ??= new Set<Span>();
-      if (seen.has(span)) return trace.deleteSpan(derived ?? ctx);
-      seen.add(span);
-      active = before;
+      if (!span) break;
+      if (callLinks.get(span)?.droppedEnded !== undefined) return afterDroppedRequest(active);
+      if (isRecording(span) || cell?.liveDropped?.has(span)) return active;
+      active = cell?.before.get(span);
     }
+    return afterDroppedRequest(ctx);
   } catch { return ctx; /* Parent links are best effort. */ }
 }
 
@@ -122,7 +131,8 @@ function activateInCall(parent: Context, span: Span, start: SpanStart): void {
       if (cell.accepts !== incomingServerSpan || isTracingSuppressed(current) || isTracingSuppressed(parent)) return;
       const remote = trace.getSpanContext(parent), local = span.spanContext();
       if (!remote?.isRemote || !trace.isSpanContextValid(remote) || (remote.traceFlags & TraceFlags.SAMPLED) ||
-          !trace.isSpanContextValid(local) || local.traceId !== remote.traceId) return;
+          !trace.isSpanContextValid(local) || local.isRemote || (local.traceFlags & TraceFlags.SAMPLED) ||
+          local.traceId !== remote.traceId || local.spanId === remote.spanId) return;
       // isRecording() cannot distinguish a live dropped span from an ended one.
       // Observe end only on this request's span, not on the tracer or prototype.
       const live = cell.liveDropped ??= new WeakSet<Span>();

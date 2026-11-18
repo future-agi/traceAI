@@ -44,7 +44,8 @@ beforeEach(() => { collected = []; requests = 0; });
 async function child(app = "plain.cjs", args = ["--import", "@traceai/auto/register"], extra: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith("FI_") || key.startsWith("OTEL_") || ["NODE_OPTIONS", "KIND", "MODE", "SUPPRESS"].includes(key)) delete env[key];
-  Object.assign(env, { FI_API_KEY: "mock-fi-api-key", FI_SECRET_KEY: "mock-fi-secret-key", FI_BASE_URL: url, MOCK_URL: url, FI_PROJECT_NAME: "auto-test", FI_INSTRUMENTATIONS: "wire" }, extra);
+  // Children run in the package root; a developer's futureagi.toml must not change the sampler.
+  Object.assign(env, { FI_CONFIG_FILE: resolve(apps, "empty.toml"), FI_API_KEY: "mock-fi-api-key", FI_SECRET_KEY: "mock-fi-secret-key", FI_BASE_URL: url, MOCK_URL: url, FI_PROJECT_NAME: "auto-test", FI_INSTRUMENTATIONS: "wire" }, extra);
   return new Promise<{ stdout: string; stderr: string }>((resolveResult, reject) => {
     const process = spawn(global.process.execPath, [...args, resolve(apps, app)], { cwd: root, env });
     let stdout = "", stderr = "";
