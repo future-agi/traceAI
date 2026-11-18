@@ -140,7 +140,9 @@ final class ToolSpans {
                     Class<?> statusApi = Class.forName(spanApi.getName().substring(0, spanApi.getName().lastIndexOf('.')) + ".StatusCode", false, spanApi.getClassLoader());
                     Object error = null;
                     for (Object constant : statusApi.getEnumConstants()) if ("ERROR".equals(((Enum<?>)constant).name())) error = constant;
-                    String description = TraceAIAuto.hidesErrorText(config) ? "" : String.valueOf(failure.getMessage() == null ? "" : failure.getMessage());
+                    // The application exports this span itself, so apply the redaction the agent's exporter applies to its own.
+                    String description = TraceAIAuto.hidesErrorText(config) ? ""
+                        : ExportPrivacy.privacy(config).text(String.valueOf(failure.getMessage() == null ? "" : failure.getMessage()));
                     spanApi.getMethod("setStatus", statusApi, String.class).invoke(span, error, bounded(description, 32000));
                 }
             } catch (Throwable ignored) { }
