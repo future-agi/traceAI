@@ -140,6 +140,24 @@ class IncomingRequestsE2ETest {
         assertNewRoot(exported.get(3), TRACE_1, TRACE_2);
     }
 
+    @Test void servletOverridingThePublicServiceMethodJoinsToo() throws Exception {
+        // Jersey's ServletContainer and CXF override service(ServletRequest, ServletResponse) without calling HttpServlet's.
+        String log = run("tomcat", Map.of(), "/own/call|" + SAMPLED_1 + "|-", "/own/call|-|-", "/call|" + SAMPLED_2 + "|-");
+        assertEquals(1, threads(log).size(), log);
+        List<Map<String, Object>> exported = ordered();
+        assertEquals(3, exported.size(), exported.toString());
+        assertJoined(exported.get(0), TRACE_1, PARENT_1);
+        assertNewRoot(exported.get(1), TRACE_1, TRACE_2);
+        assertJoined(exported.get(2), TRACE_2, PARENT_2);
+    }
+
+    @Test void applicationSpanInsideTheRequestTakesPrecedence() throws Exception {
+        String log = run("tomcat", Map.of(), "/appspan|" + SAMPLED_1 + "|-");
+        assertEquals(1, spans.size(), spans.toString());
+        String line = log.lines().filter(l -> l.startsWith("APP_SPAN=")).findFirst().orElseThrow();
+        assertJoined(spans.get(0), line.replaceAll(".*APP_TRACE=(\\w+).*", "$1"), line.replaceAll("APP_SPAN=(\\w+).*", "$1"));
+    }
+
     @Test void sampledParentRatioIsInherited() throws Exception {
         run("tomcat", Map.of(), "/call|" + SAMPLED_1 + "|fi=r:0.5,vendor=value");
         assertEquals(1, spans.size(), spans.toString());

@@ -16,8 +16,9 @@ import java.util.*;
  * Arguments: container ({@code tomcat} or {@code javax}), the mock provider's chat endpoint, then one
  * incoming request per argument, {@code path|traceparent|tracestate}, with {@code -} for an absent
  * header. Paths: {@code /call} makes one AI call; {@code /throw} makes it and then throws; {@code /async}
- * makes it and then completes the request from another thread; {@code /outside} (javax only) makes
- * the AI call on the same thread outside any request.
+ * makes it and then completes the request from another thread; {@code /appspan} makes it under the
+ * application's own span; {@code /own/...} is served by a servlet that overrides the public service
+ * method; {@code /outside} (javax only) makes the AI call on the same thread outside any request.
  */
 public final class ServletApp {
     static final HttpClient CLIENT = HttpClient.newHttpClient();
@@ -40,6 +41,7 @@ public final class ServletApp {
 
     static final class JakartaServlet extends jakarta.servlet.http.HttpServlet {
         @Override protected void doGet(jakarta.servlet.http.HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response) throws IOException {
+            if (request.getRequestURI().equals("/appspan")) { applicationSpan(request.getParameter("label")); response.getWriter().write("ok"); return; }
             try { callProvider(request.getParameter("label")); } catch (InterruptedException error) { throw new IOException(error); }
             switch (request.getRequestURI()) {
                 case "/throw" -> throw new IllegalStateException("handler fails after its AI call");
@@ -53,6 +55,24 @@ public final class ServletApp {
                 }
                 default -> response.getWriter().write("ok");
             }
+        }
+    }
+
+    /** The application's own (unrelocated) OpenTelemetry span, current around the AI call. */
+    static void applicationSpan(String label) throws IOException {
+        var provider = io.opentelemetry.sdk.trace.SdkTracerProvider.builder().build();
+        io.opentelemetry.api.trace.Span span = provider.get("servlet-app").spanBuilder("application-handler").startSpan();
+        System.out.println("APP_SPAN=" + span.getSpanContext().getSpanId() + " APP_TRACE=" + span.getSpanContext().getTraceId());
+        try (var scope = span.makeCurrent()) { callProvider(label); }
+        catch (InterruptedException error) { throw new IOException(error); }
+        finally { span.end(); provider.shutdown(); }
+    }
+
+    /** Overrides the public service method without calling HttpServlet's, as Jersey's ServletContainer and CXF do. */
+    static final class OwnServiceServlet extends jakarta.servlet.http.HttpServlet {
+        @Override public void service(jakarta.servlet.ServletRequest request, jakarta.servlet.ServletResponse response) throws IOException {
+            try { callProvider(request.getParameter("label")); } catch (InterruptedException error) { throw new IOException(error); }
+            response.getWriter().write("ok");
         }
     }
 
@@ -72,6 +92,8 @@ public final class ServletApp {
         org.apache.catalina.Wrapper wrapper = org.apache.catalina.startup.Tomcat.addServlet(context, "app", new JakartaServlet());
         wrapper.setAsyncSupported(true);
         context.addServletMappingDecoded("/*", "app");
+        org.apache.catalina.startup.Tomcat.addServlet(context, "own-service", new OwnServiceServlet());
+        context.addServletMappingDecoded("/own/*", "own-service");
         tomcat.start();
         try {
             int port = connector.getLocalPort();
