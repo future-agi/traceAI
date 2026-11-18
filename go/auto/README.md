@@ -7,11 +7,10 @@ import and a rebuild. Dedicated library middleware remains opt-in.
 
 ## Quick start
 
-1. Add the module. Until its first go/auto tag is released, use `@dev` instead
-   of `@latest`:
+1. Add the released module; use `@dev` to follow unreleased work:
 
    ```sh
-   go get github.com/future-agi/traceAI/go/auto@dev
+   go get github.com/future-agi/traceAI/go/auto@v0.1.0
    ```
 
 2. Import it once, anywhere in your program, and flush before `main` returns:
