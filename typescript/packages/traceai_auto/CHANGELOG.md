@@ -1,3 +1,17 @@
+## [0.3.0] - pending release
+
+### If you upgrade from 0.2.x
+- **Without an explicit sample rate, the agent's own provider follows `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`** (#711). When no `sampleRate`, `FI_SAMPLE_RATE` or file `sample_rate` is set, the default is `ParentBased(TraceIdRatio(1))`, so AI spans under an unsampled parent are now dropped with it. To keep 0.2.0's behaviour, set `FI_SAMPLE_RATE` (for example `1`). Invalid sampler names or ratio arguments produce one agent warning and use the default. Application-owned samplers and explicit-rate record-only flags are unchanged.
+
+### Added
+- Sampled spans on agent-created providers carry the numeric `fi.sampling.ratio` attribute (`0 < r < 1`) when the agent makes a fractional local ratio decision or inherits a valid ratio from a sampled parent's `fi=r:<ratio>` tracestate entry (#713). Local fractional decisions also write `fi=r:<ratio>` in W3C tracestate, so children in other processes inherit the trace-wide ratio. An absent attribute means `1.0`. Roots sampled locally at `1`, record-only spans, unsampled parents, invalid parent ratios and application-owned providers are not stamped.
+
+### Changed
+- `@traceai/auto` depends on exactly `@traceai/fi-core` 1.4.0, which keeps `fi.sampling.ratio` on exported spans under attribute limits.
+
+### Fixed
+- An AI call made while your app handles an incoming request that its sampler dropped (a non-recording server span under an unsampled remote parent) keeps that request's trace ID and parent, so it no longer starts a separate orphan trace (#715). Once the request's span ends, later work goes back to the parent that was active before it.
+
 ## [0.2.0] - pending release
 
 ### If you upgrade from 0.1.x
@@ -8,10 +22,9 @@
 - **Listing `http` beside your app's own tracer provider no longer installs the agent's HTTP instrumentation;** the agent warns once and leaves incoming HTTP to your OpenTelemetry setup. To have the agent install it there, set `FI_FORWARD_APP_SPANS=true`.
 - **A privacy switch with an unrecognised value now hides.** `FI_HIDE_*` and `FI_PII_REDACTION` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, in any case. Any other non-empty value hides that content with one warning; before, only `true` hid. `FI_HIDE_ERROR_DETAILS` set to `off`, `no` or `0` now shows error details, as `false` did. To keep content visible, use one of the accepted values.
 - **An empty `FI_HIDE_*` or `FI_PII_REDACTION` variable no longer masks the config file's value:** it counts as unset, so the file's setting applies, and an empty `FI_HIDE_ERROR_DETAILS` beside the file's `false` now shows error details even with a content switch on. To override the file, set the variable to an accepted value.
-- **An explicit `FI_SAMPLE_RATE` decides by trace id for every AI span on the agent's own provider,** so your app's own sampler does not drop admitted AI spans in this mode. In 0.1.x a provider your app owned kept its sampler for them; with `FI_FORWARD_APP_SPANS=true`, AI spans are created on your provider and keep its sampler. If your app samples with a trace-id ratio sampler, set `FI_SAMPLE_RATE` to the same ratio: the same traces are kept where your sampler decides at the root of a trace, but not where it follows an incoming parent's decision.
+- **`FI_SAMPLE_RATE` now decides by trace id for every AI span on the agent's own provider, the default,** and your app's own sampler no longer drops AI spans. In 0.1.x a provider your app owned kept its sampler for them; with `FI_FORWARD_APP_SPANS=true`, AI spans are created on your provider and keep its sampler. If your app samples with a trace-id ratio sampler, set `FI_SAMPLE_RATE` to the same ratio: the same traces are kept where your sampler decides at the root of a trace, but not where it follows an incoming parent's decision.
 
 ### Changed
-- Agent-created providers honor `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` when no explicit `sampleRate`, `FI_SAMPLE_RATE` or file `sample_rate` is set. The default/fallback is `ParentBased(TraceIdRatio(1))`, so unsampled parents now drop AI children unless an explicit rate selects the existing AI sampler. Invalid sampler names or ratio arguments produce one agent warning. Application-owned samplers and explicit-rate record-only flags are unchanged.
 - `@traceai/auto` depends on exactly the `@traceai/fi-core` version it is built with, 1.3.0.
 - AI spans keep their parent from your app's active span. A span is active only inside its own SDK call, so a request your app sends beside a call is captured as its own wire span.
 
