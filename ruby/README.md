@@ -273,6 +273,10 @@ match a known format.
 | `Net::HTTP` | Buffered and streamed requests and responses, multipart uploads, gzip and deflate. Covers Faraday's default adapter, `ruby-openai`, the official `openai` and `anthropic` gems and RubyLLM. |
 | `HTTPX` | Buffered and `:stream` responses, retries and `:follow_redirects`. |
 
+| Library | Coverage |
+| --- | --- |
+| RubyLLM 1.2 to 2.x (`ruby_llm`) | Each tool execution becomes an `execute_tool <tool name>` span (INTERNAL, `gen_ai.span.kind` `TOOL`) with `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`, arguments and result, and `error.type` with an error status when the tool raises (the exception still reaches your code). A chat with tools gets one `invoke_agent` span when no span is current, so the chat spans and tool spans of an `ask` share a trace; tools RubyLLM runs on worker threads stay in it. Arguments and results are content: any of the input, output, text or message hide switches below redacts them, while the tool name, call id and type stay visible. An argument or result larger than half of `wire_max_body_bytes` (at most 512 KiB) is left out and the span gets `traceai.wire.truncated`. Turn it off with `FI_DISABLED_INSTRUMENTATIONS=ruby_llm`. |
+
 Spans carry `gen_ai.*` request, response and usage attributes, input and output
 messages, `gen_ai.response.time_to_first_chunk` and
 `gen_ai.response.time_to_first_text` for streams, and `traceai.wire.*` markers

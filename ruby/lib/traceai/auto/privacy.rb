@@ -419,6 +419,8 @@ module TraceAI
         return explicit unless explicit.nil?
         %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text].any? { |k| config.hidden?(k) }
       end
+      TOOL_IDENTITY_KEYS = %w[gen_ai.tool.name gen_ai.tool.call.id gen_ai.tool.type].freeze
+      TOOL_CONTENT_KEYS = %w[gen_ai.tool.call.arguments gen_ai.tool.call.result].freeze
       def mask(attributes, config, operation = nil)
         hide = ->(key) { config.hidden?(key) }
         attributes.each_with_object({}) do |(k, v), out|
@@ -428,7 +430,8 @@ module TraceAI
           input_messages = k == 'gen_ai.input.messages' || k.start_with?('gen_ai.input.messages.')
           output_messages = k == 'gen_ai.output.messages' || k.start_with?('gen_ai.output.messages.')
           system = k == 'gen_ai.system_instructions' || k.start_with?('gen_ai.system_instructions.')
-          tools = k == 'gen_ai.tool' || k.start_with?('gen_ai.tool.')
+          # A tool's name, call id and type identify the call; they are not content.
+          tools = (k == 'gen_ai.tool' || k.start_with?('gen_ai.tool.')) && !TOOL_IDENTITY_KEYS.include?(k)
           parameters = !REQUEST_IDENTITY_KEYS.include?(k) && INVOCATION_FAMILIES.any? { |family| k == family || k.start_with?(family + '.') }
           next if (input_messages || system) && (hide.call('hide_inputs') || hide.call('hide_input_messages'))
           next if output_messages && (hide.call('hide_outputs') || hide.call('hide_output_messages'))
@@ -445,6 +448,9 @@ module TraceAI
           hidden ||= k == 'input.value' && (hide.call('hide_input_messages') || hide.call('hide_input_images') || hide.call('hide_llm_invocation_parameters'))
           hidden ||= k == 'output.value' && hide.call('hide_output_messages')
           hidden ||= tools && %w[hide_inputs hide_outputs hide_input_text hide_output_text].any? { |flag| hide.call(flag) }
+          # Tool arguments come from the model's output message and a tool result
+          # becomes an input message: either message switch hides both.
+          hidden ||= TOOL_CONTENT_KEYS.include?(k) && (hide.call('hide_input_messages') || hide.call('hide_output_messages'))
           out[k] = hidden ? '__REDACTED__' : v
         end
       end
