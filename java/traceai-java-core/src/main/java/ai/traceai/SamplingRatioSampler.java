@@ -13,6 +13,7 @@ import io.opentelemetry.sdk.trace.samplers.Sampler;
 import io.opentelemetry.sdk.trace.samplers.SamplingDecision;
 import io.opentelemetry.sdk.trace.samplers.SamplingResult;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -80,16 +81,17 @@ final class SamplingRatioSampler implements Sampler {
             @Override public Attributes getAttributes() { return stamped; }
             @Override public TraceState getUpdatedTraceState(TraceState parentTraceState) {
                 TraceState updated = result.getUpdatedTraceState(invalidParent ? TraceState.getDefault() : parentTraceState);
-                // Retain delegate updates, and valid parents' other vendors and inherited fi. Remove our old
-                // entry first: the SDK builder refuses a put into a full (32-entry) state even for an existing key.
                 if (!ownDecision || effectiveRatio == null) return updated;
-                TraceStateBuilder builder = updated.toBuilder().remove(STATE_KEY);
-                // W3C: a vendor adding its key to a full list removes the right-most member.
-                if (updated.get(STATE_KEY) == null && updated.size() >= MAX_STATE_MEMBERS) {
-                    String[] rightMost = new String[1];
-                    updated.forEach((key, value) -> rightMost[0] = key);
-                    builder.remove(rightMost[0]);
-                }
+                // Retain delegate updates and valid parents' other vendors, in order. W3C: a modified key
+                // MUST move to the left, a new key SHOULD be added at the left, and adding to a full
+                // (32-member) list removes the right-most member. The SDK builder would update an existing
+                // fi in place, so rebuild the state with fi first. Each put prepends, so add in reverse.
+                List<String[]> others = new ArrayList<>();
+                updated.forEach((key, value) -> {
+                    if (!STATE_KEY.equals(key) && others.size() < MAX_STATE_MEMBERS - 1) others.add(new String[] {key, value});
+                });
+                TraceStateBuilder builder = TraceState.builder();
+                for (int i = others.size() - 1; i >= 0; i--) builder.put(others.get(i)[0], others.get(i)[1]);
                 return builder.put(STATE_KEY, "r:" + Double.toString(ratio)).build();
             }
         };
