@@ -146,11 +146,7 @@ public class TracedOllamaAPI {
                 span.setAttribute("ollama.response_time_ms", result.getResponseTime());
             }
 
-            // The chat result carries the whole request history, so the raw output is dropped while the
-            // input hide settings are on.
-            if (!tracer.getConfig().isHideInputs() && !tracer.getConfig().isHideInputMessages()) {
-                tracer.setRawOutput(span, result);
-            }
+            setRawOutputUnlessHidden(span, result);
             span.setStatus(StatusCode.OK);
             return result;
 
@@ -292,5 +288,18 @@ public class TracedOllamaAPI {
      */
     public OllamaAPI unwrap() {
         return api;
+    }
+
+    /**
+     * Records a raw result only while no hide setting is on. The chat result carries the whole request history, so
+     * under any hide setting it is not recorded. Every raw-output write in this class goes through here.
+     */
+    private void setRawOutputUnlessHidden(Span span, Object result) {
+        TraceConfig config = tracer.getConfig();
+        if (config.isHideInputs() || config.isHideInputMessages()
+            || config.isHideOutputs() || config.isHideOutputMessages()) {
+            return;
+        }
+        tracer.setRawOutput(span, result);
     }
 }

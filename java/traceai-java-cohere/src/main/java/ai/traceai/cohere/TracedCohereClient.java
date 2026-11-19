@@ -142,7 +142,7 @@ public class TracedCohereClient {
                 });
             }
 
-            setChatRawOutput(span, response);
+            setRawOutputUnlessHidden(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 
@@ -155,11 +155,12 @@ public class TracedCohereClient {
     }
 
     /**
-     * Records the raw chat response only while no hide setting is on. The response carries the whole request
-     * history and may carry fields added by later SDK versions, so under any hide setting it is not recorded;
-     * the dedicated attributes above still carry the operational data.
+     * Records a raw response only while no hide setting is on. A response can echo the request (the chat history,
+     * the embedded texts, the returned documents) and may carry fields added by later SDK versions, so under any
+     * hide setting it is not recorded; the dedicated attributes still carry the operational data. Every raw-output
+     * write in this class goes through here.
      */
-    private void setChatRawOutput(Span span, NonStreamedChatResponse response) {
+    private void setRawOutputUnlessHidden(Span span, Object response) {
         TraceConfig config = tracer.getConfig();
         if (config.isHideInputs() || config.isHideInputMessages()
             || config.isHideOutputs() || config.isHideOutputMessages()) {
@@ -241,7 +242,7 @@ public class TracedCohereClient {
                 }
             });
 
-            tracer.setRawOutput(span, response);
+            setRawOutputUnlessHidden(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 
@@ -309,7 +310,7 @@ public class TracedCohereClient {
                     units.getSearchUnits().ifPresent(searchUnits ->
                         span.setAttribute("cohere.rerank.search_units", searchUnits.longValue()))));
 
-            tracer.setRawOutput(span, response);
+            setRawOutputUnlessHidden(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 

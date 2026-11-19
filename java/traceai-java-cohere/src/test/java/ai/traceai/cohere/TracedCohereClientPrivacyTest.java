@@ -98,7 +98,7 @@ class TracedCohereClientPrivacyTest {
         assertThat(value(rerankSpan, SemanticConventions.GEN_AI_RERANKER_QUERY))
             .isEqualTo(inputs ? null : "private-query");
         assertThat(value(rerankSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(inputs);
-        assertThat(value(rerankSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(outputs);
+        assertThat(value(rerankSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(flags != 0);
         assertThat(rerankSpan.getAttributes().get(AttributeKey.longKey(
             SemanticConventions.GEN_AI_RERANKER_INPUT_DOCUMENTS))).isEqualTo(1L);
         assertThat(rerankSpan.getAttributes().get(AttributeKey.longKey(
