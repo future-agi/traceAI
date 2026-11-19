@@ -22,7 +22,7 @@ from traceai_together._response_attributes_extractor import (
     _StreamingChatResponseAccumulator,
     _StreamingCompletionsResponseAccumulator,
 )
-from traceai_together._utils import _finish_tracing, _to_dict
+from traceai_together._utils import _finish_tracing, _response_dict
 from traceai_together._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class _ChatCompletionsWrapper(_WithTracer):
                 return self._handle_streaming_response(span, response, request_parameters)
             else:
                 try:
-                    response_dict = _to_dict(response)
+                    response_dict = _response_dict(response, self._tracer)
                     span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response_dict))
                     _finish_tracing(
                         status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -221,7 +221,7 @@ class _AsyncChatCompletionsWrapper(_WithTracer):
                 return self._handle_async_streaming_response(span, response, request_parameters)
             else:
                 try:
-                    response_dict = _to_dict(response)
+                    response_dict = _response_dict(response, self._tracer)
                     span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response_dict))
                     _finish_tracing(
                         status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -333,7 +333,7 @@ class _CompletionsWrapper(_WithTracer):
                 return self._handle_streaming_response(span, response, request_parameters)
             else:
                 try:
-                    response_dict = _to_dict(response)
+                    response_dict = _response_dict(response, self._tracer)
                     span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response_dict))
                     _finish_tracing(
                         status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -440,7 +440,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 return self._handle_async_streaming_response(span, response, request_parameters)
             else:
                 try:
-                    response_dict = _to_dict(response)
+                    response_dict = _response_dict(response, self._tracer)
                     span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response_dict))
                     _finish_tracing(
                         status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -548,7 +548,7 @@ class _EmbeddingsWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response_dict))
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -605,7 +605,7 @@ class _AsyncEmbeddingsWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response_dict))
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),

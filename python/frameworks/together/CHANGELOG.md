@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- With `hide_inputs`, `hide_input_messages` or `hide_input_text`, the whole-response `output.value` is built from response-side fields (id, model, choices text/message, finish reason, usage) while any input hide setting is on, so a request echo such as `prompt` is not recorded.
+
 ## [0.1.2] - 2026-11-12
 
 ### Changed
