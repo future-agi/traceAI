@@ -4,7 +4,7 @@
 
 ### Changes
 
-* **java-core:** under `hideInputMessages` / `hideOutputMessages`, `input.value` / `output.value` and the raw input/output (`raw.input`, `fi.raw_input`, `raw.output`, `fi.raw_output`) are redacted, as in the Python SDK; embedding input text, and tool-call arguments nested in message keys, are masked as well. `maskAttribute` drops error-detail keys under `hideErrorDetails`. The Azure OpenAI, LangChain4j, Semantic Kernel and Bedrock instrumentations write these attributes through the masker ([#737](https://github.com/future-agi/traceAI/pull/737)).
+* **java-core:** under `hideInputMessages` / `hideOutputMessages`, `input.value` / `output.value` and the raw input/output (`raw.input`, `fi.raw_input`, `raw.output`, `fi.raw_output`) are redacted when they are set as text (string) values; embedding input text, and tool-call arguments nested in message keys, are masked as well. `maskAttribute` drops error-detail keys under `hideErrorDetails`. The Azure OpenAI, LangChain4j, Semantic Kernel and Bedrock instrumentations write these attributes through the masker ([#737](https://github.com/future-agi/traceAI/pull/737)).
 * **java-core:** with the console exporter enabled, `TraceAI.shutdown()` completes promptly while spans end concurrently with it. Exporter exceptions are logged at WARNING and failed exports at FINE ([#738](https://github.com/future-agi/traceAI/pull/738)).
 
 ## 1.4.0 (2026-11-19)
