@@ -102,7 +102,8 @@ def test_typed_modalities_in_actual_otlp(key, options, hidden):
             assert value.encode() not in wire
         if key == "raw.input" and any(getattr(config, f) for f in (
                 "hide_inputs", "hide_outputs", "hide_input_messages", "hide_output_messages",
-                "hide_input_text", "hide_output_text", "hide_input_images")):
+                "hide_input_text", "hide_output_text", "hide_input_images",
+                "hide_embedding_vectors", "hide_llm_invocation_parameters")):
             # raw payloads are not recorded while any hide setting is on
             assert key not in attrs
             assert attrs["gen_ai.request.model"] == "visible-model"
