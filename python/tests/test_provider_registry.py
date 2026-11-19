@@ -261,3 +261,36 @@ def test_real_sdk_load_falls_back_to_live_provider(providers):
         assert dead.get_finished_spans() == ()
     finally:
         configure()
+
+
+def test_shutdown_between_global_exposure_and_register_return(monkeypatch, providers):
+    from threading import Event
+
+    # The OTel API normally allows one global registration per process. Isolate
+    # that slot, but use its real setter/getter, provider, processors and shutdown.
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", None)
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER_SET_ONCE", type(trace._TRACER_PROVIDER_SET_ONCE)())
+    exposed, resume = Event(), Event()
+    publish = trace.set_tracer_provider
+
+    def pause_after_publish(provider):
+        publish(provider)
+        exposed.set()
+        assert resume.wait(10)
+
+    monkeypatch.setattr(trace, "set_tracer_provider", pause_after_publish)
+    first, live = providers()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(providers, set_global_tracer_provider=True)
+        try:
+            assert exposed.wait(10)
+            second = trace.get_tracer_provider()
+            assert second is not first
+            second.shutdown()
+        finally:
+            resume.set()
+        assert pending.result(timeout=10)[0] is second
+    assert trace.get_tracer_provider() is second  # OTel retains even the closed global.
+    assert otel.get_registered_tracer_providers() == (first,)
+    first.get_tracer(__name__).start_span("still-exported").end()
+    assert [span.name for span in live.get_finished_spans()] == ["still-exported"]

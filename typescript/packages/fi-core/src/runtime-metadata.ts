@@ -33,3 +33,6 @@ export const validRuntimeValue = (key: string, value: unknown) => schema.get(key
 // and vice versa. Never publish evidence on span attributes or process globals.
 export const receipts = new WeakMap<object, string>();
 export const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
+
+// Constructor identity only. Membership grants no receipt or span provenance.
+export const runtimeProcessors = new WeakSet<object>();

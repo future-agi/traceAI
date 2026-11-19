@@ -130,6 +130,12 @@ def get_registered_tracer_providers() -> Tuple[_TracerProvider, ...]:
         ))
 
 
+def is_tracer_provider_shutdown(provider: object) -> bool:
+    """Whether this traceAI provider has entered shutdown, even if still global."""
+    with _provider_registry_lock:
+        return isinstance(provider, TracerProvider) and provider._shutdown_started
+
+
 def _install_skills_processor(provider: _TracerProvider) -> None:
     """Optionally use the SDK's processor, without making it a dependency.
 
@@ -326,6 +332,9 @@ def register(
     # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
 
+    if skills_processor:
+        _install_skills_processor(tracer_provider)
+
     if set_global_tracer_provider:
         trace_api.set_tracer_provider(tracer_provider)
         global_provider_msg = (
@@ -343,11 +352,11 @@ def register(
     if verbose:
         print(f"{details}" f"{global_provider_msg}")
 
-    if skills_processor:
-        _install_skills_processor(tracer_provider)
     with _provider_registry_lock:
-        _provider_registration_order[tracer_provider] = next(_provider_registration_sequence)
-        _registered_tracer_providers.add(tracer_provider)
+        # The global setter may already have exposed this object to shutdown.
+        if not tracer_provider._shutdown_started:
+            _provider_registration_order[tracer_provider] = next(_provider_registration_sequence)
+            _registered_tracer_providers.add(tracer_provider)
     return tracer_provider
 
 
@@ -378,6 +387,7 @@ class TracerProvider(_TracerProvider):
         transport: Transport = Transport.HTTP,
         **kwargs: Any,
     ):
+        self._shutdown_started = False
         if "shutdown_on_exit" not in kwargs:
             kwargs["shutdown_on_exit"] = True
 
@@ -485,6 +495,7 @@ class TracerProvider(_TracerProvider):
         # Stop advertising this destination before a slow flush or shutdown.
         # A strong reference held by the application does not imply liveness.
         with _provider_registry_lock:
+            self._shutdown_started = True
             _registered_tracer_providers.discard(self)
             _provider_registration_order.pop(self, None)
         # Force flush to ensure all processors export their spans

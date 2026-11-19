@@ -31,6 +31,7 @@ import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { runtimeProcessors } from "./runtime-metadata";
 import { FutureAGIRuntimeAttributesSpanProcessor } from "./trace/runtimeAttributesProcessor";
 
 const privacyDestinations = new WeakSet<SpanExporter>();
@@ -511,11 +512,11 @@ class FITracerProvider extends BasicTracerProvider {
         : new DefaultSimpleSpanProcessor(exporter);
     }
     const runtimeProcessor = config.runtimeAttributes === false ? undefined
-      : config.spanProcessors?.find(processor => processor instanceof FutureAGIRuntimeAttributesSpanProcessor)
+      : config.spanProcessors?.find(processor => runtimeProcessors.has(processor))
         ?? new FutureAGIRuntimeAttributesSpanProcessor();
     const processorRegistry = new SpanProcessorRegistry(
       runtimeProcessor
-        ? (config.spanProcessors ?? []).filter(processor => !(processor instanceof FutureAGIRuntimeAttributesSpanProcessor))
+        ? (config.spanProcessors ?? []).filter(processor => !runtimeProcessors.has(processor))
         : config.spanProcessors ?? [],
       () => defaultProcessor?.disable(),
     );

@@ -12,7 +12,7 @@ for (const dir of ['dist/esm', 'dist/esnext']) {
   fs.writeFileSync(`${dir}/package.json`, '{"type":"module"}\n');
   // Internal admission evidence must have one identity across require/import,
   // like the privacy runtime's existing typed session bindings.
-  fs.writeFileSync(`${dir}/runtime-metadata.js`, 'export { admittedRuntime, receipts, validRuntimeValue, isRuntimeKey } from "../src/runtime-metadata.js";\n');
+  fs.writeFileSync(`${dir}/runtime-metadata.js`, 'export { admittedRuntime, receipts, validRuntimeValue, isRuntimeKey, runtimeProcessors } from "../src/runtime-metadata.js";\n');
   // Keep a single implementation across module formats, and avoid Node's JSON
   // import-attribute requirement. Browser bundlers can still inline this leaf.
   for (const name of ['privacy', 'privacy-runtime']) {

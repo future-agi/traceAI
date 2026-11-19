@@ -129,12 +129,6 @@ import {
       if (startAttributes?.[ERROR_TYPE] != null) {
         this.hasExplicitErrorType = true;
       }
-      const wrappedSpanContext = span.spanContext();
-      rememberContextReceipt(wrappedSpanContext, startAttributes);
-      const isNoOp = wrappedSpanContext.traceFlags === 0 && wrappedSpanContext.spanId === '0000000000000000';
-      // diag.debug(
-      //     `FISpan CONSTRUCTOR: Wrapping span. ID: ${wrappedSpanContext.spanId}, TraceID: ${wrappedSpanContext.traceId}, TraceFlags: ${wrappedSpanContext.traceFlags}, Is NoOp: ${isNoOp}`
-      // );
     }
   
     /**
