@@ -142,6 +142,7 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 | `portkey` | `portkey-ai` | `@traceai/portkey` | Import hook |
 | `qdrant` | `@qdrant/js-client-rest` | `@traceai/qdrant` | Import hook |
 | `redis` | `redis` | `@traceai/redis` | Import hook |
+| `sagemaker` | `@aws-sdk/client-sagemaker-runtime` | `@traceai/sagemaker` | Import hook |
 | `strands` | `@strands-agents/sdk` | `@traceai/strands` | Import hook |
 | `together` | `together-ai` | `@traceai/together` | Import hook |
 | `typesafe` | `@typesafe-ai/sdk` | `@traceai/typesafe` | Import hook |

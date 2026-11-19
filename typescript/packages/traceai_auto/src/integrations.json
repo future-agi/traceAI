@@ -471,6 +471,17 @@
     "vectorOnly": true
   },
   {
+    "name": "sagemaker",
+    "package": "@traceai/sagemaker",
+    "targets": [
+      "@aws-sdk/client-sagemaker-runtime"
+    ],
+    "className": "SageMakerInstrumentation",
+    "modules": [
+      "@aws-sdk/client-sagemaker-runtime"
+    ]
+  },
+  {
     "name": "strands",
     "package": "@traceai/strands",
     "targets": [
