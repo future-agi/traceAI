@@ -39,6 +39,12 @@ final class AttributeProjection {
             || key.startsWith("gen_ai.tool.") || CONTENT.contains(key) || key.startsWith("message.tool_calls");
     }
     static Map<String, Object> sanitize(Map<String, Object> source, AutoConfig config, WireCore.Match match) {
+        // A whole-response body can echo the request, so it is not recorded while any hide setting is on.
+        if (source.containsKey(WireCore.WHOLE_RESPONSE)) {
+            source = new LinkedHashMap<>(source);
+            source.remove(WireCore.WHOLE_RESPONSE);
+            if (TraceAIAuto.hidesContent(config)) { source.remove("output.value"); source.remove("output.mime_type"); }
+        }
         WirePrivacy privacy = ExportPrivacy.privacy(config); Map<String, Object> clean = new TreeMap<>();
         try {
             WirePrivacy.Scope scope = privacy.scope(source, "", WirePrivacy.Scope.EMPTY);
