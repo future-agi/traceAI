@@ -313,24 +313,30 @@ public final class TraceAIAuto {
      * same list and semantics as Python's TraceConfig). The agent's own rules below stay: audio transcripts of a wire call
      * are direction-aware (a speech-to-text transcript is output, a text-to-speech one is input), and the rules for the
      * wire-specific keys (cohere.preamble, message.tool_calls, error attributes, the image / text / parameter switches).
-     * A numeric or boolean value is a count or flag, never content, so it is kept under the shared table.
+     * The value type does not matter: a content key is masked whether its value is a string, number or boolean.
+     * Counts and flags stay visible because their keys sit outside the content prefixes.
      */
     static boolean hidden(String key, Object value, WireCore.Match match, AutoConfig config) {
         boolean wireOperation = match != null && match.endpoint() != null && !"chat".equals(String.valueOf(match.endpoint().get("operation")));
         boolean directional = key.equals("gen_ai.audio.transcript") && wireOperation;
-        boolean scalar = value instanceof Number || value instanceof Boolean;
-        if (!directional && !scalar && !"v".equals(config.masking.maskAttribute(key, "v"))) return true;
+        if (!directional && !"v".equals(config.masking.maskAttribute(key, "v"))) return true;
         if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
         if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
         boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
         if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || key.startsWith("gen_ai.tool.") || key.equals("gen_ai.request.parameters")
+            || key.equals("raw.input") || key.equals("llm.prompt_template.variables") || key.startsWith("llm.prompt_template.variables.")
+            || key.equals("gen_ai.prompt.template.variables") || key.startsWith("gen_ai.prompt.template.variables.")
+            || key.startsWith("embedding.embeddings.") && key.endsWith(".embedding.text")
             || key.equals("cohere.preamble") || key.equals("embedding.input_text") || key.startsWith("embedding.input_text.") || key.equals("gen_ai.reranker.query"))) return true;
         // Existing wrappers also emit generated tool calls outside gen_ai.output.messages.
-        if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
+        if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.equals("raw.output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
         if ((inputText || inputMessages || outputText || outputMessages || config.masking.isHideErrorDetails()) && Set.of("exception.message", "exception.stacktrace", "error.message", "error.stack").contains(key)) return true;
-        return key.equals("gen_ai.audio.transcript") && ("text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages);
+        if (!key.equals("gen_ai.audio.transcript")) return false;
+        // The agent's wire calls know the direction; an application span's transcript is hidden by either side's switch.
+        if (!wireOperation) return inputText || inputMessages || outputText || outputMessages;
+        return "text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages;
     }
     /** True when the error text (status description, exception and error attributes) is withheld: its own switch, or any content switch. */
     static boolean hidesErrorText(AutoConfig config) { return config.masking.isHideErrorDetails() || hidesContent(config); }

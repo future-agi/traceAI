@@ -28,7 +28,8 @@ class ContentHidingRegressionTest {
                 String json = WireCore.dump(new OtlpJsonExporter(config).serialize(original));
                 assertFalse(json.contains("PRIVATE_INPUT"), flag);
                 assertTrue(json.contains("public output")); assertTrue(json.contains("gen_ai.reranker.model"));
-                assertTrue(json.contains("gen_ai.reranker.input_documents")); assertTrue(json.contains("gen_ai.embeddings.dimension.count"));
+                // gen_ai.reranker.input_documents is a content key: whether its count is exported depends on the flag, not the value type
+                assertTrue(json.contains("gen_ai.embeddings.dimension.count"));
             }
             assertEquals("PRIVATE_INPUT_embedding.input_text.0", original.getAttributes().get(AttributeKey.stringKey("embedding.input_text.0")));
             assertEquals("PRIVATE_INPUT_gen_ai.reranker.query", original.getAttributes().get(AttributeKey.stringKey("gen_ai.reranker.query")));
