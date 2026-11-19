@@ -133,6 +133,19 @@ const response = await anthropic.messages.create({
 - `messages.stream()` - Streaming messages
 - Tool use and function calling
 
+### Amazon Bedrock and Google Vertex AI clients
+
+The same instrumentation traces `AnthropicBedrock` (`@anthropic-ai/bedrock-sdk`) and `AnthropicVertex`
+(`@anthropic-ai/vertex-sdk`). Their `messages.create()` and streaming calls produce the same LLM spans as the base
+client, with `gen_ai.provider.name` set to `aws.bedrock` or `gcp.vertex_ai` and the platform's model id as the request
+model. `@traceai/auto` enables it when either package is installed.
+
+```typescript
+import { AnthropicBedrock } from "@anthropic-ai/bedrock-sdk";
+const bedrock = new AnthropicBedrock({ awsRegion: "us-east-1" });
+// With an ESM import, pass the module once: new AnthropicInstrumentation().manuallyInstrument(await import("@anthropic-ai/bedrock-sdk"))
+```
+
 ## @traceai/langchain
 
 ```bash

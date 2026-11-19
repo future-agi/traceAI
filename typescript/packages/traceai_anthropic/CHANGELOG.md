@@ -1,3 +1,11 @@
+## Unreleased
+
+### Added
+- Traces the Anthropic clients for Amazon Bedrock (`@anthropic-ai/bedrock-sdk`) and Google Vertex AI (`@anthropic-ai/vertex-sdk`): `messages.create` and streaming produce the same LLM spans as the base client, with `gen_ai.provider.name` set to `aws.bedrock` or `gcp.vertex_ai`.
+
+### Changed
+- Raw input and raw output are not recorded while any hide setting is on, and an input hide setting records only response-side fields as output.
+
 ## [0.1.6] - 2026-11-12
 
 ### Fixed
