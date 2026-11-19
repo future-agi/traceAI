@@ -19,7 +19,7 @@ from traceai_google_genai._response_attributes_extractor import (
     _ResponseAttributesExtractor,
 )
 from traceai_google_genai._stream import _Stream
-from traceai_google_genai._utils import _finish_tracing
+from traceai_google_genai._utils import _finish_tracing, _response_view
 from traceai_google_genai._with_span import _WithSpan
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
@@ -162,7 +162,7 @@ class _SyncGenerateContent(_WithTracer):
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
-                    attributes=self._response_extractor.get_attributes(response=response),
+                    attributes=self._response_extractor.get_attributes(response=_response_view(response, self._tracer)),
                     extra_attributes=self._response_extractor.get_extra_attributes(
                         response=response, request_parameters=request_parameters
                     ),
@@ -282,7 +282,7 @@ class _AsyncGenerateContentWrapper(_WithTracer):
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
-                    attributes=self._response_extractor.get_attributes(response=response),
+                    attributes=self._response_extractor.get_attributes(response=_response_view(response, self._tracer)),
                     extra_attributes=self._response_extractor.get_extra_attributes(
                         response=response, request_parameters=request_parameters
                     ),

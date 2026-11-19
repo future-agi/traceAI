@@ -1,3 +1,7 @@
+## Unreleased
+
+- With `hide_inputs`, `hide_input_messages` or `hide_input_text`, the whole-response `output.value` is built from response-side fields (candidates, usage metadata, model version, response id) while any input hide setting is on, so `automatic_function_calling_history` is not recorded.
+
 ## [0.1.4] - 2026-11-12
 
 ### Changed

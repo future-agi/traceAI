@@ -41,6 +41,30 @@ def _io_value_and_type(obj: Any) -> _ValueAndType:
     return _ValueAndType(str(obj), FiMimeTypeValues.TEXT)
 
 
+# Response-side fields that may be recorded while input settings are on. The request echo
+# (automatic_function_calling_history, the contents sent to the model) is left out rather than stripped by name.
+_RESPONSE_FIELDS = ("candidates", "usage_metadata", "model_version", "response_id", "create_time")
+
+
+def _input_hidden(tracer: Any) -> bool:
+    config = getattr(tracer, "_self_config", None)
+    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text))
+
+
+def _response_view(response: Any, tracer: Any) -> Any:
+    """The response for the whole-output dump; under any input hide setting, only its response-side fields."""
+    if not _input_hidden(tracer) or not (hasattr(response, "model_dump") and callable(response.model_dump)):
+        return response
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dumped = response.model_dump(exclude_unset=True, mode="json")
+        return {k: dumped[k] for k in _RESPONSE_FIELDS if k in dumped}
+    except Exception:
+        logger.exception("Failed to build the response-side view")
+        return {}
+
+
 def _as_input_attributes(
     value_and_type: Optional[_ValueAndType],
 ) -> Iterator[Tuple[str, AttributeValue]]:
