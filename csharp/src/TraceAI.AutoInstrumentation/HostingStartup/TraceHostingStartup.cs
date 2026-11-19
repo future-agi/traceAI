@@ -141,11 +141,13 @@ internal static class Decorator
             return new ServiceDescriptor(descriptor.ServiceType, provider => wrapper.Wrap(factory(provider), sensitive, kind), descriptor.Lifetime);
         }
         var implementation = descriptor.ImplementationType!;
-        // Register the implementation type itself so the container still validates its constructor at build time.
-        if (implementation != descriptor.ServiceType && !services.Any(d => !d.IsKeyedService && d.ServiceType == implementation))
-            services.Add(new ServiceDescriptor(implementation, implementation, descriptor.Lifetime));
+        // The implementation is registered under a private key, with the original descriptor's lifetime, so the container still
+        // validates its constructor at build time and creates it exactly as before. The application's own registrations of the
+        // implementation type are neither used nor changed, and no public registration of it is added.
+        var key = "TraceAI.AutoInstrumentation.HostingStartup/" + Guid.NewGuid().ToString("N");
+        services.Add(new ServiceDescriptor(implementation, key, implementation, descriptor.Lifetime));
         return new ServiceDescriptor(descriptor.ServiceType,
-            provider => wrapper.Wrap(provider.GetRequiredService(implementation), sensitive, kind), descriptor.Lifetime);
+            provider => wrapper.Wrap(provider.GetRequiredKeyedService(implementation, key), sensitive, kind), descriptor.Lifetime);
     }
 
     private static string? Classify(Type serviceType, Settings settings)
@@ -214,6 +216,9 @@ internal sealed class Wrapper
             args[0] = inner;
             for (var i = 1; i < parameters.Length; i++) args[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : null;
             var wrapped = _constructor.Invoke(args);
+            // Content is only ever switched on when the standard variable has not said otherwise: an application that set
+            // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false keeps it off whatever the traceAI opt-in says.
+            if (sensitive && string.Equals(Environment.GetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")?.Trim(), "false", StringComparison.OrdinalIgnoreCase)) sensitive = false;
             _sensitive?.SetValue(wrapped, sensitive);
             TraceHostingStartup.RecordWrapped(kind);
             return wrapped;
