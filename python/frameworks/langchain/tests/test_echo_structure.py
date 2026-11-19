@@ -307,3 +307,89 @@ def test_invalid_tool_call_arguments_are_input_text(setting):
     prior = AIMessage(content="", invalid_tool_calls=[{"name": "f", "args": '{"q": "' + ORDER + '"', "id": "1", "error": None, "type": "invalid_tool_call"}])
     spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "looked up " + ORDER}).invoke({"messages": [prior]}))
     assert ORDER not in output_side(spans), (setting, _outputs(spans))
+
+
+# --- content-part schema values are not text to look for --------------------------------------------------------
+
+def _anthropic_tool_use(city, call_id="toolu_01"):
+    return AIMessage(content=[{"type": "text", "text": "Checking the weather."},
+                              {"type": "tool_use", "id": call_id, "name": "get_weather", "input": {"city": city}}])
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_tool_step_after_an_anthropic_tool_use_part_is_kept(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), _anthropic_tool_use("Paris")]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(
+        lambda s: {"messages": [ToolMessage(content="sunny 21C " + REPLY, name="get_weather", tool_call_id="toolu_01")]}).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_the_next_step_calling_the_same_tool_again_is_kept(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), _anthropic_tool_use("Paris"),
+                          ToolMessage(content="sunny 21C", name="get_weather", tool_call_id="toolu_01")]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": [AIMessage(content=[
+        {"type": "text", "text": REPLY}, {"type": "tool_use", "id": "toolu_02", "name": "get_weather", "input": {"city": "Rome"}}])]}).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_tool_step_after_a_responses_function_call_part_is_kept(setting):
+    call = AIMessage(content=[{"type": "function_call", "name": "search", "arguments": '{"q": "tides"}',
+                               "call_id": "call_1", "id": "fc_1", "status": "completed"}])
+    state = {"messages": [HumanMessage(content=HUMAN), call]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": [ToolMessage(
+        content=REPLY, name="search", tool_call_id="call_1", status="success",
+        response_metadata={"status": "completed"})]}).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("detail", ["auto", "high"])
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_reply_after_an_image_part_with_a_detail_label_is_kept(setting, detail):
+    image = HumanMessage(content=[{"type": "text", "text": "What is shown here?"},
+                                  {"type": "image_url", "image_url": {"url": "https://images.example.com/x.png", "detail": detail}}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": [AIMessage(
+        content="It switches on automatically and climbs higher at night. " + REPLY)]}).invoke({"messages": [image]}))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+class _GraphState(BaseModel):
+    messages: list
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_new_reply_from_a_pydantic_state_graph_is_kept(setting):
+    meta = {"model_name": "gpt-4o-mini", "finish_reason": "stop"}
+    state = _GraphState(messages=[HumanMessage(content=HUMAN), AIMessage(content=PRIOR, id="run-1", response_metadata=meta)])
+    spans = _spans(_config(setting), lambda: RunnableLambda(
+        lambda s: {"messages": [AIMessage(content=REPLY, id="run-2", response_metadata=meta)]}).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_type_value_inside_nested_user_data_of_a_part_is_input_text(setting):
+    secret = "SENTINEL_NESTED_META_TYPE_3071"
+    part = HumanMessage(content=[{"type": "text", "text": "hi", "meta": {"type": secret}}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "copied " + secret}).invoke({"messages": [part]}))
+    assert secret not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_truncated_tool_call_arguments_are_input_text(setting):
+    secret = "SENTINEL_TRUNCATED_ARG_6262"
+    prior = AIMessage(content="", invalid_tool_calls=[{"name": "f", "args": '{"q": "' + secret, "id": "1", "error": None, "type": "invalid_tool_call"}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "looked up " + secret}).invoke({"messages": [prior]}))
+    assert secret not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_number_input_is_not_matched_by_an_equal_boolean_output(setting):
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda _: True).invoke(1))
+    assert any(out is not None and "true" in str(out).lower() for out in _outputs(spans)), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_boolean_passthrough_is_withheld(setting):
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda x: x).invoke(True))
+    assert all(out is None for out in _outputs(spans)), (setting, _outputs(spans))
