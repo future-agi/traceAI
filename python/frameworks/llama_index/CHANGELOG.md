@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- Raw input and raw output are not recorded while any hide setting is on.
+
 ## [0.1.11](https://github.com/future-agi/traceAI/compare/traceai-llamaindex-v0.1.10...traceai-llamaindex-v0.1.11) (2026-11-05)
 
 

@@ -551,12 +551,18 @@ def _update_span(
         else:
             filtered_data = None
 
+    # A chain whose output carries its request input (a pass-through, an assign) is not
+    # recorded as output.value while an input hide setting is on.
+    value_outputs = outputs
+    if run.run_type == "chain" and _hides_input_content(config) and _echoes_input(run.inputs, outputs):
+        value_outputs = None
+
     span.set_attributes(
         dict(
             _flatten(
                 chain(
                     _as_span_input(filtered_data),
-                    _as_output(_convert_io(outputs)),
+                    _as_output(_convert_io(value_outputs)),
                     _as_input_images(images),
                     _as_eval_input(eval_input),
                     _prompts(run.inputs),
@@ -572,11 +578,49 @@ def _update_span(
                     _metadata(run),
                     _session_id_from_thread_id(run, captured_context),
                     # Keep the full run input canonical, not the first message's query.
-                    _as_raw_input_output(run, outputs),
+                    _as_raw_input_output(run, value_outputs),
                 )
             )
         )
     )
+
+
+def _hides_input_content(config: Any) -> bool:
+    return isinstance(config, TraceConfig) and any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images")
+    )
+
+
+_MIN_ECHO_LENGTH = 4
+
+
+def _string_leaves(value: Any, depth: int = 0) -> Iterator[str]:
+    if depth > 8:
+        return
+    if isinstance(value, str):
+        if len(value) >= _MIN_ECHO_LENGTH:
+            yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _string_leaves(item, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _string_leaves(item, depth + 1)
+    elif hasattr(value, "content"):
+        yield from _string_leaves(getattr(value, "content", None), depth + 1)
+
+
+def _echoes_input(inputs: Any, outputs: Any) -> bool:
+    """True when a string of the run's input (four characters or more) occurs in its output."""
+    if not inputs or not outputs:
+        return False
+    try:
+        rendered = safe_json_dumps(outputs)
+        leaves = list(_string_leaves(inputs))
+        return any(leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered for leaf in leaves)
+    except Exception:
+        return True  # when the comparison cannot be made, the output is not recorded
 
 
 def _langchain_run_type_to_span_kind(run_type: str) -> FiSpanKindValues:

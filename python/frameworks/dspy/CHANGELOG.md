@@ -1,3 +1,8 @@
+## [0.1.11]
+
+### Changed
+- Raw input and raw output are not recorded while any hide setting is on.
+
 
 
 ## [0.1.10] - 2026-11-12
