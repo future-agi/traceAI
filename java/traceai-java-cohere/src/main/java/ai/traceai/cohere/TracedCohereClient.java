@@ -135,7 +135,7 @@ public class TracedCohereClient {
                         ToolCall toolCall = toolCalls.get(i);
                         span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
                             + SemanticConventions.TOOL_CALL_FUNCTION_NAME, toolCall.getName());
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                        tracer.setAttribute(span, SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
                             + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
                             tracer.toJson(toolCall.getParameters()));
                     }

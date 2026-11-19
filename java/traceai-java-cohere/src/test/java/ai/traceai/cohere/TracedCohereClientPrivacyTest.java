@@ -68,6 +68,8 @@ class TracedCohereClientPrivacyTest {
         String arguments = value(chatSpan, toolPrefix + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS);
         if (outputs || outputMessages) {
             assertThat(arguments).isNull();
+        } else if (inputs || inputMessages) {
+            assertThat(arguments == null || !arguments.contains("private-argument")).isTrue();
         } else {
             assertThat(arguments).contains("private-argument");
         }
