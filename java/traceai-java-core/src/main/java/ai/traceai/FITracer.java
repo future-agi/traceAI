@@ -111,7 +111,7 @@ public class FITracer {
      */
     public void setInputValue(Span span, String value) {
         if (!config.isHideInputs() && value != null) {
-            span.setAttribute(SemanticConventions.INPUT_VALUE, truncateIfNeeded(value));
+            setAttribute(span, SemanticConventions.INPUT_VALUE, value); // the message flags redact it too
         }
     }
 
@@ -122,7 +122,7 @@ public class FITracer {
      */
     public void setOutputValue(Span span, String value) {
         if (!config.isHideOutputs() && value != null) {
-            span.setAttribute(SemanticConventions.OUTPUT_VALUE, truncateIfNeeded(value));
+            setAttribute(span, SemanticConventions.OUTPUT_VALUE, value); // the message flags redact it too
         }
     }
 
@@ -133,8 +133,7 @@ public class FITracer {
      */
     public void setRawInput(Span span, Object value) {
         if (!config.isHideInputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_INPUT, truncateIfNeeded(json));
+            setAttribute(span, SemanticConventions.RAW_INPUT, toJson(value)); // the message flags redact it too
         }
     }
 
@@ -145,8 +144,7 @@ public class FITracer {
      */
     public void setRawOutput(Span span, Object value) {
         if (!config.isHideOutputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_OUTPUT, truncateIfNeeded(json));
+            setAttribute(span, SemanticConventions.RAW_OUTPUT, toJson(value)); // the message flags redact it too
         }
     }
 

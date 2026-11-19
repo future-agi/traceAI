@@ -93,12 +93,12 @@ public class TracedChatLanguageModel implements ChatLanguageModel {
                     List<ToolExecutionRequest> toolRequests = response.content().toolExecutionRequests();
                     for (int i = 0; i < toolRequests.size(); i++) {
                         ToolExecutionRequest request = toolRequests.get(i);
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_ID, request.id());
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_FUNCTION_NAME, request.name());
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS, request.arguments());
+                        // Tool-call fields are content: go through the tracer so the hide settings apply.
+                        String toolCallKey = SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + ".";
+                        tracer.setAttribute(span, toolCallKey + SemanticConventions.TOOL_CALL_ID, request.id());
+                        tracer.setAttribute(span, toolCallKey + SemanticConventions.TOOL_CALL_FUNCTION_NAME, request.name());
+                        tracer.setAttribute(span, toolCallKey + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
+                            request.arguments());
                     }
                 }
             }
