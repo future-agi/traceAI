@@ -21,6 +21,24 @@ REPLY = "synthetic streamed reply"
 SETTINGS = [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}]
 
 
+def _offline_client(respond):
+    """A client whose sync requests go to ``respond``, on every google-genai release CI installs."""
+    transport = httpx.MockTransport(respond)
+    fields = types.HttpOptions.model_fields
+    if "httpx_client" in fields:
+        http_options = types.HttpOptions(httpx_client=httpx.Client(transport=transport))
+    elif "client_args" in fields:
+        # Releases before HttpOptions.httpx_client (the lock's 1.24.0) pass these to their httpx.Client.
+        http_options = types.HttpOptions(client_args={"transport": transport, "trust_env": False})
+    else:
+        http_options = None
+    client = genai.Client(api_key="offline-placeholder", http_options=http_options)
+    if http_options is None:
+        # The oldest releases take no transport options: swap the client at their HTTP boundary.
+        client._api_client._httpx_client = httpx.Client(transport=transport, trust_env=False)
+    return client
+
+
 def lookup(topic: str) -> str:
     """Synthetic local tool."""
     return "synthetic tool result"
@@ -43,10 +61,7 @@ def _run_stream(config):
     instrumentor = GoogleGenAIInstrumentor()
     instrumentor.instrument(tracer_provider=provider, config=config)
     try:
-        client = genai.Client(
-            api_key="offline-placeholder",
-            http_options=types.HttpOptions(httpx_client=httpx.Client(transport=httpx.MockTransport(respond))),
-        )
+        client = _offline_client(respond)
         for _ in client.models.generate_content_stream(
             model="gemini-2.0-flash", contents=PROMPT_SENTINEL, config=types.GenerateContentConfig(tools=[lookup]),
         ):
