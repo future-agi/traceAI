@@ -88,3 +88,22 @@ def test_structured_credentials_hidden_on_native_span_surfaces(direction, key):
         assert link_attributes[key] == payload
     finally:
         provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "direction,key",
+    [("input_text", "raw.input"), ("output_text", "raw.output")],
+)
+def test_raw_payload_is_not_exported_while_its_hide_setting_is_on(direction, key):
+    sentinel = "synthetic-credential-never-export"
+    payload = json.dumps({"client": {"config": {"api_key": sentinel}}, "business": "useful"})
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = FITracer(provider.get_tracer(__name__), TraceConfig(**{"hide_" + direction: True}))
+    with tracer.start_as_current_span("raw", attributes={key: payload, "safe.id": "span-123"}) as span:
+        span.set_attribute(key + ".again", payload)
+    (exported,) = exporter.get_finished_spans()
+    assert key not in exported.attributes
+    assert exported.attributes["safe.id"] == "span-123"
+    assert sentinel not in json.dumps(dict(exported.attributes))

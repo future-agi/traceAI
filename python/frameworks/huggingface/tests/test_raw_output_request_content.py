@@ -60,6 +60,10 @@ def test_control_output_recorded_without_settings(monkeypatch):
 def test_rawOutputOmitsRequestTokensUnderInputSettings(trace_config, monkeypatch):
     dumped = _run_text_generation(TraceConfig(**trace_config), monkeypatch)
     assert PROMPT_SENTINEL not in dumped
+    # Only the request echo is withheld: the reply and the token counts (counts are not content) remain.
+    assert REPLY in dumped
+    attributes, _ = json.JSONDecoder().raw_decode(dumped)
+    assert attributes["gen_ai.usage.output_tokens"] == 4
 
 def _output_values(dumped):
     """The output.value of every span in a dump (the first JSON document of the dump holds the attributes)."""
