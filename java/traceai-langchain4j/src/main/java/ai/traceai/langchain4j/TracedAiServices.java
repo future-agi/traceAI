@@ -8,11 +8,16 @@ import io.opentelemetry.context.Scope;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
-import java.util.Arrays;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 
 /**
  * Factory for creating traced proxies of LangChain4j AiServices.
- * Wraps AiService interfaces to provide automatic tracing of all method calls.
+ * Traces synchronous and CompletionStage-returning service methods. Lazy TokenStream
+ * and Flow.Publisher methods are delegated unchanged without a service span: creating
+ * a stream handle is not completing a service invocation. Attach LangChain4jListener
+ * to the streaming model for model-level spans; this proxy does not observe tool execution.
  *
  * <p>Usage:</p>
  * <pre>
@@ -76,13 +81,23 @@ public final class TracedAiServices {
             Object[] args,
             FITracer tracer) throws Throwable {
 
-        // Skip tracing for Object methods
-        if (method.getDeclaringClass() == Object.class) {
-            return method.invoke(target, args);
+        // AiServices permits package-private interfaces in application code.
+        if (!method.canAccess(target)) method.trySetAccessible();
+
+        // Do not report lazy handle construction as a successful service invocation.
+        if (method.getDeclaringClass() == Object.class
+                || Flow.Publisher.class.isAssignableFrom(method.getReturnType())
+                || isTokenStream(method.getReturnType())) {
+            try {
+                return method.invoke(target, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
         }
 
         String spanName = "AiService." + serviceInterface.getSimpleName() + "." + method.getName();
         Span span = tracer.startSpan(spanName, FISpanKind.AGENT);
+        boolean deferred = false;
 
         try (Scope scope = span.makeCurrent()) {
             // Set service attributes
@@ -90,7 +105,7 @@ public final class TracedAiServices {
             span.setAttribute("langchain4j.method", method.getName());
 
             // Capture input parameters
-            if (args != null && args.length > 0) {
+            if (!tracer.getConfig().isHideInputs() && args != null && args.length > 0) {
                 StringBuilder inputBuilder = new StringBuilder();
                 String[] paramNames = getParameterNames(method);
 
@@ -101,20 +116,33 @@ public final class TracedAiServices {
                 }
 
                 tracer.setInputValue(span, inputBuilder.toString());
-
-                // Set individual parameter attributes
-                for (int i = 0; i < args.length; i++) {
-                    if (args[i] != null) {
-                        span.setAttribute("langchain4j.param." + paramNames[i], args[i].toString());
-                    }
-                }
             }
 
             // Invoke the method
             Object result = method.invoke(target, args);
 
+            if (result instanceof CompletionStage<?> stage) {
+                stage.whenComplete((value, error) -> {
+                    try {
+                        if (error != null) {
+                            Throwable cause = error instanceof CompletionException && error.getCause() != null
+                                    ? error.getCause() : error;
+                            tracer.setError(span, cause);
+                        } else {
+                            if (value != null && !tracer.getConfig().isHideOutputs())
+                                tracer.setOutputValue(span, value.toString());
+                            span.setStatus(StatusCode.OK);
+                        }
+                    } finally {
+                        span.end();
+                    }
+                });
+                deferred = true;
+                return result; // Preserve identity and cancellation semantics of the original future.
+            }
+
             // Capture output
-            if (result != null) {
+            if (result != null && !tracer.getConfig().isHideOutputs()) {
                 tracer.setOutputValue(span, result.toString());
             }
 
@@ -129,8 +157,18 @@ public final class TracedAiServices {
             tracer.setError(span, e);
             throw e;
         } finally {
-            span.end();
+            if (!deferred) span.end();
         }
+    }
+
+    private static boolean isTokenStream(Class<?> type) {
+        if (type == null) return false;
+        // TokenStream lives in the optional langchain4j service module, not core.
+        if (type.getName().equals("dev.langchain4j.service.TokenStream")) return true;
+        for (Class<?> parent : type.getInterfaces()) {
+            if (isTokenStream(parent)) return true;
+        }
+        return isTokenStream(type.getSuperclass());
     }
 
     private static String[] getParameterNames(Method method) {
