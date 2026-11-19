@@ -8,8 +8,12 @@ response bodies: the spans carry an explicit set of fields, nothing is dumped wh
 from __future__ import annotations
 
 import contextvars
+import datetime
+import decimal
 import inspect
 import json
+import numbers
+import uuid
 from collections.abc import Collection
 from importlib import import_module
 from itertools import islice
@@ -31,6 +35,7 @@ _DOCUMENT_LIMIT = 4096
 _MAX_IDS = 100
 _MAX_DOCUMENTS = 20
 _CLIENTS = ("Elasticsearch", "AsyncElasticsearch")
+_TEXTUAL = (datetime.date, datetime.datetime, datetime.time, decimal.Decimal, uuid.UUID)
 
 # method -> span kind
 _METHODS = {
@@ -49,26 +54,42 @@ _INSIDE: contextvars.ContextVar[bool] = contextvars.ContextVar("traceai_elastics
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, numbers.Real) and not isinstance(value, bool)
+
+
+def _plain(value: Any) -> Any:
+    """Array-likes (numpy arrays and scalars, torch tensors) as plain Python values."""
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist) and not isinstance(value, (str, bytes, dict, list, tuple)):
+        try:
+            return tolist()
+        except Exception:  # noqa: BLE001 - an exotic array type is reduced to a type note below
+            return value
+    return value
 
 
 def _scrub(value: Any, depth: int = 0) -> Any:
-    """Content without embedding vectors: numeric arrays and ``query_vector`` fields are dropped."""
+    """Content without embedding vectors: numeric sequences of three or more values and ``query_vector``
+    fields are dropped. Values of unknown types are reduced to a type note, never to their text."""
+    value = _plain(value)
+    if isinstance(value, (str, bool)) or value is None or _is_number(value):
+        return value
+    if isinstance(value, _TEXTUAL):
+        return str(value)
     if depth > 6:
         return "[truncated]"
     if isinstance(value, dict):
         return {str(k): _scrub(v, depth + 1) for k, v in value.items() if k != "query_vector"}
-    if isinstance(value, (list, tuple)):
-        if len(value) >= 3 and all(_is_number(v) for v in value):
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        if len(items) >= 3 and all(_is_number(_plain(v)) for v in items):
             return "[vector omitted]"
-        return [_scrub(v, depth + 1) for v in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
+        return [_scrub(v, depth + 1) for v in items]
+    return f"[{type(value).__name__}]"
 
 
 def _dump(value: Any, limit: int) -> str:
-    return json.dumps(_scrub(value), default=str, sort_keys=True)[:limit]
+    return json.dumps(_scrub(value), default=lambda v: f"[{type(v).__name__}]", sort_keys=True)[:limit]
 
 
 def _simple(value: Any) -> bool:
@@ -76,16 +97,23 @@ def _simple(value: Any) -> bool:
         isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value))
 
 
-def _arguments(wrapped: Any, args: tuple, kwargs: dict) -> dict:
+# Top-level keys of a search request body, merged into the arguments when the deprecated ``body=`` form is used.
+_SEARCH_BODY_KEYS = {"query": "query", "knn": "knn", "rank": "rank", "rescore": "rescore", "post_filter": "post_filter",
+                     "retriever": "retriever", "size": "size", "from": "from_", "min_score": "min_score",
+                     "track_total_hits": "track_total_hits", "terminate_after": "terminate_after"}
+
+
+def _arguments(wrapped: Any, method: str, args: tuple, kwargs: dict) -> dict:
     try:
         bound = inspect.signature(wrapped).bind_partial(*args, **kwargs)
         arguments = dict(bound.arguments)
     except (TypeError, ValueError):
         arguments = dict(kwargs)
     body = arguments.get("body")
-    if isinstance(body, dict):  # the deprecated body form carries the same top-level keys
-        for key, value in body.items():
-            arguments.setdefault(key, value)
+    if method in ("search", "knn_search") and isinstance(body, dict):
+        for key, name in _SEARCH_BODY_KEYS.items():
+            if key in body:
+                arguments.setdefault(name, body[key])
     return arguments
 
 
@@ -105,13 +133,25 @@ def _index_name(value: Any) -> str | None:
     return None
 
 
+def _bulk_lines(operations: Any) -> list:
+    if isinstance(operations, (bytes, str)):
+        text = operations.decode() if isinstance(operations, bytes) else operations
+        lines = []
+        for line in text.splitlines():
+            if line.strip():
+                try:
+                    lines.append(json.loads(line))
+                except ValueError:
+                    return []
+        return lines
+    return list(operations) if isinstance(operations, (list, tuple)) else []
+
+
 def _bulk_documents(operations: Any) -> tuple[int, list]:
     """The write count and the document lines of a bulk request (action lines are not content)."""
     count, documents = 0, []
-    if not isinstance(operations, (list, tuple)):
-        return 0, documents
     expecting_document = False
-    for line in operations:
+    for line in _bulk_lines(operations):
         if expecting_document:
             documents.append(line)
             expecting_document = False
@@ -124,8 +164,24 @@ def _bulk_documents(operations: Any) -> tuple[int, list]:
     return count, documents
 
 
+def _retriever_k(retriever: Any, depth: int = 0) -> Any:
+    """The k of the first kNN retriever inside a (possibly nested) retriever request."""
+    if depth > 4 or not isinstance(retriever, dict):
+        return None
+    knn = retriever.get("knn")
+    if isinstance(knn, dict) and _is_number(knn.get("k")):
+        return knn["k"]
+    for value in retriever.values():
+        found = _retriever_k(value, depth + 1) if isinstance(value, dict) else None
+        if found is None and isinstance(value, list):
+            found = next((k for k in (_retriever_k(v, depth + 1) for v in value) if k is not None), None)
+        if found is not None:
+            return found
+    return None
+
+
 def _start(tracer: Any, config: TraceConfig, method: str, wrapped: Any, args: tuple, kwargs: dict):
-    arguments = _arguments(wrapped, args, kwargs)
+    arguments = _arguments(wrapped, method, args, kwargs)
     index = _index_name(arguments.get("index"))
     attrs: dict[str, Any] = {
         A.GEN_AI_PROVIDER_NAME: PROVIDER,
@@ -142,7 +198,7 @@ def _start(tracer: Any, config: TraceConfig, method: str, wrapped: Any, args: tu
     if method in ("search", "knn_search"):
         knn = arguments.get("knn")
         knn_requests = [k for k in (knn if isinstance(knn, (list, tuple)) else [knn]) if isinstance(k, dict)]
-        k_value = knn_requests[0].get("k") if knn_requests else None
+        k_value = knn_requests[0].get("k") if knn_requests else _retriever_k(arguments.get("retriever"))
         top_k = k_value if _is_number(k_value) else arguments.get("size")
         if _is_number(top_k):
             attrs["db.vector.query.top_k"] = top_k
@@ -157,17 +213,17 @@ def _start(tracer: Any, config: TraceConfig, method: str, wrapped: Any, args: tu
             if isinstance(vector, (list, tuple)) and all(_is_number(v) for v in vector):
                 attrs["elasticsearch.query_vector_dimensions"] = len(vector)
         if capture:
-            request = {k: arguments[k] for k in ("query", "knn", "rank", "rescore", "post_filter") if arguments.get(k)}
+            request = {k: arguments[k] for k in ("query", "knn", "retriever", "rank", "rescore", "post_filter") if arguments.get(k)}
             if request:
                 attrs[A.GEN_AI_RETRIEVAL_QUERY] = _dump(request, _LIMIT)
     elif method == "bulk":
-        count, documents = _bulk_documents(arguments.get("operations"))
+        count, documents = _bulk_documents(arguments.get("operations") or arguments.get("body"))
         attrs["db.vector.upsert.count"] = count
         if capture and documents:
             attrs[A.INPUT_VALUE] = _dump(list(islice(documents, _MAX_DOCUMENTS)), _LIMIT)
             attrs[A.INPUT_MIME_TYPE] = "application/json"
     elif method == "index":
-        document = arguments.get("document")
+        document = arguments.get("document") if arguments.get("document") is not None else arguments.get("body")
         if isinstance(arguments.get("id"), str):
             attrs["elasticsearch.document_id"] = arguments["id"]
         if capture and isinstance(document, dict):
@@ -198,13 +254,15 @@ def _record(span: Any, config: TraceConfig, method: str, result: Any) -> None:
             span.set_attribute("elasticsearch.total_hits", total_value)
         if _is_number(body.get("took")):
             span.set_attribute("elasticsearch.took_ms", body["took"])
-        ids = [str(h["_id"]) for h in hits if h.get("_id") is not None][:_MAX_IDS]
-        if ids:
-            span.set_attribute("db.vector.results.ids", ids)
-        scores = [h["_score"] for h in hits if _is_number(h.get("_score"))][:_MAX_IDS]
-        if scores:
-            span.set_attribute("db.vector.results.scores", [float(s) for s in scores])
-            span.set_attribute("elasticsearch.top_score", float(scores[0]))
+        if _capture_output(config):
+            # Ids and scores identify and rank the result content, so the output settings cover them too.
+            ids = [str(h["_id"]) for h in hits if h.get("_id") is not None][:_MAX_IDS]
+            if ids:
+                span.set_attribute("db.vector.results.ids", ids)
+            scores = [h["_score"] for h in hits if _is_number(h.get("_score"))][:_MAX_IDS]
+            if scores:
+                span.set_attribute("db.vector.results.scores", [float(s) for s in scores])
+                span.set_attribute("elasticsearch.top_score", float(scores[0]))
         if _capture_output(config):
             for position, hit in enumerate(hits[:_MAX_DOCUMENTS]):
                 prefix = f"{A.RETRIEVAL_DOCUMENTS}.{position}.document"
