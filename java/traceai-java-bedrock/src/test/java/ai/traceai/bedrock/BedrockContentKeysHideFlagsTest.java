@@ -15,13 +15,11 @@ import software.amazon.awssdk.core.document.Document;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
 import software.amazon.awssdk.services.bedrockruntime.model.*;
 
+import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Offline: the real Bedrock instrumentation over a stubbed runtime client, with each hide flag set on its
@@ -44,16 +42,35 @@ class BedrockContentKeysHideFlagsTest {
     @BeforeEach
     void setup() {
         provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
-        stub = mock(BedrockRuntimeClient.class);
         Message answer = Message.builder().role("assistant").content(
             ContentBlock.fromText(OUT_TEXT),
             ContentBlock.fromToolUse(ToolUseBlock.builder().toolUseId("t1").name("lookup")
                 .input(Document.fromMap(Map.of("q", Document.fromString(OUT_TOOL_ARGS)))).build())).build();
-        when(stub.converse(any(ConverseRequest.class))).thenReturn(ConverseResponse.builder()
+        ConverseResponse converseResponse = ConverseResponse.builder()
             .output(ConverseOutput.builder().message(answer).build()).stopReason("end_turn")
-            .usage(TokenUsage.builder().inputTokens(3).outputTokens(5).totalTokens(8).build()).build());
-        when(stub.invokeModel(any(InvokeModelRequest.class))).thenReturn((InvokeModelResponse) InvokeModelResponse.builder()
-            .body(SdkBytes.fromUtf8String("{\"results\":[{\"outputText\":\"" + OUT_INVOKE + "\"}]}")).build());
+            .usage(TokenUsage.builder().inputTokens(3).outputTokens(5).totalTokens(8).build()).build();
+        InvokeModelResponse invokeResponse = (InvokeModelResponse) InvokeModelResponse.builder()
+            .body(SdkBytes.fromUtf8String("{\"results\":[{\"outputText\":\"" + OUT_INVOKE + "\"}]}")).build();
+        stub = (BedrockRuntimeClient) Proxy.newProxyInstance(
+            BedrockRuntimeClient.class.getClassLoader(), new Class<?>[] {BedrockRuntimeClient.class},
+            (proxy, method, args) -> {
+                switch (method.getName()) {
+                    case "converse":
+                        return converseResponse;
+                    case "invokeModel":
+                        return invokeResponse;
+                    case "close":
+                        return null;
+                    case "toString":
+                        return "stubBedrockRuntimeClient";
+                    case "hashCode":
+                        return System.identityHashCode(proxy);
+                    case "equals":
+                        return proxy == args[0];
+                    default:
+                        throw new UnsupportedOperationException(method.getName());
+                }
+            });
     }
 
     @AfterEach

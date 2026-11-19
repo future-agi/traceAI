@@ -2,14 +2,11 @@ package ai.traceai.googlegenai;
 
 import ai.traceai.FITracer;
 import ai.traceai.TraceConfig;
-import com.google.genai.Chat;
-import com.google.genai.Chats;
 import com.google.genai.Client;
-import com.google.genai.Models;
 import com.google.genai.types.Content;
-import com.google.genai.types.CountTokensResponse;
-import com.google.genai.types.GenerateContentResponse;
+import com.google.genai.types.HttpOptions;
 import com.google.genai.types.Part;
+import com.sun.net.httpserver.HttpServer;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
@@ -19,16 +16,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.lang.reflect.Field;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Offline: the real TracedGenerativeModel over a stubbed Google GenAI client (no network), one hide flag at a
@@ -45,49 +40,50 @@ class GoogleGenAiContentKeysHideFlagsTest {
     private final InMemorySpanExporter exporter = InMemorySpanExporter.create();
     private SdkTracerProvider provider;
     private Client client;
+    private HttpServer server;
 
-    private static GenerateContentResponse response(String text) {
-        return GenerateContentResponse.fromJson("{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":"
+    private static String responseJson(String text) {
+        return "{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":"
             + "[{\"text\":\"" + text + "\"}]},\"finishReason\":\"STOP\"}],"
-            + "\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":5,\"totalTokenCount\":8}}");
-    }
-
-    private static void setField(Object target, String name, Object value) throws Exception {
-        Field f = target.getClass().getSuperclass() == Object.class || hasField(target.getClass(), name)
-            ? target.getClass().getDeclaredField(name) : target.getClass().getSuperclass().getDeclaredField(name);
-        f.setAccessible(true);
-        f.set(target, value);
-    }
-
-    private static boolean hasField(Class<?> type, String name) {
-        try {
-            type.getDeclaredField(name);
-            return true;
-        } catch (NoSuchFieldException e) {
-            return false;
-        }
+            + "\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":5,\"totalTokenCount\":8}}";
     }
 
     @BeforeEach
     void setup() throws Exception {
         provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
-        client = mock(Client.class);
-        Models models = mock(Models.class);
-        when(models.generateContent(anyString(), anyString(), any())).thenReturn(response(OUT_TEXT));
-        when(models.generateContent(anyString(), any(List.class), any())).thenReturn(response(OUT_TEXT));
-        when(models.countTokens(anyString(), anyString(), any()))
-            .thenReturn(CountTokensResponse.fromJson("{\"totalTokens\":7}"));
-        Chats chats = mock(Chats.class);
-        Chat chat = mock(Chat.class);
-        when(chat.sendMessage(anyString())).thenReturn(response(OUT_CHAT));
-        when(chats.create(anyString())).thenReturn(chat);
-        setField(client, "models", models);
-        setField(client, "chats", chats);
+        // real client over a canned loopback transport (no external network)
+        server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.createContext("/", exchange -> {
+            String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            String path = exchange.getRequestURI().getPath();
+            String body;
+            if (path.endsWith(":countTokens")) {
+                body = "{\"totalTokens\":7}";
+            } else if (path.endsWith(":generateContent")) {
+                body = responseJson(request.contains(IN_CHAT) ? OUT_CHAT : OUT_TEXT);
+            } else {
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+        });
+        server.start();
+        client = Client.builder().apiKey("offline")
+            .httpOptions(HttpOptions.builder()
+                .baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).build())
+            .build();
     }
 
     @AfterEach
     void teardown() {
         provider.close();
+        server.stop(0);
     }
 
     private void run(String flag) {

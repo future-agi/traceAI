@@ -71,9 +71,16 @@ class ContentHideFlagsTest {
                     + "\"usage\":{\"prompt_tokens\":1,\"total_tokens\":1}}",
                 CreateEmbeddingResponse.class);
 
-            @SuppressWarnings("unchecked")
-            StreamResponse<ChatCompletionChunk> stream = mock(StreamResponse.class);
-            when(stream.stream()).thenReturn(Stream.of(chunk));
+            StreamResponse<ChatCompletionChunk> stream = new StreamResponse<>() {
+                @Override
+                public Stream<ChatCompletionChunk> stream() {
+                    return Stream.of(chunk);
+                }
+
+                @Override
+                public void close() {
+                }
+            };
 
             OpenAIClient client = mock(OpenAIClient.class);
             ChatService chat = mock(ChatService.class);

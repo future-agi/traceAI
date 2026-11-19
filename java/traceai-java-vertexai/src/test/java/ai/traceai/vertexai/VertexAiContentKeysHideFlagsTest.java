@@ -2,14 +2,27 @@ package ai.traceai.vertexai;
 
 import ai.traceai.FITracer;
 import ai.traceai.TraceConfig;
+import com.google.api.core.ApiFuture;
+import com.google.api.core.ApiFutures;
+import com.google.api.gax.rpc.ApiCallContext;
+import com.google.api.gax.rpc.ResponseObserver;
+import com.google.api.gax.rpc.ServerStreamingCallable;
+import com.google.api.gax.rpc.StreamController;
+import com.google.api.gax.rpc.UnaryCallable;
+import com.google.cloud.vertexai.VertexAI;
 import com.google.cloud.vertexai.api.Candidate;
+import com.google.cloud.vertexai.api.CountTokensRequest;
+import com.google.cloud.vertexai.api.GenerateContentRequest;
+import com.google.cloud.vertexai.api.LlmUtilityServiceClient;
+import com.google.cloud.vertexai.api.PredictionServiceClient;
+import com.google.cloud.vertexai.api.stub.LlmUtilityServiceStub;
+import com.google.cloud.vertexai.api.stub.PredictionServiceStub;
 import com.google.cloud.vertexai.api.Content;
 import com.google.cloud.vertexai.api.CountTokensResponse;
 import com.google.cloud.vertexai.api.FunctionCall;
 import com.google.cloud.vertexai.api.GenerateContentResponse;
 import com.google.cloud.vertexai.api.Part;
 import com.google.cloud.vertexai.generativeai.GenerativeModel;
-import com.google.cloud.vertexai.generativeai.ResponseStream;
 import com.google.protobuf.Struct;
 import com.google.protobuf.Value;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
@@ -23,12 +36,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Offline: the real Vertex AI TracedGenerativeModel over a stubbed GenerativeModel (no network, no credentials),
@@ -46,6 +56,7 @@ class VertexAiContentKeysHideFlagsTest {
     private final InMemorySpanExporter exporter = InMemorySpanExporter.create();
     private SdkTracerProvider provider;
     private GenerativeModel model;
+    private VertexAI vertexAi;
 
     @BeforeEach
     void setup() throws Exception {
@@ -59,17 +70,120 @@ class VertexAiContentKeysHideFlagsTest {
             .setUsageMetadata(GenerateContentResponse.UsageMetadata.newBuilder()
                 .setPromptTokenCount(3).setCandidatesTokenCount(5).setTotalTokenCount(8))
             .build();
-        model = mock(GenerativeModel.class);
-        when(model.getModelName()).thenReturn("gemini-1.5-pro");
-        when(model.generateContent(anyString())).thenReturn(response);
-        when(model.generateContent(anyList())).thenReturn(response);
-        when(model.generateContentStream(anyString())).thenReturn(mock(ResponseStream.class));
-        when(model.countTokens(anyString())).thenReturn(CountTokensResponse.newBuilder().setTotalTokens(7).build());
+        // real GenerativeModel over in-process stubs of the prediction and utility service clients
+        UnaryCallable<GenerateContentRequest, GenerateContentResponse> generate = new UnaryCallable<>() {
+            @Override
+            public ApiFuture<GenerateContentResponse> futureCall(GenerateContentRequest request, ApiCallContext context) {
+                return ApiFutures.immediateFuture(response);
+            }
+        };
+        ServerStreamingCallable<GenerateContentRequest, GenerateContentResponse> streaming = new ServerStreamingCallable<>() {
+            @Override
+            public void call(GenerateContentRequest request, ResponseObserver<GenerateContentResponse> observer,
+                             ApiCallContext context) {
+                observer.onStart(new StreamController() {
+                    @Override
+                    public void cancel() {
+                    }
+
+                    @Override
+                    public void disableAutoInboundFlowControl() {
+                    }
+
+                    @Override
+                    public void request(int count) {
+                    }
+                });
+                observer.onResponse(response);
+                observer.onComplete();
+            }
+        };
+        UnaryCallable<CountTokensRequest, CountTokensResponse> count = new UnaryCallable<>() {
+            @Override
+            public ApiFuture<CountTokensResponse> futureCall(CountTokensRequest request, ApiCallContext context) {
+                return ApiFutures.immediateFuture(CountTokensResponse.newBuilder().setTotalTokens(7).build());
+            }
+        };
+        PredictionServiceClient prediction = PredictionServiceClient.create(new PredictionServiceStub() {
+            @Override
+            public UnaryCallable<GenerateContentRequest, GenerateContentResponse> generateContentCallable() {
+                return generate;
+            }
+
+            @Override
+            public ServerStreamingCallable<GenerateContentRequest, GenerateContentResponse> streamGenerateContentCallable() {
+                return streaming;
+            }
+
+            @Override
+            public void close() {
+            }
+
+            @Override
+            public void shutdown() {
+            }
+
+            @Override
+            public boolean isShutdown() {
+                return false;
+            }
+
+            @Override
+            public boolean isTerminated() {
+                return false;
+            }
+
+            @Override
+            public void shutdownNow() {
+            }
+
+            @Override
+            public boolean awaitTermination(long duration, TimeUnit unit) {
+                return false;
+            }
+        });
+        LlmUtilityServiceClient utility = LlmUtilityServiceClient.create(new LlmUtilityServiceStub() {
+            @Override
+            public UnaryCallable<CountTokensRequest, CountTokensResponse> countTokensCallable() {
+                return count;
+            }
+
+            @Override
+            public void close() {
+            }
+
+            @Override
+            public void shutdown() {
+            }
+
+            @Override
+            public boolean isShutdown() {
+                return false;
+            }
+
+            @Override
+            public boolean isTerminated() {
+                return false;
+            }
+
+            @Override
+            public void shutdownNow() {
+            }
+
+            @Override
+            public boolean awaitTermination(long duration, TimeUnit unit) {
+                return false;
+            }
+        });
+        vertexAi = new VertexAI.Builder().setProjectId("offline").setLocation("us-central1")
+            .setPredictionClientSupplier(() -> prediction).setLlmClientSupplier(() -> utility).build();
+        model = new GenerativeModel("gemini-1.5-pro", vertexAi);
     }
 
     @AfterEach
     void teardown() {
         provider.close();
+        vertexAi.close();
     }
 
     private void run(String flag) throws Exception {

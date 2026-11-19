@@ -1,9 +1,6 @@
 package ai.traceai.chromadb;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import ai.traceai.FITracer;
 import ai.traceai.TraceConfig;
@@ -31,8 +28,14 @@ class TracedChromaContentMaskTest {
         List<SpanData> spans;
         try (SdkTracerProvider provider = SdkTracerProvider.builder()
                 .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
-            Collection collection = mock(Collection.class);
-            when(collection.query(any(), any(), any(), any(), any())).thenReturn(null);
+            Collection collection = new Collection(null, "docs", null) {
+                @Override
+                public QueryResponse query(List<String> queryTexts, Integer nResults,
+                                           Map<String, Object> where, Map<String, Object> whereDocument,
+                                           List<IncludeEnum> include) {
+                    return null;
+                }
+            };
             TracedChromaCollection traced = new TracedChromaCollection(
                     collection, new FITracer(provider.get("chroma-mask"), config), "docs");
             traced.query(List.of(SENTINEL, SENTINEL + "-second"), 3, Map.of("k", "v"), null,
