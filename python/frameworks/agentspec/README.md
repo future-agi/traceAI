@@ -51,4 +51,4 @@ makes no model calls, so there is no HTTP layer to instrument and nothing to dou
   `agentspec.span.unfinished`.
 * Tracing failures are logged at debug level and never reach your code.
 
-Supported SDK range: `pyagentspec >= 26.1.0` (the first release with the tracing API).
+Supported SDK range: `pyagentspec >= 26.1.0, < 27` (the first release with the tracing API).

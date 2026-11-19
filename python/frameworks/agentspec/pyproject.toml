@@ -11,7 +11,7 @@ classifiers = ["Intended Audience :: Developers", "License :: OSI Approved :: Ap
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
 fi-instrumentation-otel = ">=1.1.0"
-pyagentspec = ">=26.1.0"
+pyagentspec = ">=26.1.0,<27"
 wrapt = ">=1.15.0"
 
 [tool.poetry.group.dev.dependencies]

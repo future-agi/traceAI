@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import weakref
 from typing import Any, Callable, Collection, Dict, List, Optional
 
 from fi_instrumentation import FITracer, TraceConfig
@@ -188,7 +189,7 @@ class FIAgentSpecSpanProcessor(SpanProcessor):
             attributes[A.GEN_AI_TOOL_NAME] = label
             if getattr(target, "description", None):
                 attributes[A.GEN_AI_TOOL_DESCRIPTION] = target.description
-        parent = self._open.get(getattr(getattr(span, "_parent_span", None), "id", None))
+        parent = self._nearest_open_ancestor(span)
         context = trace.set_span_in_context(parent.span) if parent is not None else None
         otel_span = self._tracer.start_span(
             f"agentspec.{prefix}.{label}", context=context, attributes=attributes, fi_span_kind=kind
@@ -198,6 +199,18 @@ class FIAgentSpecSpanProcessor(SpanProcessor):
         if kind is FiSpanKindValues.LLM:
             self._generation_parameters(state, getattr(target, "default_generation_parameters", None))
         return state
+
+    def _nearest_open_ancestor(self, span: Any) -> Optional[_State]:
+        """The state of the closest ancestor we translated, looking through spans we did not."""
+        ancestor = getattr(span, "_parent_span", None)
+        for _ in range(256):  # the chain is finite; the bound only guards a malformed cycle
+            if ancestor is None:
+                return None
+            state = self._open.get(getattr(ancestor, "id", None))
+            if state is not None:
+                return state
+            ancestor = getattr(ancestor, "_parent_span", None)
+        return None
 
     @_safe
     def on_start(self, span: Any) -> None:
@@ -345,7 +358,7 @@ class AgentSpecInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Attach a traceAI span processor to every ``pyagentspec`` ``Trace``."""
 
     def instrumentation_dependencies(self) -> Collection[str]:
-        return ("pyagentspec >= 26.1.0",)
+        return ("pyagentspec >= 26.1.0, < 27",)
 
     def _instrument(self, **kwargs: Any) -> None:
         from pyagentspec.tracing.trace import Trace
@@ -355,7 +368,9 @@ class AgentSpecInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             raise TypeError("config must be a TraceConfig")
         tracer = FITracer(trace.get_tracer(__name__, __version__, kwargs.get("tracer_provider")), config)
         mask = bool(kwargs.get("mask_sensitive_information", False))
-        self._processors: List[FIAgentSpecSpanProcessor] = []
+        # Weak: a Trace owns its processor (through span_processors), so a closed Trace frees it.
+        # Holding them strongly here would keep one processor per request alive forever.
+        self._processors: "weakref.WeakSet[FIAgentSpecSpanProcessor]" = weakref.WeakSet()
         self._original = Trace.__dict__["__init__"]
 
         def wrapped(wrapped: Any, instance: Any, args: Any, kw: Any) -> None:
@@ -363,7 +378,7 @@ class AgentSpecInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             try:
                 if not any(isinstance(p, FIAgentSpecSpanProcessor) for p in instance.span_processors):
                     processor = FIAgentSpecSpanProcessor(tracer, config, mask)
-                    self._processors.append(processor)
+                    self._processors.add(processor)
                     # a new list: the one the caller passed in is theirs
                     instance.span_processors = [*instance.span_processors, processor]
             except Exception:
@@ -376,7 +391,7 @@ class AgentSpecInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
         for processor in getattr(self, "_processors", []):
             processor.active = False  # traces that are still running stop translating
-        self._processors = []
+        self._processors = weakref.WeakSet()
         original = getattr(self, "_original", None)
         if original is not None:
             Trace.__init__ = original
