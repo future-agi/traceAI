@@ -13,6 +13,15 @@ module TraceAI
 
       def self.state_value(rate) = "r:#{rate}"
 
+      # W3C: a modified key MUST move to the left and a new key SHOULD be added
+      # at the left; a full (32-member) list evicts its right-most member. The
+      # SDK's set_value keeps an existing key in place and appends new keys at
+      # the right, so fi would be the next member evicted downstream.
+      def self.with_state(state, rate)
+        others = state.to_h.reject { |key, _| key == 'fi' }.first(31).to_h
+        OpenTelemetry::Trace::Tracestate.create({'fi' => state_value(rate)}.merge(others))
+      end
+
       def self.from_tracestate(state)
         value = state['fi']
         return unless value&.start_with?('r:')
@@ -61,7 +70,7 @@ module TraceAI
         rate = ratio_for(parent) if result.sampled?
         return result unless rate || state != result.tracestate
 
-        state = state.set_value('fi', SamplingRatio.state_value(rate)) if rate && !(@parent_based && parent.valid?)
+        state = SamplingRatio.with_state(state, rate) if rate && !(@parent_based && parent.valid?)
         decision = if result.sampled?
                      samplers::Decision::RECORD_AND_SAMPLE
                    elsif result.recording?
