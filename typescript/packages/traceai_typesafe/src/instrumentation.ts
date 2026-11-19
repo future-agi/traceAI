@@ -72,15 +72,41 @@ function clientPrototype(module: SDKModule): { systemOne?: SystemOne } | undefin
   return typeof holder === "function" ? (holder as unknown as ClientClass).prototype : undefined;
 }
 
+/** The key the client most likely sends; the SDK keeps its own copy private. */
+function redactKey(value: string): string {
+  const key = process.env.TYPESAFE_API_KEY?.trim();
+  return key && key.length >= 8 ? value.split(key).join("[redacted]") : value;
+}
+
+/** Binary values are noted by type and size, never serialized as numeric bytes (like Python's sanitizer). */
+function binaryNote(raw: unknown): string | undefined {
+  if (raw instanceof ArrayBuffer) return `<ArrayBuffer: ${raw.byteLength} bytes>`;
+  if (ArrayBuffer.isView(raw)) return `<${raw.constructor.name}: ${raw.byteLength} bytes>`;
+  if (typeof Blob !== "undefined" && raw instanceof Blob) return `<Blob: ${raw.size} bytes>`;
+  return undefined;
+}
+
 function dump(payload: unknown): { value: string; mime: string } | undefined {
   try {
-    const json = JSON.stringify(payload);
+    const json = JSON.stringify(payload, function (this: unknown, key: string, value: unknown) {
+      // Buffer has a toJSON, so inspect the original value, not the converted one.
+      const note = binaryNote((this as Record<string, unknown>)[key]);
+      return note ?? value;
+    });
     if (json === undefined) return undefined;
+    return dumpResult(redactKey(json));
+  } catch {
+    return undefined; // circular or otherwise unserializable content is left to the SDK to report
+  }
+}
+
+function dumpResult(json: string): { value: string; mime: string } | undefined {
+  try {
     return json.length <= MAX_CAPTURED_CHARS
       ? { value: json, mime: MimeType.JSON }
       : { value: `${json.slice(0, MAX_CAPTURED_CHARS)}...[truncated]`, mime: MimeType.TEXT };
   } catch {
-    return undefined; // circular or otherwise unserializable content is left to the SDK to report
+    return undefined;
   }
 }
 
@@ -310,11 +336,22 @@ function observePromise<T>(
       if (key === "catch") return (...args: Parameters<Promise<T>["catch"]>) => parsed().catch(...args);
       if (key === "finally") return (...args: Parameters<Promise<T>["finally"]>) => parsed().finally(...args);
       const method = Reflect.get(target, key, target);
+      if (key === "map" && typeof method === "function") {
+        // The derived APIPromise reads the SDK's own parse, which this observer does not see.
+        // Start the observed parse (the SDK shares one parse), so the span ends on its result.
+        return (...args: unknown[]) => {
+          parsed().catch(() => undefined);
+          return method.apply(target, args);
+        };
+      }
       if (key === "withResponse" && typeof method === "function") {
         return (...args: unknown[]) =>
           context
             .with(execContext, () => method.apply(target, args))
-            .then((result: { data: T }) => ({ ...result, data: onValue(result.data) }), onError);
+            .then((result: { data: T; requestId?: string }) => {
+              if (result.requestId) onRequestId(result.requestId);
+              return { ...result, data: onValue(result.data) };
+            }, onError);
       }
       if (key === "asResponse" && typeof method === "function") {
         return (...args: unknown[]) =>
