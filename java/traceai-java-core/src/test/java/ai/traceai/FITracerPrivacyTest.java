@@ -42,11 +42,11 @@ class FITracerPrivacyTest {
 
         SpanData data = otel.getSpans().get(0);
         assertThat(value(data, SemanticConventions.INPUT_VALUE) == null).isEqualTo(inputs);
-        assertThat(value(data, SemanticConventions.RAW_INPUT) == null).isEqualTo(inputs);
+        assertThat(value(data, SemanticConventions.RAW_INPUT) == null).isEqualTo(flags != 0);
         assertThat(value(data, SemanticConventions.LLM_INPUT_MESSAGES) == null)
             .isEqualTo(inputs || inputMessages);
         assertThat(value(data, SemanticConventions.OUTPUT_VALUE) == null).isEqualTo(outputs);
-        assertThat(value(data, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(outputs);
+        assertThat(value(data, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(flags != 0);
         assertThat(value(data, SemanticConventions.LLM_OUTPUT_MESSAGES) == null)
             .isEqualTo(outputs || outputMessages);
         assertThat(data.getAttributes().get(AttributeKey.longKey(

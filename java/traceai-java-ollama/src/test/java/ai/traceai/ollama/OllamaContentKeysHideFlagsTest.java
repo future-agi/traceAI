@@ -96,7 +96,7 @@ class OllamaContentKeysHideFlagsTest {
     }
 
     /** Attribute keys (and event names) whose exported value contains the sentinel. */
-    private List<String> leakedKeys(String sentinel) {
+    private List<String> exportedKeys(String sentinel) {
         List<String> keys = new ArrayList<>();
         for (SpanData span : exporter.getFinishedSpanItems()) {
             span.getAttributes().forEach((k, v) -> { if (String.valueOf(v).contains(sentinel)) keys.add(k.getKey()); });
@@ -112,14 +112,14 @@ class OllamaContentKeysHideFlagsTest {
     void inputFlagsKeepPromptContentOutOfEverySpan(String flag) throws Exception {
         run(flag);
         for (String s : List.of(IN_PROMPT, IN_USER, IN_SYSTEM, IN_EMBED, IN_BATCH_A, IN_BATCH_B)) {
-            List<String> leaked = leakedKeys(s);
-            // the raw output attribute is outside this check, which covers the input-side keys
-            leaked.remove("fi.raw_output");
-            assertThat(leaked).as("%s leaked under %s", s, flag).isEmpty();
+            List<String> exported = exportedKeys(s);
+            // OllamaChatResult echoes the chat history; that echo is covered by the separate test below
+            exported.remove("fi.raw_output");
+            assertThat(exported).as("%s exported under %s", s, flag).isEmpty();
         }
         // the other direction is not hidden: guards against asserting on an empty export
-        assertThat(leakedKeys(OUT_GENERATE)).isNotEmpty();
-        assertThat(leakedKeys(OUT_CHAT)).isNotEmpty();
+        assertThat(exportedKeys(OUT_GENERATE)).isNotEmpty();
+        assertThat(exportedKeys(OUT_CHAT)).isNotEmpty();
     }
 
     @ParameterizedTest
@@ -127,8 +127,21 @@ class OllamaContentKeysHideFlagsTest {
     void outputFlagsKeepResponseContentOutOfEverySpan(String flag) throws Exception {
         run(flag);
         for (String s : List.of(OUT_GENERATE, OUT_CHAT)) {
-            assertThat(leakedKeys(s)).as("%s leaked under %s", s, flag).isEmpty();
+            assertThat(exportedKeys(s)).as("%s exported under %s", s, flag).isEmpty();
         }
-        assertThat(leakedKeys(IN_PROMPT)).isNotEmpty();
+        assertThat(exportedKeys(IN_PROMPT)).isNotEmpty();
+    }
+
+    /**
+     * OllamaChatResult carries the whole chat history, so raw.output (written unless an output flag hides it)
+     * repeats the request messages. An input flag must not be bypassable through that echo.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hideInputs", "hideInputMessages"})
+    void chatRawOutputDoesNotEchoHiddenInputs(String flag) throws Exception {
+        run(flag);
+        for (String s : List.of(IN_USER, IN_SYSTEM)) {
+            assertThat(exportedKeys(s)).as("%s echoed under %s", s, flag).isEmpty();
+        }
     }
 }

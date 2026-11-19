@@ -293,7 +293,7 @@ public final class TraceAIAuto {
                     String.valueOf(capture.match.endpoint().get("operation")));
                 for (Map.Entry<String, Object> e : attrs.entrySet()) {
                     String k = e.getKey(); Object v = e.getValue();
-                    if (hidden(k, capture.match, state.config())) continue;
+                    if (hidden(k, v, capture.match, state.config())) continue;
                     // With the error details hidden, a failed call's output is withheld as well: it may be the provider's error body.
                     if (!result.ok() && state.config().masking.isHideErrorDetails() && (k.equals("output.value") || k.equals("output.mime_type"))) continue;
                     if (v instanceof String) span.setAttribute(k, (String)v);
@@ -306,19 +306,42 @@ public final class TraceAIAuto {
             } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource, limit); }
         } catch (Throwable ignored) { }
     }
+    private static final List<String> RAW_KEYS = List.of("raw.input", "fi.raw_input", "raw.output", "fi.raw_output");
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }
-    static boolean hidden(String key, WireCore.Match match, AutoConfig config) {
+    static boolean hidden(String key, WireCore.Match match, AutoConfig config) { return hidden(key, "", match, config); }
+    /**
+     * True when the attribute is withheld. The content keys are the core SDK's shared table (ai.traceai.ContentKeys, the
+     * same list and semantics as Python's TraceConfig). The agent's own rules below stay: audio transcripts of a wire call
+     * are direction-aware (a speech-to-text transcript is output, a text-to-speech one is input), and the rules for the
+     * wire-specific keys (cohere.preamble, message.tool_calls, error attributes, the image / text / parameter switches).
+     * The value type does not matter: a content key is masked whether its value is a string, number or boolean.
+     * Counts and flags stay visible because their keys sit outside the content prefixes.
+     */
+    static boolean hidden(String key, Object value, WireCore.Match match, AutoConfig config) {
+        boolean wireOperation = match != null && match.endpoint() != null && !"chat".equals(String.valueOf(match.endpoint().get("operation")));
+        boolean directional = key.equals("gen_ai.audio.transcript") && wireOperation;
+        // The core decision by key; a non-text value is passed as itself so a reranker document count stays a count.
+        Object probe = value instanceof Number || value instanceof Boolean ? value : "v";
+        if (!directional && config.masking.maskTypedAttribute(key, probe) != probe) return true;
+        // The raw request and response are withheld under every hide switch, the agent's own switches included, as core does for its flags.
+        if (hidesContent(config) && RAW_KEYS.stream().anyMatch(raw -> key.equals(raw) || key.startsWith(raw + "."))) return true;
         if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
         if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
         boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
         if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || key.startsWith("gen_ai.tool.") || key.equals("gen_ai.request.parameters")
+            || key.equals("raw.input") || key.equals("llm.prompt_template.variables") || key.startsWith("llm.prompt_template.variables.")
+            || key.equals("gen_ai.prompt.template.variables") || key.startsWith("gen_ai.prompt.template.variables.")
+            || key.startsWith("embedding.embeddings.") && key.endsWith(".embedding.text")
             || key.equals("cohere.preamble") || key.equals("embedding.input_text") || key.startsWith("embedding.input_text.") || key.equals("gen_ai.reranker.query"))) return true;
         // Existing wrappers also emit generated tool calls outside gen_ai.output.messages.
-        if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
+        if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.equals("raw.output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
         if ((inputText || inputMessages || outputText || outputMessages || config.masking.isHideErrorDetails()) && Set.of("exception.message", "exception.stacktrace", "error.message", "error.stack").contains(key)) return true;
-        return key.equals("gen_ai.audio.transcript") && ("text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages);
+        if (!key.equals("gen_ai.audio.transcript")) return false;
+        // The agent's wire calls know the direction; an application span's transcript is hidden by either side's switch.
+        if (!wireOperation) return inputText || inputMessages || outputText || outputMessages;
+        return "text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages;
     }
     /** True when the error text (status description, exception and error attributes) is withheld: its own switch, or any content switch. */
     static boolean hidesErrorText(AutoConfig config) { return config.masking.isHideErrorDetails() || hidesContent(config); }

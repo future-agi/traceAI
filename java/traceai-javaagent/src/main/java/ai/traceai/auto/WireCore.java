@@ -92,6 +92,8 @@ public final class WireCore {
     record ToolCall(String id, String name, String arguments) {}
     static final class Parsed {
         String requestModel, responseModel, responseId, inputValue, inputMime, outputValue, outputMime;
+        /** The output value is the provider's whole response body, which can echo the request. */
+        boolean wholeResponse;
         List<String> finish = new ArrayList<>();
         List<Message> input = new ArrayList<>(), output = new ArrayList<>();
         List<Object> tools = new ArrayList<>();
@@ -484,7 +486,10 @@ public final class WireCore {
     static void finish(Parsed p, Object reason) { if (truth(reason)) p.finish = new ArrayList<>(List.of(str(reason))); }
     static void transcript(Parsed p, Object text) { if (text instanceof String) { p.extra.put("gen_ai.audio.transcript", text); p.outputValue = (String)text; p.outputMime = "text/plain"; } }
     static void dimension(Parsed p, Object vector) { if (vector instanceof List) p.extra.put("gen_ai.embeddings.dimension.count", list(vector).size()); }
+    /** Internal marker on a wire attribute map: output.value is the whole response body. Never exported. */
+    static final String WHOLE_RESPONSE = "traceai.internal.whole_response";
     static void outputJson(Parsed p, Object value) { p.outputValue = dump(value); p.outputMime = "application/json"; }
+    static void outputDump(Parsed p, Object value) { outputJson(p, value); p.wholeResponse = true; }
     static void responsesOutput(Parsed p, Object response) {
         p.responseId = str(or(get(response, "id"), p.responseId)); p.responseModel = str(or(get(response, "model"), p.responseModel));
         Message message = new Message("assistant", null); List<String> texts = new ArrayList<>();
@@ -624,7 +629,7 @@ public final class WireCore {
                 if (get(data, "audio_base64") instanceof String) p.extra.put("traceai.audio.output_bytes", base64Size(string(get(data, "audio_base64"))));
                 if (body.kind.equals("sse")) { long size = 0; for (Object event : body.events) if (get(event, "data") instanceof String && "chunk".equals(or(get(event, "type"), "chunk"))) size += base64Size(string(get(event, "data"))); p.extra.put("traceai.audio.output_bytes", size); } break;
             case "openai.images":
-                if (data instanceof Map) { Object copy = parse(dump(data)); for (Object item : list(get(copy, "data"))) if (map(item).containsKey("b64_json")) map(item).put("b64_json", "<base64 omitted>"); outputJson(p, copy); openaiUsage(p, get(data, "usage")); } break;
+                if (data instanceof Map) { Object copy = parse(dump(data)); for (Object item : list(get(copy, "data"))) if (map(item).containsKey("b64_json")) map(item).put("b64_json", "<base64 omitted>"); outputDump(p, copy); openaiUsage(p, get(data, "usage")); } break;
             case "openai.moderations":
                 if (data instanceof Map) { p.responseId = string(get(data, "id")); p.responseModel = string(get(data, "model")); p.extra.put("traceai.moderation.flagged", list(get(data, "results")).stream().anyMatch(r -> truth(get(r, "flagged")))); outputJson(p, data); } break;
             case "rerank":
@@ -651,7 +656,7 @@ public final class WireCore {
                 Object embeddings = get(data, "embeddings"); dimension(p, first(embeddings instanceof Map ? get(embeddings, "float") : embeddings)); usage(p, "input", get(get(get(data, "meta"), "billed_units"), "input_tokens")); break;
             case "bedrock.converse":
                 Object message = get(get(data, "output"), "message"); if (message instanceof Map) p.output.add(bedrockMessage(message)); finish(p, get(data, "stopReason")); usageSnapshot(p, "bedrock.converse", get(data, "usage")); break;
-            case "bedrock.invoke": if (data instanceof Map && map(data).containsKey("content")) anthropic(body, p); else if (body.kind.equals("json")) outputJson(p, data); break;
+            case "bedrock.invoke": if (data instanceof Map && map(data).containsKey("content")) anthropic(body, p); else if (body.kind.equals("json")) outputDump(p, data); break;
             case "ollama.chat", "ollama.generate":
                 StringBuilder output = new StringBuilder(); Message ollama = new Message("assistant", null);
                 for (Object item : body.kind.equals("ndjson") ? body.events : data instanceof Map ? List.of(data) : List.of()) {
@@ -736,6 +741,7 @@ public final class WireCore {
             }
         }
         if (p.outputValue != null) { attrs.put("output.value", p.outputValue); attrs.put("output.mime_type", or(p.outputMime, "text/plain")); }
+        if (p.wholeResponse && p.outputValue != null) attrs.put(WHOLE_RESPONSE, true);
         p.extra.forEach((k, v) -> put(attrs, k, v));
         if (body.kind.equals("binary") && ok) { attrs.putIfAbsent("gen_ai.audio.mime_type", contentType(resp.headers)); if (contentType(resp.headers).startsWith("audio/") || "text_to_speech".equals(m.endpoint.get("operation"))) attrs.put("traceai.audio.output_bytes", resp.size); }
         if (req.truncated || resp.truncated) attrs.put("traceai.wire.truncated", true);
