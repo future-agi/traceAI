@@ -27,3 +27,9 @@ const schema = new Map<string, (v: unknown) => boolean>([
 export const isRuntimeKey = (key: string) => schema.has(key);
 /** Input is the already-sanitized FI admission map, never a host-supplied object. */
 export const validRuntimeValue = (key: string, value: unknown) => schema.get(key)?.(value) === true;
+
+// Module-private to fi-core's package (no public subpath). The ESM build refers
+// to the CJS instance so an ESM exporter can check an FI-authored CJS value,
+// and vice versa. Never publish evidence on span attributes or process globals.
+export const receipts = new WeakMap<object, string>();
+export const admittedRuntime = new WeakMap<object, Map<string, unknown>>();

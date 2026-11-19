@@ -9,7 +9,7 @@ import { capBase64Images } from "./trace/trace-config/imageCap";
 import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-config/structuredRedaction";
 import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
-import { validRuntimeValue } from "./runtime-metadata";
+import { admittedRuntime, receipts, validRuntimeValue } from "./runtime-metadata";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
@@ -21,7 +21,6 @@ export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credential
 // canonical UUID shape participate in FI-authored grouping; foreign spans still mask
 // the name, and loss, media and registered-secret checks always apply.
 const RECEIPT = "fi.context.session_id";
-const receipts = new WeakMap<object, string>();
 /** @internal Bind only explicit FI span writes to the exact admitted value. */
 export function rememberContextReceipt(ctx: object, attrs: Attributes | undefined): void {
   if (!attrs || !Object.prototype.hasOwnProperty.call(attrs, RECEIPT)) return;
@@ -223,7 +222,6 @@ function metadataDiscoverySources(value: string, charge: (characters: number) =>
 // Only our pre-admission path can attest to a complete text MIME before SDK
 // truncation/projection. Keep evidence out of telemetry and invalidate it if any
 // processor changes the admitted value. Host-owned exporters are never mutated.
-const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
 const admittedText = new WeakMap<object, Map<string, unknown>>();
 // Markers synthesized AFTER native admission can exceed its value limit. Trust
 // only this exact detached map/key/value, never a marker's spelling in telemetry.
@@ -489,7 +487,7 @@ export function rememberMediaAdmission(span: object, complete: Attributes): void
       else if (sameAttribute(original, actual)) proven.set(key, Array.isArray(actual) ? Array.from({ length: data(actual, "length") }, (_, i) => data(actual, String(i))) : actual);
     }
     admittedText.set(current, proven);
-    admittedRuntime.set(current, runtime);
+    if (runtime.size) admittedRuntime.set(current, runtime); else admittedRuntime.delete(current);
   } catch { /* Missing evidence invokes the conservative export fallback. */ }
 }
 export type PrivacyOptions = TraceConfigOptions & { hideLLMInvocationParameters?: boolean };

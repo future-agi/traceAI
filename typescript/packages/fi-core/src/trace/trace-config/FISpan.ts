@@ -186,7 +186,7 @@ import {
      * updated; custom span implementations retain their normal public API path.
      */
     private admit(attributes: Attributes, singleKey?: string, original: Attributes = attributes): void {
-      rememberContextReceipt(this.span.spanContext(), attributes);
+      if (Object.prototype.hasOwnProperty.call(attributes, "fi.context.session_id")) rememberContextReceipt(this.span.spanContext(), attributes);
       if (this.autoDestination) {
         // Never read/merge/replay foreign attributes. Host processors and active
         // application code may have written to the same native span since our
