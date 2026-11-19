@@ -70,7 +70,7 @@ An HTTP error or a connection error ends the span with `ERROR`, `error.type`, `h
 - The span kind is written under the TypeScript key `fi.span.kind`; Python writes `gen_ai.span.kind`. Both mean `EVALUATOR`.
 - The TypeScript SDK exposes the request id only on the response headers, so a plain `await` reads it from the (already buffered) response; Python reads it from the result object.
 - The `exception` event's `exception.type` is the error's class name (for example `RateLimitError`); Python writes `module.ClassName`.
-- The TypeScript SDK keeps its API key private, so the key is redacted from captured input only when it is set in `TYPESAFE_API_KEY`; Python redacts the client's own key.
+- The TypeScript SDK keeps its API key private, so the key is redacted from captured input, the idempotency key and server error messages only when it is set in `TYPESAFE_API_KEY`; Python redacts the client's own key.
 - The TypeScript SDK keeps its API key private and has no Python-style `typesafe.response.field_path` error field.
 
 A call whose promise is never awaited and never read through `asResponse()` or `withResponse()` is not ended.

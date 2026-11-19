@@ -158,7 +158,7 @@ function requestAttributes(client: unknown, request: Dict, options: unknown, hid
       attributes[S.INPUT_MIME_TYPE] = captured.mime;
     }
     const key = idempotencyKey(options);
-    if (key) attributes[IDEMPOTENCY_KEY] = key;
+    if (key) attributes[IDEMPOTENCY_KEY] = redactKey(key);
   }
   return attributes;
 }
@@ -272,7 +272,8 @@ function recordError(span: Span, error: unknown, hideInputs: boolean, hideOutput
   // Client-side TypeSafeError text can name a local file, so only the API's own message is used,
   // and only while neither side's content is hidden (an API can echo request values).
   if (status !== undefined && !hideInputs && !hideOutputs) {
-    const message = serverMessage(data)?.slice(0, MAX_ERROR_MESSAGE_CHARS);
+    const raw = serverMessage(data);
+    const message = raw === undefined ? undefined : redactKey(raw).slice(0, MAX_ERROR_MESSAGE_CHARS);
     if (message) {
       event["exception.message"] = message;
       description = `${description}: ${message}`;
