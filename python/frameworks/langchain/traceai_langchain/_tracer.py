@@ -50,6 +50,7 @@ from fi_instrumentation.fi_types import (
 )
 from fi_instrumentation.instrumentation._tracers import FITracer
 from langchain_core.documents import Document
+from pydantic import BaseModel as PydanticBaseModel
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.human import HumanMessage
 from langchain_core.tracers import BaseTracer, LangChainTracer
@@ -639,15 +640,31 @@ def _is_message_like(value: Any) -> bool:
     return isinstance(value, (BaseMessage, Document))
 
 
-def _part_leaves(part: Any, top: bool = True) -> Any:
-    """A content part with its own ``type`` and ``id`` keys left out (and those of the parts nested in it, which
-    carry a ``type``); any other value, nested data included, stays (``image_url.url``, ``source.data``, a tool
-    result's ``content``)."""
+# Labels a content part carries whatever it says: its kind, ids, tool name, status and media/format labels.
+_PART_KEYS = ("type", "id", "name", "status", "call_id", "tool_use_id", "detail", "media_type", "mime_type",
+              "source_type", "format")
+# Keys of a part whose mapping value describes a media item (``image_url.detail``, ``source.media_type``).
+_PART_HOLDERS = ("image_url", "input_audio", "source", "file")
+
+
+def _part_leaves(part: Any, drop: tuple = _PART_KEYS) -> Any:
+    """A content part without its labels (``_PART_KEYS``, also in its media holders ``image_url``, ``input_audio``,
+    ``source`` and ``file``). Content blocks nested in a part's ``content`` list lose only ``type`` and ``id``; other
+    nested data keeps every key. Any other value stays (``image_url.url``, ``source.data``, tool input values)."""
     if isinstance(part, Mapping):
-        schema = top or "type" in part
-        return {k: _part_leaves(v, False) for k, v in part.items() if not (schema and k in ("type", "id"))}
+        out = {}
+        for k, v in part.items():
+            if k in drop:
+                continue
+            if k in _PART_HOLDERS and isinstance(v, Mapping):
+                out[k] = _part_leaves(v)
+            elif k == "content" and isinstance(v, (list, tuple)):
+                out[k] = [_part_leaves(item, ("type", "id")) if isinstance(item, Mapping) else _part_leaves(item, ()) for item in v]
+            else:
+                out[k] = _part_leaves(v, ())
+        return out
     if isinstance(part, (list, tuple)):
-        return [_part_leaves(item, False) for item in part]
+        return [_part_leaves(item, ()) for item in part]
     return part
 
 
@@ -675,7 +692,7 @@ def _message_parts(value: Any) -> list:
                         parts.append(json.loads(args))
                     except ValueError:
                         parts.append(args)
-                        parts.extend(re.findall(r'"((?:[^"\\]|\\.)*)"', args))
+                        parts.extend(re.findall(r'"((?:[^"\\]|\\.)*)(?:"|$)', args))
                 elif args is not None:
                     parts.append(args)
     return parts
@@ -686,6 +703,10 @@ def _input_children(value: Any) -> Any:
     text-bearing fields only, anything else has all its parts (see ``_children``). None when not a container."""
     if _is_message_like(value):
         return [(None, part) for part in _message_parts(value)]
+    fields = getattr(type(value), "model_fields", None)
+    if isinstance(value, PydanticBaseModel) and isinstance(fields, Mapping):
+        # Read the fields themselves, so messages and documents inside keep the narrowing (model_dump makes dicts).
+        return [(n, getattr(value, n, None)) for n in fields]
     return _children(value)
 
 
@@ -708,16 +729,21 @@ def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0, childre
         _string_leaves(child, found, nodes, depth + 1, children_of)
 
 
+def _same(value: Any, target: Any) -> bool:
+    """Equal and of comparable types; a boolean only equals a boolean."""
+    if isinstance(value, bool) or isinstance(target, bool):
+        comparable = type(value) is type(target)
+    else:
+        comparable = type(value) is type(target) or isinstance(value, type(target)) or isinstance(target, type(value))
+    return comparable and value == target
+
+
 def _contains_value(value: Any, target: Any, nodes: list, depth: int = 0) -> bool:
     """True when ``value`` or any part of it (within the node and depth budget) equals ``target``."""
     nodes[0] += 1
     if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
         raise _Undecidable
-    if isinstance(value, bool) or isinstance(target, bool):
-        comparable = type(value) is type(target)
-    else:
-        comparable = type(value) is type(target) or isinstance(value, type(target)) or isinstance(target, type(value))
-    if comparable and value == target:
+    if _same(value, target):
         return True
     children = _children(value)
     if children is None:
@@ -758,7 +784,7 @@ def _echoes_input(inputs: Any, outputs: Any) -> bool:
     try:
         # 1. identity, of the whole output or of any part of it
         whole = _unwrap(inputs)
-        if _unwrap(outputs) == whole:
+        if _same(_unwrap(outputs), whole):
             return True
         empty = whole is None or (isinstance(whole, (str, bytes, Mapping, list, tuple, set, frozenset)) and len(whole) == 0)
         if not empty and _contains_value(outputs, whole, [0]):
