@@ -1378,6 +1378,14 @@
         "traceai_writer/version.py"
       ]
     },
+    "python/frameworks/alephalpha": {
+      "release-type": "python",
+      "component": "traceai-alephalpha",
+      "package-name": "traceAI-alephalpha",
+      "extra-files": [
+        "traceai_alephalpha/version.py"
+      ]
+    },
     "go/langchaingo": {
       "release-type": "go",
       "component": "go/langchaingo",

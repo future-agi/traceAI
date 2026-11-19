@@ -372,6 +372,16 @@ def test_registry_enables_sagemaker_on_boto3_next_to_bedrock():
     assert bedrock.targets == sagemaker.targets
 
 
+def test_registry_enables_alephalpha_on_the_aleph_alpha_client_import():
+    integration = _registry.find("alephalpha")
+    assert integration is not None
+    assert integration.kind == _registry.INSTRUMENTOR
+    assert integration.targets == ("aleph_alpha_client",)
+    assert (integration.package, integration.module, integration.entry) == (
+        "traceAI-alephalpha", "traceai_alephalpha", "AlephAlphaInstrumentor")
+    assert integration.default
+
+
 def test_registry_enables_writer_on_the_writerai_import():
     integration = _registry.find("writer")
     assert integration is not None

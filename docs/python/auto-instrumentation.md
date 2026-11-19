@@ -99,6 +99,7 @@ Each integration reports one of these statuses:
 | `litellm` | `litellm` | `traceAI-litellm` | Automatic |
 | `openrouter` | `openrouter` | `traceAI-openrouter` | Automatic |
 | `writer` | `writerai` | `traceAI-writer` | Automatic |
+| `alephalpha` | `aleph_alpha_client` | `traceAI-alephalpha` | Automatic |
 | `portkey` | `portkey-ai` | `traceAI-portkey` | Automatic |
 | `watsonx` | `ibm_watsonx_ai` | `traceAI-watsonx` | Automatic |
 | `replicate` | `replicate` | `traceAI-replicate` | Automatic |
