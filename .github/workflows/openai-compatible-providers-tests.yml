@@ -18,7 +18,7 @@ on:
       - 'python/frameworks/vllm/**'
       - '.github/workflows/openai-compatible-providers-tests.yml'
   push:
-    branches: [dev, main]
+    branches: [dev]
     paths:
       - 'python/fi_instrumentation/**'
       - 'python/tests_cross_package/**'
