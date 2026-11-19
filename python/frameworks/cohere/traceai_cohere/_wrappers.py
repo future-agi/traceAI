@@ -20,7 +20,7 @@ from traceai_cohere._response_attributes_extractor import (
     _EmbedResponseAttributesExtractor,
     _RerankResponseAttributesExtractor,
 )
-from traceai_cohere._utils import _finish_tracing, _to_dict
+from traceai_cohere._utils import _finish_tracing, _input_hidden, _response_dict, _response_side, _to_dict
 from traceai_cohere._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,7 @@ class _ChatWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
@@ -175,7 +175,7 @@ class _AsyncChatWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
@@ -268,6 +268,8 @@ class _ChatStreamWrapper(_WithTracer):
             else:
                 try:
                     final_response["text"] = "".join(content_parts)
+                    if _input_hidden(self._tracer):
+                        final_response = _response_side(final_response)
                     span._span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(raw_chunks[-5:]))  # Last 5 chunks
                     span._span.set_attribute(SpanAttributes.OUTPUT_VALUE, "".join(content_parts))
 
@@ -360,6 +362,8 @@ class _AsyncChatStreamWrapper(_ChatStreamWrapper):
         else:
             try:
                 final_response["text"] = "".join(content_parts)
+                if _input_hidden(self._tracer):
+                    final_response = _response_side(final_response)
                 # Legacy provider-specific tool fields do not pass through
                 # the core's canonical output-message masking rules.
                 if (self._config.hide_outputs or self._config.hide_output_messages
@@ -421,7 +425,7 @@ class _EmbedWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
@@ -475,7 +479,7 @@ class _AsyncEmbedWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
@@ -529,7 +533,7 @@ class _RerankWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
@@ -583,7 +587,7 @@ class _AsyncRerankWrapper(_WithTracer):
                 raise
 
             try:
-                response_dict = _to_dict(response)
+                response_dict = _response_dict(response, self._tracer)
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,

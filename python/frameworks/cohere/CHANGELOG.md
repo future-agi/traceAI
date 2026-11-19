@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.3] - 2026-11-19
+
+- With `hide_inputs`, `hide_input_messages`, `hide_input_text` or `hide_input_images`, the whole-response `output.value` is built from response-side fields (text, tool calls, citations, finish reason, usage) while any input hide setting is on, so `chat_history` and other request echoes are not recorded.
+
 ## [0.1.2] - 2026-11-12
 
 ### Changed

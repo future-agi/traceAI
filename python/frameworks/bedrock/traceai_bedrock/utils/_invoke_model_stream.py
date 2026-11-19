@@ -34,6 +34,14 @@ class _InvokeModelEventStream(_EventStream):
         return result
 
 
+def _hides_input(span: Span) -> bool:
+    config = getattr(span, "_self_config", None)
+    return any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images")
+    )
+
+
 class _InvokeModelStreamCallback:
     def __init__(self, span: Span, request: Mapping[str, Any]) -> None:
         self._span = span
@@ -70,7 +78,9 @@ class _InvokeModelStreamCallback:
             if self._text:
                 self._attributes[SpanAttributes.OUTPUT_VALUE] = "".join(self._text)
                 self._attributes[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.TEXT.value
-            elif self._payloads:
+            elif self._payloads and not _hides_input(self._span):
+                # A structured payload can repeat the request (a Cohere final event carries the prompt),
+                # so it is not recorded while an input hide setting is on.
                 self._attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(self._payloads)
                 self._attributes[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
             input_tokens = self._attributes.get(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS)

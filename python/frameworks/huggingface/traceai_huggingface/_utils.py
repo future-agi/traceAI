@@ -26,6 +26,61 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     return {"value": str(obj)}
 
 
+# Response-side fields that may be recorded while input settings are on. The request echo (the prefill tokens
+# of a text generation's details) is left out rather than stripped by name.
+_RESPONSE_FIELDS = ("id", "object", "created", "model", "usage", "generated_text", "system_fingerprint")
+_DETAIL_FIELDS = ("finish_reason", "generated_tokens", "seed")
+_CHOICE_FIELDS = ("index", "finish_reason")
+_MESSAGE_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+
+def _input_hidden(tracer: Any) -> bool:
+    config = getattr(tracer, "_self_config", None)
+    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text or config.hide_input_images))
+
+
+def _field(obj: Any, name: str) -> Any:
+    if isinstance(obj, Mapping):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _pick(obj: Any, names: Tuple[str, ...]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for name in names:
+        value = _field(obj, name)
+        if value is not None:
+            out[name] = dict(value) if isinstance(value, Mapping) else value
+    return out
+
+
+def _response_view(response: Any, tracer: Any) -> Any:
+    """The response for the extractors; under any input hide setting, only its response-side fields."""
+    if response is None or isinstance(response, (str, bytes)) or not _input_hidden(tracer):
+        return response
+    if not isinstance(response, Mapping) and not hasattr(response, "__dict__"):
+        return response
+    out = _pick(response, _RESPONSE_FIELDS)
+    details = _field(response, "details")
+    if details is not None:
+        out["details"] = _pick(details, _DETAIL_FIELDS)
+        # The prefill tokens are request content; their count is not, and is kept as a count only.
+        prefill = _field(details, "prefill")
+        if isinstance(prefill, (list, tuple)):
+            out["details"]["prefill_token_count"] = len(prefill)
+    choices = _field(response, "choices")
+    if choices:
+        kept = []
+        for choice in choices:
+            item = _pick(choice, _CHOICE_FIELDS)
+            message = _field(choice, "message")
+            if message is not None:
+                item["message"] = _pick(message, _MESSAGE_FIELDS)
+            kept.append(item)
+        out["choices"] = kept
+    return out
+
+
 def _flatten(
     mapping: Mapping[str, Any], prefix: str = ""
 ) -> Iterator[Tuple[str, AttributeValue]]:

@@ -634,7 +634,7 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: LLMCompletionInProgressEvent) -> None:
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(_progress_output(event, self._config)))
 
     @_process_event.register
     def _(self, event: LLMCompletionEndEvent) -> None:
@@ -655,7 +655,7 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: LLMChatInProgressEvent) -> None:
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(_progress_output(event, self._config)))
 
     @_process_event.register
     def _(self, event: LLMChatEndEvent) -> None:
@@ -1256,6 +1256,14 @@ class EventHandler(BaseEventHandler, extra="allow"):
                     f"Error processing event of type {event.__class__.__qualname__}"
                 )
         return event
+
+
+def _progress_output(event: Any, config: TraceConfig) -> Any:
+    """What an in-progress LLM event records as output. The event carries the request next to the
+    streamed response, so while an input hide setting is on only the response is recorded."""
+    if _hides_embedding_text(config) or getattr(config, "hide_input_images", False):
+        return getattr(event, "response", None)
+    return event
 
 
 def _hides_embedding_text(config: TraceConfig) -> bool:
