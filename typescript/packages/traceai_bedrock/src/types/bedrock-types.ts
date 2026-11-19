@@ -5,8 +5,9 @@
  * custom types for structures not exposed by the SDK.
  */
 
-// Import official AWS SDK types
-import {
+// Import official AWS SDK types. Type-only: this package must load when only
+// @aws-sdk/client-bedrock-agent-runtime is installed.
+import type {
     // Core content and message types from SDK
     ContentBlock,
     Message,
@@ -33,7 +34,7 @@ import {
   import { isObjectWithStringKeys } from "@traceai/fi-core";
   
   // Re-export AWS SDK types for convenience
-  export {
+  export type {
     ContentBlock,
     Message,
     SystemContentBlock,

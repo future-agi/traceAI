@@ -14,11 +14,13 @@
     "name": "bedrock",
     "package": "@traceai/bedrock",
     "targets": [
-      "@aws-sdk/client-bedrock-runtime"
+      "@aws-sdk/client-bedrock-runtime",
+      "@aws-sdk/client-bedrock-agent-runtime"
     ],
     "className": "BedrockInstrumentation",
     "modules": [
-      "@aws-sdk/client-bedrock-runtime"
+      "@aws-sdk/client-bedrock-runtime",
+      "@aws-sdk/client-bedrock-agent-runtime"
     ]
   },
   {
