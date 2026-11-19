@@ -14,6 +14,27 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+
+# Response-side fields that may be recorded while input settings are on. The request echoes (GenerateResponse.context
+# token ids, for one) are left out rather than stripped by name.
+_RESPONSE_FIELDS = (
+    "model", "created_at", "response", "thinking", "done", "done_reason", "total_duration", "load_duration",
+    "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration", "embedding", "embeddings",
+)
+_MESSAGE_FIELDS = ("role", "content", "thinking", "tool_calls")
+
+
+def _input_hidden(config: Any) -> bool:
+    return bool(config.hide_inputs or config.hide_input_messages or config.hide_input_text)
+
+
+def _response_side(response: Mapping[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {k: response[k] for k in _RESPONSE_FIELDS if k in response}
+    message = response.get("message")
+    if isinstance(message, Mapping):
+        out["message"] = {k: message[k] for k in _MESSAGE_FIELDS if k in message}
+    return out
+
 class _ResponseAttributesExtractor:
     """Extract span attributes from Ollama response."""
 
@@ -80,10 +101,12 @@ class _ResponseAttributesExtractor:
         # Core masks dedicated vector keys, but cannot inspect serialized JSON.
         # Redact only the copy used for telemetry, never the SDK response itself.
         output = response
+        if _input_hidden(self._config):
+            output = _response_side(response)
         if self._config.hide_embedding_vectors:
             output = {
                 key: REDACTED_VALUE if key in ("embedding", "embeddings") else value
-                for key, value in response.items()
+                for key, value in output.items()
             }
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(output)
 
