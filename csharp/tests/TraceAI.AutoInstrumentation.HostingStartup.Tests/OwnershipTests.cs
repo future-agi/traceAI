@@ -9,6 +9,7 @@ using Xunit;
 namespace TraceAI.AutoInstrumentation.HostingStartup.Tests;
 
 /// <summary>Every type-registered implementation the hook wraps is released exactly once, with the container, and is still traced.</summary>
+[Collection("ProcessEnvironment")] // shares the process-wide activity sources with DecoratorTests: one listener at a time
 public class OwnershipTests
 {
     private static readonly Settings Everything = new(Chat: true, Agent: true, Sensitive: false);

@@ -9,6 +9,7 @@ namespace TraceAI.AutoInstrumentation.HostingStartup.Tests;
 
 /// <summary>The decoration the hosting startup applies to a service collection, against the real
 /// Microsoft.Extensions.AI and Microsoft.Agents.AI packages.</summary>
+[Collection("ProcessEnvironment")] // its spans are counted per source, so no other test may emit on them at the same time
 public class DecoratorTests
 {
     private const string ChatSource = "Experimental.Microsoft.Extensions.AI";
