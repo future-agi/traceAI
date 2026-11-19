@@ -35,6 +35,8 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
     # Legacy provider entry points only defer once extraction/privacy parity is
     # present, not merely because an older shared package happens to be enabled.
     _supports_deepseek_extensions = True
+    # The shared instrumentor labels MiniMax hosts (api.minimax.io / api.minimax.chat) as provider "minimax".
+    _supports_minimax_provider = True
 
     __slots__ = (
         "_original_request",

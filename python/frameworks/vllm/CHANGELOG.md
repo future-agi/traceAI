@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- The package declares `DEFERS_TO_SHARED_OPENAI`, which the core reads to turn the integration on by default (an older release without it stays off by default, so a call never yields two spans).
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-vllm-v0.1.0...traceai-vllm-v0.1.1) (2026-11-05)
 
 

@@ -37,6 +37,12 @@ class Integration:
     default: bool = True
     note: str = ""
     scopes: Tuple[str, ...] = ()
+    # An OpenAI-compatible provider wraps the shared OpenAI client. It is on by default only when the installed
+    # provider package declares DEFERS_TO_SHARED_OPENAI (so one span per call holds on any version mix) and the
+    # installed traceai-openai has every capability in ``needs_openai``; otherwise it keeps ``skew_note`` and stays off.
+    shared_openai: bool = False
+    needs_openai: Tuple[str, ...] = ()
+    skew_note: str = ""
 
 
 def _covered_by_openai(provider: str) -> str:
@@ -46,6 +52,8 @@ def _covered_by_openai(provider: str) -> str:
         f"and leave openai out."
     )
 
+
+_EXTENSIONS = ("_supports_deepseek_extensions",)
 
 INTEGRATIONS: Tuple[Integration, ...] = (
     # Model providers
@@ -79,11 +87,11 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("voyage", ("voyageai",), "traceAI-voyage", "traceai_voyage", "VoyageInstrumentor"),
     Integration("discoveryengine", ("google.cloud.discoveryengine",), "traceAI-discoveryengine", "traceai_discoveryengine", "DiscoveryEngineInstrumentor", category="retrieval"),
     Integration("typesafe", ("typesafe_sdk",), "traceAI-typesafe", "traceai_typesafe", "TypeSafeInstrumentor", category="guardrail"),
-    Integration("deepseek", ("openai",), "traceAI-deepseek", "traceai_deepseek", "DeepSeekInstrumentor", default=False, note=_covered_by_openai("DeepSeek")),
-    Integration("fireworks", ("openai",), "traceAI-fireworks", "traceai_fireworks", "FireworksInstrumentor", default=False, note=_covered_by_openai("Fireworks")),
-    Integration("xai", ("openai",), "traceAI-xai", "traceai_xai", "XAIInstrumentor", default=False, note=_covered_by_openai("xAI")),
-    Integration("minimax", ("openai",), "traceAI-minimax", "traceai_minimax", "MiniMaxInstrumentor", default=False, note=_covered_by_openai("MiniMax")),
-    Integration("vllm", ("openai",), "traceAI-vllm", "traceai_vllm", "VLLMInstrumentor", default=False, note=_covered_by_openai("vLLM servers")),
+    Integration("deepseek", ("openai",), "traceAI-deepseek", "traceai_deepseek", "DeepSeekInstrumentor", shared_openai=True, needs_openai=_EXTENSIONS, skew_note=_covered_by_openai("DeepSeek")),
+    Integration("fireworks", ("openai",), "traceAI-fireworks", "traceai_fireworks", "FireworksInstrumentor", shared_openai=True, skew_note=_covered_by_openai("Fireworks")),
+    Integration("xai", ("openai",), "traceAI-xai", "traceai_xai", "XAIInstrumentor", shared_openai=True, needs_openai=_EXTENSIONS, skew_note=_covered_by_openai("xAI")),
+    Integration("minimax", ("openai",), "traceAI-minimax", "traceai_minimax", "MiniMaxInstrumentor", shared_openai=True, needs_openai=_EXTENSIONS + ("_supports_minimax_provider",), skew_note=_covered_by_openai("MiniMax")),
+    Integration("vllm", ("openai",), "traceAI-vllm", "traceai_vllm", "VLLMInstrumentor", shared_openai=True, skew_note=_covered_by_openai("vLLM servers")),
     # Agent and orchestration frameworks
     Integration("langchain", ("langchain_core",), "traceAI-langchain", "traceai_langchain", "LangChainInstrumentor", category="framework"),
     Integration("langgraph", ("langgraph",), "traceAI-langchain", "traceai_langchain", "LangGraphInstrumentor", category="framework"),

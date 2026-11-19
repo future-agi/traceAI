@@ -17,7 +17,7 @@ from traceai_minimax._response_attributes_extractor import (
     _ChatCompletionResponseAttributesExtractor,
     _StreamingChatCompletionResponseExtractor,
 )
-from traceai_minimax._utils import _finish_tracing, _to_dict, is_minimax_client
+from traceai_minimax._utils import _finish_tracing, _to_dict, is_minimax_client, shared_openai_is_active
 from traceai_minimax._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class _ChatCompletionWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if shared_openai_is_active() or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
         # Check if this is a MiniMax client
@@ -182,7 +182,7 @@ class _AsyncChatCompletionWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if shared_openai_is_active() or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
 
         # Check if this is a MiniMax client
