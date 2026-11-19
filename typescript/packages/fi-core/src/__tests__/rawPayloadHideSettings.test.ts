@@ -16,6 +16,7 @@ const settings: (keyof TraceConfigOptions)[] = [
   "hideInputText",
   "hideOutputText",
   "hideInputImages",
+  "hideEmbeddingVectors",
 ];
 
 describe("raw input and raw output are not recorded while any hide setting is on", () => {
