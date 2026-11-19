@@ -127,16 +127,50 @@ public class ContentMaskParityTests : IDisposable
     }
 
     [Fact]
-    public void MessageKeys_AreRedactedByTheirFlags()
+    public void MessageKeys_AreDroppedByTheirFlags_AsPythonDropsThem()
     {
+        // Python: hide_inputs / hide_input_messages -> `return None` for any gen_ai.input.messages key.
         const string input = "gen_ai.input.messages.0.message.content";
         const string output = "gen_ai.output.messages.0.message.content";
         var inputMessages = TraceConfig.Builder().HideInputMessages().Build();
         var outputMessages = TraceConfig.Builder().HideOutputMessages().Build();
-        Assert.Equal(TraceConfig.RedactedValue, Export(inputMessages, input));
+        Assert.Null(Export(inputMessages, input));
         Assert.Equal(Secret, Export(inputMessages, output));
-        Assert.Equal(TraceConfig.RedactedValue, Export(outputMessages, output));
+        Assert.Null(Export(outputMessages, output));
         Assert.Equal(Secret, Export(outputMessages, input));
+        Assert.Null(Export(Hiding(true, false), input));
+        Assert.Null(Export(Hiding(false, true), output));
+    }
+
+    public static readonly string[] InputValueKeyList =
+    [
+        "input.value", "raw.input", "llm.prompt_template.variables", "gen_ai.prompt.template.variables",
+    ];
+
+    public static readonly string[] OutputValueKeyList = ["output.value", "raw.output"];
+
+    public static IEnumerable<object[]> InputValueKeys => InputValueKeyList.Select(k => new object[] { k });
+    public static IEnumerable<object[]> OutputValueKeys => OutputValueKeyList.Select(k => new object[] { k });
+
+    // Python: private_input = hide_inputs or hide_input_messages or hide_input_text, and the value keys
+    // are also hidden under hide_input_images; private_output likewise without an image flag.
+    [Theory]
+    [MemberData(nameof(InputValueKeys))]
+    public void MessageTextAndImageFlags_HideTheInputValueKeys(string key)
+    {
+        Assert.Equal(TraceConfig.RedactedValue, Export(TraceConfig.Builder().HideInputMessages().Build(), key));
+        Assert.Equal(TraceConfig.RedactedValue, Export(TraceConfig.Builder().HideInputText().Build(), key));
+        Assert.Equal(TraceConfig.RedactedValue, Export(TraceConfig.Builder().HideInputImages().Build(), key));
+        Assert.Equal(Secret, Export(TraceConfig.Builder().HideOutputMessages().HideOutputText().Build(), key));
+    }
+
+    [Theory]
+    [MemberData(nameof(OutputValueKeys))]
+    public void MessageAndTextFlags_HideTheOutputValueKeys(string key)
+    {
+        Assert.Equal(TraceConfig.RedactedValue, Export(TraceConfig.Builder().HideOutputMessages().Build(), key));
+        Assert.Equal(TraceConfig.RedactedValue, Export(TraceConfig.Builder().HideOutputText().Build(), key));
+        Assert.Equal(Secret, Export(TraceConfig.Builder().HideInputMessages().HideInputText().HideInputImages().Build(), key));
     }
 
     [Fact]

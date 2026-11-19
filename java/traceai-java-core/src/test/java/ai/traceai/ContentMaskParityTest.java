@@ -156,4 +156,82 @@ class ContentMaskParityTest {
         assertThat(data.getAttributes().get(AttributeKey.stringArrayKey("gen_ai.response.finish_reasons")))
             .containsExactly("stop");
     }
+
+    /** Python: private_input = hide_inputs or hide_input_messages (or hide_input_text, absent in Java). */
+    static final List<String> INPUT_VALUE_KEYS = List.of(
+        "input.value", "raw.input", "fi.raw_input",
+        "llm.prompt_template.variables", "gen_ai.prompt.template.variables");
+    static final List<String> OUTPUT_VALUE_KEYS = List.of("output.value", "raw.output", "fi.raw_output");
+
+    @ParameterizedTest(name = "hideInputMessages masks {0}")
+    @MethodSource("inputValueKeys")
+    void hideInputMessagesMasksTheInputValueKeys(String key) {
+        TraceConfig messages = TraceConfig.builder().hideInputMessages(true).build();
+        assertThat(stored(export(messages, key), key)).isEqualTo(REDACTED);
+        assertThat(stored(export(messages, key + ".0.value"), key + ".0.value")).isEqualTo(REDACTED);
+        assertThat(stored(export(TraceConfig.builder().hideOutputMessages(true).build(), key), key)).isEqualTo(SECRET);
+    }
+
+    @ParameterizedTest(name = "hideOutputMessages masks {0}")
+    @MethodSource("outputValueKeys")
+    void hideOutputMessagesMasksTheOutputValueKeys(String key) {
+        TraceConfig messages = TraceConfig.builder().hideOutputMessages(true).build();
+        assertThat(stored(export(messages, key), key)).isEqualTo(REDACTED);
+        assertThat(stored(export(TraceConfig.builder().hideInputMessages(true).build(), key), key)).isEqualTo(SECRET);
+    }
+
+    static Stream<String> inputValueKeys() { return INPUT_VALUE_KEYS.stream(); }
+    static Stream<String> outputValueKeys() { return OUTPUT_VALUE_KEYS.stream(); }
+
+    @Test
+    void theTracerSettersHonourTheMessageFlags() {
+        otel.clearSpans();
+        FITracer tracer = new FITracer(otel.getOpenTelemetry().getTracer("parity"),
+            TraceConfig.builder().hideInputMessages(true).hideOutputMessages(true).build());
+        Span span = tracer.startSpan("parity", FISpanKind.LLM);
+        tracer.setInputValue(span, SECRET);
+        tracer.setOutputValue(span, SECRET);
+        tracer.setRawInput(span, SECRET);
+        tracer.setRawOutput(span, SECRET);
+        span.end();
+        SpanData data = otel.getSpans().get(0);
+        for (String key : List.of("input.value", "output.value", "raw.input", "raw.output")) {
+            assertThat(data.getAttributes().get(AttributeKey.stringKey(key))).as(key)
+                .satisfiesAnyOf(v -> assertThat(v).isNull(), v -> assertThat(v).isEqualTo(REDACTED));
+        }
+    }
+
+    @Test
+    void embeddingTextIsInputContentUnderHideInputsAndHideInputMessages() {
+        for (String key : List.of("embedding.embeddings.0.embedding.text", "embedding.embeddings.12.embedding.text",
+                                  "embedding.input_text", "embedding.input_text.0", "embedding.input_text.3")) {
+            assertThat(stored(export(hiding(true, false), key), key)).as(key).isEqualTo(REDACTED);
+            assertThat(stored(export(TraceConfig.builder().hideInputMessages(true).build(), key), key))
+                .as(key).isEqualTo(REDACTED);
+            assertThat(stored(export(hiding(false, true), key), key)).as(key).isEqualTo(SECRET);
+            assertThat(stored(export(hiding(false, false), key), key)).as(key).isEqualTo(SECRET);
+        }
+        for (String key : List.of("embedding.embeddings.0.embedding.vector", "embedding.model_name",
+                                  "embedding.vector_count", "embedding.input_texts_count")) {
+            assertThat(stored(export(hiding(true, true), key), key)).as(key).isEqualTo(SECRET);
+        }
+    }
+
+    @Test
+    void toolCallArgumentsNestedInAMessageAreMasked() {
+        // The shape LangChain4j writes: message.tool_calls.N.tool_call.function.arguments, with no
+        // gen_ai.*.messages prefix, so an anchored prefix match misses it.
+        for (String key : List.of("message.tool_calls.0.tool_call.function.arguments",
+                                  "message.tool_calls.2.tool_call.function.arguments",
+                                  "llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments",
+                                  "message.tool_calls.0.message.function_call_arguments_json")) {
+            assertThat(stored(export(hiding(true, false), key), key)).as(key).isEqualTo(REDACTED);
+            assertThat(stored(export(hiding(false, true), key), key)).as(key).isEqualTo(REDACTED);
+            assertThat(stored(export(hiding(false, false), key), key)).as(key).isEqualTo(SECRET);
+        }
+        for (String key : List.of("message.tool_calls.0.tool_call.function.name", "message.tool_calls.0.tool_call.id",
+                                  "message.tool_calls.0.tool_call.function.arguments_count")) {
+            assertThat(stored(export(hiding(true, true), key), key)).as(key).isEqualTo(SECRET);
+        }
+    }
 }
