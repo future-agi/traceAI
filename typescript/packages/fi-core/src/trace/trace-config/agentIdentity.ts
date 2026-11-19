@@ -1,13 +1,15 @@
 import type { Span } from '@opentelemetry/api';
+import { types } from 'node:util';
 
 // Optional SDK interop, including mixed ESM/CJS. The wrapper exports only
-// admitted identity and a writer bit; it never exposes its native span or a
+// admitted identity and write eligibility; it never exposes its native span or a
 // callback that can operate on it. All attribute writes still use FISpan.
 export const AGENT_VIEW = Symbol.for('futureagi.runtime.agent-identity.v1');
 export const AGENT_NAME = 'gen_ai.agent.name';
 export const AGENT_ID = 'gen_ai.agent.id';
 const WRITER = Symbol.for('futureagi.runtime.context-agent.writer.v1');
 export const SET_CONTEXT_NAME = Symbol.for('futureagi.runtime.set-context-name.v1');
+export const FILL_IDENTITY = Symbol.for('futureagi.runtime.fill-agent-identity.v1');
 export const WATCH_NAME = Symbol.for('traceai.fi.standalone-name-observer.v1');
 type Origin = { automatic: boolean; beforeHost?: WeakSet<Span> };
 type Setter = Span['setAttribute'] & { [WRITER]?: Origin };
@@ -21,6 +23,20 @@ export function writer(span: Span): Origin | undefined {
 export function observedWriter(span: Span): Origin | undefined {
   const origin = writer(span);
   return origin?.beforeHost?.has(span) ? origin : undefined;
+}
+
+// Inspect only the real SDK's data slots, without publishing a host value or
+// interpreting a missing/redacted export as a missing native attribute.
+export function identitySlots(span: Span, lastContextName?: string) {
+  if (types.isProxy(span)) return;
+  const native = Object.getOwnPropertyDescriptor(span, '_droppedAttributesCount');
+  const slot = Object.getOwnPropertyDescriptor(span, 'attributes');
+  const attrs = slot?.value;
+  if (typeof native?.value !== 'number' || !slot?.writable || !attrs || typeof attrs !== 'object' || types.isProxy(attrs)) return;
+  const proto = Object.getPrototypeOf(attrs);
+  if (proto !== null && proto !== Object.prototype) return;
+  return { nameEmpty: !(AGENT_NAME in attrs), idEmpty: !(AGENT_ID in attrs),
+    matchesLast: lastContextName !== undefined && Object.getOwnPropertyDescriptor(attrs, AGENT_NAME)?.value === lastContextName };
 }
 
 // Called by our processor registry *before* dispatching user onStart hooks.

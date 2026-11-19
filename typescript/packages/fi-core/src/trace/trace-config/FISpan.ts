@@ -10,7 +10,7 @@ import {
     Link,
     diag,
   } from "@opentelemetry/api";
-  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, SET_CONTEXT_NAME, observedWriter, writer } from "./agentIdentity";
+  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, FILL_IDENTITY, SET_CONTEXT_NAME, identitySlots, observedWriter, writer } from "./agentIdentity";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
@@ -89,33 +89,43 @@ import {
      * callers keep the wrapper. Instrumentors continue writing through `this`. */
     getContextSpan(): Span { return this.autoDestination ? this.span : this; }
 
-    /** @internal Narrow SDK view of the identity the host actually admitted. */
-    [AGENT_VIEW](mark?: true) {
-      if (!this.admissionFailed) {
-        try {
-          const identity = exportedAgentIdentity(this.span, this.privacy);
-          const origin = observedWriter(this.span);
-          // A foreign provider may have handed an unobserved, bound setter to
-          // a host before constructing this wrapper. Do not plant a derived
-          // name there: a subsequent same-string write would be unknowable.
-          if (origin && mark && identity.name !== undefined) origin.automatic = true;
-          if (origin?.automatic && this.lastContextName !== undefined && identity.name !== this.lastContextName) origin.automatic = false;
-          return { ...identity, automatic: origin?.automatic === true };
-        } catch { /* A failed identity export exposes no host values. */ }
+    private identityWrites(mark?: true) {
+      const slots = !this.admissionFailed ? identitySlots(this.span, this.lastContextName) : undefined;
+      const origin = observedWriter(this.span);
+      if (origin && slots) {
+        if (mark && !slots.nameEmpty) origin.automatic = true;
+        if (origin.automatic && this.lastContextName !== undefined && !slots.matchesLast) origin.automatic = false;
       }
-      return { automatic: false };
+      const automatic = !!slots && origin?.automatic === true;
+      return { automatic, nameWritable: slots?.nameEmpty === true || automatic, idWritable: slots?.idEmpty === true };
     }
 
-    /** @internal Only the latest verified context name, never native values.
-     * Without pre-host observation, defer this optional current-span field;
-     * a host setter (even the same string) then leaves a real, distinct write. */
+    /** @internal Export eligibility is independent of native write authority. */
+    [AGENT_VIEW](mark?: true) {
+      let identity: { name?: string; id?: string } = {};
+      if (!this.admissionFailed) {
+        try { identity = exportedAgentIdentity(this.span, this.privacy); }
+        catch { /* A failed identity export exposes no host values. */ }
+      }
+      return { ...identity, ...this.identityWrites(mark && identity.name !== undefined ? true : undefined) };
+    }
+
+    /** @internal Fill SDK enrichment only; explicit framework setters stay unconditional. */
+    [FILL_IDENTITY](key: string, value: AttributeValue): void {
+      if (this.isEnded) return;
+      const {nameWritable, idWritable} = this.identityWrites();
+      if (key === AGENT_NAME ? nameWritable : key === AGENT_ID && idWritable) this.setAttribute(key, value);
+    }
+
+    /** @internal Without pre-host observation, defer even a proven-empty slot:
+     * an already bound host setter could later write the same string. */
     [SET_CONTEXT_NAME](name: string): void {
-      if (this.isEnded || this.admissionFailed || typeof name !== 'string' || name.length > 64) return;
+      if (this.isEnded || typeof name !== 'string' || name.length > 64 || !this.identityWrites().nameWritable) return;
       const origin = observedWriter(this.span);
       this.lastContextName = name;
       if (!origin) return;
       this.setAttribute(AGENT_NAME, name);
-      origin.automatic = true; // Next view validates the actual committed name.
+      origin.automatic = true; // Next native slot check validates the committed name.
     }
 
     constructor({
@@ -407,13 +417,8 @@ import {
           // Commit a deferred default only into a demonstrably empty name slot.
           // An opaque map, preexisting name or late framework write wins.
           let fallback: Attributes = {};
-          if (this.lastContextName !== undefined && !observedWriter(this.span)) {
-            const slot = Object.getOwnPropertyDescriptor(this.span, "attributes");
-            const native = Object.getOwnPropertyDescriptor(this.span, "_droppedAttributesCount");
-            if (native && "value" in native && typeof native.value === "number" && slot && "value" in slot && slot.writable &&
-                slot.value && typeof slot.value === "object" && !(AGENT_NAME in slot.value)) {
-              fallback = { [AGENT_NAME]: this.lastContextName };
-            }
+          if (this.lastContextName !== undefined && !observedWriter(this.span) && this.identityWrites().nameWritable) {
+            fallback = { [AGENT_NAME]: this.lastContextName };
           }
           this.admit(fallback);
           rememberMediaAdmission(this.span, Object.fromEntries([...this.admittedKeys].map(key => [key, this.pendingAttributes[key]])));
