@@ -304,6 +304,24 @@ public class TraceConfig {
         }
     }
 
+    /**
+     * Applies the hide settings to one attribute. Content keys listed in {@link ContentKeys} are
+     * replaced with {@link ContentKeys#REDACTED}; message keys and MIME types are dropped, as Python
+     * does. Anything else, including names, ids and counts, is returned unchanged.
+     *
+     * @param key the attribute key
+     * @param value the attribute value
+     * @return the value to export, {@link ContentKeys#REDACTED}, or null when the attribute is dropped
+     */
+    public String maskAttribute(String key, String value) {
+        if (key == null || value == null) return null;
+        switch (ContentKeys.actionFor(key, this)) {
+            case OMIT: return null;
+            case REDACT: return ContentKeys.REDACTED;
+            default: return value;
+        }
+    }
+
     // Getters
     public boolean isHideInputs() { return hideInputs; }
     public boolean isHideOutputs() { return hideOutputs; }

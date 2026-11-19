@@ -151,6 +151,43 @@ public class FITracer {
     }
 
     /**
+     * Sets a string attribute on a span, applying the hide settings to content keys (see
+     * {@link ContentKeys}). Use this for any attribute that may carry prompt, response or tool
+     * content; keys that are not content are set as given.
+     * @param span the span
+     * @param key the attribute key
+     * @param value the attribute value
+     */
+    public void setAttribute(Span span, String key, String value) {
+        String masked = config.maskAttribute(key, value);
+        if (masked != null) {
+            span.setAttribute(key, truncateIfNeeded(masked));
+        }
+    }
+
+    /**
+     * Sets a string-array attribute on a span, applying the hide settings to content keys. A masked
+     * array is replaced by the single redaction placeholder, as Python does.
+     * @param span the span
+     * @param key the attribute key
+     * @param values the attribute values
+     */
+    public void setAttribute(Span span, String key, List<String> values) {
+        if (key == null || values == null) {
+            return;
+        }
+        switch (ContentKeys.actionFor(key, config)) {
+            case OMIT:
+                return;
+            case REDACT:
+                span.setAttribute(key, ContentKeys.REDACTED);
+                return;
+            default:
+                span.setAttribute(AttributeKey.stringArrayKey(key), values);
+        }
+    }
+
+    /**
      * Sets token count attributes on a span.
      * @param span the span
      * @param prompt the prompt token count

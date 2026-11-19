@@ -70,6 +70,11 @@ public class TraceConfig
         key.EndsWith(".exception.stacktrace", StringComparison.Ordinal) ||
         key.EndsWith(".error_message", StringComparison.Ordinal));
 
+    // Parity with the Python SDK (python/fi_instrumentation/instrumentation/config.py): InputContent
+    // covers every key in _INPUT_CONTENT_PREFIXES plus input.value, raw.input, the prompt-template
+    // variables and the alias tool.parameters; OutputContent every key in _OUTPUT_CONTENT_PREFIXES plus
+    // output.value and raw.output; MixedContent is _MIXED_CONTENT_PREFIXES. ContentMaskParityTests
+    // checks each key against its hide flag, so a key added to Python belongs in the test and here.
     // Content families, not whole namespaces: model names, tool IDs, token counts,
     // template names and other operational identifiers must remain available.
     private static readonly string[] InputContent =
