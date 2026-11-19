@@ -541,7 +541,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
       args,
       span,
       (response: ConverseResponse) => {
-        extractConverseResponseAttributes({ span, response });
+        extractConverseResponseAttributes({ span, response, traceConfig: this.traceConfig });
         span.setStatus({ code: SpanStatusCode.OK });
         span.end();
         return response;
