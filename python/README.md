@@ -208,6 +208,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-pinecone` | [pinecone](frameworks/pinecone/) |
 | `traceAI-pipecat` | [pipecat](frameworks/pipecat/) |
 | `traceAI-portkey` | [portkey](frameworks/portkey/) |
+| `traceAI-promptflow` | [promptflow](frameworks/promptflow/) |
 | `traceai-pydantic-ai` | [pydantic-ai](frameworks/pydantic-ai/) |
 | `traceAI-qdrant` | [qdrant](frameworks/qdrant/) |
 | `traceAI-redis` | [redis-vector](frameworks/redis-vector/) |
