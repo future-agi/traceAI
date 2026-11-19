@@ -1,4 +1,4 @@
-## [0.1.4] - pending release
+## [0.1.4] - 2026-11-12
 
 ### Changed
 - traceai-google-genai now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.

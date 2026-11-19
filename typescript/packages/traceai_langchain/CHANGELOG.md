@@ -1,12 +1,12 @@
 # Changelog
 
-## [0.1.8] - pending release
+## [0.1.8] - 2026-11-12
 
 ### Fixed
 - Normalized tool calls and the links from tool results back to their calls are recorded.
 - Importing @traceai/langchain as an ES module no longer prints a TypeError stack trace on every run.
 
-## [0.1.6] - pending release
+## [0.1.6] - 2026-11-07
 ### Fix
 - Function-call arguments are kept in exported messages. Legacy OpenAI `function_call.arguments` was read as `args`, so `gen_ai.input.messages` / `gen_ai.output.messages` dropped the arguments; `args` is still accepted as a fallback.
 

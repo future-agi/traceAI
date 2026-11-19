@@ -1,6 +1,6 @@
 
 
-## [0.1.8] - pending release
+## [0.1.8] - 2026-11-12
 
 ### Changed
 - traceai-openai-agents now requires fi-instrumentation-otel 1.2.2 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.

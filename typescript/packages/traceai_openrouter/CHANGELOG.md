@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.1] - pending release
+## [0.1.1] - 2026-11-12
 
 ### Fixed
 - The README shows the install command and how to send traces to Future AGI with @traceai/fi-core.
