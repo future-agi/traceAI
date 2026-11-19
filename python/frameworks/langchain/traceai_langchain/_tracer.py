@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import math
@@ -593,34 +594,91 @@ def _hides_input_content(config: Any) -> bool:
 
 
 _MIN_ECHO_LENGTH = 4
+_MAX_ECHO_DEPTH = 32
+_MAX_ECHO_LEAVES = 5000
 
 
-def _string_leaves(value: Any, depth: int = 0) -> Iterator[str]:
-    if depth > 8:
+class _Undecidable(Exception):
+    """The comparison cannot be completed (too deep, too large, unreadable): the output is treated as an echo."""
+
+
+def _children(value: Any) -> Any:
+    """The parts of a non-scalar value: mapping values, sequence items, and the fields of model-like objects."""
+    if isinstance(value, Mapping):
+        return list(value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return list(value)
+    for method in ("model_dump", "dict"):
+        dump = getattr(value, method, None)
+        if callable(dump):
+            try:
+                dumped = dump()
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(dumped, Mapping):
+                return list(dumped.values())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return [getattr(value, f.name, None) for f in dataclasses.fields(value)]
+    parts = []
+    for name in ("page_content", "content", "metadata"):
+        if hasattr(value, name):
+            parts.append(getattr(value, name, None))
+    if parts:
+        return parts
+    fields = getattr(value, "__dict__", None)
+    if isinstance(fields, Mapping) and fields:
+        return list(fields.values())
+    return None
+
+
+def _leaves(value: Any, found: list, depth: int = 0) -> None:
+    """Every scalar leaf of ``value``, whatever its type; anything unreadable is a text leaf of its own."""
+    if depth > _MAX_ECHO_DEPTH or len(found) > _MAX_ECHO_LEAVES:
+        raise _Undecidable
+    if value is None:
         return
-    if isinstance(value, str):
-        if len(value) >= _MIN_ECHO_LENGTH:
-            yield value
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _string_leaves(item, depth + 1)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _string_leaves(item, depth + 1)
-    elif hasattr(value, "content"):
-        yield from _string_leaves(getattr(value, "content", None), depth + 1)
+    if isinstance(value, (str, bool, int, float)):
+        found.append(value)
+        return
+    children = _children(value)
+    if children is None:
+        found.append(str(value))
+        return
+    for child in children:
+        _leaves(child, found, depth + 1)
 
 
 def _echoes_input(inputs: Any, outputs: Any) -> bool:
-    """True when a string of the run's input (four characters or more) occurs in its output."""
+    """True when any leaf of the run's input (a string, number or boolean of any size) occurs in its output.
+
+    Fail-safe: a comparison that cannot be completed, or any doubt, counts as an echo.
+    """
     if not inputs or not outputs:
         return False
     try:
+        in_leaves: list = []
+        out_leaves: list = []
+        _leaves(inputs, in_leaves)
+        _leaves(outputs, out_leaves)
         rendered = safe_json_dumps(outputs)
-        leaves = list(_string_leaves(inputs))
-        return any(leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered for leaf in leaves)
-    except Exception:
-        return True  # when the comparison cannot be made, the output is not recorded
+        out_strings = [leaf for leaf in out_leaves if isinstance(leaf, str)]
+        out_booleans = [leaf for leaf in out_leaves if isinstance(leaf, bool)]
+        out_numbers = [leaf for leaf in out_leaves if isinstance(leaf, (int, float)) and not isinstance(leaf, bool)]
+        for leaf in in_leaves:
+            if isinstance(leaf, bool):
+                if leaf in out_booleans:
+                    return True
+            elif isinstance(leaf, (int, float)):
+                if leaf in out_numbers or (len(str(leaf)) >= _MIN_ECHO_LENGTH and str(leaf) in rendered):
+                    return True
+            elif leaf:
+                if leaf in out_strings:
+                    return True
+                if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
+                    return True
+        return False
+    except Exception:  # noqa: BLE001 - when the comparison cannot be made, the output is not recorded
+        return True
 
 
 def _langchain_run_type_to_span_kind(run_type: str) -> FiSpanKindValues:
