@@ -89,7 +89,7 @@ Azure SDK client, not only AI clients).
 
 The payload is managed code built for `net8.0`, with no native profiler; it runs in
 .NET 8 and .NET 10 processes. Continuous integration runs the tests on macOS and
-Linux. DiagnosticSource majors outside 8–10 fail open with a warning rather than
+Linux. DiagnosticSource majors outside 8–11 fail open with a warning rather than
 creating conflicting Activity types. The hook never upgrades the app's chosen
 DiagnosticSource.
 
@@ -365,7 +365,7 @@ so ordinary LRU churn cannot evict ignored/overridden FI credentials.
 Attribute projection follows the shared A7 contract, independent of insertion order.
 Wire candidates are projected before Activity creation; forwarded Activities are
 sanitized and mapped on a detached snapshot before the SDK's bounded serializer
-(Activity itself has no bounded tag container on DiagnosticSource 8–10). Reserve
+(Activity itself has no bounded tag container on DiagnosticSource 8–11). Reserve
 identity, outcome, provider/model/operation, all known usage, timing, provenance and
 degradation fields, including one dropped-content marker when necessary. Timing is
 the exact keys `gen_ai.response.latency`, `gen_ai.response.time_to_first_chunk`,
@@ -400,13 +400,13 @@ body limit), eight encoding layers, 128 distinct values per discovery and 4,096
 characters per value. Registry capacity is 1,024; discovery/value-budget failures
 fail closed, while capacity overflow uses LRU eviction. A snapshot failure discards
 all content but retains identity, flags and timing. Snapshot shells use the tested
-DiagnosticSource 8–10 private content fields to preserve IDs without invoking
+DiagnosticSource 8–11 private content fields to preserve IDs without invoking
 ActivitySource constructors or application listeners. These and the other private
 runtime and OpenTelemetry members the agent uses are resolved once; at start the
 agent prints one warning naming any that are missing. An unrecognized layout omits
 telemetry rather than reverting to the unsafe shared Activity. These privacy rules
 apply to the agent's exporter, not an application's separately configured exporters.
-The agent does not enable libraries' sensitive-content diagnostics automatically.
+The agent does not enable libraries' sensitive-content diagnostics automatically; the only exception is the explicit `FI_AUTO_CAPTURE_CONTENT=true` opt-in for ASP.NET Core hosts (see Web hosts below), which no hide setting overrides.
 
 ## Library layer and transactions
 
@@ -458,8 +458,10 @@ replacing it). Just before the host builds its container, that assembly wraps ev
 
 - A registration whose instance already carries the wrapper (the application called `UseOpenTelemetry()`) is left as it is, so each call produces one span.
 - It is off when the agent is not running (`OTEL_SDK_DISABLED`, missing credentials) and per kind when `extensions_ai` or `agents` is disabled (`FI_DISABLED_INSTRUMENTATIONS`, or left out of `FI_INSTRUMENTATIONS`).
-- The library's sensitive-content capture follows the traceAI hide settings, not the library default: content is captured unless any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES` is on. The agent's own privacy rules still apply to what is exported.
-- The integration status reads `instrumented` with `auto (web host)` when a registration was wrapped, and `manual` otherwise.
+- Prompt and response content is off by default. The libraries' sensitive-content switch (`EnableSensitiveData`) puts content on the span for every listener the application has, not only this agent, so the startup leaves it off unless you opt in with `FI_AUTO_CAPTURE_CONTENT=true`. Any traceAI hide setting (`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES`) keeps it off even then. With the opt-in, an application's other listeners or exporters on `Experimental.Microsoft.Extensions.AI` and `Experimental.Microsoft.Agents.AI` receive the content too. The agent's own privacy rules still apply to what it exports.
+- The integration status reads `instrumented` with `auto (web host)` once a registered service was wrapped by this startup, and `manual` otherwise, including when the application's own `UseOpenTelemetry()` wrapper is the one tracing.
+- Registrations of open generic types and keyed services are left as registered. An instance the application registers stays the application's to dispose; type registrations keep the container's build-time validation.
+- The startup adds the assembly to `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` in the process environment, so child processes the application starts inherit it; the assembly does nothing outside a process with the hook running.
 - Not covered: applications that are not ASP.NET Core hosts, clients built directly (`new ChatClientBuilder(...).Build()`) and keyed registrations. They call `UseOpenTelemetry()` as before.
 - The agent loads next to `System.Diagnostics.DiagnosticSource` 8 through 11 (`Microsoft.Extensions.AI` 11 ships version 11).
 
@@ -856,7 +858,7 @@ invented as zero; absent optional additions use provider-schema defaults.
   JSON element boundaries. Use `AutoOptions.EvalTags` or a JSON-encoded
   `FI_EVAL_TAGS` environment string when boundaries matter. This is not fixed here.
 - **2026-10-30 — Runtime layout/stream identity:** privacy snapshots and standard
-  HTTP stream taps depend on the verified DiagnosticSource 8–10 and
+  HTTP stream taps depend on the verified DiagnosticSource 8–11 and
   SocketsHttpHandler managed layouts. Changed layouts fail open for the application
   and fail closed for export; coverage can be lost. NativeAOT/trimmed/single-file
   deployments and unsupported runtimes are not certified. Framework stream concrete

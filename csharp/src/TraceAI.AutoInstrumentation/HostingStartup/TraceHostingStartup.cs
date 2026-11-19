@@ -16,7 +16,7 @@ public sealed class TraceHostingStartup : IHostingStartup
 {
     /// <summary>AppContext data written by the startup hook: "chat=1;agent=1;sensitive=1".</summary>
     public const string SettingsKey = "TraceAI.AutoInstrumentation.HostingStartup";
-    /// <summary>AppContext data written here: the kinds of registration that were wrapped, e.g. "chat,agent".</summary>
+    /// <summary>AppContext data written here: the kinds that were wrapped, e.g. "chat,agent", recorded as each is wrapped.</summary>
     public const string DecoratedKey = "TraceAI.AutoInstrumentation.HostingStartup.Decorated";
 
     private static int s_subscribed;
@@ -67,6 +67,22 @@ public sealed class TraceHostingStartup : IHostingStartup
         public void OnCompleted() { }
     }
 
+    private static readonly object WrappedGate = new();
+
+    /// <summary>Records a kind the startup actually wrapped (not merely a registration it replaced), for the status report.</summary>
+    internal static void RecordWrapped(string kind)
+    {
+        try
+        {
+            lock (WrappedGate)
+            {
+                var kinds = new SortedSet<string>(((AppContext.GetData(DecoratedKey) as string) ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)) { kind };
+                AppContext.SetData(DecoratedKey, string.Join(',', kinds));
+            }
+        }
+        catch { }
+    }
+
     internal static void Report(string message)
     {
         try { if (Environment.GetEnvironmentVariable("FI_AUTO_DEBUG") == "true") Console.Error.WriteLine("[traceAI auto] hosting startup " + message); }
@@ -95,23 +111,41 @@ internal static class Decorator
 
     internal static void Apply(IServiceCollection services, Settings settings)
     {
-        var decorated = new SortedSet<string>();
         var snapshot = services.ToList();
         for (var i = 0; i < snapshot.Count; i++)
         {
             var descriptor = snapshot[i];
-            if (descriptor.IsKeyedService) continue;
+            // Keyed services and open generics are left exactly as registered: a factory cannot stand in for an
+            // open-generic registration, and the container would refuse to build.
+            if (descriptor.IsKeyedService || descriptor.ServiceType.ContainsGenericParameters) continue;
             var kind = Classify(descriptor.ServiceType, settings);
             if (kind == null) continue;
             var wrapper = Wrapper.For(kind, descriptor.ServiceType);
             if (wrapper == null) continue;
             var index = services.IndexOf(descriptor);
             if (index < 0) continue;
-            services[index] = new ServiceDescriptor(descriptor.ServiceType,
-                provider => wrapper.Wrap(Create(descriptor, provider), settings.Sensitive), descriptor.Lifetime);
-            decorated.Add(kind);
+            services[index] = Replace(services, descriptor, kind, wrapper, settings.Sensitive);
         }
-        if (decorated.Count > 0) AppContext.SetData(TraceHostingStartup.DecoratedKey, string.Join(',', decorated));
+    }
+
+    private static ServiceDescriptor Replace(IServiceCollection services, ServiceDescriptor descriptor, string kind, Wrapper wrapper, bool sensitive)
+    {
+        // An instance the application registered stays the application's to dispose, as before: the wrapper is built
+        // now and registered as an instance too, which the container never disposes.
+        if (descriptor.ImplementationInstance != null)
+            return new ServiceDescriptor(descriptor.ServiceType, wrapper.Wrap(descriptor.ImplementationInstance, sensitive, kind));
+        // Other registrations are created, and so owned, by the container; the wrapper it creates is disposed with them.
+        if (descriptor.ImplementationFactory != null)
+        {
+            var factory = descriptor.ImplementationFactory;
+            return new ServiceDescriptor(descriptor.ServiceType, provider => wrapper.Wrap(factory(provider), sensitive, kind), descriptor.Lifetime);
+        }
+        var implementation = descriptor.ImplementationType!;
+        // Register the implementation type itself so the container still validates its constructor at build time.
+        if (implementation != descriptor.ServiceType && !services.Any(d => !d.IsKeyedService && d.ServiceType == implementation))
+            services.Add(new ServiceDescriptor(implementation, implementation, descriptor.Lifetime));
+        return new ServiceDescriptor(descriptor.ServiceType,
+            provider => wrapper.Wrap(provider.GetRequiredService(implementation), sensitive, kind), descriptor.Lifetime);
     }
 
     private static string? Classify(Type serviceType, Settings settings)
@@ -120,13 +154,6 @@ internal static class Decorator
         if (serviceType.IsGenericType && serviceType.GetGenericTypeDefinition().FullName == EmbeddingGenerator) return settings.Chat ? "embedding" : null;
         if (serviceType.FullName == Agent) return settings.Agent ? "agent" : null;
         return null;
-    }
-
-    private static object Create(ServiceDescriptor descriptor, IServiceProvider provider)
-    {
-        if (descriptor.ImplementationInstance != null) return descriptor.ImplementationInstance;
-        if (descriptor.ImplementationFactory != null) return descriptor.ImplementationFactory(provider);
-        return ActivatorUtilities.CreateInstance(provider, descriptor.ImplementationType!);
     }
 }
 
@@ -176,10 +203,11 @@ internal sealed class Wrapper
     }
 
     /// <summary>The wrapped instance, or the original when it already carries the wrapper.</summary>
-    internal object Wrap(object inner, bool sensitive)
+    internal object Wrap(object inner, bool sensitive, string kind)
     {
         try
         {
+            // An application that already traces this client has the wrapper; it is not wrapped twice or credited.
             if (AlreadyTraced(inner)) return inner;
             var parameters = _constructor.GetParameters();
             var args = new object?[parameters.Length];
@@ -187,6 +215,7 @@ internal sealed class Wrapper
             for (var i = 1; i < parameters.Length; i++) args[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : null;
             var wrapped = _constructor.Invoke(args);
             _sensitive?.SetValue(wrapped, sensitive);
+            TraceHostingStartup.RecordWrapped(kind);
             return wrapped;
         }
         catch (Exception error) { TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name); return inner; }

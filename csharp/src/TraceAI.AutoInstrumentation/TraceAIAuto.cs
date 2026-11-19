@@ -107,21 +107,23 @@ public static class TraceAIAuto
         catch { return "{\"enabled\":false,\"error\":\"diagnostics unavailable\"}"; }
     }
     /// <summary>The settings the ASP.NET Core hosting startup needs, or null when it must stay off: the agent
-    /// is not running, or neither the extensions_ai nor the agents integration is enabled. Sensitive content
-    /// follows the traceAI hide settings: any hide setting turns the library's capture off.</summary>
+    /// is not running, or neither the extensions_ai nor the agents integration is enabled.</summary>
     public static string? HostingStartupPlan()
     {
-        try
-        {
-            var agent=s_agent; var config=s_config;
-            if(agent==null || config==null) return null;
-            bool chat=config.Enabled("extensions_ai"),agents=config.Enabled("agents");
-            if(!chat && !agents) return null;
-            var mask=config.Options.TraceConfig??AutoProcessor.FromHideSwitches(config);
-            bool hidden=mask.HideInputs||mask.HideOutputs||mask.HideInputMessages||mask.HideOutputMessages||mask.HideInputText||mask.HideOutputText||mask.HideInputImages;
-            return $"chat={(chat?1:0)};agent={(agents?1:0)};sensitive={(hidden?0:1)}";
-        }
+        try { var config=s_config; return s_agent==null || config==null ? null : HostingStartupPlanFor(config); }
         catch { return null; }
+    }
+    /// <summary>The libraries' sensitive-content switch is off unless the user opts in with FI_AUTO_CAPTURE_CONTENT=true:
+    /// it makes the libraries put prompts and responses on their spans for every listener the application has, not only
+    /// this agent. Any traceAI hide setting keeps it off even then.</summary>
+    internal static string? HostingStartupPlanFor(AutoConfig config)
+    {
+        bool chat=config.Enabled("extensions_ai"),agents=config.Enabled("agents");
+        if(!chat && !agents) return null;
+        var mask=config.Options.TraceConfig??AutoProcessor.FromHideSwitches(config);
+        bool hidden=mask.HideInputs||mask.HideOutputs||mask.HideInputMessages||mask.HideOutputMessages||mask.HideInputText||mask.HideOutputText||mask.HideInputImages;
+        bool sensitive=config.Bool("AUTO_CAPTURE_CONTENT") && !hidden;
+        return $"chat={(chat?1:0)};agent={(agents?1:0)};sensitive={(sensitive?1:0)}";
     }
     public static IReadOnlyList<IntegrationStatus> GetStatus()
     {
