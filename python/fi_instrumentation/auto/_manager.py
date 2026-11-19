@@ -111,9 +111,9 @@ def _declared_in_source(module: str, name: str, owner: Optional[str] = None) -> 
         origin = getattr(spec, "origin", None)
         if not origin or not origin.endswith(".py"):
             return False
-        with open(origin, encoding="utf-8") as handle:
+        with open(origin, "rb") as handle:
             tree = ast.parse(handle.read())
-    except (ImportError, ValueError, OSError, SyntaxError):
+    except Exception:  # best-effort read: any failure means the marker is not declared
         return False
     body: List[Any] = tree.body
     if owner:
