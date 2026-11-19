@@ -227,3 +227,66 @@ def test_a_multi_turn_reply_that_shares_small_numbers_and_flags_with_the_state_i
     state = {"messages": [HumanMessage(content=HUMAN), _prior_ai()], "count": 3, "done": False}
     spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": [AIMessage(content=REPLY)], "count": 3, "done": False}).invoke(state))
     assert _kept(spans), (setting, _outputs(spans))
+
+
+# --- content parts, output-side fields, and booleans vs numbers ------------------------------------------------
+
+from langchain_core.documents import Document  # noqa: E402
+
+from ._core_version import output_side  # noqa: E402
+
+IMAGE_URL = "https://images.example.com/SENTINELIMAGE9931/photo.png"
+TOOL_PART = "SENTINEL_TOOL_RESULT_PART_6604"
+COPIED = 'SENTINEL_COPIED_LINE\nthen "quoted" text \\ and a backslash'
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_an_image_only_message_passed_through_in_a_sub_list_is_withheld(setting):
+    image = HumanMessage(content=[{"type": "image_url", "image_url": {"url": IMAGE_URL}}])
+    state = {"messages": [image, AIMessage(content="ok"), HumanMessage(content="a later question about tides")]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": s["messages"][:1]}).invoke(state))
+    assert "SENTINELIMAGE9931" not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("content", ["string", "list"])
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_tool_result_content_part_passed_through_is_withheld(setting, content):
+    inner = TOOL_PART if content == "string" else [{"type": "text", "text": TOOL_PART}]
+    part = HumanMessage(content=[{"type": "tool_result", "tool_use_id": "toolu_1", "content": inner}])
+    state = {"messages": [part, AIMessage(content="ok"), HumanMessage(content="and then?")]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": s["messages"][:1]}).invoke(state))
+    assert TOOL_PART not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_input_text_copied_into_an_output_document_metadata_is_withheld(setting):
+    spans = _spans(_config(setting), lambda: RunnableLambda(
+        lambda x: {"docs": [Document(page_content="an unrelated page", metadata={"source": "prefix " + x["q"] + " suffix"})]}).invoke({"q": COPIED}))
+    assert "SENTINEL_COPIED_LINE" not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_input_text_copied_into_an_output_message_additional_kwargs_is_withheld(setting):
+    spans = _spans(_config(setting), lambda: RunnableLambda(
+        lambda x: {"messages": [AIMessage(content=REPLY, additional_kwargs={"note": "prefix " + x["q"] + " suffix"})]}).invoke({"q": COPIED}))
+    assert "SENTINEL_COPIED_LINE" not in output_side(spans), (setting, _outputs(spans))
+
+
+class _Note(BaseModel):
+    """Not a LangChain message or document: every field of it is input text to look for."""
+    content: str
+    label: str
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_any_field_of_a_non_langchain_object_with_content_is_input_text(setting):
+    secret = "SENTINEL_NOTE_LABEL_8120"
+    spans = _spans(_config(setting), lambda: RunnableLambda(
+        lambda s: {"summary": "the label was " + s["notes"][0].label}).invoke({"notes": [_Note(content="hi", label=secret)]}))
+    assert secret not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_boolean_input_is_not_matched_by_an_equal_number_in_the_output(setting):
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda _: {"count": 1}).invoke(True))
+    assert any('"count": 1' in str(out) for out in _outputs(spans)), (setting, _outputs(spans))
