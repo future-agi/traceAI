@@ -22,6 +22,10 @@ const ECHO = "REQUEST_ECHO_CANARY_77d0";
 const REQUEST_ARGS = { count: 4242, ratio: 0.4244, flag: true, label: "REQUEST_ARG_CANARY_5e51" };
 const RESPONSE_ARGS = { count: 5353, ratio: 0.5354, flag: false, label: "RESPONSE_ARG_CANARY_8a07" };
 
+// The tool arguments are serialized inside a JSON attribute, so the quotes arrive escaped.
+const REQUEST_FLAG = /\\?"flag\\?":true/;
+const RESPONSE_FLAG = /\\?"flag\\?":false/;
+
 const message = {
   id: "msg_synthetic",
   type: "message",
@@ -238,6 +242,9 @@ describe.each(CASES)("$flavor client privacy", ({ model, make }) => {
     expect(dumped).toContain("raw.input");
     expect(dumped).toContain("raw.output");
     expect(dumped).toContain(ECHO);
+    // Boolean values on content keys (tool arguments) are recorded too.
+    expect(dumped).toMatch(REQUEST_FLAG);
+    expect(dumped).toMatch(RESPONSE_FLAG);
   });
 
   it.each([
@@ -248,6 +255,9 @@ describe.each(CASES)("$flavor client privacy", ({ model, make }) => {
   ])("%s keeps its content out of every attribute", async (flag, canaries) => {
     const dumped = await run({ [flag]: true });
     for (const canary of canaries) expect(dumped).not.toContain(canary);
+    // Number and boolean values on a hidden content key are hidden with it.
+    if (String(flag).startsWith("hideInput")) expect(dumped).not.toMatch(REQUEST_FLAG);
+    else expect(dumped).not.toMatch(RESPONSE_FLAG);
     expect(dumped).toContain("gen_ai.usage.input_tokens");
   });
 
