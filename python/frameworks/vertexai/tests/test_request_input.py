@@ -24,17 +24,25 @@ def exported_request():
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = VertexAIInstrumentor()
 
-    def run(contents, config):
+    def run(contents, config, *, predict=False):
         instrumentor.instrument(tracer_provider=provider, config=config)
         channel = Mock(spec=grpc.Channel)
-        response = v1.GenerateContentResponse()
+        response = v1.PredictResponse() if predict else v1.GenerateContentResponse()
         rpc = Mock(spec=grpc.UnaryUnaryMultiCallable, return_value=response)
         rpc.with_call.return_value = (response, Mock(spec=grpc.Call))
         channel.unary_unary.return_value = rpc
         transport = PredictionServiceGrpcTransport(channel=channel)
         client = v1.PredictionServiceClient(transport=transport)
-        request = v1.GenerateContentRequest(model="synthetic-model", contents=contents)
-        assert client.generate_content(request=request) is response
+        if predict:
+            request = v1.PredictRequest.from_json(
+                json.dumps({"endpoint": "synthetic", "instances": contents})
+            )
+            assert client.predict(request=request) is response
+        else:
+            request = v1.GenerateContentRequest(
+                model="synthetic-model", contents=contents
+            )
+            assert client.generate_content(request=request) is response
         (span,) = exporter.get_finished_spans()
         return span.attributes
 
@@ -43,6 +51,41 @@ def exported_request():
     finally:
         instrumentor.uninstrument()
         provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "instances,expected",
+    [
+        ([{"prompt": "first"}], "first"),
+        ([{"prompt": "first"}, {"prompt": "second"}], "first\nsecond"),
+        ([{"prompt": "first"}, {"prompt": 7}, {}, {"prompt": "last"}], "first\nlast"),
+        ([{}, {"prompt": 7}, {"prompt": ""}], None),
+    ],
+    ids=["single", "double", "mixed", "no-recognized"],
+)
+def test_typed_prompts(exported_request, instances, expected):
+    attrs = exported_request(instances, TraceConfig(), predict=True)
+    assert attrs.get(_wrapper.INPUT_VALUE) == expected
+    assert attrs.get(_wrapper.INPUT_MIME_TYPE) == ("text/plain" if expected else None)
+    for idx, instance in enumerate(instances):
+        key = f"{_wrapper.GEN_AI_INPUT_MESSAGES}.{idx}.{_wrapper.MESSAGE_CONTENT}"
+        prompt = instance.get("prompt")
+        if isinstance(prompt, str) and prompt:
+            assert json.loads(attrs[key]) == prompt
+        else:
+            assert key not in attrs
+
+
+@pytest.mark.parametrize(
+    "flag,redacted",
+    [("hide_inputs", True), ("hide_input_messages", False), ("hide_input_text", False)],
+)
+def test_typed_prompt_masks(exported_request, flag, redacted):
+    attrs = exported_request(
+        [{"prompt": "synthetic"}], TraceConfig(**{flag: True}), predict=True
+    )
+    assert attrs.get(_wrapper.INPUT_VALUE) == ("__REDACTED__" if redacted else None)
+    assert _wrapper.INPUT_MIME_TYPE not in attrs
 
 
 def turns():

@@ -137,7 +137,9 @@ class _Wrapper:
         span = self._tracer.start_span(name=span_name, attributes=attributes)
         span.set_attribute(GEN_AI_SPAN_KIND, LLM)
 
-        if isinstance(request, proto.Message):
+        if isinstance(request, proto.Message) and not isinstance(
+            request, v1.PredictRequest
+        ):
             try:
                 data = request.__class__.to_dict(request)
                 extracted = _extract_image_data(data.get("contents", []))
@@ -163,7 +165,10 @@ class _Wrapper:
                 # Instrumentation must not replace the SDK result or export a raw fallback.
                 logger.debug("Could not extract Vertex request attributes")
         try:
-            _update_span(request, span)
+            if isinstance(request, v1.PredictRequest):
+                _update_predict_request(request, span, self._config)
+            else:
+                _update_span(request, span)
         except BaseException:
             pass
         try:
@@ -425,30 +430,30 @@ def _(resp: GenerateContentResponse, span: Span) -> None:
             span.set_attribute(k, v)
 
 
-@_update_span.register(v1.PredictRequest)
-def _(req: PredictRequest, span: Span) -> None:
-    """
-    Extract and set attributes from PredictRequest onto the span.
-
-    Args:
-        req: a PredictRequest proto.Message
-        span: the OpenTelemetry span to update with attributes
-    """
+def _update_predict_request(
+    req: PredictRequest, span: Span, config: TraceConfig
+) -> None:
+    """Record only the typed prompts recognized by the legacy prediction API."""
     if req.endpoint:
         span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
         span.set_attribute("prediction.endpoint", req.endpoint)
 
-    if req.instances:
-        for idx, instance in enumerate(req.instances):
-            if prompt := instance.get("prompt"):
-                span.set_attribute(
-                    f"{GEN_AI_INPUT_MESSAGES}.{idx}.{MESSAGE_CONTENT}",
-                    safe_json_dumps(prompt),
-                )
-                span.set_attribute(
-                    f"{GEN_AI_INPUT_MESSAGES}.{idx}.{MESSAGE_ROLE}",
-                    "user",
-                )
+    prompts = []
+    for idx, instance in enumerate(req.instances):
+        if not isinstance(instance, Mapping):
+            continue
+        prompt = instance.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            continue
+        prefix = f"{GEN_AI_INPUT_MESSAGES}.{idx}"
+        span.set_attribute(f"{prefix}.{MESSAGE_CONTENT}", safe_json_dumps(prompt))
+        span.set_attribute(f"{prefix}.{MESSAGE_ROLE}", "user")
+        prompts.append(prompt)
+
+    if prompts and not (config.hide_input_messages or config.hide_input_text):
+        # The span applies the installed core's hide_inputs value and MIME policy.
+        span.set_attribute(INPUT_VALUE, "\n".join(prompts))
+        span.set_attribute(INPUT_MIME_TYPE, "text/plain")
 
 
 @_update_span.register(v1.PredictResponse)
