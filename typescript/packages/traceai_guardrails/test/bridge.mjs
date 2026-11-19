@@ -99,8 +99,13 @@ try {
           assert.ok(guards[0].attributes.some(a => a.key === "guardrails.validation_passed"));
           assert.equal(attr(guards[0], "guardrails.reask_count"), undefined);
           assert.equal(JSON.stringify(spans).includes("synthetic-private-invalid-integer"), !hideInputs);
+          // The raw output is not recorded while any hide setting is on (the environment switch hides inputs too).
+          const anyHidden = hideInputs || hideOutputs || useEnv;
           for (const key of ["output.value", "raw.output"]) {
-            if (hideOutputs) {
+            if (key === "raw.output" && anyHidden) {
+              assert.equal(attr(guards[0], key), undefined);
+              assert.equal(attr(guards[1], key), undefined);
+            } else if (hideOutputs) {
               assert.equal(attr(guards[0], key).stringValue, "__REDACTED__");
               assert.equal(attr(guards[1], key).stringValue, "__REDACTED__");
             } else {
