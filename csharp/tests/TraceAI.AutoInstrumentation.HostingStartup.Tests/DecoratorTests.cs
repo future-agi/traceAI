@@ -124,6 +124,53 @@ public class DecoratorTests
     }
 
     [Fact]
+    public void AnOpenGenericEmbeddingRegistrationIsLeftAloneAndTheHostStillBuilds()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(IEmbeddingGenerator<,>), typeof(OpenEmbeddings<,>));
+        var before = services.ToList();
+        Decorator.Apply(services, Everything);
+        Assert.Equal(before, services.ToList());
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+        Assert.NotNull(provider.GetService<IEmbeddingGenerator<string, Embedding<float>>>());
+    }
+
+    [Fact]
+    public void AnInstanceTheApplicationOwnsIsNotDisposedByTheContainer()
+    {
+        var instance = new StubChat();
+        var services = new ServiceCollection();
+        services.AddSingleton<IChatClient>(instance);
+        Decorator.Apply(services, Everything);
+        var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetRequiredService<IChatClient>().GetService<OpenTelemetryChatClient>());
+        provider.Dispose();
+        Assert.False(instance.Disposed);
+    }
+
+    [Fact]
+    public void AnInstanceTheContainerCreatesStillBelongsToTheContainer()
+    {
+        StubChat? created = null;
+        var services = new ServiceCollection();
+        services.AddSingleton<IChatClient>(_ => created = new StubChat());
+        Decorator.Apply(services, Everything);
+        var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IChatClient>();
+        provider.Dispose();
+        Assert.True(created!.Disposed);
+    }
+
+    [Fact]
+    public void ATypeRegistrationKeepsItsBuildTimeValidation()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IChatClient, NeedsMissingDependency>();
+        Decorator.Apply(services, Everything);
+        Assert.Throws<AggregateException>(() => services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true }));
+    }
+
+    [Fact]
     public void KeyedAndUnrelatedRegistrationsAreLeftAlone()
     {
         var services = new ServiceCollection();
@@ -144,13 +191,29 @@ public class DecoratorTests
     public void SettingsRoundTrip() => Assert.Equal(new Settings(true, false, true), Settings.Read("chat=1;agent=0;sensitive=1"));
 }
 
+sealed class OpenEmbeddings<TInput, TEmbedding> : IEmbeddingGenerator<TInput, TEmbedding> where TEmbedding : Embedding
+{
+    public Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
+}
+
+sealed class NeedsMissingDependency(Uri missing) : IChatClient
+{
+    public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
+}
+
 sealed class StubChat : IChatClient
 {
+    public bool Disposed { get; private set; }
     public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "answer")) { ModelId = "stub" });
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public object? GetService(Type serviceType, object? serviceKey = null) => serviceKey == null && serviceType.IsInstanceOfType(this) ? this : null;
-    public void Dispose() { }
+    public void Dispose() => Disposed = true;
 }
 
 sealed class StubEmbeddings : IEmbeddingGenerator<string, Embedding<float>>

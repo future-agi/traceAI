@@ -8,6 +8,15 @@ using Microsoft.Extensions.DependencyInjection;
 
 // Usage: WebApp <mode>. The application has no tracing code unless the mode adds it. It starts a web host,
 // resolves its registered AI services from the container, calls each once, and prints a JSON summary.
+// An application listener of its own on the libraries' sources: it records whether any prompt or response text reaches it.
+var otherListenerTags = new List<string>();
+using var otherListener = new System.Diagnostics.ActivityListener
+{
+    ShouldListenTo = source => source.Name.StartsWith("Experimental.Microsoft.Extensions.AI") || source.Name.StartsWith("Experimental.Microsoft.Agents.AI"),
+    Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+    ActivityStopped = activity => { lock (otherListenerTags) otherListenerTags.AddRange(activity.TagObjects.Select(t => t.Key + "=" + t.Value)); },
+};
+System.Diagnostics.ActivitySource.AddActivityListener(otherListener);
 var mode = args.Length > 0 ? args[0] : "plain";
 var builder = WebApplication.CreateBuilder([]);
 builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -49,6 +58,9 @@ try
         var embeddings = app.Services.GetService<IEmbeddingGenerator<string, Embedding<float>>>();
         if (embeddings != null) result["embeddings"] = (await embeddings.GenerateAsync(["hello embed"])).Count;
     }
+    string[] seen; lock (otherListenerTags) seen = otherListenerTags.ToArray();
+    result["otherListenerSawContent"] = seen.Any(t => t.Contains("hello") || t.Contains("stub answer") || t.Contains("agent answer"));
+    result["otherListenerSpanTags"] = seen.Length;
     result["hostingStartupVariable"] = Environment.GetEnvironmentVariable("ASPNETCORE_HOSTINGSTARTUPASSEMBLIES");
     result["integrations"] = StatusOf();
 }

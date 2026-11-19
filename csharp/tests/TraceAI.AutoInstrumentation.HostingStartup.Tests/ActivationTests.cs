@@ -65,7 +65,6 @@ public class ActivationTests
         Assert.Equal(1, Count(run.Exported, "AGENT"));
         Assert.Contains("Experimental.Microsoft.Extensions.AI", run.Exported);
         Assert.Contains("Experimental.Microsoft.Agents.AI", run.Exported);
-        Assert.Contains("hello chat", run.Exported);
         var status = run.Summary.GetProperty("integrations");
         Assert.StartsWith("instrumented|auto (web host)", status.GetProperty("extensions_ai").GetString());
         Assert.StartsWith("instrumented|auto (web host)", status.GetProperty("agents").GetString());
@@ -110,10 +109,38 @@ public class ActivationTests
     [InlineData("FI_HIDE_INPUT_TEXT")]
     public async Task ContentCaptureFollowsTheTraceAiHideSettings(string flag)
     {
-        var run = await Run("plain", new() { [flag] = "true" });
+        var run = await Run("plain", new() { [flag] = "true", ["FI_AUTO_CAPTURE_CONTENT"] = "true" });
         Assert.Equal(1, Count(run.Exported, ChatModel));
+        Assert.False(run.Summary.GetProperty("otherListenerSawContent").GetBoolean());
         Assert.DoesNotContain("hello chat", run.Exported);
         Assert.DoesNotContain("stub answer", run.Exported);
+    }
+
+    [Fact]
+    public async Task AnotherListenerOnTheLibrarySourcesReceivesNoContentByDefault()
+    {
+        var run = await Run("plain");
+        Assert.True(run.Summary.GetProperty("otherListenerSpanTags").GetInt32() > 0, "the application's own listener saw no spans");
+        Assert.False(run.Summary.GetProperty("otherListenerSawContent").GetBoolean());
+    }
+
+    [Fact]
+    public async Task OptingInSharesContentWithEveryListenerAndTheHideSettingsStillWin()
+    {
+        var optedIn = await Run("plain", new() { ["FI_AUTO_CAPTURE_CONTENT"] = "true" });
+        Assert.True(optedIn.Summary.GetProperty("otherListenerSawContent").GetBoolean());
+        Assert.Contains("hello chat", optedIn.Exported);
+        var hidden = await Run("plain", new() { ["FI_AUTO_CAPTURE_CONTENT"] = "true", ["FI_HIDE_INPUTS"] = "true" });
+        Assert.False(hidden.Summary.GetProperty("otherListenerSawContent").GetBoolean());
+        Assert.DoesNotContain("hello chat", hidden.Exported);
+    }
+
+    [Fact]
+    public async Task TheStatusDoesNotCreditAnApplicationsOwnWrapper()
+    {
+        var run = await Run("own_otel");
+        var status = run.Summary.GetProperty("integrations");
+        Assert.StartsWith("manual|", status.GetProperty("extensions_ai").GetString());
     }
 
     [Fact]
