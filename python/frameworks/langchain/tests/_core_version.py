@@ -16,9 +16,14 @@ def dump(spans) -> str:
         [[(e.name, dict(e.attributes or {})) for e in s.events] for s in spans], default=str)
 
 
+def _input_side(name: str) -> bool:
+    """Attributes the core masks as request content under the input settings (a cause of the 1.3.0 floor)."""
+    return "input" in name.lower() or "prompt.template.variables" in name
+
+
 def output_side(spans) -> str:
-    """The spans' attributes whose name does not mention the input side, plus their events."""
-    return json.dumps([{k: v for k, v in dict(s.attributes).items() if "input" not in k.lower()} for s in spans], default=str) + json.dumps(
+    """The spans' attributes the package itself decides (everything but the input side), plus their events."""
+    return json.dumps([{k: v for k, v in dict(s.attributes).items() if not _input_side(k)} for s in spans], default=str) + json.dumps(
         [[(e.name, dict(e.attributes or {})) for e in s.events] for s in spans], default=str)
 
 
