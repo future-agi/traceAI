@@ -234,4 +234,17 @@ class ContentMaskParityTest {
             assertThat(stored(export(hiding(true, true), key), key)).as(key).isEqualTo(SECRET);
         }
     }
+
+    @Test
+    void hideErrorDetailsDropsTheErrorDetailKeysThroughTheMasker() {
+        TraceConfig config = TraceConfig.builder().hideErrorDetails(true).build();
+        for (String key : List.of("error.message", "exception.message", "exception.stacktrace",
+                                  "tool.error.message", "x.exception.stacktrace", "x.error_message")) {
+            assertThat(stored(export(config, key), key)).as(key).isNull();
+        }
+        for (String key : List.of("error.type", "exception.type", "error.message_count")) {
+            assertThat(stored(export(config, key), key)).as(key).isEqualTo(SECRET);
+        }
+        assertThat(stored(export(TraceConfig.builder().build(), "error.message"), "error.message")).isEqualTo(SECRET);
+    }
 }

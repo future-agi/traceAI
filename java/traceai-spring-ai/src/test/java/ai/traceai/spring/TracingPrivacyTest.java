@@ -14,7 +14,10 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Broad channel switches also hide messages; message-only switches leave aggregate values. */
+/**
+ * Broad channel switches also hide messages; message-only switches also redact the aggregate values
+ * (input.value / output.value), as the Python SDK does (private_input = hide_inputs or hide_input_messages).
+ */
 class TracingPrivacyTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
@@ -43,10 +46,19 @@ class TracingPrivacyTest {
     }
 
     @Test
-    void hideInputMessagesAloneKeepsInputValue() {
+    void hideInputMessagesAloneRedactsInputValue() {
         SpanData span = traced(TraceConfig.builder().hideInputMessages(true).build(), Flux.just(SpanTestSupport.response("visible")));
-        assertThat(span.getAttributes().get(INPUT_VALUE)).isEqualTo("secret input");
+        assertThat(span.getAttributes().get(INPUT_VALUE)).isEqualTo("__REDACTED__");
         assertThat(span.getAttributes().get(INPUT_MESSAGES)).isNull();
+        assertThat(span.getAttributes().get(OUTPUT_VALUE)).isEqualTo("visible");
+    }
+
+    @Test
+    void hideOutputMessagesAloneRedactsOutputValue() {
+        SpanData span = traced(TraceConfig.builder().hideOutputMessages(true).build(), Flux.just(SpanTestSupport.response("visible")));
+        assertThat(span.getAttributes().get(OUTPUT_VALUE)).isEqualTo("__REDACTED__");
+        assertThat(span.getAttributes().get(OUTPUT_MESSAGES)).isNull();
+        assertThat(span.getAttributes().get(INPUT_VALUE)).isEqualTo("secret input");
     }
 
     @Test

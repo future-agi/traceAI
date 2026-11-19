@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* **java-core:** under `hideInputMessages` / `hideOutputMessages`, `input.value` / `output.value` and the raw input/output (`raw.input`, `fi.raw_input`, `raw.output`, `fi.raw_output`) are now redacted, as in the Python SDK; embedding input text, and tool-call arguments nested in message keys, are masked as well. `maskAttribute` also drops error-detail keys under `hideErrorDetails`. The Azure OpenAI, LangChain4j, Semantic Kernel and Bedrock instrumentations write these attributes through the masker.
+
 ## 1.4.0 (2026-11-19)
 
 ### Features

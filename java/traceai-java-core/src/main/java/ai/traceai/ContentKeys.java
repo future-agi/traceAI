@@ -5,9 +5,10 @@ import java.util.List;
 /**
  * The span attribute keys that carry prompt, response or tool content, and so are masked by the
  * hide settings. The reference is the Python SDK's {@code TraceConfig}
- * ({@code python/fi_instrumentation/instrumentation/config.py}); this class lists the same keys,
- * plus the legacy and alias names the Java SDK writes itself, so a key masked in one SDK is masked
- * in the other. Model names, ids, counts and token usage are deliberately not here.
+ * ({@code python/fi_instrumentation/instrumentation/config.py}); this class lists the same content keys,
+ * plus the legacy and alias names the Java SDK writes itself, for the four hide flags and the error-detail
+ * flag Java has. It is not full equivalence: see "Differences from Python" below. Model names, ids, counts
+ * and token usage are deliberately not here.
  *
  * <p>Each entry matches the key itself and everything below it ({@code key.*}).
  *
@@ -72,6 +73,9 @@ import java.util.List;
  *     {@code message.tool_calls.0.tool_call.function.arguments}), under any of the four hide flags, because
  *     the Java instrumentations write tool-call arguments that way.</li>
  * <li>Java has no counterpart of Python's list-valued message flattening or ChatInput handling.</li>
+ * <li>Error details: under hideErrorDetails the keys error.message, exception.message, exception.stacktrace and
+ *     the {@code .error.message}, {@code .exception.message}, {@code .exception.stacktrace} and {@code .error_message}
+ *     suffixes are dropped, matching the C# SDK's list; Python's own error-key helper may differ.</li>
  * </ul>
  */
 public final class ContentKeys {
@@ -157,7 +161,14 @@ public final class ContentKeys {
         return key.startsWith(EMBEDDINGS + ".") && key.endsWith("." + EMBEDDING_TEXT);
     }
 
+    private static boolean isErrorDetail(String key) {
+        return key.equals("error.message") || key.equals("exception.message") || key.equals("exception.stacktrace")
+            || key.endsWith(".error.message") || key.endsWith(".exception.message")
+            || key.endsWith(".exception.stacktrace") || key.endsWith(".error_message");
+    }
+
     static Action actionFor(String key, TraceConfig config) {
+        if (config.isHideErrorDetails() && isErrorDetail(key)) return Action.OMIT;
         boolean inputs = config.isHideInputs();
         boolean outputs = config.isHideOutputs();
         boolean privateInput = inputs || config.isHideInputMessages();
