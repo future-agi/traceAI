@@ -920,6 +920,14 @@
         "src/instrumentation.ts"
       ]
     },
+    "typescript/packages/traceai_sagemaker": {
+      "release-type": "node",
+      "component": "npm-traceai-sagemaker",
+      "package-name": "@traceai/sagemaker",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "typescript/packages/traceai_strands": {
       "release-type": "node",
       "component": "npm-traceai-strands",
