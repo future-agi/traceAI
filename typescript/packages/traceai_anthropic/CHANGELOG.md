@@ -1,11 +1,7 @@
 ## Unreleased
 
 ### Added
-- Traces the Anthropic clients for Amazon Bedrock (`@anthropic-ai/bedrock-sdk`) and Google Vertex AI (`@anthropic-ai/vertex-sdk`): `messages.create` and streaming produce the same LLM spans as the base client, with `gen_ai.provider.name` set to `aws.bedrock` or `gcp.vertex_ai`.
-
-### Fixed
-- Patching the hosted clients builds no client with live credentials: the probe used to find the Messages class carries placeholder keys and a stub auth object, makes no request, reads no credential source and starts no credential discovery, so loading the SDKs cannot leave a rejected promise behind.
-- With the base SDK and a hosted client loaded together (they share one Messages class), `@traceai/auto` reports the anthropic integration as instrumented instead of manual.
+- Traces the Anthropic clients for Amazon Bedrock (`@anthropic-ai/bedrock-sdk`) and Google Vertex AI (`@anthropic-ai/vertex-sdk`): `messages.create` and streaming produce the same LLM spans as the base client, with `gen_ai.provider.name` set to `aws.bedrock` or `gcp.vertex_ai`. Finding each client's Messages class builds a probe client with placeholder keys and a stub auth object: no request, no credential source and no credential discovery. With the base SDK and a hosted client loaded together (they share one Messages class), `@traceai/auto` reports the integration as instrumented.
 
 ### Changed
 - `init()` now returns an array of module definitions (the base SDK plus the two hosted-client packages) instead of one definition. `init()` is a protected method of the instrumentation base class; a subclass that overrides it or reads its result needs to accept an array.
