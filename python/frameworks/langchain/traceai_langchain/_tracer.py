@@ -633,57 +633,75 @@ def _children(value: Any) -> Any:
     return None
 
 
-def _leaves(value: Any, found: list, nodes: list, key: Any = None, depth: int = 0) -> None:
-    """Every scalar leaf of ``value`` as (nearest mapping key, leaf), whatever its type; anything unreadable is
-    a text leaf of its own. Every node visited counts toward the budget, not only the leaves."""
+def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0) -> None:
+    """Every string leaf of ``value`` (anything unreadable is a text leaf of its own). Every node visited counts
+    toward the budget, not only the leaves; running out of budget raises _Undecidable."""
     nodes[0] += 1
     if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
         raise _Undecidable
-    if value is None:
+    if value is None or isinstance(value, (bool, int, float)):
         return
-    if isinstance(value, (str, bool, int, float)):
-        found.append((key, value))
+    if isinstance(value, str):
+        found.append(value)
         return
     children = _children(value)
     if children is None:
-        found.append((key, str(value)))
+        found.append(str(value))
         return
-    for child_key, child in children:
-        _leaves(child, found, nodes, child_key if child_key is not None else key, depth + 1)
+    for _, child in children:
+        _string_leaves(child, found, nodes, depth + 1)
+
+
+def _unwrap(value: Any) -> Any:
+    """Strip the single-key ``{"input": x}`` / ``{"output": x}`` wrappers LangChain puts around a non-mapping
+    value, and single-element tuples."""
+    for _ in range(_MAX_ECHO_DEPTH):
+        if isinstance(value, Mapping) and len(value) == 1 and next(iter(value)) in ("input", "output"):
+            value = next(iter(value.values()))
+        elif isinstance(value, tuple) and len(value) == 1:
+            value = value[0]
+        else:
+            return value
+    raise _Undecidable
 
 
 def _echoes_input(inputs: Any, outputs: Any) -> bool:
-    """True when the run's input shows up in its output.
+    """True when the run's output repeats its input, judged by structure and by string content.
 
-    Strings and structures are compared fail-safe: a string leaf of four characters or more matches by
-    containment anywhere in the output, a shorter one by exact leaf equality (so "Hi" inside "Hi there" is
-    not an echo). A boolean or number matches only an equal value under the same key name (a pass-through or
-    assign shape), except that a number of four digits or more also matches by containment in the rendered
-    output. A comparison that cannot be completed, or any error, counts as an echo.
+    1. Identity: the unwrapped output equals the unwrapped input (any type, scalars included).
+    2. Pass-through / assign shape: the output is a mapping holding every top-level key of the input mapping
+       with an equal value.
+    3. String content: a string leaf of the input of four characters or more occurs in the rendered output
+       (also in its JSON-escaped form), or a shorter one equals a string leaf of the output exactly.
+    4. Anything that cannot be decided (too deep, too large, unreadable, any error) counts as an echo.
+
+    A boolean or number is never matched by its field name: fields that every message object carries
+    (``example: False``) do not make a node's new message an echo of its input messages.
     """
     if not inputs or not outputs:
         return False
     try:
-        in_leaves: list = []
-        out_leaves: list = []
-        _leaves(inputs, in_leaves, [0])
-        _leaves(outputs, out_leaves, [0])
+        # 1. identity
+        if _unwrap(inputs) == _unwrap(outputs):
+            return True
+        # 2. pass-through / assign shape
+        if isinstance(inputs, Mapping) and isinstance(outputs, Mapping) and inputs:
+            if all(key in outputs and outputs[key] == value for key, value in inputs.items()):
+                return True
+        # 3. string content
+        in_strings: list = []
+        out_strings: list = []
+        _string_leaves(inputs, in_strings, [0])
+        _string_leaves(outputs, out_strings, [0])
         rendered = safe_json_dumps(outputs)
-        out_strings = {leaf for _, leaf in out_leaves if isinstance(leaf, str)}
-        out_scalars = {(k, leaf) for k, leaf in out_leaves if not isinstance(leaf, str)}
-        for key, leaf in in_leaves:
-            if isinstance(leaf, str):
-                if not leaf:
-                    continue
-                if leaf in out_strings:
-                    return True
-                if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
-                    return True
-            else:
-                if (key, leaf) in out_scalars:
-                    return True
-                if not isinstance(leaf, bool) and len(str(leaf)) >= _MIN_ECHO_LENGTH and str(leaf) in rendered:
-                    return True
+        exact = set(out_strings)
+        for leaf in in_strings:
+            if not leaf:
+                continue
+            if leaf in exact:
+                return True
+            if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
+                return True
         return False
     except Exception:  # noqa: BLE001 - when the comparison cannot be made, the output is not recorded
         return True

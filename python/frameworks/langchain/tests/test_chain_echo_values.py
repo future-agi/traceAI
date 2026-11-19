@@ -13,6 +13,10 @@ from pydantic import BaseModel
 
 from traceai_langchain import LangChainInstrumentor
 
+from ._core_version import requires_current_core
+
+pytestmark = requires_current_core
+
 REPLY = "synthetic chain answer"
 SETTINGS = ["hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images"]
 

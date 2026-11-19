@@ -9,6 +9,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from traceai_langchain import LangChainInstrumentor
 
+from ._core_version import requires_current_core
+
+pytestmark = requires_current_core
+
 INPUT_SENTINEL = "SENTINEL_CHAIN_INPUT_4402"
 REPLY = "synthetic chain answer"
 

@@ -13,6 +13,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from traceai_langchain import LangChainInstrumentor
 
+from ._core_version import requires_current_core
+
+pytestmark = requires_current_core
+
 SETTINGS = ["hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images"]
 REPLY = "FRESH_MODEL_REPLY_4471"
 

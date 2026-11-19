@@ -9,6 +9,12 @@ from wrapt import ObjectProxy
 Finish = Callable[[Optional[BaseException], bool], None]
 
 
+def _raised(exc_info: Any) -> Optional[BaseException]:
+    """The exception a with-block was left with, or None for a normal exit (or one that only closes a generator)."""
+    error = exc_info[1] if len(exc_info) > 1 else None
+    return error if isinstance(error, BaseException) and not isinstance(error, GeneratorExit) else None
+
+
 class _StreamState:
     __slots__ = ()
 
@@ -63,7 +69,8 @@ class TracedStream(_StreamState, ObjectProxy):
             leave = getattr(self.__wrapped__, "__exit__", None)
             return leave(*exc_info) if leave is not None else None
         finally:
-            self._end(incomplete=True)
+            # An exception raised in the with-block is the call's failure: the span ends with it.
+            self._end(error=_raised(exc_info), incomplete=True)
 
     def close(self) -> Any:
         try:
@@ -120,7 +127,7 @@ class TracedAsyncStream(_StreamState, ObjectProxy):
             leave = getattr(self.__wrapped__, "__aexit__", None)
             return await leave(*exc_info) if leave is not None else None
         finally:
-            self._end(incomplete=True)
+            self._end(error=_raised(exc_info), incomplete=True)
 
     async def aclose(self) -> Any:
         try:
