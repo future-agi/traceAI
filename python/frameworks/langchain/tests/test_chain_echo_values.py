@@ -13,9 +13,7 @@ from pydantic import BaseModel
 
 from traceai_langchain import LangChainInstrumentor
 
-from ._core_version import requires_current_core
-
-pytestmark = requires_current_core
+from ._core_version import assert_hidden, dump as _dump_all
 
 REPLY = "synthetic chain answer"
 SETTINGS = ["hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images"]
@@ -62,8 +60,7 @@ def _export(config, value, extra=None):
 
 
 def _dump(spans):
-    return json.dumps([dict(s.attributes) for s in spans], default=str) + json.dumps(
-        [[(e.name, dict(e.attributes or {})) for e in s.events] for s in spans], default=str)
+    return _dump_all(spans)
 
 
 def _chain_outputs(spans):
@@ -85,7 +82,7 @@ def test_the_echoing_chain_output_is_not_recorded_under_input_settings(name, set
     for out in _chain_outputs(spans):
         # the echoing output is {"input": <request>, "answer": ...}; the inner answer-only chain may record its own output
         assert out is None or '"input"' not in str(out), (name, setting, out)
-    assert token not in _dump(spans), (name, setting)
+    assert_hidden(spans, token, (name, setting), setting=setting)
 
 
 @pytest.mark.parametrize("setting", SETTINGS)
@@ -102,7 +99,7 @@ def test_a_chain_whose_output_does_not_echo_its_input_still_records_it(setting):
         instrumentor.uninstrument()
         provider.shutdown()
     assert REPLY in _dump(spans)
-    assert "SENTINEL_PRIVATE_REQUEST_55" not in _dump(spans)
+    assert_hidden(spans, "SENTINEL_PRIVATE_REQUEST_55", setting=setting)
 
 
 SETTINGS_ALL = ["hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images"]
@@ -123,7 +120,7 @@ def test_a_non_echo_output_sharing_a_boolean_and_a_number_with_its_input_is_kept
         instrumentor.uninstrument()
         provider.shutdown()
     assert REPLY in _dump(spans)
-    assert "SENTINEL_Q_91" not in _dump(spans)
+    assert_hidden(spans, "SENTINEL_Q_91", setting=setting)
 
 
 @pytest.mark.parametrize("setting", SETTINGS_ALL)
@@ -149,7 +146,7 @@ def test_a_prompt_template_run_does_not_export_its_formatted_input(setting):
         instrumentor.uninstrument()
         provider.shutdown()
     assert spans
-    assert "SENTINEL_PROMPT_VAR_92" not in _dump(spans)
+    assert_hidden(spans, "SENTINEL_PROMPT_VAR_92", setting=setting)
 
 
 def test_a_prompt_template_run_records_its_formatted_prompt_with_no_setting():

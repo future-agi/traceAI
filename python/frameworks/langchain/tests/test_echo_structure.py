@@ -13,9 +13,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from traceai_langchain import LangChainInstrumentor
 
-from ._core_version import requires_current_core
-
-pytestmark = requires_current_core
+from ._core_version import assert_hidden, dump as _dump_all
 
 SETTINGS = ["hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images"]
 REPLY = "FRESH_MODEL_REPLY_4471"
@@ -40,7 +38,7 @@ def _outputs(spans):
 
 
 def _dump(spans):
-    return json.dumps([dict(s.attributes) for s in spans], default=str)
+    return _dump_all(spans)
 
 
 # --- LangGraph-style message state --------------------------------------------------------------
@@ -56,7 +54,7 @@ def test_a_node_that_returns_a_new_message_keeps_its_output(setting):
     spans = _spans(config, lambda: RunnableLambda(_graph_node).invoke({"messages": [HumanMessage(content="SENTINEL_USER_TURN_3318")]}))
     assert any(REPLY in str(out) for out in _outputs(spans)), (setting, _outputs(spans))
     if setting in ("hide_inputs", "hide_input_messages", "hide_input_text"):
-        assert "SENTINEL_USER_TURN_3318" not in _dump(spans)
+        assert_hidden(spans, "SENTINEL_USER_TURN_3318", setting=setting)
 
 
 class _Turn(BaseModel):
@@ -85,7 +83,7 @@ def test_schema_fields_shared_by_message_objects_do_not_make_a_node_output_an_ec
 def test_a_bare_scalar_passthrough_is_withheld(value, setting):
     spans = _spans(TraceConfig(**{setting: True}), lambda: RunnableLambda(lambda x: x).invoke(value))
     assert all(out is None for out in _outputs(spans)), (value, setting, _outputs(spans))
-    assert "raw.output" not in _dump(spans)
+    assert not any("output.value" in dict(s.attributes) for s in spans), _outputs(spans)
 
 
 @pytest.mark.parametrize("value", [True, 7, [1, 2, 3]])
@@ -122,7 +120,7 @@ def test_a_result_that_shares_a_field_name_and_value_with_the_input_is_kept(sett
 
     spans = _spans(TraceConfig(**{setting: True}), lambda: RunnableLambda(work).invoke({"count": 5, "flag": True, "q": "SENTINEL_Q_5512"}))
     assert any(REPLY in str(out) for out in _outputs(spans))
-    assert "SENTINEL_Q_5512" not in _dump(spans)
+    assert_hidden(spans, "SENTINEL_Q_5512", setting=setting)
 
 
 # --- string content ------------------------------------------------------------------------------
@@ -132,9 +130,100 @@ def test_a_result_that_shares_a_field_name_and_value_with_the_input_is_kept(sett
 def test_an_output_that_contains_an_input_string_is_withheld(setting):
     spans = _spans(TraceConfig(**{setting: True}),
                    lambda: RunnableLambda(lambda x: {"summary": "see: " + x["q"]}).invoke({"q": "SENTINEL_STRING_ECHO_2290"}))
-    assert "SENTINEL_STRING_ECHO_2290" not in _dump(spans)
+    assert_hidden(spans, "SENTINEL_STRING_ECHO_2290", setting=setting)
 
 
 def test_controls_record_everything_with_no_setting():
     spans = _spans(TraceConfig(), lambda: RunnableLambda(lambda x: {"summary": "see: " + x["q"]}).invoke({"q": "SENTINEL_STRING_ECHO_2290"}))
     assert "SENTINEL_STRING_ECHO_2290" in _dump(spans)
+
+
+# --- multi-turn agent state: a new reply is kept even though the state already holds earlier turns ---------------
+
+from langchain_core.messages import ToolMessage  # noqa: E402
+from langchain_core.runnables import RunnableParallel  # noqa: E402
+
+HUMAN = "SENTINEL_USER_TURN_3318"
+PRIOR = "PRIOR_ASSISTANT_NOTE_7741"
+TOOL_RESULT = "TOOL_RESULT_5520"
+ALL_SETTINGS = [None, *SETTINGS]
+
+
+def _config(setting):
+    return TraceConfig(**{setting: True}) if setting else TraceConfig()
+
+
+def _prior_ai():
+    return AIMessage(
+        content=PRIOR,
+        response_metadata={"model_name": "gpt-4o-mini", "finish_reason": "tool_calls"},
+        tool_calls=[{"name": "lookup", "args": {"topic": "weather"}, "id": "call_1", "type": "tool_call"}],
+    )
+
+
+def _kept(spans):
+    return any(REPLY in str(out) for out in _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_new_reply_after_a_tool_round_trip_is_kept(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), _prior_ai(), ToolMessage(content=TOOL_RESULT, tool_call_id="call_1")]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(_graph_node).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+    if setting in ("hide_inputs", "hide_input_messages", "hide_input_text"):
+        assert_hidden(spans, HUMAN, setting=setting)
+        assert_hidden(spans, TOOL_RESULT, setting=setting)
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_new_reply_after_human_ai_human_is_kept(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), AIMessage(content=PRIOR, response_metadata={"model_name": "gpt-4o-mini"}), HumanMessage(content="a second question about tides")]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(_graph_node).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_node_that_returns_its_input_messages_unchanged_is_withheld(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), _prior_ai()]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": s["messages"]}).invoke(state))
+    assert_hidden(spans, HUMAN, setting=setting)
+    assert_hidden(spans, PRIOR, setting=setting)
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_new_reply_that_contains_an_input_text_is_withheld(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), _prior_ai()]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": [AIMessage(content="you wrote: " + HUMAN)]}).invoke(state))
+    assert_hidden(spans, HUMAN, setting=setting)
+
+
+class _Wrapper(BaseModel):
+    text: str
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_an_input_text_with_a_newline_and_a_quote_inside_a_nested_model_is_withheld(setting):
+    secret = 'SENTINEL_LINE_ONE\nthen "quoted" text \\ and a backslash'
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda x: {"wrapped": _Wrapper(text="prefix " + secret + " suffix")}).invoke({"q": secret}))
+    assert_hidden(spans, "SENTINEL_LINE_ONE", setting=setting)
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_number_passed_through_below_the_top_level_is_withheld(setting):
+    chain = RunnableParallel(orig=RunnablePassthrough(), x=RunnableLambda(lambda _: REPLY))
+    spans = _spans(_config(setting), lambda: chain.invoke(12345678))
+    assert all("12345678" not in str(out) for out in _outputs(spans)), _outputs(spans)
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_bool_passed_through_below_the_top_level_is_withheld(setting):
+    chain = RunnableParallel(orig=RunnablePassthrough(), x=RunnableLambda(lambda _: REPLY))
+    spans = _spans(_config(setting), lambda: chain.invoke(True))
+    assert not any('"orig": true' in str(out) for out in _outputs(spans)), _outputs(spans)
+
+
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_multi_turn_reply_that_shares_small_numbers_and_flags_with_the_state_is_kept(setting):
+    state = {"messages": [HumanMessage(content=HUMAN), _prior_ai()], "count": 3, "done": False}
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"messages": [AIMessage(content=REPLY)], "count": 3, "done": False}).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))

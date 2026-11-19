@@ -286,7 +286,17 @@ def _exception_types(span):
     return [event.attributes.get("exception.type") for event in span.events if event.name == "exception"]
 
 
-def test_an_exception_raised_inside_a_with_block_ends_the_span_with_an_error(traced, kind):
+def _carries_text(span, text):
+    """The text appears in the status description or in any exception event attribute."""
+    events = json.dumps([dict(e.attributes or {}) for e in span.events], default=str)
+    return text in (span.status.description or "") or text in events
+
+
+def _hides_errors(config):
+    return config.hide_inputs or config.hide_input_messages
+
+
+def test_an_exception_raised_inside_a_with_block_ends_the_span_with_an_error(traced, kind, config):
     sync_cls, _, created, exporter = traced
     with pytest.raises(ValueError):
         with _call(kind, sync_cls) as stream:
@@ -296,9 +306,11 @@ def test_an_exception_raised_inside_a_with_block_ends_the_span_with_an_error(tra
     span = _only(exporter)
     assert span.status.status_code.name == "ERROR"
     assert _exception_types(span) == ["ValueError"]
+    if _hides_errors(config):
+        assert not _carries_text(span, "synthetic caller failure")
 
 
-def test_an_exception_raised_inside_an_async_with_block_ends_the_span_with_an_error(traced, kind):
+def test_an_exception_raised_inside_an_async_with_block_ends_the_span_with_an_error(traced, kind, config):
     _, async_cls, created, exporter = traced
 
     async def run():
@@ -313,3 +325,5 @@ def test_an_exception_raised_inside_an_async_with_block_ends_the_span_with_an_er
     span = _only(exporter)
     assert span.status.status_code.name == "ERROR"
     assert _exception_types(span) == ["ValueError"]
+    if _hides_errors(config):
+        assert not _carries_text(span, "synthetic caller failure")

@@ -9,9 +9,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from traceai_langchain import LangChainInstrumentor
 
-from ._core_version import requires_current_core
-
-pytestmark = requires_current_core
+from ._core_version import assert_hidden, dump
 
 INPUT_SENTINEL = "SENTINEL_CHAIN_INPUT_4402"
 REPLY = "synthetic chain answer"
@@ -30,17 +28,14 @@ def _run(config):
         assert result == {"input": INPUT_SENTINEL, "answer": REPLY}
         spans = exporter.get_finished_spans()
         assert spans
-        return json.dumps([dict(s.attributes) for s in spans], default=str) + json.dumps(
-            [[(e.name, dict(e.attributes or {})) for e in s.events] for s in spans],
-            default=str,
-        )
+        return spans
     finally:
         instrumentor.uninstrument()
         provider.shutdown()
 
 
 def test_control_output_recorded_without_settings():
-    assert REPLY in _run(TraceConfig())
+    assert REPLY in dump(_run(TraceConfig()))
 
 
 @pytest.mark.parametrize(
@@ -48,4 +43,4 @@ def test_control_output_recorded_without_settings():
     [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}],
 )
 def test_rawOutputOmitsRequestInputUnderInputSettings(trace_config):
-    assert INPUT_SENTINEL not in _run(TraceConfig(**trace_config))
+    assert_hidden(_run(TraceConfig(**trace_config)), INPUT_SENTINEL)
