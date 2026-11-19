@@ -1,5 +1,6 @@
 package ai.traceai.cohere;
 
+import ai.traceai.ContentKeys;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import ai.traceai.TraceConfig;
@@ -57,17 +58,19 @@ class TracedCohereClientPrivacyTest {
         assertThat(value(chatSpan, SemanticConventions.INPUT_VALUE) == null).isEqualTo(inputs);
         assertThat(value(chatSpan, SemanticConventions.LLM_INPUT_MESSAGES) == null)
             .isEqualTo(inputs || inputMessages);
-        assertThat(value(chatSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(inputs);
+        assertThat(value(chatSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(flags != 0);
         assertThat(value(chatSpan, SemanticConventions.OUTPUT_VALUE) == null).isEqualTo(outputs);
         assertThat(value(chatSpan, SemanticConventions.LLM_OUTPUT_MESSAGES) == null)
             .isEqualTo(outputs || outputMessages);
-        assertThat(value(chatSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(outputs);
+        assertThat(value(chatSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(flags != 0);
         String toolPrefix = SemanticConventions.MESSAGE_TOOL_CALLS + ".0.";
         assertThat(value(chatSpan, toolPrefix + SemanticConventions.TOOL_CALL_FUNCTION_NAME) == null)
             .isEqualTo(outputs || outputMessages);
         String arguments = value(chatSpan, toolPrefix + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS);
         if (outputs || outputMessages) {
             assertThat(arguments).isNull();
+        } else if (inputs || inputMessages) {
+            assertThat(arguments).isEqualTo(ContentKeys.REDACTED);
         } else {
             assertThat(arguments).contains("private-argument");
         }
@@ -94,8 +97,8 @@ class TracedCohereClientPrivacyTest {
         SpanData rerankSpan = otel.getSpans().get(1);
         assertThat(value(rerankSpan, SemanticConventions.GEN_AI_RERANKER_QUERY))
             .isEqualTo(inputs ? null : "private-query");
-        assertThat(value(rerankSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(inputs);
-        assertThat(value(rerankSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(outputs);
+        assertThat(value(rerankSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(flags != 0);
+        assertThat(value(rerankSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(flags != 0);
         assertThat(rerankSpan.getAttributes().get(AttributeKey.longKey(
             SemanticConventions.GEN_AI_RERANKER_INPUT_DOCUMENTS))).isEqualTo(1L);
         assertThat(rerankSpan.getAttributes().get(AttributeKey.longKey(

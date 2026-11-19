@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+* **java-core:** raw input and raw output are not recorded while any hide setting is on.
+* **java-core:** number and boolean values (and arrays of them) written through `FITracer` on content keys are masked by key under the hide settings, like text values.
+* **cohere:** tool-call arguments go through the masker; chat, embed and rerank raw responses are not recorded while any hide setting is on.
+* **ollama:** the raw chat response is not recorded while any hide setting is on.
+* **langchain4j:** AiServices method arguments (`langchain4j.param.*`) are not recorded under `hideInputs` / `hideInputMessages`.
+* **javaagent:** the agent masks the same content keys as `traceai-java-core`, including number and boolean values; it does not record a whole provider response body while any hide setting is on.
+* **java-core, javaagent:** a whole-number document count on the reranker document keys (`gen_ai.reranker.input_documents`, `gen_ai.reranker.output_documents` and the `reranker.*` names) is kept under every hide setting; text on these keys, and keys below them, is masked as before.
+* **javaagent:** an application span's raw input and output (`raw.input`, `raw.output`, `fi.raw_input`, `fi.raw_output`) are not exported while any hide switch is on, including `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES` and `FI_HIDE_LLM_INVOCATION_PARAMETERS`.
+
 ## 1.4.1 (2026-11-19)
 
 ### Changes

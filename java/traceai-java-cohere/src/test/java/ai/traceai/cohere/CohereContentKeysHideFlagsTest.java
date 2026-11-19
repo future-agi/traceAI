@@ -16,6 +16,7 @@ import com.cohere.api.types.NonStreamedChatResponse;
 import com.cohere.api.types.RerankRequestDocumentsItem;
 import com.cohere.api.types.RerankResponse;
 import com.cohere.api.types.RerankResponseResultsItem;
+import com.cohere.api.types.RerankResponseResultsItemDocument;
 import com.cohere.api.types.ToolCall;
 import com.cohere.api.types.ToolResult;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
@@ -66,7 +67,11 @@ class CohereContentKeysHideFlagsTest {
 
         @Override
         public NonStreamedChatResponse chat(ChatRequest request) {
+            // the v1 chat response echoes the conversation, including the user message
             return NonStreamedChatResponse.builder().text(OUT_TEXT)
+                .chatHistory(List.of(
+                    Message.user(ChatMessage.builder().message(IN_MESSAGE).build()),
+                    Message.user(ChatMessage.builder().message(IN_HISTORY).build())))
                 .toolCalls(List.of(ToolCall.builder().name("lookup").parameters(Map.of("q", OUT_TOOL_ARGS)).build()))
                 .build();
         }
@@ -74,13 +79,14 @@ class CohereContentKeysHideFlagsTest {
         @Override
         public EmbedResponse embed(EmbedRequest request) {
             return EmbedResponse.embeddingsFloats(EmbedFloatsResponse.builder()
-                .id("embed-1").embeddings(List.of(List.of(0.1, 0.2))).texts(List.of()).build());
+                .id("embed-1").embeddings(List.of(List.of(0.1, 0.2))).texts(List.of(IN_EMBED_TEXT)).build());
         }
 
         @Override
         public RerankResponse rerank(RerankRequest request) {
             return RerankResponse.builder()
-                .results(List.of(RerankResponseResultsItem.builder().index(0).relevanceScore(0.9f).build())).build();
+                .results(List.of(RerankResponseResultsItem.builder().index(0).relevanceScore(0.9f)
+                    .document(RerankResponseResultsItemDocument.builder().text(IN_DOCUMENT).build()).build())).build();
         }
     }
 
@@ -106,12 +112,12 @@ class CohereContentKeysHideFlagsTest {
             .build());
         client.embed(EmbedRequest.builder().texts(List.of(IN_EMBED_TEXT)).model("embed-english-v3.0").build());
         client.rerank(RerankRequest.builder().query(IN_QUERY)
-            .documents(List.of(RerankRequestDocumentsItem.of(IN_DOCUMENT))).topN(1).model("rerank-v3").build());
+            .documents(List.of(RerankRequestDocumentsItem.of(IN_DOCUMENT))).returnDocuments(true).topN(1).model("rerank-v3").build());
         assertThat(exporter.getFinishedSpanItems()).hasSize(3);
     }
 
     /** Attribute keys (and event names) whose exported value contains the sentinel. */
-    private List<String> leakedKeys(String sentinel) {
+    private List<String> exportedKeys(String sentinel) {
         List<String> keys = new ArrayList<>();
         for (SpanData span : exporter.getFinishedSpanItems()) {
             span.getAttributes().forEach((k, v) -> { if (String.valueOf(v).contains(sentinel)) keys.add(k.getKey()); });
@@ -127,13 +133,13 @@ class CohereContentKeysHideFlagsTest {
     void inputFlagsKeepPromptContentOutOfEverySpan(String flag) {
         run(flag);
         for (String s : List.of(IN_MESSAGE, IN_PREAMBLE, IN_HISTORY, IN_TOOL_RESULT, IN_EMBED_TEXT, IN_QUERY, IN_DOCUMENT)) {
-            List<String> leaked = leakedKeys(s);
+            List<String> exported = exportedKeys(s);
             // gen_ai.reranker.query is on Python's hide_inputs list only, so hideInputMessages keeps it by design
-            if (flag.equals("hideInputMessages")) leaked.remove("gen_ai.reranker.query");
-            assertThat(leaked).as("%s leaked under %s", s, flag).isEmpty();
+            if (flag.equals("hideInputMessages")) exported.remove("gen_ai.reranker.query");
+            assertThat(exported).as("%s exported under %s", s, flag).isEmpty();
         }
         // the other direction is not hidden: guards against asserting on an empty export
-        assertThat(leakedKeys(OUT_TEXT)).isNotEmpty();
+        assertThat(exportedKeys(OUT_TEXT)).isNotEmpty();
     }
 
     @ParameterizedTest
@@ -141,8 +147,52 @@ class CohereContentKeysHideFlagsTest {
     void outputFlagsKeepResponseContentOutOfEverySpan(String flag) {
         run(flag);
         for (String s : List.of(OUT_TEXT, OUT_TOOL_ARGS)) {
-            assertThat(leakedKeys(s)).as("%s leaked under %s", s, flag).isEmpty();
+            assertThat(exportedKeys(s)).as("%s exported under %s", s, flag).isEmpty();
         }
-        assertThat(leakedKeys(IN_MESSAGE)).isNotEmpty();
+        assertThat(exportedKeys(IN_MESSAGE)).isNotEmpty();
+    }
+
+    /**
+     * tool_call.function.arguments is on Python's input-side list and Java masks it, wherever it is nested, under
+     * every one of the four flags (ContentKeys javadoc). Only the nested argument attributes are inspected:
+     * raw.output legitimately carries the whole response unless an output flag hides it.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hideInputs", "hideOutputs", "hideInputMessages", "hideOutputMessages"})
+    void toolCallArgumentAttributesAreMaskedUnderEveryFlag(String flag) {
+        run(flag);
+        List<String> exported = new ArrayList<>();
+        for (SpanData span : exporter.getFinishedSpanItems()) {
+            span.getAttributes().forEach((k, v) -> {
+                if (k.getKey().contains("tool_call.function.arguments") && String.valueOf(v).contains(OUT_TOOL_ARGS)) {
+                    exported.add(k.getKey());
+                }
+            });
+        }
+        assertThat(exported).as("tool-call arguments under %s", flag).isEmpty();
+    }
+
+    /** Control: with no hide flag the echoed history is part of the raw output. */
+    @org.junit.jupiter.api.Test
+    void withNoFlagTheEchoedHistoryIsInTheRawOutput() {
+        TracedCohereClient client = new TracedCohereClient(new StubCohere(), new FITracer(provider.get("cohere-hide-test"),
+            TraceConfig.builder().apiKey("offline").secretKey("offline").projectName("offline")
+                .hideInputs(false).hideOutputs(false).hideInputMessages(false).hideOutputMessages(false).build()));
+        client.chat(ChatRequest.builder().message(IN_MESSAGE).model("command-r").build());
+        assertThat(exportedKeys(IN_HISTORY)).contains("fi.raw_output");
+        assertThat(exportedKeys(OUT_TEXT)).contains("fi.raw_output");
+    }
+
+    /** Control: with no hide flag the echoed input texts and documents are part of the raw output. */
+    @org.junit.jupiter.api.Test
+    void withNoFlagEmbedAndRerankRawOutputCarryTheEchoedInput() {
+        TracedCohereClient client = new TracedCohereClient(new StubCohere(), new FITracer(provider.get("cohere-hide-test"),
+            TraceConfig.builder().apiKey("offline").secretKey("offline").projectName("offline")
+                .hideInputs(false).hideOutputs(false).hideInputMessages(false).hideOutputMessages(false).build()));
+        client.embed(EmbedRequest.builder().texts(List.of(IN_EMBED_TEXT)).model("embed-english-v3.0").build());
+        client.rerank(RerankRequest.builder().query(IN_QUERY)
+            .documents(List.of(RerankRequestDocumentsItem.of(IN_DOCUMENT))).returnDocuments(true).model("rerank-v3").build());
+        assertThat(exportedKeys(IN_EMBED_TEXT)).contains("fi.raw_output");
+        assertThat(exportedKeys(IN_DOCUMENT)).contains("fi.raw_output");
     }
 }

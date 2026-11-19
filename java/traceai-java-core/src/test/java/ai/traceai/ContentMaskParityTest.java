@@ -80,15 +80,20 @@ class ContentMaskParityTest {
     @MethodSource("inputKeys")
     void hideInputsMasksEveryInputContentKey(String key) {
         assertThat(stored(export(hiding(true, false), key), key)).isEqualTo(REDACTED);
-        assertThat(stored(export(hiding(false, true), key), key)).isEqualTo(SECRET);
+        assertThat(stored(export(hiding(false, true), key), key)).isEqualTo(otherDirection(key));
         assertThat(stored(export(hiding(false, false), key), key)).isEqualTo(SECRET);
+    }
+
+    /** The raw request and response keys are masked under every hide setting; every other key only under its own direction. */
+    private static String otherDirection(String key) {
+        return key.contains("raw") ? REDACTED : SECRET;
     }
 
     @ParameterizedTest(name = "hideOutputs masks {0}")
     @MethodSource("outputKeys")
     void hideOutputsMasksEveryOutputContentKey(String key) {
         assertThat(stored(export(hiding(false, true), key), key)).isEqualTo(REDACTED);
-        assertThat(stored(export(hiding(true, false), key), key)).isEqualTo(SECRET);
+        assertThat(stored(export(hiding(true, false), key), key)).isEqualTo(otherDirection(key));
         assertThat(stored(export(hiding(false, false), key), key)).isEqualTo(SECRET);
     }
 
@@ -169,7 +174,7 @@ class ContentMaskParityTest {
         TraceConfig messages = TraceConfig.builder().hideInputMessages(true).build();
         assertThat(stored(export(messages, key), key)).isEqualTo(REDACTED);
         assertThat(stored(export(messages, key + ".0.value"), key + ".0.value")).isEqualTo(REDACTED);
-        assertThat(stored(export(TraceConfig.builder().hideOutputMessages(true).build(), key), key)).isEqualTo(SECRET);
+        assertThat(stored(export(TraceConfig.builder().hideOutputMessages(true).build(), key), key)).isEqualTo(otherDirection(key));
     }
 
     @ParameterizedTest(name = "hideOutputMessages masks {0}")
@@ -177,7 +182,7 @@ class ContentMaskParityTest {
     void hideOutputMessagesMasksTheOutputValueKeys(String key) {
         TraceConfig messages = TraceConfig.builder().hideOutputMessages(true).build();
         assertThat(stored(export(messages, key), key)).isEqualTo(REDACTED);
-        assertThat(stored(export(TraceConfig.builder().hideInputMessages(true).build(), key), key)).isEqualTo(SECRET);
+        assertThat(stored(export(TraceConfig.builder().hideInputMessages(true).build(), key), key)).isEqualTo(otherDirection(key));
     }
 
     static Stream<String> inputValueKeys() { return INPUT_VALUE_KEYS.stream(); }

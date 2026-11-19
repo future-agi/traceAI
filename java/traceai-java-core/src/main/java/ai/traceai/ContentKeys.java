@@ -8,7 +8,8 @@ import java.util.List;
  * ({@code python/fi_instrumentation/instrumentation/config.py}); this class lists the same content keys,
  * plus the legacy and alias names the Java SDK writes itself, for the four hide flags and the error-detail
  * flag Java has. It is not full equivalence: see "Differences from Python" below. Model names, ids, counts
- * and token usage are deliberately not here.
+ * and token usage are deliberately not here; a whole-number document count on a reranker document key is
+ * kept as well (see {@link #DOCUMENT_COUNT_KEYS}).
  *
  * <p>Each entry matches the key itself and everything below it ({@code key.*}).
  *
@@ -55,6 +56,9 @@ import java.util.List;
  * gen_ai.computer_use.screenshot, gen_ai.computer_use.current_url
  *                                                 no            yes
  * </pre>
+ *
+ * The raw request and response keys (raw.input, raw.output and the Java aliases fi.raw_input, fi.raw_output) are
+ * redacted when any of the four hide flags is set.
  *
  * Message flags (Python: private_input = hide_inputs or hide_input_messages; private_output likewise).
  * The value keys input.value, raw.input, fi.raw_input and both template-variable keys are redacted when
@@ -109,6 +113,22 @@ public final class ContentKeys {
         "gen_ai.audio.url", "gen_ai.audio.transcript", "gen_ai.computer_use.screenshot",
         "gen_ai.computer_use.current_url");
 
+    /**
+     * The reranker document keys on which the Java instrumentations write a document count (Cohere rerank: how
+     * many documents went in and came out). A whole-number value on exactly one of these keys is a count, not
+     * content, and is kept under every hide setting. Text or any other value on them, and every key below them
+     * ({@code gen_ai.reranker.input_documents.0.document.content}), is masked as listed above.
+     */
+    static final List<String> DOCUMENT_COUNT_KEYS = List.of(
+        "gen_ai.reranker.input_documents", "gen_ai.reranker.output_documents",
+        "reranker.input_documents", "reranker.output_documents");
+
+    /** True when the value is a document count on one of {@link #DOCUMENT_COUNT_KEYS}. */
+    static boolean isDocumentCount(String key, Object value) {
+        return (value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte)
+            && DOCUMENT_COUNT_KEYS.contains(key);
+    }
+
     private static final String AGGREGATE_TOOL_CALL = "gen_ai.tool.call";
     private static final String INPUT_MIME_TYPE = "input.mime_type";
     private static final String OUTPUT_MIME_TYPE = "output.mime_type";
@@ -129,6 +149,8 @@ public final class ContentKeys {
     private static final List<String> INPUT_VALUES = List.of(
         "input.value", "raw.input", "fi.raw_input",
         "llm.prompt_template.variables", "gen_ai.prompt.template.variables");
+    /** The raw request and response objects: redacted under every hide setting, input and output alike. */
+    private static final List<String> RAW_VALUES = List.of("raw.input", "fi.raw_input", "raw.output", "fi.raw_output");
     /** The keys Python hides under hide_outputs or hide_output_messages (private_output). */
     private static final List<String> OUTPUT_VALUES = List.of("output.value", "raw.output", "fi.raw_output");
     /** Embedding text: Python's embedding.embeddings.N.embedding.text, and the Java alias embedding.input_text[.N]. */
@@ -175,6 +197,7 @@ public final class ContentKeys {
         boolean privateOutput = outputs || config.isHideOutputMessages();
         if (inputs && key.equals(INPUT_MIME_TYPE)) return Action.OMIT;
         if (outputs && key.equals(OUTPUT_MIME_TYPE)) return Action.OMIT;
+        if ((inputs || outputs || privateInput || privateOutput) && under(key, RAW_VALUES)) return Action.REDACT;
         if (privateInput && under(key, INPUT_VALUES)) return Action.REDACT;
         if (privateOutput && under(key, OUTPUT_VALUES)) return Action.REDACT;
         if ((inputs || outputs) && (key.equals(AGGREGATE_TOOL_CALL) || under(key, EITHER))) return Action.REDACT;

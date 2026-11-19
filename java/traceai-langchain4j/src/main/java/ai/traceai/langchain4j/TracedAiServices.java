@@ -102,8 +102,10 @@ public final class TracedAiServices {
 
                 tracer.setInputValue(span, inputBuilder.toString());
 
-                // Set individual parameter attributes
-                for (int i = 0; i < args.length; i++) {
+                // Set individual parameter attributes; they are input content, so the input
+                // hide settings apply to them as they do to the aggregate input value
+                boolean hideParams = tracer.getConfig().isHideInputs() || tracer.getConfig().isHideInputMessages();
+                for (int i = 0; i < args.length && !hideParams; i++) {
                     if (args[i] != null) {
                         span.setAttribute("langchain4j.param." + paramNames[i], args[i].toString());
                     }
