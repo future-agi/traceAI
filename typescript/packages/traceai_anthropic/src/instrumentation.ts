@@ -17,7 +17,7 @@ import {
 } from "@opentelemetry/api";
 import { SemanticConventions, FISpanKind, LLMProvider, MimeType } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
-import { FITracer, safelyJSONStringify, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, generateTraceConfig, safelyJSONStringify, TraceConfigOptions } from "@traceai/fi-core";
 import { VERSION } from "./version";
 import {
     getAnthropicInputMessagesAttributes,
@@ -30,6 +30,8 @@ import { type MessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { Stream } from "@anthropic-ai/sdk/streaming";
 
 const MODULE_NAME = "@anthropic-ai/sdk";
+const BEDROCK_MODULE = "@anthropic-ai/bedrock-sdk";
+const VERTEX_MODULE = "@anthropic-ai/vertex-sdk";
 // Key ownership by the concrete target, not the module namespace: ESM aliases
 // can share Messages, and frozen namespaces cannot carry a fiPatched flag.
 const patchedMessages = new Map<Anthropic.Messages, {
@@ -37,6 +39,8 @@ const patchedMessages = new Map<Anthropic.Messages, {
   moduleExports: typeof Anthropic;
   create: Anthropic.Messages["create"];
   generation: symbol;
+  /** The hosted-client module whose loader installed this patch, if any. */
+  hostedBy?: unknown;
 }>();
 
 export function isPatched() {
@@ -53,6 +57,57 @@ function getExecContext(span: Span) {
   //   diag.debug("Tracing is suppressed. Span will not be exported or set in context for children.");
   // }
   return execContext;
+}
+
+/** The cloud-hosted Anthropic clients share the base SDK's Messages class. */
+const PROVIDER_BEDROCK = "aws.bedrock";
+const PROVIDER_VERTEX = "gcp.vertex_ai";
+
+/** Which provider a Messages resource talks to, from its owning client. */
+function providerOf(messages: unknown): string {
+  const client = (messages as { _client?: object } | undefined)?._client;
+  if (!client || typeof client !== "object") return LLMProvider.ANTHROPIC;
+  const name = (client.constructor as { name?: string } | undefined)?.name;
+  if (name === "AnthropicBedrock" || (name !== "AnthropicVertex" && "awsRegion" in client)) return PROVIDER_BEDROCK;
+  if (name === "AnthropicVertex" || ("projectId" in client && "region" in client)) return PROVIDER_VERTEX;
+  return LLMProvider.ANTHROPIC;
+}
+
+/** The module object of a cloud-hosted client package, and how to build a client from it without credentials. */
+function hostedClient(moduleExports: any): { className: string; probe: Record<string, unknown> } | undefined {
+  if (typeof moduleExports?.AnthropicBedrock === "function") {
+    return { className: "AnthropicBedrock", probe: { awsRegion: "us-east-1" } };
+  }
+  if (typeof moduleExports?.AnthropicVertex === "function") {
+    return { className: "AnthropicVertex", probe: { region: "us-east5", projectId: "traceai-probe" } };
+  }
+  return undefined;
+}
+
+/** What the hide settings withhold: raw objects and whole responses are held to the strictest one. */
+interface Privacy {
+  /** Any hide setting is on: the raw request and response objects are not recorded. */
+  hidesAny: boolean;
+  /** An input hide setting is on: only response-side fields are recorded as output. */
+  hidesInput: boolean;
+}
+
+function privacyOf(traceConfig?: TraceConfigOptions): Privacy {
+  const config = generateTraceConfig(traceConfig);
+  const hidesInput = !!(config.hideInputs || config.hideInputMessages || config.hideInputText || config.hideInputImages);
+  const hidesAny = hidesInput || !!(config.hideOutputs || config.hideOutputMessages || config.hideOutputText);
+  return { hidesAny, hidesInput };
+}
+
+const RESPONSE_FIELDS = ["id", "type", "role", "model", "content", "stop_reason", "stop_sequence", "usage"] as const;
+
+/** The response-side fields of a message; anything else the object carries is left out. */
+function responseSide(message: object): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const field of RESPONSE_FIELDS) {
+    if (field in message) picked[field] = (message as Record<string, unknown>)[field];
+  }
+  return picked;
 }
 
 /**
@@ -151,7 +206,7 @@ function instrumentAPIPromise(
 }
 
 /** Record only events the application consumed; never drain a background tee. */
-function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<MessageStreamEvent> {
+function observeStream(span: Span, stream: Stream<MessageStreamEvent>, privacy: Privacy): Stream<MessageStreamEvent> {
   const chunks: MessageStreamEvent[] = [];
   let sawMessageStop = false;
   let ended = false;
@@ -162,7 +217,7 @@ function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<M
     ended = true;
     signal?.removeEventListener("abort", onAbort);
     try {
-      finishInstrumentationStream(span, chunks, sawMessageStop, canceled, error);
+      finishInstrumentationStream(span, chunks, sawMessageStop, canceled, privacy, error);
     } catch {
       // A processor/exporter failure must not replace an SDK iterator result.
     } finally {
@@ -264,6 +319,7 @@ function finishInstrumentationStream(
   chunks: MessageStreamEvent[],
   sawMessageStop: boolean,
   canceled: boolean,
+  privacy: Privacy,
   error?: unknown,
 ) {
   try {
@@ -300,7 +356,8 @@ function finishInstrumentationStream(
         streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = concatenatedStreamText;
         streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.TEXT;
     } else {
-        streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = safelyJSONStringify(reconstructedMessage) ?? "";
+        streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = safelyJSONStringify(
+          privacy.hidesInput ? responseSide(reconstructedMessage) : reconstructedMessage) ?? "";
         streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
     }
 
@@ -318,7 +375,8 @@ function finishInstrumentationStream(
         Object.assign(streamSpanAttributes, getAnthropicUsageAttributes(reconstructedMessage));
     }
 
-    span.setAttributes({
+    // The raw response is not recorded while any hide setting is on.
+    span.setAttributes(privacy.hidesAny ? streamSpanAttributes : {
         ...streamSpanAttributes,
         [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(reconstructedMessage) ?? "",
     });
@@ -376,15 +434,49 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
-    return module;
+    // The cloud-hosted clients build on the base SDK's Messages class but may be the only
+    // module the application loads, so each gets its own definition.
+    const hosted = (name: string) =>
+      new InstrumentationNodeModuleDefinition(name, [">=0.1.0"], this.patch.bind(this), this.unpatch.bind(this));
+    return [module, hosted(BEDROCK_MODULE), hosted(VERTEX_MODULE)];
   }
 
-  manuallyInstrument(module: typeof Anthropic) {
-    this._manualModules.add(module);
-    if (this.isEnabled()) this.patch(module);
+  /** Patches the Messages class a hosted client uses, found from a client built without credentials. */
+  private patchHosted(moduleExports: any, className: string, probe: Record<string, unknown>) {
+    const ClientClass = moduleExports?.[className];
+    // A client with native OpenTelemetry support traces itself.
+    if (ClientClass.prototype && "openTelemetry" in ClientClass.prototype) return moduleExports;
+    let messagesPrototype: any;
+    try {
+      // Constructing a client reads the environment only: it does no I/O and needs no credentials.
+      messagesPrototype = Object.getPrototypeOf(new ClientClass(probe).messages);
+    } catch (error) {
+      diag.warn(`@traceai/anthropic: could not find the Messages class of ${className}`, error);
+      return moduleExports;
+    }
+    if (!messagesPrototype || typeof messagesPrototype.create !== "function") return moduleExports;
+    this.patchMessages({ Messages: { prototype: messagesPrototype } } as any, moduleExports);
+    return moduleExports;
+  }
+
+  private unpatchHosted(moduleExports: any) {
+    for (const [messagesPrototype, patch] of patchedMessages) {
+      if (patch.owner === this && patch.hostedBy === moduleExports) this.unpatchMessages(messagesPrototype);
+    }
+  }
+
+  manuallyInstrument(module: typeof Anthropic | object) {
+    this._manualModules.add(module as typeof Anthropic);
+    if (this.isEnabled()) this.patch(module as typeof Anthropic);
   }
 
   private patch(moduleExports: typeof Anthropic, moduleVersion?: string) {
+    const hosted = hostedClient(moduleExports);
+    if (hosted) return this.patchHosted(moduleExports, hosted.className, hosted.probe);
+    return this.patchMessages(moduleExports);
+  }
+
+  private patchMessages(moduleExports: typeof Anthropic, hostedBy?: unknown) {
     // Native SDK tracing owns the APIPromise, stream lifecycle and privacy options.
     // Do not wrap it, even when the client explicitly disables native telemetry.
     // Check the public capability, not just the automatic loader's version gate:
@@ -414,6 +506,7 @@ export class AnthropicInstrumentation extends InstrumentationBase{
         instrumentation.fiTracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: instrumentation._traceConfig });
     }
 
+    const privacy = privacyOf(instrumentation._traceConfig);
     const previousCreate = messagesPrototype.create;
     const generation = Symbol("messages.create");
     // Patch messages.create
@@ -430,19 +523,23 @@ export class AnthropicInstrumentation extends InstrumentationBase{
             return originalCreate.apply(this, args);
           }
           const params = args[0] as Anthropic.MessageCreateParams;
+          // Read before the call: a hosted client rewrites the shared request body (model, stream) while building the request.
+          const streaming = params.stream === true;
           const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = params;
 
+          const provider = providerOf(this);
           const span = instrumentation.fiTracer.startSpan("Anthropic Messages Create", {
             kind: SpanKind.INTERNAL,
             attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
               [SemanticConventions.LLM_MODEL_NAME]: params.model,
-              [SemanticConventions.LLM_PROVIDER]: LLMProvider.ANTHROPIC,
+              [SemanticConventions.LLM_PROVIDER]: provider,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safelyJSONStringify(invocationParameters) ?? "",
               ...getAnthropicInputMessagesAttributes(params),
               ...getAnthropicToolsAttributes(params),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(params) ?? "",
+              // The raw request is not recorded while any hide setting is on.
+              ...(privacy.hidesAny ? {} : { [SemanticConventions.RAW_INPUT]: safelyJSONStringify(params) ?? "" }),
             },
           });
 
@@ -459,10 +556,10 @@ export class AnthropicInstrumentation extends InstrumentationBase{
 
           const handleResult = (result: unknown) => {
             if (ended) return result;
-            if (params.stream === true) {
+            if (streaming) {
               const receivedStream = result as Stream<Anthropic.MessageStreamEvent>;
               ended = true;
-              return observeStream(span, receivedStream);
+              return observeStream(span, receivedStream, privacy);
             }
             ended = true;
             const messageResponse = result as Anthropic.Message;
@@ -474,14 +571,18 @@ export class AnthropicInstrumentation extends InstrumentationBase{
                 span.setAttributes({
                   ...getAnthropicOutputMessagesAttributes(messageResponse),
                   ...getAnthropicUsageAttributes(messageResponse),
-                  [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model,
+                  // A hosted client's request model is the platform's id; the response names the model itself.
+                  ...(provider === LLMProvider.ANTHROPIC ? { [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model } : {}),
                   [SemanticConventions.GEN_AI_RESPONSE_MODEL]: messageResponse.model,
                   [SemanticConventions.GEN_AI_RESPONSE_ID]: messageResponse.id,
                   [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: messageResponse.stop_reason
                     ? JSON.stringify([messageResponse.stop_reason]) : "[]",
-                  [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(messageResponse) ?? "",
+                  // While an input hide setting is on only the response-side fields are recorded.
+                  [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(
+                    privacy.hidesInput ? responseSide(messageResponse) : messageResponse) ?? "",
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "",
+                  // The raw response is not recorded while any hide setting is on.
+                  ...(privacy.hidesAny ? {} : { [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "" }),
                 });
               }
             } catch (attributeError: unknown) {
@@ -535,6 +636,7 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       moduleExports,
       create: messagesPrototype.create,
       generation,
+      hostedBy,
     });
     try {
       (moduleExports as any).fiPatched = true;
@@ -545,6 +647,10 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   }
 
   private unpatch(moduleExports: typeof Anthropic & { fiPatched?: boolean }) {
+    if (hostedClient(moduleExports)) {
+      this.unpatchHosted(moduleExports);
+      return;
+    }
     const messagesPrototype = getMessagesPrototype(moduleExports);
     if (messagesPrototype) {
       this.unpatchMessages(messagesPrototype);
