@@ -1,14 +1,17 @@
+import { context, trace } from "@opentelemetry/api";
 import { SemanticConventions as S } from "@traceai/fi-semantic-conventions";
 import { TypeSafeInstrumentation } from "../instrumentation";
 import { BASE_URL, fakeFetch, Reply, SDKS, sdk, SECRET_KEY, tracing, WIRE } from "./harness";
 
 describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
   const lib = sdk(name);
+  const hasBox = typeof (lib as { box?: unknown }).box === "function"; // box questions arrived after 0.5.7
   let instrumentation: TypeSafeInstrumentation;
   let t: ReturnType<typeof tracing>;
 
   beforeEach(() => {
     t = tracing();
+    t.provider.register(); // installs a context manager so suppression and nesting work
     instrumentation = new TypeSafeInstrumentation();
     instrumentation.setTracerProvider(t.provider);
     instrumentation.manuallyInstrument(lib as unknown as Record<string, unknown>);
@@ -16,6 +19,8 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
   afterEach(async () => {
     instrumentation.disable();
     await t.provider.shutdown();
+    context.disable();
+    trace.disable();
   });
 
   const client = (replies: Reply[], extra: Record<string, unknown> = {}) => {
@@ -29,7 +34,7 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
         billing: lib.noul("Is this about billing?"),
         tone: lib.choice("What is the tone?", { calm: null, angry: null }),
         quality: lib.score("How good?", ["bad", "ok", "good"]),
-        where: lib.box("The damaged area"),
+        ...(hasBox ? { where: lib.box("The damaged area") } : {}),
       },
     }, options);
   const only = () => {
@@ -50,7 +55,7 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
     expect(a[S.GEN_AI_RESPONSE_MODEL]).toBe("jev-2026-10-01");
     expect(a["typesafe.response.model"]).toBe("jev-2026-10-01");
     expect(a["server.address"]).toBe("typesafe.invalid");
-    expect(a["typesafe.question_count"]).toBe(4);
+    expect(a["typesafe.question_count"]).toBe(hasBox ? 4 : 3);
     expect(a["typesafe.request_id"]).toBe("req-synthetic-1");
     expect([a[S.GEN_AI_USAGE_INPUT_TOKENS], a[S.GEN_AI_USAGE_OUTPUT_TOKENS], a[S.GEN_AI_USAGE_TOTAL_TOKENS]]).toEqual([12, 3, 15]);
     expect(a["typesafe.question.billing.type"]).toBe("noul");
@@ -59,9 +64,11 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
     expect(a["typesafe.question.tone.choice"]).toBe("angry");
     expect(a["typesafe.question.tone.confidence"]).toBe(0.8);
     expect(a["typesafe.question.quality.score"]).toBe(2.4);
-    expect(a["typesafe.question.where.box.top"]).toBe(0.1);
-    expect(a["typesafe.question.where.box.right"]).toBe(0.6);
-    expect(a["typesafe.question.where.confidence"]).toBeUndefined();
+    if (hasBox) {
+      expect(a["typesafe.question.where.box.top"]).toBe(0.1);
+      expect(a["typesafe.question.where.box.right"]).toBe(0.6);
+      expect(a["typesafe.question.where.confidence"]).toBeUndefined();
+    }
     expect(span.status.code).toBe(1);
   });
 
@@ -123,7 +130,8 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
 
   it("records a client-side validation error without its text", async () => {
     const { client: c, sent } = client([{}]);
-    await expect(c.systemOne({ state: "x", questions: {} })).rejects.toBeInstanceOf(lib.TypeSafeError);
+    // Older SDKs throw this synchronously, newer ones reject; both must reach the caller unchanged.
+    await expect((async () => c.systemOne({ state: "x", questions: {} }))()).rejects.toBeInstanceOf(lib.TypeSafeError);
     expect(sent).toHaveLength(0);
     const span = only();
     expect(span.status.code).toBe(2);
@@ -149,7 +157,8 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
     expect(only().status.code).toBe(1);
   });
 
-  it("notes an image by its reference, never its bytes", async () => {
+  const hasImage = typeof (lib as { image?: unknown }).image === "function"; // images arrived after 0.5.7
+  (hasImage ? it : it.skip)("notes an image by its reference, never its bytes", async () => {
     const { client: c } = client([{}]);
     const photo = lib.image(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]));
     await c.systemOne({ state: photo, questions: { damaged: lib.noul("Is it damaged?") } });
@@ -160,7 +169,6 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
 
   it("creates no span while tracing is suppressed or after disable()", async () => {
     const { suppressTracing } = await import("@opentelemetry/core");
-    const { context } = await import("@opentelemetry/api");
     const { client: c } = client([{}, {}]);
     await context.with(suppressTracing(context.active()), () => ask(c));
     expect(t.spans()).toHaveLength(0);

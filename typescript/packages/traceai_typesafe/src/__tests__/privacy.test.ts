@@ -43,7 +43,8 @@ describe("TypeSafe privacy through the fi-core masker", () => {
 
   it.each([["hideOutputs"], ["hideOutputText"]])("%s removes the decisions' labels and keeps numeric answers", async (flag) => {
     const { dump, spans } = await run({ [flag]: true });
-    expect(dump).not.toContain(LABEL);
+    // The label also appears among the question's own criteria, which are input, so look at the answer.
+    expect(spans[0].attributes["typesafe.question.tone.choice"]).toBeUndefined();
     expect(dump).toContain(PROMPT);
     expect(spans[0].attributes["output.value"] === undefined || spans[0].attributes["output.value"] === REDACTED).toBe(true);
     expect(spans[0].attributes["typesafe.question.billing.noul"]).toBe(0.5);
@@ -56,6 +57,6 @@ describe("TypeSafe privacy through the fi-core masker", () => {
   });
 
   it("never exports the API key", async () => {
-    for (const config of [{}, { hideInputs: true, hideOutputs: true }]) expect((await run(config)).dump).not.toContain(SECRET_KEY);
+    for (const config of [{}, { hideInputs: true, hideOutputs: true }] as Array<Record<string, boolean>>) expect((await run(config)).dump).not.toContain(SECRET_KEY);
   });
 });
