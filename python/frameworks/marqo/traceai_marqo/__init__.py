@@ -197,6 +197,9 @@ def _wrap(tracer: Any, config: TraceConfig, method: str):
         try:
             span = _start(tracer, config, instance, method, wrapped, args, kwargs)
         except Exception:  # never let tracing break the host call
+            span = None
+        if span is None:
+            # Called outside the handler so an SDK error is not chained to the tracing failure.
             return wrapped(*args, **kwargs)
         token = _INSIDE.set(True)
         try:

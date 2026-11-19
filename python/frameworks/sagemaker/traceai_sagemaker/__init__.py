@@ -220,6 +220,7 @@ def _wrap_operation(state: _State, operation: str, original: Callable[..., Any])
         except BaseException as exc:
             _fail(span, exc)
             raise
+        read_error = None
         try:
             if operation == "invoke_endpoint_with_response_stream":
                 if _finish_stream(state, span, response):
@@ -227,10 +228,13 @@ def _wrap_operation(state: _State, operation: str, original: Callable[..., Any])
             else:
                 _FINISHERS[operation](state, span, response)
         except _BodyReadError as wrapper:
-            _fail(span, wrapper.original)
-            raise wrapper.original
+            read_error = wrapper.original
         except Exception:
             logger.debug("sagemaker response capture failed", exc_info=True)
+        if read_error is not None:
+            # Raised outside the handler so the caller's exception keeps its own __context__.
+            _fail(span, read_error)
+            raise read_error
         span.end()
         return response
 
@@ -241,7 +245,7 @@ class _BodyReadError(Exception):
     """Internal carrier for a failed response-body read, so it is re-raised unchanged."""
 
     def __init__(self, original: BaseException) -> None:
-        super().__init__(str(original))
+        super().__init__()
         self.original = original
 
 

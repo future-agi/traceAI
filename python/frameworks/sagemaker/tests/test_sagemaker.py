@@ -585,6 +585,28 @@ def test_non_io_body_read_error_surfaces_to_the_caller(spans, error):
     assert span.end_time is not None
 
 
+def _error_with_context():
+    try:
+        raise OSError("connection reset")
+    except OSError:
+        try:
+            raise _SslLikeError("tls dropped mid-read")
+        except _SslLikeError as error:
+            return error
+
+
+def test_body_read_error_keeps_its_own_exception_context(spans):
+    error = _error_with_context()
+    prior = error.__context__
+    client = make_client()
+    respond(client, "InvokeEndpoint", ok(_FailingBody(error)))
+    with pytest.raises(_SslLikeError) as raised:
+        invoke(client, {"inputs": "x"})
+    assert raised.value is error
+    assert raised.value.__context__ is prior
+    assert isinstance(prior, OSError)
+
+
 def test_zero_generation_token_count_is_recorded(spans):
     client = make_client()
     respond(client, "InvokeEndpoint", ok({"generation": "", "prompt_token_count": 5, "generation_token_count": 0}))
