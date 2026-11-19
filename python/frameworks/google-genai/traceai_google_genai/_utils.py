@@ -48,7 +48,7 @@ _RESPONSE_FIELDS = ("candidates", "usage_metadata", "model_version", "response_i
 
 def _input_hidden(tracer: Any) -> bool:
     config = getattr(tracer, "_self_config", None)
-    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text))
+    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text or config.hide_input_images))
 
 
 def _response_view(response: Any, tracer: Any) -> Any:

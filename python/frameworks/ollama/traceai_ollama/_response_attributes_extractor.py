@@ -25,7 +25,7 @@ _MESSAGE_FIELDS = ("role", "content", "thinking", "tool_calls")
 
 
 def _input_hidden(config: Any) -> bool:
-    return bool(config.hide_inputs or config.hide_input_messages or config.hide_input_text)
+    return bool(config.hide_inputs or config.hide_input_messages or config.hide_input_text or config.hide_input_images)
 
 
 def _response_side(response: Mapping[str, Any]) -> Dict[str, Any]:

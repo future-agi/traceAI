@@ -36,7 +36,7 @@ _MESSAGE_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
 
 def _input_hidden(tracer: Any) -> bool:
     config = getattr(tracer, "_self_config", None)
-    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text))
+    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text or config.hide_input_images))
 
 
 def _field(obj: Any, name: str) -> Any:

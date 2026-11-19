@@ -88,7 +88,7 @@ _MESSAGE_FIELDS = ("role", "content", "tool_calls", "function_call", "refusal", 
 
 
 def _hide_input(config: TraceConfig) -> bool:
-    return bool(config.hide_inputs or config.hide_input_messages or config.hide_input_text)
+    return bool(config.hide_inputs or config.hide_input_messages or config.hide_input_text or config.hide_input_images)
 
 
 def _response_side(dumped: Any) -> Any:
