@@ -68,6 +68,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("transformers", ("transformers",), "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     Integration("litellm", ("litellm",), "traceAI-litellm", "traceai_litellm", "LiteLLMInstrumentor", category="gateway"),
     Integration("openrouter", ("openrouter",), "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor", category="gateway"),
+    Integration("agentspec", ("pyagentspec",), "traceAI-agentspec", "traceai_agentspec", "AgentSpecInstrumentor"),
     Integration("writer", ("writerai",), "traceAI-writer", "traceai_writer", "WriterInstrumentor"),
     Integration("alephalpha", ("aleph_alpha_client",), "traceAI-alephalpha", "traceai_alephalpha", "AlephAlphaInstrumentor"),
     Integration("portkey", ("portkey_ai",), "traceAI-portkey", "traceai_portkey", "PortkeyInstrumentor", category="gateway"),

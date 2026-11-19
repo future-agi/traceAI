@@ -7,6 +7,8 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import StatusCode
+from pyagentspec.agent import Agent
+from pyagentspec.llms import OpenAiCompatibleConfig
 from pyagentspec.tracing.events import (
     AgentExecutionEnd,
     AgentExecutionStart,
@@ -175,11 +177,13 @@ def test_async_run_is_traced_the_same(spans):
 
 def test_concurrent_async_traces_do_not_mix(spans):
     async def one(name):
+        agent = Agent(name=name, llm_config=LLM, system_prompt="x")
+        llm = OpenAiCompatibleConfig(name=f"{name}-cfg", url="http://llm.test", model_id=f"{name}-model")
         async with Trace(name=name):
-            async with AgentExecutionSpan(agent=AGENT, name=name) as agent_span:
+            async with AgentExecutionSpan(agent=agent) as agent_span:
                 await asyncio.sleep(0)
-                await agent_span.add_event_async(AgentExecutionStart(agent=AGENT, inputs={"who": name}))
-                async with LlmGenerationSpan(llm_config=LLM, name=f"{name}-llm"):
+                await agent_span.add_event_async(AgentExecutionStart(agent=agent, inputs={"who": name}))
+                async with LlmGenerationSpan(llm_config=llm):
                     await asyncio.sleep(0)
 
     async def main():
@@ -188,7 +192,7 @@ def test_concurrent_async_traces_do_not_mix(spans):
     asyncio.run(main())
     for name in ("a", "b"):
         agent = by_name(spans, f"agentspec.agent.{name}")
-        llm = by_name(spans, f"agentspec.llm.{name}-llm")
+        llm = by_name(spans, f"agentspec.llm.{name}-model")
         assert llm.parent.span_id == agent.context.span_id
         assert json.loads(attrs(agent)["input.value"]) == {"who": name}
 
@@ -259,8 +263,7 @@ def test_hide_inputs_and_outputs(instrument):
     llm = attrs(by_name(spans, "agentspec.llm.gpt-served"))
     assert llm["gen_ai.usage.input_tokens"] == 11
     assert llm["gen_ai.request.model"] == "gpt-served"
-    assert "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.arguments" not in llm
-    assert llm["gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name"] == "lookup"
+    assert "Japan" not in json.dumps(llm, default=str) and "Tokyo" not in json.dumps(llm, default=str)
 
 
 def test_hide_outputs_only_keeps_inputs(instrument):

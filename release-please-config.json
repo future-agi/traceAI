@@ -1386,6 +1386,14 @@
         "traceai_alephalpha/version.py"
       ]
     },
+    "python/frameworks/agentspec": {
+      "release-type": "python",
+      "component": "traceai-agentspec",
+      "package-name": "traceAI-agentspec",
+      "extra-files": [
+        "traceai_agentspec/version.py"
+      ]
+    },
     "go/langchaingo": {
       "release-type": "go",
       "component": "go/langchaingo",

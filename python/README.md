@@ -159,6 +159,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-ag2` | [ag2](frameworks/ag2/) |
 | `traceAI-ag2-classic` | [ag2-classic](frameworks/ag2-classic/) |
 | `traceAI-agent-framework` | [agent-framework](frameworks/agent-framework/) |
+| `traceAI-agentspec` | [agentspec](frameworks/agentspec/) |
 | `traceai-agno` | [agno](frameworks/agno/) |
 | `traceAI-anthropic` | [anthropic](frameworks/anthropic/) |
 | `traceAI-autogen` | [autogen](frameworks/autogen/) |
