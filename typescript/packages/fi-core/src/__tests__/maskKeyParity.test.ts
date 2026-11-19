@@ -26,7 +26,8 @@ const OUTPUT_KEYS = [
 const MIXED_KEYS = [
   "gen_ai.voice.transcript", "gen_ai.voice.recording.url", "gen_ai.voice.recording.stereo_url",
   "gen_ai.voice.recording.customer_url", "gen_ai.voice.recording.assistant_url", "gen_ai.audio.url",
-  "gen_ai.audio.transcript", "gen_ai.computer_use.screenshot", "gen_ai.computer_use.current_url",
+  // gen_ai.audio.transcript is masked by direction in @traceai/auto's wire layer, not here.
+  "gen_ai.computer_use.screenshot", "gen_ai.computer_use.current_url",
   "gen_ai.tool.call",
 ];
 // Names, ids, counts, model and usage are never content.
