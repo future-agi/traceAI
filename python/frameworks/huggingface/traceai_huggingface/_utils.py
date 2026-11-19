@@ -64,6 +64,10 @@ def _response_view(response: Any, tracer: Any) -> Any:
     details = _field(response, "details")
     if details is not None:
         out["details"] = _pick(details, _DETAIL_FIELDS)
+        # The prefill tokens are request content; their count is not, and is kept as a count only.
+        prefill = _field(details, "prefill")
+        if isinstance(prefill, (list, tuple)):
+            out["details"]["prefill_token_count"] = len(prefill)
     choices = _field(response, "choices")
     if choices:
         kept = []

@@ -40,6 +40,11 @@ class _TextGenerationResponseAttributesExtractor:
             if details:
                 if "generated_tokens" in details:
                     yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, details["generated_tokens"]
+                prefill = details.get("prefill")
+                if prefill:
+                    yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, len(prefill)
+                elif details.get("prefill_token_count"):
+                    yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, details["prefill_token_count"]
 
     def get_extra_attributes(
         self,
