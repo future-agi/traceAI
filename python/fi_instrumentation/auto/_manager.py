@@ -94,6 +94,49 @@ def module_available(dotted: str) -> bool:
     return spec is not None
 
 
+def _declared_in_source(module: str, name: str) -> bool:
+    """True when ``name`` is assigned the literal True at the top level of ``module``'s ``__init__``.
+
+    The package is never imported or executed: a loaded module is asked directly, an unloaded one is located
+    on the path and its source read. A package without readable source declares nothing.
+    """
+    loaded = sys.modules.get(module)
+    if loaded is not None:
+        value = getattr(loaded, name, None)
+        if value is None:
+            owner = getattr(loaded, "OpenAIInstrumentor", None)
+            value = getattr(owner, name, None)
+        return value is True
+    try:
+        spec = importlib.machinery.PathFinder.find_spec(module)
+        origin = getattr(spec, "origin", None)
+        if not origin or not origin.endswith(".py"):
+            return False
+        with open(origin, encoding="utf-8") as handle:
+            text = handle.read()
+    except (ImportError, ValueError, OSError):
+        return False
+    return re.search(rf"^[ \t]*{re.escape(name)}\s*=\s*True\b", text, re.MULTILINE) is not None
+
+
+def provider_defers_to_shared_openai(integration: Integration) -> bool:
+    """Whether the installed provider package, and the installed traceai-openai it defers to, support deferral.
+
+    The core turns an OpenAI-compatible provider on by default only then; with any other version mix the
+    provider keeps its previous (off) state, so a call is never traced twice.
+    """
+    if not _declared_in_source(integration.module, "DEFERS_TO_SHARED_OPENAI"):
+        return False
+    return all(_declared_in_source("traceai_openai", capability) for capability in integration.needs_openai)
+
+
+def _effective_default(integration: Integration) -> Tuple[bool, str]:
+    """The default-on state and report note of an integration for the versions installed here."""
+    if integration.shared_openai and integration.default and not provider_defers_to_shared_openai(integration):
+        return False, integration.skew_note
+    return integration.default, integration.note
+
+
 def _enable(integration: Integration, provider: Any, config: Any) -> Tuple[IntegrationStatus, Any]:
     """Install against a configuration snapshot; retain cleanup only for our own patches."""
     base = IntegrationStatus(integration.name, INSTRUMENTED, integration.category, integration.package)
@@ -298,6 +341,16 @@ def _cleanup(callback: Any, name: str) -> None:
             logger.debug("traceAI: could not disable %s", name, exc_info=True)
 
 
+def _run_cleanups(cleanups: Dict[str, Any]) -> None:
+    """Undo integrations in the reverse of the order they were installed.
+
+    Providers that wrap the same method each restore the callable they captured, so only the most recent
+    wrapper can safely be removed first.
+    """
+    for name, callback in reversed(list(cleanups.items())):
+        _cleanup(callback, name)
+
+
 def _on_import(integration: Integration) -> None:
     """A hooked library was imported. Plan an integration again if it was not ready at startup."""
     state = _state
@@ -353,16 +406,17 @@ def _plan(integration: Integration, settings: AutoConfig, lazy: bool) -> Tuple[I
     """
     status = IntegrationStatus(integration.name, NOT_INSTALLED, integration.category, integration.package)
     installed = [t for t in integration.targets if module_available(t)]
+    default, note = _effective_default(integration)
     web_off = _state.web_off if integration.category == "web" else ""
     # A library or traceAI package that is not importable yet can still arrive (a later-sorting
     # .pth file, a sys.path change): wait for the library's first import and plan it again then.
     later = (not web_off and integration.kind in (INSTRUMENTOR, SETUP)
-             and settings.is_selected(integration.name, integration.default))
+             and settings.is_selected(integration.name, default))
     if not installed:
         return status, ("hook" if later else None), list(integration.targets)
-    if not settings.is_selected(integration.name, integration.default):
+    if not settings.is_selected(integration.name, default):
         status.status = DISABLED
-        status.detail = integration.note or "disabled by configuration"
+        status.detail = note or "disabled by configuration"
         return status, None, installed
     if web_off:
         status.status, status.detail = DISABLED, web_off
@@ -1329,8 +1383,7 @@ def shutdown(timeout_millis: int = 5000) -> None:
             for entry in state.statuses.values():
                 if entry.status in (PENDING, INSTRUMENTED):
                     entry.status, entry.detail = DISABLED, "agent shut down; restart requires a new process"
-        for name, callback in cleanups.items():
-            _cleanup(callback, name)
+        _run_cleanups(cleanups)
         with _lifecycle_lock:
             for overlay in overlays:
                 overlay.shutdown()

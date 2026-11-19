@@ -55,7 +55,11 @@ def _shared_instrumentor_enabled() -> bool:
     """
     module = sys.modules.get("traceai_openai")
     instrumentor = getattr(module, "OpenAIInstrumentor", None)
-    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
+    return bool(
+        instrumentor
+        and getattr(instrumentor, "_supports_deepseek_extensions", False)
+        and instrumentor().is_instrumented_by_opentelemetry
+    )
 
 
 def _is_xai_client(instance: Any) -> bool:

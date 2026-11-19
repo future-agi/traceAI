@@ -54,12 +54,12 @@ def _handler(request):
 
 
 def _client(base_url):
-    return openai.OpenAI(api_key="k", base_url=base_url, http_client=httpx.Client(transport=httpx.MockTransport(_handler)))
+    return openai.OpenAI(api_key="synthetic-test-key", base_url=base_url, http_client=httpx.Client(transport=httpx.MockTransport(_handler)))
 
 
 def _async_client(base_url):
     return openai.AsyncOpenAI(
-        api_key="k", base_url=base_url, http_client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)))
+        api_key="synthetic-test-key", base_url=base_url, http_client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)))
 
 
 @pytest.fixture
@@ -205,11 +205,30 @@ def test_provider_with_the_marker_gives_one_span_with_its_label(name, run, expor
     assert span.attributes["gen_ai.request.model"] == "m"
 
 
-def test_deepseek_needs_the_shared_extensions(monkeypatch):
+def test_providers_that_need_the_shared_extensions_stay_off_with_an_older_traceai_openai(monkeypatch):
     openai_module = importlib.import_module("traceai_openai")
     monkeypatch.setattr(openai_module.OpenAIInstrumentor, "_supports_deepseek_extensions", False)
-    assert "deepseek" not in _enabled_by_default(["openai", "deepseek"])
+    for name in ("deepseek", "xai", "minimax"):
+        assert name not in _enabled_by_default(["openai", name]), name
+    for name in ("fireworks", "vllm"):
+        assert name in _enabled_by_default(["openai", name]), name
+
+
+def test_minimax_needs_the_shared_minimax_labels(monkeypatch):
+    openai_module = importlib.import_module("traceai_openai")
+    monkeypatch.setattr(openai_module.OpenAIInstrumentor, "_supports_minimax_provider", False)
+    assert "minimax" not in _enabled_by_default(["openai", "minimax"])
     assert "xai" in _enabled_by_default(["openai", "xai"])
+
+
+@pytest.mark.parametrize("name,flag", [("xai", "_supports_deepseek_extensions"), ("minimax", "_supports_minimax_provider")])
+def test_runtime_deferral_requires_the_same_capabilities(name, flag, monkeypatch, run, exporter):
+    """If the shared instrumentor lacks a capability at call time, the provider traces its own call."""
+    run(_enabled_by_default(["openai", name]))
+    openai_module = importlib.import_module("traceai_openai")
+    monkeypatch.setattr(openai_module.OpenAIInstrumentor, flag, False)
+    _client(BASE_URLS[name]).chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}])
+    assert len(exporter.get_finished_spans()) >= 1
 
 
 # --- streaming -----------------------------------------------------------------------------------

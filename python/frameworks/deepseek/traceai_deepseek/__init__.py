@@ -1,3 +1,7 @@
+# Declared for the core's registry, which reads it from the source without importing this package: this package
+# defers to the shared OpenAI instrumentor for calls it also traces, so both can be on without a double span.
+DEFERS_TO_SHARED_OPENAI = True
+
 import logging
 import warnings
 from importlib import import_module

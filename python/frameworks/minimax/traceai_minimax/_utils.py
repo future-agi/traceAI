@@ -28,7 +28,12 @@ def shared_openai_is_active() -> bool:
     """
     module = sys.modules.get("traceai_openai")
     instrumentor = getattr(module, "OpenAIInstrumentor", None)
-    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
+    return bool(
+        instrumentor
+        and getattr(instrumentor, "_supports_deepseek_extensions", False)
+        and getattr(instrumentor, "_supports_minimax_provider", False)
+        and instrumentor().is_instrumented_by_opentelemetry
+    )
 
 
 def is_minimax_client(instance: Any) -> bool:
