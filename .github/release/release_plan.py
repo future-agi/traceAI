@@ -154,7 +154,7 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
         version = manifest.get(path, "0.1.0")
         out.append({"ecosystem": "go", "name": module, "version": version,
                     "dir": path, "tag": f"{path}/v{version}", "core": False,
-                    "changelog": f"{path}/CHANGELOG.md"})
+                    "changelog": f"{path}/CHANGELOG.md" if (f.parent / "CHANGELOG.md").is_file() else None})
     # The startup hook's own folder also holds its private runtime and SDK projects; only the
     # project in the folder's top level is a package.
     for folder in ("csharp/src/FIInstrumentation", "csharp/src/TraceAI.AutoInstrumentation"):
