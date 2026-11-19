@@ -84,7 +84,12 @@ def test_provider_error_is_reraised_with_error_status(spans, model, client):
         model.generate_content("hello")
     span, a = one(spans)
     assert span.status.status_code == StatusCode.ERROR
-    assert a["error.type"] == "RuntimeError" or "upstream exploded" in (span.status.description or "")
+    assert span.status.description == "upstream exploded"
+    assert a["error.type"] == "RuntimeError"
+    events = [e for e in span.events if e.name == "exception"]
+    assert len(events) == 1
+    assert events[0].attributes["exception.type"] == "RuntimeError"
+    assert events[0].attributes["exception.message"] == "upstream exploded"
     assert span.end_time is not None
 
 
@@ -219,3 +224,56 @@ def test_uninstrument_restores_originals(make_spans, client):
     GoogleGenerativeAIInstrumentor().uninstrument()
     assert (GenerativeModel.generate_content, GenerativeModel.generate_content_async, embedding.embed_content, genai.embed_content) == originals
     assert exporter.get_finished_spans() == ()
+
+
+BLOB = b"INLINE-BLOB-SENTINEL-0123456789"
+
+
+def _everywhere(attributes):
+    import base64
+
+    dumped = json.dumps(dict(attributes), default=str)
+    return BLOB.decode() in dumped or base64.b64encode(BLOB).decode().rstrip("=") in dumped
+
+
+def test_inline_data_in_the_request_is_never_copied_into_any_attribute(spans, model, client):
+    client.responses.append(text_response("ok"))
+    model.generate_content([{"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": BLOB}}, "describe"]}])
+    _, a = one(spans)
+    assert not _everywhere(a)
+    assert "image/png" in a["input.value"] and f"{len(BLOB)} bytes" in a["input.value"]
+    assert "describe" in a["input.value"]
+
+
+def test_inline_data_in_the_response_is_never_copied_into_any_attribute(spans, model, client):
+    client.responses.append(protos.GenerateContentResponse(candidates=[protos.Candidate(
+        content=protos.Content(role="model", parts=[protos.Part(inline_data=protos.Blob(mime_type="image/png", data=BLOB))]),
+        finish_reason=protos.Candidate.FinishReason.STOP)]))
+    model.generate_content("draw")
+    _, a = one(spans)
+    assert not _everywhere(a)
+    assert "image/png" in a["output.value"] and f"{len(BLOB)} bytes" in a["output.value"]
+
+
+def test_generator_contents_reach_the_real_call_unconsumed(spans, model, client):
+    client.responses.append(text_response("fine"))
+    contents = (item for item in [{"role": "user", "parts": ["from a generator"]}])
+    result = model.generate_content(contents)
+    assert result.text == "fine"
+    assert [p.text for p in client.requests[0].contents[0].parts] == ["from a generator"]
+    span, _ = one(spans)
+    assert span.status.status_code == StatusCode.OK
+
+
+def test_an_unrelated_type_error_does_not_switch_the_proto_option_keyword():
+    from traceai_google_generativeai import _attributes as attributes
+
+    class Broken:
+        @staticmethod
+        def to_dict(message, **options):
+            raise TypeError("unrelated failure")
+
+    before = dict(attributes._OMIT_DEFAULTS)
+    with pytest.raises(TypeError, match="unrelated failure"):
+        attributes.to_dict(Broken())
+    assert attributes._OMIT_DEFAULTS == before

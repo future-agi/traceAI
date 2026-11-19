@@ -83,3 +83,17 @@ def test_hide_inputs_removes_embedding_text(make_spans, client):
     exporter = make_spans(config=TraceConfig(hide_inputs=True))
     genai.embed_content(model="models/text-embedding-004", content=PROMPT, client=client)
     assert PROMPT not in _dump(exporter)
+
+
+TITLE = "TITLE-MARK-7f"
+
+
+@pytest.mark.parametrize("flags", [{}, {"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}])
+def test_embedding_title_follows_the_embedding_text(make_spans, client, flags):
+    exporter = make_spans(config=TraceConfig(**flags))
+    genai.embed_content(model="models/text-embedding-004", content=PROMPT, title=TITLE, task_type="retrieval_document", client=client)
+    dumped = _dump(exporter)
+    if flags:
+        assert TITLE not in dumped and PROMPT not in dumped
+    else:
+        assert TITLE in dumped and PROMPT in dumped
