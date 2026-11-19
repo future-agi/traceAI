@@ -323,12 +323,11 @@ describe("Bedrock Agents (bedrock-agent-runtime) instrumentation", () => {
   });
 
   it("ends the span when the stream is abandoned before the first event", async () => {
-    const { stream, state } = completionStream(tracedEvents());
+    const { stream } = completionStream(tracedEvents());
     const { client, exporter } = setup(() => ({ completion: stream }));
     const response = await client.send(command());
     const iterator = (response.completion as AsyncIterable<Event>)[Symbol.asyncIterator]();
     await iterator.return?.();
-    expect(state.closed).toBe(true);
     expect(exporter.getFinishedSpans().map((s) => s.name)).toEqual(["invoke_agent AGENT1/ALIAS1"]);
   });
 

@@ -1,5 +1,9 @@
 ## [0.1.4] - 2026-11-12
 
+### Added
+- Amazon Bedrock Agents: `InvokeAgentCommand` and `InvokeInlineAgentCommand` sent through `@aws-sdk/client-bedrock-agent-runtime` are traced. One AGENT span `invoke_agent <agentId>/<aliasId>` (`invoke_agent inline` for inline agents) covers the call and the whole `completion` stream and ends when the stream is consumed, fails or is abandoned. With `enableTrace`, the stream's trace events become child spans: model invocations as LLM spans (model, prompt, output, token usage), action group calls as TOOL spans `execute_tool <name>`, and knowledge base lookups as RETRIEVER spans (documents, count). Output text is assembled from the chunk events and follows the hide settings. `@traceai/auto` activates it when only `@aws-sdk/client-bedrock-agent-runtime` is installed.
+- `@aws-sdk/client-bedrock-agent-runtime` `^3.693.0` is an optional peer dependency; `@aws-sdk/client-bedrock-runtime` is now optional too, so an application using only one of the two SDKs loads this package.
+
 ### Fixed
 - Traced send() keeps its options and callbacks, response streams are read only as your code reads them, the requested model id is recorded in full, and streamed tool arguments from Anthropic models are recorded, with a placeholder when the argument JSON is incomplete or malformed.
 
