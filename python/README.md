@@ -180,6 +180,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-fireworks` | [fireworks](frameworks/fireworks/) |
 | `traceAI-google-adk` | [google-adk](frameworks/google-adk/) |
 | `traceAI-google-genai` | [google-genai](frameworks/google-genai/) |
+| `traceAI-google-generativeai` | [google-generativeai](frameworks/google-generativeai/) |
 | `traceAI-google-genai-live` | [google-genai-live](frameworks/google-genai-live/) |
 | `traceAI-groq` | [groq](frameworks/groq/) |
 | `traceAI-guardrails` | [guardrails](frameworks/guardrails/) |

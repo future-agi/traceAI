@@ -84,6 +84,7 @@ Each integration reports one of these statuses:
 | `openai_realtime` | `openai` (Realtime) | `traceAI-openai-realtime` | Automatic |
 | `anthropic` | `anthropic` | `traceAI-anthropic` | Automatic |
 | `google_genai` | `google-genai` | `traceAI-google-genai` | Automatic |
+| `google_generativeai` | `google-generativeai` (legacy SDK) | `traceAI-google-generativeai` | Automatic |
 | `google_genai_live` | `google-genai` (Live) | `traceAI-google-genai-live` | Automatic |
 | `vertexai` | `vertexai` | `traceAI-vertexai` | Automatic |
 | `bedrock` | `boto3` | `traceAI-bedrock` | Automatic |

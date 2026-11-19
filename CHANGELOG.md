@@ -317,6 +317,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | Bedrock | [python/frameworks/bedrock/CHANGELOG.md](python/frameworks/bedrock/CHANGELOG.md) |
 | Instructor | [python/frameworks/instructor/CHANGELOG.md](python/frameworks/instructor/CHANGELOG.md) |
 | Google GenAI | [python/frameworks/google-genai/CHANGELOG.md](python/frameworks/google-genai/CHANGELOG.md) |
+| Google Generative AI (legacy SDK) | [python/frameworks/google-generativeai/CHANGELOG.md](python/frameworks/google-generativeai/CHANGELOG.md) |
 | Google ADK | [python/frameworks/google-adk/CHANGELOG.md](python/frameworks/google-adk/CHANGELOG.md) |
 | Pipecat | [python/frameworks/pipecat/CHANGELOG.md](python/frameworks/pipecat/CHANGELOG.md) |
 | Portkey | [python/frameworks/portkey/CHANGELOG.md](python/frameworks/portkey/CHANGELOG.md) |
