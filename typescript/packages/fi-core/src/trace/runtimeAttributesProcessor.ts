@@ -16,11 +16,11 @@ interface ConfigurationReader {
 }
 
 /** Shared with the owned pre-host observer; off/load_only install no writer. */
-export function runtimeAttributesEnabled(): boolean {
+export function runtimeAttributesEnabled(useEnvironment = true): boolean {
   const config = (globalThis as unknown as Record<symbol, ConfigurationReader | undefined>)[CONFIG_KEY];
   if (config?.v === 1 && typeof config.mode === "function") return config.mode() === "on";
   const mode = process.env.FI_SKILLS_TRACING;
-  return mode !== "off" && mode !== "load_only";
+  return useEnvironment && mode !== "off" && mode !== "load_only";
 }
 
 type RuntimeAttributes = Record<string, string | number | boolean | string[]>;

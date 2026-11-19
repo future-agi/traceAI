@@ -7,6 +7,7 @@ export const AGENT_VIEW = Symbol.for('futureagi.runtime.agent-identity.v1');
 export const AGENT_NAME = 'gen_ai.agent.name';
 export const AGENT_ID = 'gen_ai.agent.id';
 const WRITER = Symbol.for('futureagi.runtime.context-agent.writer.v1');
+export const SET_CONTEXT_NAME = Symbol.for('futureagi.runtime.set-context-name.v1');
 export const WATCH_NAME = Symbol.for('traceai.fi.standalone-name-observer.v1');
 type Origin = { automatic: boolean; beforeHost?: true };
 type Setter = Span['setAttribute'] & { [WRITER]?: Origin };

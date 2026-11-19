@@ -10,7 +10,7 @@ import {
     Link,
     diag,
   } from "@opentelemetry/api";
-  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, writer } from "./agentIdentity";
+  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, SET_CONTEXT_NAME, writer } from "./agentIdentity";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
@@ -81,6 +81,9 @@ import {
     private admissionFailed = false;
     private readonly autoDestination: boolean;
     private authoredHints: PrivacyHints;
+    // One bounded SDK-authored name, never a host identity. Also witnesses
+    // the last eager write: disagreement invalidates, equality alone cannot mark.
+    private lastContextName?: string;
 
     /** @internal Native application context in auto mode; explicit standalone
      * callers keep the wrapper. Instrumentors continue writing through `this`. */
@@ -95,12 +98,25 @@ import {
           // A foreign provider may have handed an unobserved, bound setter to
           // a host before constructing this wrapper. Do not plant a derived
           // name there: a subsequent same-string write would be unknowable.
-          const canStampName = origin?.beforeHost === true;
-          if (canStampName && mark && identity.name !== undefined) origin.automatic = true;
-          return { ...identity, automatic: canStampName && origin.automatic, canStampName };
+          const observed = origin?.beforeHost === true;
+          if (observed && mark && identity.name !== undefined) origin.automatic = true;
+          if (observed && origin.automatic && this.lastContextName !== undefined && identity.name !== this.lastContextName) origin.automatic = false;
+          return { ...identity, automatic: observed && origin.automatic };
         } catch { /* A failed identity export exposes no host values. */ }
       }
-      return { automatic: false, canStampName: false };
+      return { automatic: false };
+    }
+
+    /** @internal Only the latest verified context name, never native values.
+     * Without pre-host observation, defer this optional current-span field;
+     * a host setter (even the same string) then leaves a real, distinct write. */
+    [SET_CONTEXT_NAME](name: string): void {
+      if (this.isEnded || this.admissionFailed || typeof name !== 'string' || name.length > 64) return;
+      const origin = writer(this.span);
+      this.lastContextName = name;
+      if (!origin?.beforeHost) return;
+      this.setAttribute(AGENT_NAME, name);
+      origin.automatic = true; // Next view validates the actual committed name.
     }
 
     constructor({
@@ -389,7 +405,18 @@ import {
         // recheck happens only on the detached export view, never by rewriting
         // application attributes or reconstructing what the host SDK discarded.
         if (!this.autoDestination) {
-          this.admit({});
+          // Commit a deferred default only into a demonstrably empty name slot.
+          // An opaque map, preexisting name or late framework write wins.
+          let fallback: Attributes = {};
+          if (this.lastContextName !== undefined && !writer(this.span)?.beforeHost) {
+            const slot = Object.getOwnPropertyDescriptor(this.span, "attributes");
+            const native = Object.getOwnPropertyDescriptor(this.span, "_droppedAttributesCount");
+            if (native && "value" in native && typeof native.value === "number" && slot && "value" in slot && slot.writable &&
+                slot.value && typeof slot.value === "object" && !(AGENT_NAME in slot.value)) {
+              fallback = { [AGENT_NAME]: this.lastContextName };
+            }
+          }
+          this.admit(fallback);
           rememberMediaAdmission(this.span, Object.fromEntries([...this.admittedKeys].map(key => [key, this.pendingAttributes[key]])));
         }
       } catch {
@@ -402,6 +429,7 @@ import {
         finally {
           this.isEnded = true;
           this.pendingAttributes = {};
+          this.lastContextName = undefined;
           this.authoredHints = new Map();
           this.admittedKeys.clear();
         }

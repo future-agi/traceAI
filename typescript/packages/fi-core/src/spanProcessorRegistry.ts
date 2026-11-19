@@ -52,7 +52,9 @@ export class SpanProcessorRegistry implements SpanProcessor {
   onStart(span: Span, parentContext: Context): void {
     if (this.shutdownPromise) return;
     try {
-      if (parentContext.getValue(WATCH_NAME) === true && runtimeAttributesEnabled()) observeBeforeHost(span);
+      // A configured SDK may enrich a plain native span too. Without its mode
+      // reader, only a standalone FI start requests environment-based fallback.
+      if (runtimeAttributesEnabled(parentContext.getValue(WATCH_NAME) === true)) observeBeforeHost(span);
     } catch { /* Optional observation cannot skip host onStart. */ }
     for (const processor of this.processors) {
       try {
