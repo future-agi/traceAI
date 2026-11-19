@@ -453,6 +453,13 @@
       "name": "IBM watsonx",
       "category": "model-providers",
       "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/watsonx/pyproject.toml",
+            "package": "traceAI-watsonx",
+            "source": "python/frameworks/watsonx/"
+          }
+        ],
         "Java": [
           {
             "manifest": "java/traceai-java-watsonx/pom.xml",

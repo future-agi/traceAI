@@ -1346,6 +1346,14 @@
         "traceai_marqo/version.py"
       ]
     },
+    "python/frameworks/watsonx": {
+      "release-type": "python",
+      "component": "traceai-watsonx",
+      "package-name": "traceAI-watsonx",
+      "extra-files": [
+        "traceai_watsonx/version.py"
+      ]
+    },
     "python/frameworks/openrouter": {
       "release-type": "python",
       "component": "traceai-openrouter",

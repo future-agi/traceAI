@@ -348,6 +348,7 @@ def test_registry_is_consistent():
     ("transformers", "transformers", "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     ("openrouter", "openrouter", "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor"),
     ("marqo", "marqo", "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor"),
+    ("watsonx", "ibm_watsonx_ai", "traceAI-watsonx", "traceai_watsonx", "WatsonxInstrumentor"),
 ])
 def test_registry_enables_transformers_and_openrouter(name, target, package, module, entry):
     integration = _registry.find(name)

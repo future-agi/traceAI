@@ -99,6 +99,7 @@ Each integration reports one of these statuses:
 | `litellm` | `litellm` | `traceAI-litellm` | Automatic |
 | `openrouter` | `openrouter` | `traceAI-openrouter` | Automatic |
 | `portkey` | `portkey-ai` | `traceAI-portkey` | Automatic |
+| `watsonx` | `ibm_watsonx_ai` | `traceAI-watsonx` | Automatic |
 | `replicate` | `replicate` | `traceAI-replicate` | Automatic |
 | `voyage` | `voyageai` | `traceAI-voyage` | Automatic |
 | `discoveryengine` | `google-cloud-discoveryengine` | `traceAI-discoveryengine` | Automatic |
