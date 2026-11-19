@@ -633,6 +633,47 @@ def _children(value: Any) -> Any:
     return None
 
 
+def _is_message_like(value: Any) -> bool:
+    """A LangChain message or document, or anything else shaped like one (it has ``content`` or ``page_content``)."""
+    return not isinstance(value, (str, bytes, Mapping, list, tuple, set, frozenset)) and (
+        hasattr(value, "content") or hasattr(value, "page_content")
+    )
+
+
+def _message_parts(value: Any) -> list:
+    """What a message-like value says: its ``content`` (a string, or the text parts of a content list),
+    ``page_content``, and the argument values of its tool calls. Never its type, id, name, example, metadata or
+    other schema fields, which every message carries whatever its text is."""
+    parts: list = []
+    content = getattr(value, "content", None)
+    if isinstance(content, str):
+        parts.append(content)
+    elif isinstance(content, (list, tuple)):
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, Mapping) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+    page_content = getattr(value, "page_content", None)
+    if isinstance(page_content, str):
+        parts.append(page_content)
+    tool_calls = getattr(value, "tool_calls", None)
+    if isinstance(tool_calls, (list, tuple)):
+        for call in tool_calls:
+            args = call.get("args") if isinstance(call, Mapping) else getattr(call, "args", None)
+            if args is not None:
+                parts.append(args)
+    return parts
+
+
+def _echo_children(value: Any) -> Any:
+    """The parts the echo comparison looks at: those of a message-like value are its text-bearing fields only,
+    anything else has all its parts (see ``_children``). None when the value is not a container."""
+    if _is_message_like(value):
+        return [(None, part) for part in _message_parts(value)]
+    return _children(value)
+
+
 def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0) -> None:
     """Every string leaf of ``value`` (anything unreadable is a text leaf of its own). Every node visited counts
     toward the budget, not only the leaves; running out of budget raises _Undecidable."""
@@ -644,12 +685,26 @@ def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0) -> None
     if isinstance(value, str):
         found.append(value)
         return
-    children = _children(value)
+    children = _echo_children(value)
     if children is None:
         found.append(str(value))
         return
     for _, child in children:
         _string_leaves(child, found, nodes, depth + 1)
+
+
+def _contains_value(value: Any, target: Any, nodes: list, depth: int = 0) -> bool:
+    """True when ``value`` or any part of it (within the node and depth budget) equals ``target``."""
+    nodes[0] += 1
+    if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
+        raise _Undecidable
+    if type(value) is type(target) or isinstance(value, type(target)) or isinstance(target, type(value)):
+        if value == target:
+            return True
+    children = _echo_children(value)
+    if children is None:
+        return False
+    return any(_contains_value(child, target, nodes, depth + 1) for _, child in children)
 
 
 def _unwrap(value: Any) -> Any:
@@ -668,21 +723,27 @@ def _unwrap(value: Any) -> Any:
 def _echoes_input(inputs: Any, outputs: Any) -> bool:
     """True when the run's output repeats its input, judged by structure and by string content.
 
-    1. Identity: the unwrapped output equals the unwrapped input (any type, scalars included).
+    1. Identity: the output, or any part of it, equals the whole unwrapped input (any type, scalars included).
     2. Pass-through / assign shape: the output is a mapping holding every top-level key of the input mapping
        with an equal value.
-    3. String content: a string leaf of the input of four characters or more occurs in the rendered output
-       (also in its JSON-escaped form), or a shorter one equals a string leaf of the output exactly.
+    3. String content: an input string of four characters or more occurs in a string of the output (read from
+       the text-bearing fields of messages and documents, from every part of anything else) or in its JSON
+       rendering, also in the JSON-escaped form.
     4. Anything that cannot be decided (too deep, too large, unreadable, any error) counts as an echo.
 
-    A boolean or number is never matched by its field name: fields that every message object carries
-    (``example: False``) do not make a node's new message an echo of its input messages.
+    Message type, id, name, metadata and other schema fields are not compared, and a boolean or number is never
+    matched by its field name: a node's new message is not an echo of the earlier messages in its state because
+    they share ``type: "ai"`` or ``finish_reason``.
     """
     if not inputs or not outputs:
         return False
     try:
-        # 1. identity
-        if _unwrap(inputs) == _unwrap(outputs):
+        # 1. identity, of the whole output or of any part of it
+        whole = _unwrap(inputs)
+        if _unwrap(outputs) == whole:
+            return True
+        empty = whole is None or (isinstance(whole, (str, bytes, Mapping, list, tuple, set, frozenset)) and len(whole) == 0)
+        if not empty and _contains_value(outputs, whole, [0]):
             return True
         # 2. pass-through / assign shape
         if isinstance(inputs, Mapping) and isinstance(outputs, Mapping) and inputs:
@@ -693,14 +754,10 @@ def _echoes_input(inputs: Any, outputs: Any) -> bool:
         out_strings: list = []
         _string_leaves(inputs, in_strings, [0])
         _string_leaves(outputs, out_strings, [0])
+        text = "\x00".join(out_strings)
         rendered = safe_json_dumps(outputs)
-        exact = set(out_strings)
         for leaf in in_strings:
-            if not leaf:
-                continue
-            if leaf in exact:
-                return True
-            if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
+            if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in text or leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
                 return True
         return False
     except Exception:  # noqa: BLE001 - when the comparison cannot be made, the output is not recorded
