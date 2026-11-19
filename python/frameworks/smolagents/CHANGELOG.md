@@ -1,4 +1,4 @@
-## Unreleased
+## [0.1.8] - 2026-11-19
 
 ### Changed
 - With any input hide setting, a full run result records only its output, not the task and model input messages it carries.

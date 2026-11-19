@@ -1,4 +1,4 @@
-## Unreleased
+## [0.1.12] - 2026-11-19
 
 ### Changed
 - With any input hide setting, an in-progress LLM event records only its response as output, because the event also carries the request.

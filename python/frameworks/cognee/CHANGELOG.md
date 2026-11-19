@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.1.2] - 2026-11-19
 
 * Content keys follow the `TraceConfig` hide settings whatever the type of their value (number, boolean or text), including the `input.value` / `output.value` aliases.
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.2.3] - 2026-11-19
 ### Changed
 - With any input hide setting, a run or workflow response is not written as `output.value`, because the response object carries the run input.
 
