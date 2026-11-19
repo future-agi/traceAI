@@ -44,9 +44,11 @@ _METHODS = (
     (_EMBEDDINGS, "Embeddings", "aembed_query", "embeddings", True),
 )
 
-# True while a traced SDK call is running, so the SDK's internal calls to other public methods
-# do not create nested duplicate spans.
-_INSIDE: contextvars.ContextVar[bool] = contextvars.ContextVar("traceai_watsonx_inside", default=False)
+# The accumulator of the traced SDK call that is running, or None. The SDK's internal calls to
+# other public methods do not create nested duplicate spans; their results feed this accumulator,
+# so ``generate_text`` and ``embed_query`` still record usage and finish reason from ``generate``.
+_INSIDE: contextvars.ContextVar[Optional["_Output"]] = contextvars.ContextVar(
+    "traceai_watsonx_inside", default=None)
 
 _REQUEST_ATTRIBUTES = (
     (A.GEN_AI_REQUEST_MAX_TOKENS, ("max_new_tokens", "max_tokens", "max_completion_tokens"), int),
@@ -104,6 +106,18 @@ def _text_content(content: Any) -> Optional[str]:
     return None
 
 
+def _is_stream(result: Any) -> bool:
+    return hasattr(result, "__anext__") or (hasattr(result, "__next__") and hasattr(result, "__iter__"))
+
+
+def _capture_input(config: TraceConfig) -> bool:
+    return not (config.hide_inputs or config.hide_input_text or config.hide_input_messages or config.hide_input_images)
+
+
+def _capture_output(config: TraceConfig) -> bool:
+    return not (config.hide_outputs or config.hide_output_text or config.hide_output_messages)
+
+
 def _failure(span: Any, exc: BaseException) -> None:
     # Exception text may carry the request body, URL or credentials: record only the type.
     span.set_attribute("error.type", type(exc).__name__)
@@ -126,6 +140,7 @@ class _Output:
         self.vectors = 0
         self.dimension: Optional[int] = None
         self.size = 0
+        self.absorbed = False  # an inner SDK call already supplied the response
 
     def _add(self, index: int, piece: Any) -> None:
         if isinstance(piece, str) and piece and self.size < _LIMIT:
@@ -189,7 +204,17 @@ class _Output:
             if "input_token_count" in chunk:  # embeddings response
                 self._tokens("tokens_in", chunk.get("input_token_count"), total)
 
-    def apply(self, span: Any, operation: str, complete: bool = True) -> None:
+    def absorb(self, result: Any) -> None:
+        """Take the result of an inner SDK call made by the traced call (never a stream)."""
+        if _is_stream(result):
+            return
+        try:
+            self.feed(result, total=True)
+            self.absorbed = True
+        except Exception:
+            pass
+
+    def apply(self, span: Any, operation: str, complete: bool = True, config: Optional[TraceConfig] = None) -> None:
         if self.model:
             span.set_attribute(A.GEN_AI_RESPONSE_MODEL, self.model)
         if self.id:
@@ -213,18 +238,35 @@ class _Output:
             prefix = f"{A.GEN_AI_OUTPUT_MESSAGES}.{position}.message"
             span.set_attribute(f"{prefix}.role", self.role.get(index, "assistant"))
             span.set_attribute(f"{prefix}.content", "".join(self.text[index]))
+        if config is not None and _capture_output(config):
+            texts = ["".join(self.text[index]) for index in sorted(self.text)]
+            if len(texts) == 1:
+                span.set_attribute(A.OUTPUT_VALUE, texts[0])
+            elif texts:
+                span.set_attribute(A.OUTPUT_VALUE, json.dumps(texts)[:_LIMIT])
+                span.set_attribute(A.OUTPUT_MIME_TYPE, "application/json")
 
 
-def _start(tracer: Any, instance: Any, operation: str, args: tuple, kwargs: dict, method: str):
+def _prompts(operation: str, args: tuple, kwargs: dict) -> list:
+    if operation != "text_completion":
+        return []
+    prompt = _argument(args, kwargs, 0, "prompt")
+    return [prompt] if isinstance(prompt, str) else (list(prompt) if isinstance(prompt, (list, tuple)) else [])
+
+
+def _start(tracer: Any, config: TraceConfig, instance: Any, operation: str, args: tuple, kwargs: dict, method: str):
     embeddings = operation == "embeddings"
     model = getattr(instance, "model_id", None) or getattr(instance, "deployment_id", None)
     attrs: dict[str, Any] = {A.GEN_AI_PROVIDER_NAME: PROVIDER, A.GEN_AI_OPERATION_NAME: operation}
     if isinstance(model, str):
         attrs[A.GEN_AI_REQUEST_MODEL] = model
-    params_index = 1
-    params = _params(_argument(args, kwargs, params_index, "params"))
-    if embeddings and method in ("embed_query", "aembed_query", "embed_documents", "aembed_documents"):
-        params = _params(_argument(args, kwargs, 1, "params"))
+    # Parameters set when the SDK object was created apply to every call; call-level ones win.
+    params = {**_params(getattr(instance, "params", None)), **_params(_argument(args, kwargs, 1, "params"))}
+    # Template input is user content: it goes under the key core hides with the input flags,
+    # never into the request parameters (core hides those only under hide_inputs).
+    variables = params.pop("prompt_variables", None)
+    if isinstance(variables, dict) and variables:
+        attrs[A.GEN_AI_PROMPT_TEMPLATE_VARIABLES] = _json(variables)
     for attr, names, kind in _REQUEST_ATTRIBUTES:
         for name in names:
             number = _number(params.get(name), kind)
@@ -247,6 +289,7 @@ def _start(tracer: Any, instance: Any, operation: str, args: tuple, kwargs: dict
     elif operation == "chat":
         messages = _argument(args, kwargs, 0, "messages")
         position = 0
+        plain = []
         for message in messages if isinstance(messages, (list, tuple)) else []:
             content = _text_content(_field(message, "content"))
             role = _field(message, "role")
@@ -254,14 +297,23 @@ def _start(tracer: Any, instance: Any, operation: str, args: tuple, kwargs: dict
                 attrs[f"{A.GEN_AI_INPUT_MESSAGES}.{position}.message.role"] = role
                 if content is not None:
                     attrs[f"{A.GEN_AI_INPUT_MESSAGES}.{position}.message.content"] = content
+                    if isinstance(_field(message, "content"), str):
+                        plain.append({"role": role, "content": content})
                 position += 1
+        # Only plain-text conversations become input.value: it cannot tell text from an inline image.
+        if messages and len(plain) == position == len(messages) and _capture_input(config):
+            attrs[A.INPUT_VALUE] = json.dumps(plain)[:_LIMIT]
+            attrs[A.INPUT_MIME_TYPE] = "application/json"
     else:
-        prompt = _argument(args, kwargs, 0, "prompt")
-        prompts = [prompt] if isinstance(prompt, str) else prompt
-        for position, text in enumerate(prompts if isinstance(prompts, (list, tuple)) else []):
+        prompts = _prompts(operation, args, kwargs)
+        for position, text in enumerate(prompts):
             if isinstance(text, str):
                 attrs[f"{A.GEN_AI_INPUT_MESSAGES}.{position}.message.role"] = "user"
                 attrs[f"{A.GEN_AI_INPUT_MESSAGES}.{position}.message.content"] = text[:_LIMIT]
+        if prompts and all(isinstance(t, str) for t in prompts) and _capture_input(config):
+            value = prompts[0] if len(prompts) == 1 and isinstance(_argument(args, kwargs, 0, "prompt"), str) else prompts
+            attrs[A.INPUT_VALUE] = json.dumps(value)[:_LIMIT]
+            attrs[A.INPUT_MIME_TYPE] = "application/json"
     kind = FiSpanKindValues.EMBEDDING if embeddings else FiSpanKindValues.LLM
     return tracer.start_span(f"watsonx.{operation}", attributes=attrs, fi_span_kind=kind)
 
@@ -269,10 +321,14 @@ def _start(tracer: Any, instance: Any, operation: str, args: tuple, kwargs: dict
 class _Stream:
     """Passes chunks through unchanged; the span ends when the stream ends or is closed."""
 
-    def __init__(self, source: Any, span: Any, operation: str):
-        self._source, self._span, self._operation = source, span, operation
+    def __init__(self, source: Any, span: Any, operation: str, config: TraceConfig, batch: Optional[list] = None):
+        self._source, self._span, self._operation, self._config = source, span, operation, config
         self._output = _Output()
         self._ended = False
+        # ``generate(prompt=[...], async_mode=True)`` yields one whole response per prompt, in
+        # completion order; ``batch`` holds the prompts so each answer lands on its own index.
+        self._batch = batch
+        self._seen: set[int] = set()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._source, name)
@@ -284,7 +340,7 @@ class _Stream:
         try:
             if not complete:
                 self._span.set_attribute("watsonx.stream.incomplete", True)
-            self._output.apply(self._span, self._operation, complete)
+            self._output.apply(self._span, self._operation, complete, self._config)
         finally:
             self._span.end()
 
@@ -293,9 +349,23 @@ class _Stream:
             self._ended = True
             _failure(self._span, exc)
 
+    def _slot(self, chunk: Any) -> int:
+        results = chunk.get("results") if isinstance(chunk, dict) else None
+        echoed = results[0].get("input_text") if results and isinstance(results[0], dict) else None
+        for index, prompt in enumerate(self._batch or []):
+            if index not in self._seen and prompt == echoed:
+                break
+        else:
+            index = next((i for i in range(len(self._batch or [])) if i not in self._seen), len(self._seen))
+        self._seen.add(index)
+        return index
+
     def _observe(self, chunk: Any) -> None:
         try:
-            self._output.feed(chunk)
+            if self._batch is not None:
+                self._output.feed(chunk, offset=self._slot(chunk), total=True)
+            else:
+                self._output.feed(chunk)
         except Exception:  # never let tracing break the caller's stream
             pass
 
@@ -350,31 +420,48 @@ class _Stream:
             pass
 
 
-def _complete(span: Any, result: Any, operation: str) -> Any:
-    if hasattr(result, "__anext__") or (hasattr(result, "__next__") and hasattr(result, "__iter__")):
-        return _Stream(result, span, operation)
-    output = _Output()
+def _complete(span: Any, result: Any, operation: str, config: TraceConfig, output: _Output,
+              method: str = "", prompts: Optional[list] = None) -> Any:
+    if _is_stream(result):
+        # A generator from ``generate`` is the multi-prompt async_mode batch, not a token stream.
+        batch = prompts if method == "generate" and hasattr(result, "__next__") else None
+        return _Stream(result, span, operation, config, batch)
     try:
-        output.feed(result, total=True)
-        output.apply(span, operation)
+        if not output.absorbed:  # otherwise an inner SDK call already supplied the response
+            output.feed(result, total=True)
+        output.apply(span, operation, config=config)
+    except Exception:  # never let tracing break a successful call
+        pass
     finally:
-        span.end()
+        try:
+            span.end()
+        except Exception:
+            pass
     return result
 
 
-def _wrap(tracer: Any, operation: str, method: str, is_async: bool):
-    def prepare(instance: Any, args: tuple):
-        if instance is None and args:  # called as ``Class.method(self, ...)``
-            return args[0], args[1:]
-        return instance, args
+def _wrap(tracer: Any, config: TraceConfig, operation: str, method: str, is_async: bool):
+    def begin(instance: Any, args: tuple, kwargs: dict):
+        """The span and its accumulator, or None when tracing itself fails."""
+        try:
+            owner, rest = (args[0], args[1:]) if instance is None and args else (instance, args)
+            return _start(tracer, config, owner, operation, rest, kwargs, method), _prompts(operation, rest, kwargs)
+        except Exception:
+            return None
 
     if is_async:
         async def wrapped(wrapped, instance, args, kwargs):
-            if _INSIDE.get():
+            outer = _INSIDE.get()
+            if outer is not None:
+                result = await wrapped(*args, **kwargs)
+                outer.absorb(result)
+                return result
+            started = begin(instance, args, kwargs)
+            if started is None:
                 return await wrapped(*args, **kwargs)
-            owner, rest = prepare(instance, args)
-            span = _start(tracer, owner, operation, rest, kwargs, method)
-            token = _INSIDE.set(True)
+            span, prompts = started
+            output = _Output()
+            token = _INSIDE.set(output)
             try:
                 with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
                     result = await wrapped(*args, **kwargs)
@@ -383,14 +470,20 @@ def _wrap(tracer: Any, operation: str, method: str, is_async: bool):
                 raise
             finally:
                 _INSIDE.reset(token)
-            return _complete(span, result, operation)
+            return _complete(span, result, operation, config, output, method, prompts)
     else:
         def wrapped(wrapped, instance, args, kwargs):
-            if _INSIDE.get():
+            outer = _INSIDE.get()
+            if outer is not None:
+                result = wrapped(*args, **kwargs)
+                outer.absorb(result)
+                return result
+            started = begin(instance, args, kwargs)
+            if started is None:
                 return wrapped(*args, **kwargs)
-            owner, rest = prepare(instance, args)
-            span = _start(tracer, owner, operation, rest, kwargs, method)
-            token = _INSIDE.set(True)
+            span, prompts = started
+            output = _Output()
+            token = _INSIDE.set(output)
             try:
                 with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
                     result = wrapped(*args, **kwargs)
@@ -399,7 +492,7 @@ def _wrap(tracer: Any, operation: str, method: str, is_async: bool):
                 raise
             finally:
                 _INSIDE.reset(token)
-            return _complete(span, result, operation)
+            return _complete(span, result, operation, config, output, method, prompts)
     return wrapped
 
 
@@ -420,7 +513,7 @@ class WatsonxInstrumentor(BaseInstrumentor):
             original = cls.__dict__.get(method)
             if original is None:  # this SDK version does not have the method
                 continue
-            wrap_function_wrapper(module, f"{cls_name}.{method}", _wrap(tracer, operation, method, is_async))
+            wrap_function_wrapper(module, f"{cls_name}.{method}", _wrap(tracer, config, operation, method, is_async))
             self._originals.append((cls, method, original))
 
     def _uninstrument(self, **kwargs: Any) -> None:
