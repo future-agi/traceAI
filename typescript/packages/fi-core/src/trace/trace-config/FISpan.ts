@@ -93,10 +93,10 @@ import {
       const slots = !this.admissionFailed ? identitySlots(this.span, this.lastContextName) : undefined;
       const origin = observedWriter(this.span);
       if (origin && slots) {
-        if (mark && !slots.nameEmpty) origin.automatic = true;
-        if (origin.automatic && this.lastContextName !== undefined && !slots.matchesLast) origin.automatic = false;
+        if (mark && slots.nameIsString) origin.automatic = true;
+        if (origin.automatic && this.lastContextName !== undefined && slots.matchesLast === false) origin.automatic = false;
       }
-      const automatic = !!slots && origin?.automatic === true;
+      const automatic = slots?.nameIsString === true && origin?.automatic === true;
       return { automatic, nameWritable: slots?.nameEmpty === true || automatic, idWritable: slots?.idEmpty === true };
     }
 
@@ -107,7 +107,7 @@ import {
         try { identity = exportedAgentIdentity(this.span, this.privacy); }
         catch { /* A failed identity export exposes no host values. */ }
       }
-      return { ...identity, ...this.identityWrites(mark && identity.name !== undefined ? true : undefined) };
+      return { ...identity, ...this.identityWrites(mark) };
     }
 
     /** @internal Fill SDK enrichment only; explicit framework setters stay unconditional. */

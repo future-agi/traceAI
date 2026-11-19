@@ -35,8 +35,11 @@ export function identitySlots(span: Span, lastContextName?: string) {
   if (typeof native?.value !== 'number' || !slot?.writable || !attrs || typeof attrs !== 'object' || types.isProxy(attrs)) return;
   const proto = Object.getPrototypeOf(attrs);
   if (proto !== null && proto !== Object.prototype) return;
-  return { nameEmpty: !(AGENT_NAME in attrs), idEmpty: !(AGENT_ID in attrs),
-    matchesLast: lastContextName !== undefined && Object.getOwnPropertyDescriptor(attrs, AGENT_NAME)?.value === lastContextName };
+  const name = Object.getOwnPropertyDescriptor(attrs, AGENT_NAME);
+  const nameEmpty = !(AGENT_NAME in attrs);
+  return { nameEmpty, idEmpty: !(AGENT_ID in attrs), nameIsString: typeof name?.value === 'string',
+    // An inherited/accessor identity is occupied but not a readable witness.
+    matchesLast: nameEmpty ? false : name && 'value' in name ? name.value === lastContextName : undefined };
 }
 
 // Called by our processor registry *before* dispatching user onStart hooks.
