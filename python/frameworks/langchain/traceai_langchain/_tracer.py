@@ -650,9 +650,10 @@ _PART_HOLDERS = ("image_url", "input_audio", "source", "file")
 def _part_leaves(part: Any, drop: tuple = _PART_KEYS) -> Any:
     """A content part without its labels: ``drop`` (``_PART_KEYS`` for a message's own parts) at the part's top
     level, ``_PART_KEYS`` at the top level of its media holders ``image_url``, ``input_audio``, ``source`` and
-    ``file``, and ``type`` and ``id`` of the content blocks in the part's own ``content`` list (recursively, as
-    parts). Nothing else is dropped: any mapping reached through another key, or nested in a holder, is user data
-    and keeps every key (``json.file.name``, ``meta.source.format``, ``json.content[].id``)."""
+    ``file``, and ``type`` and ``id`` of the content blocks in the part's or a holder's own ``content`` (a list of
+    blocks or a single block, each read as a part, recursively). Nothing else is dropped: any mapping reached
+    through another key, or nested in a holder, is user data and keeps every key (``json.file.name``,
+    ``meta.source.format``, ``json.content[].id``)."""
     if not isinstance(part, Mapping):
         return part
     out = {}
@@ -660,12 +661,22 @@ def _part_leaves(part: Any, drop: tuple = _PART_KEYS) -> Any:
         if k in drop:
             continue
         if k in _PART_HOLDERS and isinstance(v, Mapping):
-            out[k] = {hk: hv for hk, hv in v.items() if hk not in _PART_KEYS}
-        elif k == "content" and isinstance(v, (list, tuple)):
-            out[k] = [_part_leaves(item, ("type", "id")) for item in v]
+            out[k] = {hk: _content_blocks(hv) if hk == "content" else hv for hk, hv in v.items() if hk not in _PART_KEYS}
+        elif k == "content":
+            out[k] = _content_blocks(v)
         else:
             out[k] = v
     return out
+
+
+def _content_blocks(content: Any) -> Any:
+    """The ``content`` of a part or holder: each nested content block (a list of them, or a single one) without its
+    ``type`` and ``id``, read as a part; any other value stays."""
+    if isinstance(content, (list, tuple)):
+        return [_part_leaves(item, ("type", "id")) for item in content]
+    if isinstance(content, Mapping):
+        return _part_leaves(content, ("type", "id"))
+    return content
 
 
 def _message_parts(value: Any) -> list:
