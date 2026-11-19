@@ -207,6 +207,8 @@ def test_streamed_tool_call_deltas_are_assembled(spans):
 
 
 def test_chat_stream_helper_produces_exactly_one_span(spans):
+    if not hasattr(writerai.resources.chat.ChatResource, "stream"):
+        pytest.skip("chat.stream() helper was added after writer-sdk 2.0.0")
     with make_client(stream_handler()).chat.stream(messages=MESSAGES, model="palmyra-x5") as stream:
         for _ in stream:
             pass

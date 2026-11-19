@@ -68,6 +68,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("transformers", ("transformers",), "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     Integration("litellm", ("litellm",), "traceAI-litellm", "traceai_litellm", "LiteLLMInstrumentor", category="gateway"),
     Integration("openrouter", ("openrouter",), "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor", category="gateway"),
+    Integration("writer", ("writerai",), "traceAI-writer", "traceai_writer", "WriterInstrumentor"),
     Integration("portkey", ("portkey_ai",), "traceAI-portkey", "traceai_portkey", "PortkeyInstrumentor", category="gateway"),
     Integration("watsonx", ("ibm_watsonx_ai",), "traceAI-watsonx", "traceai_watsonx", "WatsonxInstrumentor"),
     Integration("replicate", ("replicate",), "traceAI-replicate", "traceai_replicate", "ReplicateInstrumentor"),

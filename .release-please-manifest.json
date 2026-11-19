@@ -161,6 +161,7 @@
   "python/frameworks/sagemaker": "0.1.0",
   "python/frameworks/marqo": "0.1.0",
   "python/frameworks/watsonx": "0.1.0",
+  "python/frameworks/writer": "0.1.0",
   "go/langchaingo": "0.1.0",
   "ruby": "0.1.0",
   "ruby/roast": "0.1.0",

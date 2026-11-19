@@ -1370,6 +1370,14 @@
         "traceai_sagemaker/version.py"
       ]
     },
+    "python/frameworks/writer": {
+      "release-type": "python",
+      "component": "traceai-writer",
+      "package-name": "traceAI-writer",
+      "extra-files": [
+        "traceai_writer/version.py"
+      ]
+    },
     "go/langchaingo": {
       "release-type": "go",
       "component": "go/langchaingo",

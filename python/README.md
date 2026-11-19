@@ -223,6 +223,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-vllm` | [vllm](frameworks/vllm/) |
 | `traceAI-voyage` | [voyage](frameworks/voyage/) |
 | `traceAI-weaviate` | [weaviate](frameworks/weaviate/) |
+| `traceAI-writer` | [writer](frameworks/writer/) |
 | `traceAI-xai` | [xai](frameworks/xai/) |
 
 </details>
