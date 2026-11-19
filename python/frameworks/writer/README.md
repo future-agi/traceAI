@@ -31,7 +31,8 @@ when the response carries it. Tool calls the model makes are recorded on the out
 * Only the outermost SDK call is traced: `chat.stream()`, `with_raw_response` and
   `with_streaming_response` produce one span, not several.
 * Streams end on exhaustion, error or `close()`; an early close is marked
-  `writer.stream.incomplete`.
+  `writer.stream.incomplete`. This includes leaving a `chat.stream()` helper block early (the
+  helper closes the underlying response) and a stream that is dropped without being closed.
 * Exceptions are re-raised unchanged and recorded as `ERROR` with `error.type` (the class name);
   the message is never exported.
 * Inputs and outputs follow the `TraceConfig` hide settings. Only plain-text conversations are

@@ -201,6 +201,32 @@ def _failure(span: Any, exc: BaseException) -> None:
     span.end()
 
 
+class _Response:
+    """The httpx response behind a stream, closed by the SDK's own helpers.
+
+    ``chat.stream()`` keeps ``raw_stream.response`` and closes that, never the stream, so the
+    span has to end when the response is closed too.
+    """
+
+    def __init__(self, response: Any, finish: Any) -> None:
+        self._response, self._finish = response, finish
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+    def close(self) -> Any:
+        try:
+            return self._response.close()
+        finally:
+            self._finish(complete=False)
+
+    async def aclose(self) -> Any:
+        try:
+            return await self._response.aclose()
+        finally:
+            self._finish(complete=False)
+
+
 class _Stream:
     """Proxy for the SDK's Stream / AsyncStream; chunks are forwarded unchanged."""
 
@@ -210,6 +236,17 @@ class _Stream:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._source, name)
+
+    @property
+    def response(self) -> Any:
+        return _Response(self._source.response, self._finish)
+
+    def __del__(self) -> None:
+        # A stream dropped without being read or closed must not leak an open span.
+        try:
+            self._finish(complete=False)
+        except Exception:
+            pass
 
     def _finish(self, complete: bool = True) -> None:
         if self._ended:
