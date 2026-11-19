@@ -1,10 +1,10 @@
-## [1.4.0] - pending release
+## [1.4.0] - 2026-11-18
 
 ### Added
 - `FI_TRACES_URL` sends HTTP span exports to a trace collector separate from the platform API in `FI_BASE_URL` (self-hosted Docker installs serve them on different ports) (#710). It is a base URL like `FI_BASE_URL`; when unset or blank, exports keep their current destination. An explicit exporter `endpoint` still wins, and platform API calls keep using `FI_BASE_URL`.
 - Exports keep a valid `fi.sampling.ratio` sampling weight, a number strictly between 0 and 1 (#713). It keeps a slot under attribute-count limits, down to a one-attribute budget, and is kept, instead of being replaced by the host-truncation marker, when the host's span limits dropped other attributes. A value of any other type or range is still treated as content, and a registered secret is still redacted.
 
-## [1.3.0] - pending release
+## [1.3.0] - 2026-11-17
 
 ### Added
 - Three supported public functions. `rememberFITracerSpan(span)` marks a span as traceAI's own, so an integration that exports converted copies of its framework's spans keeps their session, user and session-name ids. `runInFIContext(ctx, fn)` runs work with `ctx` active for traceAI, and `activeFIContext()` returns the context traceAI treats as active. Both work in an app with no OpenTelemetry context manager and register nothing with OpenTelemetry.
@@ -16,12 +16,12 @@
 - Session, user and session-name ids are exported as set only on spans that traceAI's own tracers make, or that an integration marks with `rememberFITracerSpan`. On any other span that reaches the export boundary, such as an application span, they keep the credential name rule and are exported as `<redacted>`. A session id seen first on such a span is no longer learned as a secret, so later traceAI spans with the same id keep it.
 - The active span is carried without a global context manager. In an app with no OpenTelemetry context manager, spans started with `startActiveSpan` now nest, and their span is active only inside the callback and the work it starts, never in the code that runs after it or beside it. Apps with a context manager see no change.
 
-## [1.2.4] - pending release
+## [1.2.4] - 2026-11-12
 
 ### Fixed
 - A full collector URL set in the environment is used as given, so traces are delivered instead of failing with 404.
 
-## [1.2.3] - pending release
+## [1.2.3] - 2026-11-08
 ### Fix
 - **Upgrade.** 1.2.0, 1.2.1 and 1.2.2 could export short base64 media payloads that carry no recognized file signature: type- or modality-declared video (`type: video`, `type: input_video`, `modality: video`) at any cap, including the default 0; type-declared images (for example `{"type":"image","data":"<base64>"}`) when a positive `base64ImageMaxLength` (or `FI_BASE64_IMAGE_MAX_LENGTH`) was set; and images whose declaration is a separate attribute from the payload (for example `parts.0.type` = `image` beside `parts.0.data`), at any cap. 1.2.3 omits all of these at any cap. Setting the cap to 0 is not a workaround.
 - Covered declarations: image and video by type or modality declaration, audio by type declaration; by MIME declaration, `image/*`, `video/*`, `audio/*`, `application/pdf` and `application/octet-stream`. Payloads are recognized in the catalog payload fields (for example `data`, `bytes`, `content`, `base64`, `b64_json`), and image declarations also cover image URL fields such as `url` and `image_url`. Under video and other generic media declarations, raw base64 under other keys such as `video`, `video_url` or `url` is not covered by this declaration rule (see the known limitations).
@@ -36,16 +36,16 @@
 - Scope the media-omission contract to recognized base64 image payloads in payload fields or `data:` URLs, not every possible image encoding. See the [README image recognition limits](README.md#image-recognition-limits) and 1.2.0 known limitations below for non-payload keys, headerless runs and spacing.
 - Document cap-0 ASCII whitespace compaction separately within each Q1 scope/view, including inside `data:` / `image/` fragments: U+0009-U+000D and U+001C-U+0020. Python also removes non-ASCII `str.isspace()` characters; TypeScript does not compact them in this check. JSON sibling tokens are never joined.
 
-## [1.2.2] - pending release
+## [1.2.2] - 2026-11-08
 ### Fix
 - Preserve numeric `gen_ai.usage.cache_read_tokens.audio` counts through admission, projection and export. The 1.2.0 shared privacy runtime mistook this modality count for an audio payload. Only nonnegative safe integers receive the metric role; strings, arrays, media ancestry and registered secrets retain their existing privacy protections.
 
-## [1.2.1] - pending release
+## [1.2.1] - 2026-11-08
 ### Fix
 - **Spans no longer carry the process command line or the OS user.** 1.2.0 added OpenTelemetry's full process detector to every provider resource, so `process.command_args`, `process.command`, `process.owner`, `process.executable.path` and `process.pid` were exported with every span. Command-line flags can hold secrets. By default fi-core now detects only `process.runtime.name`, `process.runtime.version` and `process.runtime.description`, as it detected nothing before 1.2.0.
 - To opt in, set the OpenTelemetry Node variable `OTEL_NODE_RESOURCE_DETECTORS` to a comma-separated list of `host`, `os` and `process`, or `all` / `none`. `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` are always applied.
 
-## [1.2.0] - pending release
+## [1.2.0] - 2026-11-07
 ### Changed
 - 1.2.0 exports the typed session.id set with setSession; other session-named attributes remain masked.
 - With hideEmbeddingVectors, the legacy embedding.model_name attribute is also hidden.
@@ -71,7 +71,7 @@
 - The image cap does not detect headerless base64 images (PNG, JPEG, GIF, WebP without a data: URL) unless they are the whole value or a whole JSON string token, nor a declared image payload whose base64 contains spaces; the media policy may still omit them.
 - An over-cap image payload stored under a key outside the payload fields (data, bytes, content, image, image_url, url, base64, b64_json) of an image-declaring object, without a data: URL, is not detected by the image cap (e.g. {"type":"image","mime_type":"image/heic","blob":"<base64>"}); other media policy may still withhold it.
 
-## [1.1.1] - pending release
+## [1.1.1] - 2026-11-05
 ### Fix
 - Export the shared PII policy for native exporters. `@traceai/mastra` requires at least this version; publish fi-core before publishing Mastra.
 

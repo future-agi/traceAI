@@ -1,4 +1,4 @@
-## [1.5.0] - pending release
+## [1.5.0] - 2026-11-18
 
 ### Added
 - `FI_TRACES_URL` sends span exports to a trace collector separate from the platform API (#710). Self-hosted Docker installs serve them on different ports (often 8100 for the API and 4318 for traces), so an app can set `FI_TRACES_URL` to the traces address while `FI_BASE_URL` and the `fagi` CLI keep using the API. When it is unset or blank, exports go to `FI_BASE_URL` as before; custom eval API calls always use `FI_BASE_URL`.

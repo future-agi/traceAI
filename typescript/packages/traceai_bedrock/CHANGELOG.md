@@ -1,4 +1,4 @@
-## [0.1.4] - pending release
+## [0.1.4] - 2026-11-12
 
 ### Fixed
 - Traced send() keeps its options and callbacks, response streams are read only as your code reads them, the requested model id is recorded in full, and streamed tool arguments from Anthropic models are recorded, with a placeholder when the argument JSON is incomplete or malformed.

@@ -123,6 +123,7 @@
         "haystack",
         "lancedb",
         "llamaindex",
+        "marqo",
         "milvus",
         "mongodb",
         "pgvector",
@@ -1209,6 +1210,20 @@
             "manifest": "java/traceai-java-milvus/pom.xml",
             "package": "traceai-java-milvus",
             "source": "java/traceai-java-milvus/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "marqo",
+      "name": "Marqo",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/marqo/pyproject.toml",
+            "package": "traceAI-marqo",
+            "source": "python/frameworks/marqo/"
           }
         ]
       }

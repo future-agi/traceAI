@@ -347,6 +347,7 @@ def test_registry_is_consistent():
 @pytest.mark.parametrize("name, target, package, module, entry", [
     ("transformers", "transformers", "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     ("openrouter", "openrouter", "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor"),
+    ("marqo", "marqo", "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor"),
 ])
 def test_registry_enables_transformers_and_openrouter(name, target, package, module, entry):
     integration = _registry.find(name)
@@ -355,6 +356,19 @@ def test_registry_enables_transformers_and_openrouter(name, target, package, mod
     assert integration.targets == (target,)
     assert (integration.package, integration.module, integration.entry) == (package, module, entry)
     assert integration.default
+
+
+def test_registry_enables_sagemaker_on_boto3_next_to_bedrock():
+    sagemaker = _registry.find("sagemaker")
+    bedrock = _registry.find("bedrock")
+    assert sagemaker is not None
+    assert sagemaker.kind == _registry.INSTRUMENTOR
+    assert sagemaker.targets == ("boto3",)
+    assert (sagemaker.package, sagemaker.module, sagemaker.entry) == (
+        "traceAI-sagemaker", "traceai_sagemaker", "SageMakerInstrumentor")
+    assert sagemaker.default
+    # Both hook botocore client creation, so both must be enabled by the same module.
+    assert bedrock.targets == sagemaker.targets
 
 
 @pytest.mark.parametrize("name, target, package", [

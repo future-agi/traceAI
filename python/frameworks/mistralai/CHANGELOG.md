@@ -1,4 +1,4 @@
-## [0.1.11] - pending release
+## [0.1.11] - 2026-11-12
 
 ### Fixed
 - Tool calls and tool results from the 1.x Mistral SDK can be matched in traces by their tool-call IDs.

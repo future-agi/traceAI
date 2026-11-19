@@ -1,4 +1,4 @@
-## [0.2.3] - pending release
+## [0.2.3] - 2026-11-12
 
 ### Fixed
 - Chat spans keep the conversation history and normalized tool calls, with their IDs when supplied. For image URL parts in chat input, a URL given as a plain string no longer stops input export, inline base64 image data is redacted, and input hiding leaves their image URLs out.

@@ -1338,12 +1338,28 @@
       "component": "npm-traceai-vitest-evals",
       "package-name": "@traceai/vitest-evals"
     },
+    "python/frameworks/marqo": {
+      "release-type": "python",
+      "component": "traceai-marqo",
+      "package-name": "traceAI-marqo",
+      "extra-files": [
+        "traceai_marqo/version.py"
+      ]
+    },
     "python/frameworks/openrouter": {
       "release-type": "python",
       "component": "traceai-openrouter",
       "package-name": "traceAI-openrouter",
       "extra-files": [
         "traceai_openrouter/version.py"
+      ]
+    },
+    "python/frameworks/sagemaker": {
+      "release-type": "python",
+      "component": "traceai-sagemaker",
+      "package-name": "traceAI-sagemaker",
+      "extra-files": [
+        "traceai_sagemaker/version.py"
       ]
     },
     "go/langchaingo": {

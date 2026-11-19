@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.5] - pending release
+## [0.1.5] - 2026-11-12
 
 ### Changed
 - A privacy switch now accepts every on and off value, and an unrecognised value hides. `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, their message/text/image variants, `FI_HIDE_EMBEDDING_VECTORS` and `FI_HIDE_ERROR_DETAILS` accept `true`, `1`, `yes`, `on` and `false`, `0`, `no`, `off`, in any case and with surrounding spaces ignored, and an empty value counts as unset. Any other value turns the switch on, with one warning per variable through the OpenTelemetry diagnostic logger that never repeats the value. Before, only `true` turned a content switch on and `FI_HIDE_ERROR_DETAILS` accepted only `true` and `false`, so this hides more, with one exception: with input or output hidden, `FI_HIDE_ERROR_DETAILS` set to `off`, `no` or `0` now keeps error details, as `false` already did, where those values used to be ignored and error details were hidden.
@@ -8,7 +8,7 @@
 ### Fixed
 - Embedding calls made with embed and embedMany keep their token usage in auto mode.
 
-## [0.1.4] - pending release
+## [0.1.4] - 2026-11-07
 ### Feature
 - `enableVercelInstrumentation()` (also exported as `enable`) and `VercelAIInstrumentation` trace the AI SDK's `generateText`, `streamText`, `generateObject`, `streamObject`, `embed` and `embedMany` without `experimental_telemetry`. The zero-code agent `@traceai/auto` uses it.
 

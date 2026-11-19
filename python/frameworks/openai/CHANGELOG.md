@@ -1,4 +1,4 @@
-## [0.1.15] - pending release
+## [0.1.15] - 2026-11-12
 
 ### Fixed
 - When input hiding is off, chat spans record the conversation's roles, tool calls and content parts as input messages, and the span's input text combines the messages' text. Cached input and reasoning token counts are recorded for regular and streamed calls when the response includes them.

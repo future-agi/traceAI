@@ -1,4 +1,4 @@
-## [0.2.0] - pending release
+## [0.2.0] - 2026-11-12
 
 ### Changed
 - traceai-pydantic-ai now requires Python 3.10 or later. Action: Stay on the previous traceai-pydantic-ai release if you run Python 3.9.

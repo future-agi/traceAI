@@ -192,6 +192,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-livekit` | [livekit](frameworks/livekit/) |
 | `traceAI-llamaindex` | [llama_index](frameworks/llama_index/) |
 | `traceAI-mcp` | [mcp](frameworks/mcp/) |
+| `traceAI-marqo` | [marqo](frameworks/marqo/) |
 | `traceAI-mcp-use` | [mcp-use](frameworks/mcp-use/) |
 | `traceAI-milvus` | [milvus](frameworks/milvus/) |
 | `traceAI-minimax` | [minimax](frameworks/minimax/) |
@@ -210,6 +211,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-qdrant` | [qdrant](frameworks/qdrant/) |
 | `traceAI-redis` | [redis-vector](frameworks/redis-vector/) |
 | `traceAI-replicate` | [replicate](frameworks/replicate/) |
+| `traceAI-sagemaker` | [sagemaker](frameworks/sagemaker/) |
 | `traceAI-semantic-kernel` | [semantic-kernel](frameworks/semantic-kernel/) |
 | `traceAI-smolagents` | [smolagents](frameworks/smolagents/) |
 | `traceai-strands` | [strands](frameworks/strands/) |
