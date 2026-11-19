@@ -8,48 +8,48 @@ using Xunit;
 
 namespace TraceAI.AutoInstrumentation.HostingStartup.Tests;
 
-/// <summary>Every type-registered implementation the hook wraps is released exactly once, with the container, and is still traced.</summary>
+/// <summary>Every type- or factory-registered implementation the hook wraps is released exactly once, with the container, and is still traced.</summary>
 [Collection("ProcessEnvironment")] // shares the process-wide activity sources with DecoratorTests: one listener at a time
 public class OwnershipTests
 {
     private static readonly Settings Everything = new(Chat: true, Agent: true, Sensitive: false);
 
-    public enum Shape { DisposableChat, AsyncOnlyChat, BothChat, DisposableEmbeddings, AsyncOnlyEmbeddings, DisposableAgent, AsyncOnlyAgent }
+    public enum Shape { DisposableChat, AsyncOnlyChat, DisposableEmbeddings, AsyncOnlyEmbeddings, DisposableAgent, AsyncOnlyAgent }
 
     public static IEnumerable<object[]> Cases() =>
-        from shape in Enum.GetValues<Shape>() from lifetime in new[] { "singleton", "scoped", "transient" } from asyncDispose in new[] { false, true }
-        select new object[] { shape, lifetime, asyncDispose };
+        from shape in Enum.GetValues<Shape>() from lifetime in new[] { "singleton", "scoped", "transient" } from asyncDispose in new[] { false, true } from factory in new[] { false, true }
+        select new object[] { shape, lifetime, asyncDispose, factory };
 
-    private static void Register(IServiceCollection services, Shape shape, string lifetime)
+    private static void Register(IServiceCollection services, Shape shape, string lifetime, bool factory)
     {
         var life = lifetime switch { "singleton" => ServiceLifetime.Singleton, "scoped" => ServiceLifetime.Scoped, _ => ServiceLifetime.Transient };
         (Type Service, Type Implementation) pair = shape switch
         {
             Shape.DisposableChat => (typeof(IChatClient), typeof(OwnedChat)),
             Shape.AsyncOnlyChat => (typeof(IChatClient), typeof(AsyncOnlyChat)),
-            Shape.BothChat => (typeof(IChatClient), typeof(BothChat)),
             Shape.DisposableEmbeddings => (typeof(IEmbeddingGenerator<string, Embedding<float>>), typeof(OwnedEmbeddings)),
             Shape.AsyncOnlyEmbeddings => (typeof(IEmbeddingGenerator<string, Embedding<float>>), typeof(AsyncOnlyEmbeddings)),
             Shape.DisposableAgent => (typeof(AIAgent), typeof(OwnedAgent)),
             _ => (typeof(AIAgent), typeof(AsyncOnlyAgent)),
         };
-        services.Add(new ServiceDescriptor(pair.Service, pair.Implementation, life));
+        if (factory) services.Add(new ServiceDescriptor(pair.Service, sp => ActivatorUtilities.CreateInstance(sp, pair.Implementation), life));
+        else services.Add(new ServiceDescriptor(pair.Service, pair.Implementation, life));
     }
 
     private static Type ServiceOf(Shape shape) => shape switch
     {
-        Shape.DisposableChat or Shape.AsyncOnlyChat or Shape.BothChat => typeof(IChatClient),
+        Shape.DisposableChat or Shape.AsyncOnlyChat => typeof(IChatClient),
         Shape.DisposableEmbeddings or Shape.AsyncOnlyEmbeddings => typeof(IEmbeddingGenerator<string, Embedding<float>>),
         _ => typeof(AIAgent),
     };
 
     [Theory]
     [MemberData(nameof(Cases))]
-    public async Task ATypeRegisteredImplementationIsReleasedExactlyOnceAndStillTraced(Shape shape, string lifetime, bool asyncDispose)
+    public async Task ARegisteredImplementationIsReleasedExactlyOnceAndStillTraced(Shape shape, string lifetime, bool asyncDispose, bool factory)
     {
         Tally.All.Clear();
         var services = new ServiceCollection();
-        Register(services, shape, lifetime);
+        Register(services, shape, lifetime, factory);
         Decorator.Apply(services, Everything);
         var provider = services.BuildServiceProvider();
         var scope = provider.CreateScope();
@@ -66,7 +66,7 @@ public class OwnershipTests
 
     private static bool Traced(object resolved, Shape shape) => shape switch
     {
-        Shape.DisposableChat or Shape.AsyncOnlyChat or Shape.BothChat => ((IChatClient)resolved).GetService<OpenTelemetryChatClient>() != null,
+        Shape.DisposableChat or Shape.AsyncOnlyChat => ((IChatClient)resolved).GetService<OpenTelemetryChatClient>() != null,
         Shape.DisposableEmbeddings or Shape.AsyncOnlyEmbeddings => ((IEmbeddingGenerator<string, Embedding<float>>)resolved).GetService<OpenTelemetryEmbeddingGenerator<string, Embedding<float>>>() != null,
         _ => ((AIAgent)resolved).GetService<OpenTelemetryAgent>() != null,
     };
@@ -93,25 +93,42 @@ public class OwnershipTests
         Assert.Equal(1, spans.Count(s => s.Source.Name == "Experimental.Microsoft.Extensions.AI" && s.OperationName.StartsWith("chat")));
     }
 
-    [Fact]
-    public async Task AHostWithAProviderThatOnlyHasGetServiceResolvesWrappedServices()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheReplacedFactoryWorksOnAProviderThatOnlyHasGetService(bool factory)
     {
         Tally.All.Clear();
-        var builder = Host.CreateApplicationBuilder();
-        builder.ConfigureContainer(new MinimalFactory());
-        builder.Services.AddSingleton<IChatClient, OwnedChat>();
-        builder.Services.AddSingleton<AIAgent, OwnedAgent>();
-        Decorator.Apply(builder.Services, Everything);
-        using (var host = builder.Build())
+        var services = new ServiceCollection();
+        Register(services, Shape.DisposableChat, "singleton", factory);
+        Register(services, Shape.DisposableAgent, "singleton", factory);
+        Decorator.Apply(services, Everything);
+        using var real = services.BuildServiceProvider();
+        // No IKeyedServiceProvider, no IServiceProviderIsService: only GetService, as on a minimal third-party container.
+        var minimal = new GetServiceOnly(real);
+        foreach (var descriptor in services)
         {
-            Assert.IsType<MinimalProvider>(host.Services);
-            Assert.NotNull(host.Services.GetRequiredService<IChatClient>().GetService<OpenTelemetryChatClient>());
-            Assert.NotNull(host.Services.GetRequiredService<AIAgent>().GetService<OpenTelemetryAgent>());
-            await host.StartAsync();
-            await host.StopAsync();
+            Assert.NotNull(descriptor.ImplementationFactory);
+            var created = descriptor.ImplementationFactory!(minimal);
+            Assert.True(created is IChatClient chat ? chat.GetService<OpenTelemetryChatClient>() != null : ((AIAgent)created).GetService<OpenTelemetryAgent>() != null, "not traced");
+            await ((IAsyncDisposable)created).DisposeAsync();
         }
         Assert.Equal(2, Tally.All.Count);
         Assert.All(Tally.All, item => Assert.Equal(1, item.Releases));
+    }
+
+    [Fact]
+    public void ATypeRegisteredImplementationThatIsAlreadyTracedIsReturnedUnchangedAndDisposedOnce()
+    {
+        Tally.All.Clear();
+        var services = new ServiceCollection();
+        services.AddSingleton<IChatClient, AlreadyWrapped>();
+        Decorator.Apply(services, Everything);
+        var provider = services.BuildServiceProvider();
+        Assert.IsType<AlreadyWrapped>(provider.GetRequiredService<IChatClient>());
+        provider.Dispose();
+        Assert.Single(Tally.All);
+        Assert.Equal(1, Tally.All[0].Releases);
     }
 
     [Fact]
@@ -153,8 +170,8 @@ sealed class OwnedChat() : ChatBase(Tally.New(true, false)) { public override vo
 // IChatClient and IEmbeddingGenerator are IDisposable, so these are "async-first": the real release is DisposeAsync and Dispose is the synchronous fallback.
 sealed class AsyncOnlyChat() : ChatBase(Tally.New(true, true)), IAsyncDisposable
 { public override void Dispose() => Tally.Sync(); public ValueTask DisposeAsync() => Tally.Async(); }
-sealed class BothChat() : ChatBase(Tally.New(true, true)), IAsyncDisposable
-{ public override void Dispose() => Tally.Sync(); public ValueTask DisposeAsync() => Tally.Async(); }
+/// <summary>An implementation the application already wrapped with the library's OpenTelemetry wrapper.</summary>
+sealed class AlreadyWrapped() : DelegatingChatClient(new OpenTelemetryChatClient(new OwnedChat()));
 
 sealed class TwoConstructors : ChatBase
 {
@@ -189,15 +206,8 @@ abstract class AgentBase(Tally tally) : AIAgent
 sealed class OwnedAgent() : AgentBase(Tally.New(true, false)), IDisposable { public void Dispose() => Tally.Sync(); }
 sealed class AsyncOnlyAgent() : AgentBase(Tally.New(false, true)), IAsyncDisposable { public ValueTask DisposeAsync() => Tally.Async(); }
 
-/// <summary>A container that, like some third-party ones, exposes only GetService: no keyed services, no IServiceProviderIsService.</summary>
-sealed class MinimalFactory : IServiceProviderFactory<IServiceCollection>
-{
-    public IServiceCollection CreateBuilder(IServiceCollection services) => services;
-    public IServiceProvider CreateServiceProvider(IServiceCollection services) => new MinimalProvider(services.BuildServiceProvider());
-}
-sealed class MinimalProvider(ServiceProvider inner) : IServiceProvider, IDisposable, IAsyncDisposable
+/// <summary>A provider that exposes only GetService (no IKeyedServiceProvider, no IServiceProviderIsService), delegating to a real one.</summary>
+sealed class GetServiceOnly(IServiceProvider inner) : IServiceProvider
 {
     public object? GetService(Type serviceType) => serviceType == typeof(IServiceProviderIsService) || serviceType == typeof(IKeyedServiceProvider) ? null : inner.GetService(serviceType);
-    public void Dispose() => inner.Dispose();
-    public ValueTask DisposeAsync() => inner.DisposeAsync();
 }
