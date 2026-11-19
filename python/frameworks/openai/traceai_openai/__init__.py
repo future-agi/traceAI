@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 try:
     from fi.evals import Protect
 except ImportError:
-    logger.warning("ai-evaluation is not installed, please install it to trace protect")
+    logger.warning("Optional fi.evals.Protect is unavailable; Protect calls will not be traced.")
     Protect = None
     pass
 from fi_instrumentation import FITracer, TraceConfig
