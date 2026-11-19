@@ -306,6 +306,7 @@ public final class TraceAIAuto {
             } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource, limit); }
         } catch (Throwable ignored) { }
     }
+    private static final List<String> RAW_KEYS = List.of("raw.input", "fi.raw_input", "raw.output", "fi.raw_output");
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }
     static boolean hidden(String key, WireCore.Match match, AutoConfig config) { return hidden(key, "", match, config); }
     /**
@@ -319,7 +320,11 @@ public final class TraceAIAuto {
     static boolean hidden(String key, Object value, WireCore.Match match, AutoConfig config) {
         boolean wireOperation = match != null && match.endpoint() != null && !"chat".equals(String.valueOf(match.endpoint().get("operation")));
         boolean directional = key.equals("gen_ai.audio.transcript") && wireOperation;
-        if (!directional && !"v".equals(config.masking.maskAttribute(key, "v"))) return true;
+        // The core decision by key; a non-text value is passed as itself so a reranker document count stays a count.
+        Object probe = value instanceof Number || value instanceof Boolean ? value : "v";
+        if (!directional && config.masking.maskTypedAttribute(key, probe) != probe) return true;
+        // The raw request and response are withheld under every hide switch, the agent's own switches included, as core does for its flags.
+        if (hidesContent(config) && RAW_KEYS.stream().anyMatch(raw -> key.equals(raw) || key.startsWith(raw + "."))) return true;
         if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
         if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();

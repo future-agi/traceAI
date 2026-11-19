@@ -90,11 +90,13 @@ class TypedContentValuesHideFlagsTest {
     @Test void inputTextSwitchMasksRawInputTemplateVariablesAndEmbeddingText() throws Exception {
         String json = exportApp(Map.of("hide_input_text", true), TypedContentValuesHideFlagsTest::textKeys);
         for (String sentinel : List.of("SENTINEL-RAW-IN", "SENTINEL-TEMPLATE-VARS", "SENTINEL-TEMPLATE-VAR", "SENTINEL-EMBED-TEXT")) assertFalse(json.contains(sentinel), sentinel);
-        assertTrue(json.contains("SENTINEL-RAW-OUT"));
+        // The raw response is withheld too: raw values are not exported while any hide switch is on.
+        assertFalse(json.contains("SENTINEL-RAW-OUT"));
     }
     @Test void outputTextSwitchMasksRawOutput() throws Exception {
         String json = exportApp(Map.of("hide_output_text", true), TypedContentValuesHideFlagsTest::textKeys);
         assertFalse(json.contains("SENTINEL-RAW-OUT"));
-        assertTrue(json.contains("SENTINEL-RAW-IN"));
+        // The raw request is withheld too: raw values are not exported while any hide switch is on.
+        assertFalse(json.contains("SENTINEL-RAW-IN"));
     }
 }

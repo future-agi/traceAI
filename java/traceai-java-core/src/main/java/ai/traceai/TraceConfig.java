@@ -327,6 +327,7 @@ public class TraceConfig {
      * key, as {@link #maskAttribute(String, String)} does for strings. Python masks by key whatever the
      * value type; the placeholder is a string, so a redacted key is written as the string
      * {@link ContentKeys#REDACTED} (the value's type is not preserved, and no part of the value is kept).
+     * A whole-number document count on a reranker document key is not content and is returned unchanged.
      *
      * @param key the attribute key
      * @param value the typed value
@@ -334,6 +335,7 @@ public class TraceConfig {
      */
     public Object maskTypedAttribute(String key, Object value) {
         if (key == null || value == null) return null;
+        if (ContentKeys.isDocumentCount(key, value)) return value;
         switch (ContentKeys.actionFor(key, this)) {
             case OMIT: return null;
             case REDACT: return ContentKeys.REDACTED;

@@ -109,6 +109,11 @@ class TypedContentMaskTest {
                 String label = key + " " + sentinel.getClass().getSimpleName() + " hideIn=" + config.isHideInputs()
                     + " hideOut=" + config.isHideOutputs() + " inMsg=" + config.isHideInputMessages()
                     + " outMsg=" + config.isHideOutputMessages();
+                if (sentinel instanceof Long && RerankerDocumentCountsTest.COUNT_KEYS.contains(key)) {
+                    // A whole number on a reranker document key is a document count, kept under every flag.
+                    assertThat(exported.get(AttributeKey.longKey(key))).as(label + " is a count").isEqualTo(4242L);
+                    continue;
+                }
                 if (decision == null) {
                     assertThat(describe(exported, key)).as(label + " is dropped").isEmpty();
                 } else if (REDACTED.equals(decision)) {

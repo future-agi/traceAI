@@ -8,7 +8,8 @@ import java.util.List;
  * ({@code python/fi_instrumentation/instrumentation/config.py}); this class lists the same content keys,
  * plus the legacy and alias names the Java SDK writes itself, for the four hide flags and the error-detail
  * flag Java has. It is not full equivalence: see "Differences from Python" below. Model names, ids, counts
- * and token usage are deliberately not here.
+ * and token usage are deliberately not here; a whole-number document count on a reranker document key is
+ * kept as well (see {@link #DOCUMENT_COUNT_KEYS}).
  *
  * <p>Each entry matches the key itself and everything below it ({@code key.*}).
  *
@@ -111,6 +112,22 @@ public final class ContentKeys {
         "gen_ai.voice.recording.customer_url", "gen_ai.voice.recording.assistant_url",
         "gen_ai.audio.url", "gen_ai.audio.transcript", "gen_ai.computer_use.screenshot",
         "gen_ai.computer_use.current_url");
+
+    /**
+     * The reranker document keys on which the Java instrumentations write a document count (Cohere rerank: how
+     * many documents went in and came out). A whole-number value on exactly one of these keys is a count, not
+     * content, and is kept under every hide setting. Text or any other value on them, and every key below them
+     * ({@code gen_ai.reranker.input_documents.0.document.content}), is masked as listed above.
+     */
+    static final List<String> DOCUMENT_COUNT_KEYS = List.of(
+        "gen_ai.reranker.input_documents", "gen_ai.reranker.output_documents",
+        "reranker.input_documents", "reranker.output_documents");
+
+    /** True when the value is a document count on one of {@link #DOCUMENT_COUNT_KEYS}. */
+    static boolean isDocumentCount(String key, Object value) {
+        return (value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte)
+            && DOCUMENT_COUNT_KEYS.contains(key);
+    }
 
     private static final String AGGREGATE_TOOL_CALL = "gen_ai.tool.call";
     private static final String INPUT_MIME_TYPE = "input.mime_type";
