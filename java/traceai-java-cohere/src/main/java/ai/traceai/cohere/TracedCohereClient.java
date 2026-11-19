@@ -142,7 +142,7 @@ public class TracedCohereClient {
                 });
             }
 
-            tracer.setRawOutput(span, response);
+            setChatRawOutput(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 
@@ -152,6 +152,20 @@ public class TracedCohereClient {
         } finally {
             span.end();
         }
+    }
+
+    /**
+     * Records the raw chat response only while no hide setting is on. The response carries the whole request
+     * history and may carry fields added by later SDK versions, so under any hide setting it is not recorded;
+     * the dedicated attributes above still carry the operational data.
+     */
+    private void setChatRawOutput(Span span, NonStreamedChatResponse response) {
+        TraceConfig config = tracer.getConfig();
+        if (config.isHideInputs() || config.isHideInputMessages()
+            || config.isHideOutputs() || config.isHideOutputMessages()) {
+            return;
+        }
+        tracer.setRawOutput(span, response);
     }
 
     /**

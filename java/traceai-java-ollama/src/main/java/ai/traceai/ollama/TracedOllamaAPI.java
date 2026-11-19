@@ -146,9 +146,8 @@ public class TracedOllamaAPI {
                 span.setAttribute("ollama.response_time_ms", result.getResponseTime());
             }
 
-            // The chat result carries the whole request history, so the raw output would repeat the
-            // input messages. The echo cannot be separated from the rest of the payload, so the raw
-            // output is not recorded while the input hide settings are on.
+            // The chat result carries the whole request history, so the raw output is dropped while the
+            // input hide settings are on.
             if (!tracer.getConfig().isHideInputs() && !tracer.getConfig().isHideInputMessages()) {
                 tracer.setRawOutput(span, result);
             }

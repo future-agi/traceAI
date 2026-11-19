@@ -1,5 +1,6 @@
 package ai.traceai.cohere;
 
+import ai.traceai.ContentKeys;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import ai.traceai.TraceConfig;
@@ -61,7 +62,7 @@ class TracedCohereClientPrivacyTest {
         assertThat(value(chatSpan, SemanticConventions.OUTPUT_VALUE) == null).isEqualTo(outputs);
         assertThat(value(chatSpan, SemanticConventions.LLM_OUTPUT_MESSAGES) == null)
             .isEqualTo(outputs || outputMessages);
-        assertThat(value(chatSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(outputs);
+        assertThat(value(chatSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(flags != 0);
         String toolPrefix = SemanticConventions.MESSAGE_TOOL_CALLS + ".0.";
         assertThat(value(chatSpan, toolPrefix + SemanticConventions.TOOL_CALL_FUNCTION_NAME) == null)
             .isEqualTo(outputs || outputMessages);
@@ -69,7 +70,7 @@ class TracedCohereClientPrivacyTest {
         if (outputs || outputMessages) {
             assertThat(arguments).isNull();
         } else if (inputs || inputMessages) {
-            assertThat(arguments == null || !arguments.contains("private-argument")).isTrue();
+            assertThat(arguments).isEqualTo(ContentKeys.REDACTED);
         } else {
             assertThat(arguments).contains("private-argument");
         }
