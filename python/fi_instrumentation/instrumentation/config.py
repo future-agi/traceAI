@@ -421,6 +421,8 @@ class TraceConfig:
             private_input
             or private_output
             or self.hide_input_images
+            or self.hide_embedding_vectors
+            or self.hide_llm_invocation_parameters
         ):
             # A raw request or response object can carry content of either side
             # (a response echoing the prompt, a request holding the history), so
