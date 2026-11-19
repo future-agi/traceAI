@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- With `hide_inputs`, `hide_input_messages` or `hide_input_text`, the whole-response `output.value`, including streamed chunks, is built from response-side fields (choices, usage, the raw output completion) while any input hide setting is on, so `prompt_fragments` and `prompt_token_ids` are not recorded.
+
 ## [0.1.3] - 2026-11-12
 
 ### Changed

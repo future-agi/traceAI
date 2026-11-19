@@ -78,3 +78,38 @@ def _hide_raw_output(config: TraceConfig) -> bool:
     # tool arguments and provider extensions). Narrow message/text policies must
     # cover it too. Accounting and model attribution are extracted separately.
     return bool(config.hide_outputs or config.hide_output_messages or config.hide_output_text)
+
+
+# Response-side fields that may be recorded while input settings are on. Request echoes (prompt text and token ids,
+# prompt fragments) are left out rather than stripped by name.
+_RESPONSE_FIELDS = ("id", "object", "created", "model", "usage", "system_fingerprint", "service_tier")
+_CHOICE_FIELDS = ("index", "finish_reason", "text")
+_MESSAGE_FIELDS = ("role", "content", "tool_calls", "function_call", "refusal", "reasoning_content")
+
+
+def _hide_input(config: TraceConfig) -> bool:
+    return bool(config.hide_inputs or config.hide_input_messages or config.hide_input_text)
+
+
+def _response_side(dumped: Any) -> Any:
+    """The response fields that carry generated content, usage and identity only."""
+    if not isinstance(dumped, Mapping):
+        return dumped
+    out = {k: dumped[k] for k in _RESPONSE_FIELDS if k in dumped}
+    choices = dumped.get("choices")
+    if isinstance(choices, list):
+        kept = []
+        for choice in choices:
+            if not isinstance(choice, Mapping):
+                continue
+            item = {k: choice[k] for k in _CHOICE_FIELDS if k in choice}
+            for part in ("message", "delta"):
+                value = choice.get(part)
+                if isinstance(value, Mapping):
+                    item[part] = {k: value[k] for k in _MESSAGE_FIELDS if k in value}
+            raw = choice.get("raw_output")
+            if isinstance(raw, Mapping) and "completion" in raw:
+                item["raw_output"] = {"completion": raw["completion"]}
+            kept.append(item)
+        out["choices"] = kept
+    return out
