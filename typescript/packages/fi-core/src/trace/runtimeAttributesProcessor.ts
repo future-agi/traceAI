@@ -5,6 +5,7 @@ import { rememberAutoSpanSink } from "../auto-span-delivery";
 
 const CARRIER_KEY = Symbol.for("futureagi.runtime.span_attributes.v1");
 const REGISTRY_KEY = Symbol.for("futureagi.runtime.skills.v1");
+const AGENT_SOURCES = Symbol.for("futureagi.runtime.context-agent.sources.v1");
 const PROCESSOR_KEY = Symbol.for("futureagi.runtime.skills.processor.v1");
 // Optional SDK configuration bridge. Without the SDK, environment controls work.
 // The SDK owns publishing this reader; fi-core never creates SDK state.
@@ -73,7 +74,14 @@ export class FutureAGIRuntimeAttributesSpanProcessor implements SpanProcessor {
         if (registry?.v === 1 && typeof registry.get === "function") source = registry.get(traceId);
       }
       for (const [key, value] of Object.entries(allowlisted(source))) {
-        if (!Object.prototype.hasOwnProperty.call(span.attributes, key)) span.setAttribute(key, value);
+        if (Object.prototype.hasOwnProperty.call(span.attributes, key)) continue;
+        span.setAttribute(key, value);
+        if (key === "gen_ai.agent.name" && source && typeof source === "object") {
+          // Optional SDK writer observation for this exact published map. Never
+          // infer a generated name from equal strings or arbitrary carrier keys.
+          const observers = globals[AGENT_SOURCES] as WeakMap<object, (span: Span) => void> | undefined;
+          observers?.get(source)?.(span);
+        }
       }
     } catch {
       // Telemetry must not affect application execution, including foreign
