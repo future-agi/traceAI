@@ -376,3 +376,67 @@ def test_dependency_declaration():
 
     assert any(dep.startswith("writer-sdk") for dep in WriterInstrumentor().instrumentation_dependencies())
     assert __version__
+
+
+# --- early exit from the chat.stream() helper --------------------------------------------------
+
+def _need_helper():
+    if not hasattr(writerai.resources.chat.ChatResource, "stream"):
+        pytest.skip("chat.stream() helper was added after writer-sdk 2.0.0")
+
+
+def test_chat_stream_helper_left_early_ends_its_span_once(spans):
+    _need_helper()
+    with make_client(stream_handler()).chat.stream(messages=MESSAGES, model="palmyra-x5") as stream:
+        for _event in stream:
+            break
+    span = one(spans)
+    assert span.name == "writer.chat"
+    assert attrs(span)["writer.stream.incomplete"] is True
+
+
+def test_chat_stream_helper_explicit_close_ends_its_span_once(spans):
+    _need_helper()
+    manager = make_client(stream_handler()).chat.stream(messages=MESSAGES, model="m")
+    stream = manager.__enter__()
+    next(iter(stream))
+    assert spans.get_finished_spans() == ()
+    stream.close()
+    stream.close()
+    manager.__exit__(None, None, None)
+    assert attrs(one(spans))["writer.stream.incomplete"] is True
+
+
+def test_chat_stream_helper_read_to_the_end_is_not_incomplete(spans):
+    _need_helper()
+    with make_client(stream_handler()).chat.stream(messages=MESSAGES, model="m") as stream:
+        for _event in stream:
+            pass
+    span = one(spans)
+    assert "writer.stream.incomplete" not in attrs(span)
+    assert attrs(span)["output.value"] == "Tokyo"
+
+
+def test_async_chat_stream_helper_left_early_ends_its_span_once(spans):
+    _need_helper()
+    client = make_async_client(stream_handler())
+
+    async def go():
+        async with client.chat.stream(messages=MESSAGES, model="palmyra-x5") as stream:
+            async for _event in stream:
+                break
+
+    asyncio.run(go())
+    span = one(spans)
+    assert attrs(span)["writer.stream.incomplete"] is True
+
+
+def test_abandoned_stream_is_ended_when_it_is_collected(spans):
+    import gc
+
+    stream = make_client(stream_handler()).chat.chat(messages=MESSAGES, model="m", stream=True)
+    next(iter(stream))
+    assert spans.get_finished_spans() == ()
+    del stream
+    gc.collect()
+    assert attrs(one(spans))["writer.stream.incomplete"] is True
