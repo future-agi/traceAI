@@ -484,7 +484,7 @@ LLM programming, structured output, validation, and evaluation.
 | <img src=".github/assets/integrations/dspy-tile.svg" width="24" height="24" alt=""> DSPy | [SDK](python/frameworks/dspy/ "traceAI-DSPy") | — | — | — | — |
 | <img src=".github/assets/integrations/guardrails-tile.svg" width="24" height="24" alt=""> Guardrails AI | [SDK](python/frameworks/guardrails/ "traceAI-guardrails") | [SDK](typescript/packages/traceai_guardrails/ "@traceai/guardrails") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Instructor | [SDK](python/frameworks/instructor/ "traceAI-instructor") | [SDK](typescript/packages/traceai_instructor/ "@traceai/instructor") | — | — | — |
-| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> TypeSafe | [SDK](python/frameworks/typesafe/ "traceAI-typesafe") | — | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> TypeSafe | [SDK](python/frameworks/typesafe/ "traceAI-typesafe") | [SDK](typescript/packages/traceai_typesafe/ "@traceai/typesafe") | — | — | — |
 
 **Bring existing telemetry:** [OpenInference](https://docs.futureagi.com/docs/integrations/import/openinference) · [OpenLLMetry](https://docs.futureagi.com/docs/integrations/otel/openllmetry)
 

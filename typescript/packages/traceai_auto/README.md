@@ -144,6 +144,7 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 | `redis` | `redis` | `@traceai/redis` | Import hook |
 | `strands` | `@strands-agents/sdk` | `@traceai/strands` | Import hook |
 | `together` | `together-ai` | `@traceai/together` | Import hook |
+| `typesafe` | `@typesafe-ai/sdk` | `@traceai/typesafe` | Import hook |
 | `vercel` | `ai` | `@traceai/vercel` | Enable entry |
 | `vertexai` | `@google-cloud/vertexai` | `@traceai/fi-instrumentation-vertexai` | Import hook |
 | `vitest-evals` | `vitest-evals` | `@traceai/vitest-evals` | Manual |
