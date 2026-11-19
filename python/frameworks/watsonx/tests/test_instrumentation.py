@@ -58,6 +58,11 @@ class Wire:
                 {"id": "c1", "model_id": LLM, "choices": [{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}],
                  "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}},
             ))
+        if url.endswith("text/generation") and json.loads(req.content).get("input", "").startswith("echo:"):
+            text = json.loads(req.content)["input"]  # per-prompt answers, to tell the prompts apart
+            return httpx.Response(200, json={"model_id": LLM, "results": [
+                {"generated_text": "out:" + text, "generated_token_count": len(text), "input_token_count": 4,
+                 "stop_reason": "eos_token", "input_text": text}]})
         if url.endswith("text/generation"):
             return httpx.Response(200, json={"model_id": LLM, "results": [
                 {"generated_text": "Tokyo", "generated_token_count": 3, "input_token_count": 5, "stop_reason": "eos_token"}]})
@@ -350,3 +355,159 @@ def test_uninstrument_restores_originals_and_stops_tracing(api):
     assert ModelInference.chat is before
     ModelInference(model_id=LLM, api_client=api).chat(messages=[{"role": "user", "content": "hi"}])
     assert exporter.get_finished_spans() == ()
+
+
+# ---- round 2 regressions -------------------------------------------------------------------------
+
+
+def test_generate_text_records_usage_finish_reason_and_response_model(spans, model):
+    assert model.generate_text(prompt="Capital of Japan?") == "Tokyo"
+    _, a = one(spans)
+    assert a["gen_ai.usage.input_tokens"] == 5
+    assert a["gen_ai.usage.output_tokens"] == 3
+    assert a["gen_ai.usage.total_tokens"] == 8
+    assert tuple(a["gen_ai.response.finish_reasons"]) == ("eos_token",)
+    assert a["gen_ai.response.model"] == LLM
+
+
+def test_embed_query_and_documents_record_usage_and_dimension(spans, api):
+    emb = Embeddings(model_id=EMB, api_client=api)
+    emb.embed_documents(["alpha", "beta"])
+    emb.embed_query("gamma")
+    finished = [dict(s.attributes) for s in spans.get_finished_spans()]
+    assert len(finished) == 2
+    for a in finished:
+        assert a["gen_ai.usage.input_tokens"] == 7
+        assert a["gen_ai.embeddings.dimension.count"] == 3
+        assert a["gen_ai.response.model"] == EMB
+
+
+def test_instance_level_params_are_recorded_and_call_params_win(spans, api):
+    model = ModelInference(model_id=LLM, api_client=api, params={"max_new_tokens": 11, "temperature": 0.3})
+    model.generate_text(prompt="x")
+    model.generate_text(prompt="x", params={"temperature": 0.9})
+    first, second = (dict(s.attributes) for s in spans.get_finished_spans())
+    assert first["gen_ai.request.max_tokens"] == 11 and first["gen_ai.request.temperature"] == 0.3
+    assert json.loads(first["gen_ai.request.parameters"]) == {"max_new_tokens": 11, "temperature": 0.3}
+    assert second["gen_ai.request.max_tokens"] == 11 and second["gen_ai.request.temperature"] == 0.9
+
+
+def test_instance_level_chat_and_embedding_params(spans, api):
+    ModelInference(model_id=LLM, api_client=api, params={"max_tokens": 5, "top_p": 0.4}).chat(
+        messages=[{"role": "user", "content": "hi"}])
+    Embeddings(model_id=EMB, api_client=api, params={"truncate_input_tokens": 3}).embed_query("q")
+    chat, emb = (dict(s.attributes) for s in spans.get_finished_spans())
+    assert chat["gen_ai.request.max_tokens"] == 5 and chat["gen_ai.request.top_p"] == 0.4
+    assert json.loads(emb["gen_ai.request.parameters"]) == {"truncate_input_tokens": 3}
+
+
+def test_prompt_variables_are_not_request_parameters(spans, model):
+    model.generate_text(prompt="x", params={"max_new_tokens": 4, "prompt_variables": {"name": "SECRETVAL"}})
+    _, a = one(spans)
+    assert "SECRETVAL" not in a["gen_ai.request.parameters"]
+    assert json.loads(a["gen_ai.request.parameters"]) == {"max_new_tokens": 4}
+    assert json.loads(a["gen_ai.prompt.template.variables"]) == {"name": "SECRETVAL"}
+
+
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_input_messages", "hide_input_text"])
+def test_prompt_variables_follow_the_input_hiding_flags(api, wire, flag):
+    exporter, provider, instrumentor = make_spans(TraceConfig(**{flag: True}))
+    try:
+        ModelInference(model_id=LLM, api_client=api).generate_text(
+            prompt="x", params={"max_new_tokens": 4, "prompt_variables": {"name": "SECRETVAL"}})
+        (span,) = exporter.get_finished_spans()
+        assert "SECRETVAL" not in json.dumps(dict(span.attributes), default=str)
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+
+def test_input_and_output_value_are_set_like_sibling_providers(spans, model):
+    model.chat(messages=[{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Capital?"}])
+    model.generate_text(prompt="Capital of Japan?")
+    list(model.generate_text_stream(prompt="Hi"))
+    chat, text, stream = (dict(s.attributes) for s in spans.get_finished_spans())
+    assert json.loads(chat["input.value"]) == [
+        {"role": "system", "content": "Be brief."}, {"role": "user", "content": "Capital?"}]
+    assert chat["input.mime_type"] == "application/json"
+    assert chat["output.value"] == "Tokyo"
+    assert json.loads(text["input.value"]) == "Capital of Japan?" and text["output.value"] == "Tokyo"
+    assert stream["output.value"] == "Hello"
+
+
+def test_input_output_value_never_include_images_or_embedding_vectors(spans, model, api):
+    model.chat(messages=[{"role": "user", "content": [
+        {"type": "text", "text": "what is this"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}])
+    Embeddings(model_id=EMB, api_client=api).embed_query("q")
+    chat, emb = (dict(s.attributes) for s in spans.get_finished_spans())
+    assert "input.value" not in chat or "AAAA" not in chat["input.value"]
+    assert "AAAA" not in json.dumps(chat, default=str)
+    assert "input.value" not in emb and "output.value" not in emb
+
+
+@pytest.mark.parametrize("flags", [
+    {"hide_inputs": True, "hide_outputs": True},
+    {"hide_input_messages": True, "hide_output_messages": True},
+    {"hide_input_text": True, "hide_output_text": True},
+])
+def test_input_output_value_follow_the_hiding_flags(api, wire, flags):
+    exporter, provider, instrumentor = make_spans(TraceConfig(**flags))
+    try:
+        model = ModelInference(model_id=LLM, api_client=api)
+        model.chat(messages=[{"role": "user", "content": "my private question"}])
+        model.generate_text(prompt="my private prompt")
+        for span in exporter.get_finished_spans():
+            dumped = json.dumps(dict(span.attributes), default=str)
+            assert "private" not in dumped and "Tokyo" not in dumped
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+
+def test_tracing_failure_in_start_never_breaks_the_call(model, monkeypatch):
+    import traceai_watsonx
+
+    exporter, provider, instrumentor = make_spans()
+    try:
+        def boom(*a, **k):
+            raise RuntimeError("tracing bug")
+
+        monkeypatch.setattr(traceai_watsonx, "_start", boom)
+        assert model.generate_text(prompt="x") == "Tokyo"
+        assert model.chat(messages=[{"role": "user", "content": "hi"}])["choices"][0]["message"]["content"] == "Tokyo"
+        assert exporter.get_finished_spans() == ()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+
+def test_tracing_failure_in_result_handling_never_breaks_the_call(model, monkeypatch):
+    import traceai_watsonx
+
+    exporter, provider, instrumentor = make_spans()
+    try:
+        def boom(*a, **k):
+            raise RuntimeError("tracing bug")
+
+        monkeypatch.setattr(traceai_watsonx._Output, "feed", boom)
+        monkeypatch.setattr(traceai_watsonx._Output, "apply", boom)
+        assert model.generate_text(prompt="x") == "Tokyo"
+        assert model.chat(messages=[{"role": "user", "content": "hi"}])["choices"][0]["message"]["content"] == "Tokyo"
+        assert len(exporter.get_finished_spans()) == 2  # spans still end
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+def test_prompt_list_outputs_are_indexed_per_prompt_and_usage_is_summed(spans, model, async_mode):
+    prompts = ["echo:aaa", "echo:bbbbb"]
+    result = model.generate(prompt=prompts, async_mode=async_mode)
+    list(result) if async_mode else result
+    _, a = one(spans)
+    assert a["gen_ai.output.messages.0.message.content"] == "out:echo:aaa"
+    assert a["gen_ai.output.messages.1.message.content"] == "out:echo:bbbbb"
+    assert a["gen_ai.input.messages.1.message.content"] == "echo:bbbbb"
+    assert a["gen_ai.usage.input_tokens"] == 8
+    assert a["gen_ai.usage.output_tokens"] == len("echo:aaa") + len("echo:bbbbb")
+    assert tuple(a["gen_ai.response.finish_reasons"]) == ("eos_token", "eos_token")
