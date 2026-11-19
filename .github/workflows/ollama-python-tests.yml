@@ -1,0 +1,48 @@
+name: Ollama Python contracts
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "python/frameworks/ollama/**"
+      - "python/fi_instrumentation/**"
+      - "python/pyproject.toml"
+      - ".github/workflows/ollama-python-tests.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "python/frameworks/ollama/**"
+      - "python/fi_instrumentation/**"
+      - "python/pyproject.toml"
+      - ".github/workflows/ollama-python-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Ollama Python (${{ matrix.ollama }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        ollama: ["0.3.0", "0.6.3"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package and test tools
+        run: |
+          python -m venv "$RUNNER_TEMP/ollama-tests"
+          "$RUNNER_TEMP/ollama-tests/bin/pip" install \
+            -e ./python -e ./python/frameworks/ollama \
+            "ollama==${{ matrix.ollama }}" "pytest==8.4.2" "pytest-asyncio==0.24.0"
+      - name: Run real SDK and OTLP contracts with networking disabled
+        run: |
+          sudo unshare --net "$RUNNER_TEMP/ollama-tests/bin/python" -I -m pytest \
+            python/frameworks/ollama/tests -q -p no:cacheprovider

@@ -60,7 +60,7 @@ async def test_independent_embedding_privacy(
                 client._client.close()
         assert len(requests) == 1
         assert requests[0][0] == "/api/" + endpoint
-        received = response.model_dump()
+        received = response if isinstance(response, dict) else response.model_dump()
         key = "embeddings" if endpoint == "embed" else "embedding"
         assert received[key] == body[key]  # Redaction must not mutate the SDK result.
         spans = exporter.get_finished_spans()

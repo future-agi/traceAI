@@ -6,9 +6,13 @@ from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     MessageAttributes,
+    MessageContentAttributes,
     SpanAttributes,
+    ToolCallAttributes,
 )
 from opentelemetry.util.types import AttributeValue
+
+from traceai_ollama._utils import _redact_tool_calls
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -56,13 +60,13 @@ class _ResponseAttributesExtractor:
             message = response["message"]
             yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", message.get("role", "assistant")
             yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", message.get("content", "")
-            yield SpanAttributes.OUTPUT_VALUE, message.get("content", "")
+            yield from self._message_details(message)
 
         # Generate response
         elif "response" in response:
             yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "assistant"
             yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", response["response"]
-            yield SpanAttributes.OUTPUT_VALUE, response["response"]
+            yield from self._message_details(response)
 
         # Embedding response
         elif "embedding" in response:
@@ -77,14 +81,31 @@ class _ResponseAttributesExtractor:
                 yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{i}.{EmbeddingAttributes.EMBEDDING_VECTOR}", safe_json_dumps(emb[:10])
             yield SpanAttributes.OUTPUT_VALUE, f"[{len(embeddings)} embeddings]"
 
-        # Core masks dedicated vector keys, but cannot inspect serialized JSON.
-        # Redact only the copy used for telemetry, never the SDK response itself.
-        output = response
+        # Core masks dedicated attributes but cannot inspect serialized JSON.
+        # Apply directional privacy to a telemetry copy, not to SDK responses.
+        output = dict(response)
+        if self._config.hide_output_messages or self._config.hide_output_text:
+            # Logprob tokens (including top alternatives) reveal generated text
+            # even when the visible response/message content has been masked.
+            output.pop("logprobs", None)
         if self._config.hide_embedding_vectors:
-            output = {
-                key: REDACTED_VALUE if key in ("embedding", "embeddings") else value
-                for key, value in response.items()
-            }
+            for key in ("embedding", "embeddings"):
+                if key in output:
+                    output[key] = REDACTED_VALUE
+        if self._config.hide_output_messages:
+            for key in ("message", "response", "thinking"):
+                if key in output:
+                    output[key] = REDACTED_VALUE
+        elif self._config.hide_output_text:
+            if isinstance(output.get("message"), dict):
+                output["message"] = {
+                    key: REDACTED_VALUE if key in ("content", "thinking") else
+                    _redact_tool_calls(value) if key == "tool_calls" else value
+                    for key, value in output["message"].items() if key != "logprobs"
+                }
+            for key in ("response", "thinking"):
+                if key in output:
+                    output[key] = REDACTED_VALUE
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(output)
 
         # Performance metrics (Ollama-specific)
@@ -104,3 +125,20 @@ class _ResponseAttributesExtractor:
         # Done reason
         if "done_reason" in response:
             yield "ollama.done_reason", response["done_reason"]
+
+    def _message_details(self, message: Mapping[str, Any]) -> Iterator[Tuple[str, AttributeValue]]:
+        prefix = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0"
+        if thinking := message.get("thinking"):
+            content_prefix = f"{prefix}.{MessageAttributes.MESSAGE_CONTENTS}.0"
+            yield f"{content_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "thinking"
+            yield f"{content_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}", thinking
+        for index, tool in enumerate(message.get("tool_calls") or ()):
+            function = tool.get("function") or {}
+            tool_prefix = f"{prefix}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{index}"
+            if tool.get("id"):
+                yield f"{tool_prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tool["id"]
+            if function.get("name"):
+                yield f"{tool_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}", function["name"]
+            if "arguments" in function:
+                arguments = REDACTED_VALUE if self._config.hide_output_text else function["arguments"]
+                yield f"{tool_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}", safe_json_dumps(arguments)
