@@ -76,7 +76,7 @@ Each integration reports one of these statuses:
 <details>
 <summary>All integrations</summary>
 
-**Automatic** integrations turn on by themselves. The `deepseek`, `fireworks`, `xai`, `minimax` and `vllm` integrations wrap the OpenAI SDK too; while `openai` is on it traces those calls, so each call produces one span, and if you list only one of them in `FI_INSTRUMENTATIONS` (leaving `openai` out) that integration traces its own calls. **Manual** integrations need the setup call shown in the report.
+**Automatic** integrations turn on by themselves. The `deepseek`, `fireworks`, `xai`, `minimax` and `vllm` integrations wrap the OpenAI SDK too; while `openai` is on it traces those calls, so each call produces one span (an integration turns on by default only when its installed package declares that it defers; with an older package it stays off until you upgrade or list it), and if you list only one of them in `FI_INSTRUMENTATIONS` (leaving `openai` out) that integration traces its own calls. **Manual** integrations need the setup call shown in the report.
 
 | Name | Library | traceAI package | Setup |
 | --- | --- | --- | --- |
