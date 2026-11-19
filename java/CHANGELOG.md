@@ -4,7 +4,12 @@
 
 ### Changes
 
-* Raw input and raw output are not recorded while any hide setting is on.
+* **java-core:** raw input and raw output are not recorded while any hide setting is on.
+* **java-core:** number and boolean values (and arrays of them) written through `FITracer` on content keys are masked by key under the hide settings, like text values.
+* **cohere:** tool-call arguments go through the masker; chat, embed and rerank raw responses are not recorded while any hide setting is on.
+* **ollama:** the raw chat response is not recorded while any hide setting is on.
+* **langchain4j:** AiServices method arguments (`langchain4j.param.*`) are not recorded under `hideInputs` / `hideInputMessages`.
+* **javaagent:** the agent masks the same content keys as `traceai-java-core`, including number and boolean values; it does not record a whole provider response body while any hide setting is on.
 
 ## 1.4.1 (2026-11-19)
 
@@ -88,7 +93,6 @@
 
 ## Unreleased
 
-- Raw input and raw output are not recorded while any hide setting is on.
 - Prepare Maven Central coordinates under `com.futureagi`; Java packages remain `ai.traceai.*`.
 - Add a BOM covering all instrumentation modules and an opt-in release profile for sources, Javadocs, signing, and Central publishing.
 - Read the runtime SDK version from the parent Maven version instead of a separate hard-coded value.
