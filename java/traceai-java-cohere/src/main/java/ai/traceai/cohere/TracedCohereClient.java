@@ -274,13 +274,11 @@ public class TracedCohereClient {
 
             // Capture query
             tracer.setInputValue(span, request.getQuery());
-            if (!tracer.getConfig().isHideInputs()) {
-                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_QUERY, request.getQuery());
-            }
+            tracer.setAttribute(span, SemanticConventions.GEN_AI_RERANKER_QUERY, request.getQuery());
 
             // Capture documents count
             if (request.getDocuments() != null) {
-                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_INPUT_DOCUMENTS, (long) request.getDocuments().size());
+                tracer.setAttribute(span, SemanticConventions.GEN_AI_RERANKER_INPUT_DOCUMENTS, (long) request.getDocuments().size());
             }
 
             // Capture top_n
@@ -294,7 +292,7 @@ public class TracedCohereClient {
 
             // Capture output
             if (response.getResults() != null) {
-                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_OUTPUT_DOCUMENTS, (long) response.getResults().size());
+                tracer.setAttribute(span, SemanticConventions.GEN_AI_RERANKER_OUTPUT_DOCUMENTS, (long) response.getResults().size());
 
                 // Capture top result
                 if (!response.getResults().isEmpty()) {

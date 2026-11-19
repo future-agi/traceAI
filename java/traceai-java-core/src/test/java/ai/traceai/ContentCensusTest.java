@@ -112,6 +112,10 @@ class ContentCensusTest {
     /** Candidate keys of a key expression: constants resolved, any other operand taken as "0". */
     private static Set<String> keys(String expr, Map<String, Set<String>> constants) {
         Set<String> result = new LinkedHashSet<>(Set.of(""));
+        String[] operands = expr.split("\\s*\\+\\s*");
+        // A key that is nothing but a variable or a call cannot be resolved: it is reviewed by hand.
+        if (operands.length == 1 && !operands[0].trim().startsWith("\"")
+            && !constants.containsKey(operands[0].trim().substring(operands[0].trim().lastIndexOf('.') + 1))) return Set.of();
         for (String part : expr.split("\\s*\\+\\s*")) {
             part = part.trim();
             Set<String> options;
