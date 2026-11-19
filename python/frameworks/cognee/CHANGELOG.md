@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* Content keys follow the `TraceConfig` hide settings whatever the type of their value (number, boolean or text), including the `input.value` / `output.value` aliases.
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-cognee-v0.1.0...traceai-cognee-v0.1.1) (2026-11-05)
 
 
