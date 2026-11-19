@@ -3,6 +3,7 @@ import io
 import json
 
 import pytest
+from botocore.response import StreamingBody
 from botocore.exceptions import ClientError, ParamValidationError
 from opentelemetry import context as context_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
@@ -557,3 +558,36 @@ def test_package_metadata():
 
     assert traceai_sagemaker.SageMakerInstrumentor
     assert traceai_sagemaker.__version__
+
+
+class _SslLikeError(Exception):
+    """Stands in for urllib3 SSLError/DecodeError: an HTTPError, neither OSError nor BotoCoreError."""
+
+
+class _FailingBody(StreamingBody):
+    def __init__(self, error):
+        super().__init__(io.BytesIO(b"{}"), 2)
+        self.error = error
+
+    def read(self, *args, **kwargs):
+        raise self.error
+
+
+@pytest.mark.parametrize("error", [_SslLikeError("tls dropped mid-read"), ValueError("bad decode")])
+def test_non_io_body_read_error_surfaces_to_the_caller(spans, error):
+    client = make_client()
+    respond(client, "InvokeEndpoint", ok(_FailingBody(error)))
+    with pytest.raises(type(error)) as raised:
+        invoke(client, {"inputs": "x"})
+    assert raised.value is error
+    span = one(spans)
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.end_time is not None
+
+
+def test_zero_generation_token_count_is_recorded(spans):
+    client = make_client()
+    respond(client, "InvokeEndpoint", ok({"generation": "", "prompt_token_count": 5, "generation_token_count": 0}))
+    invoke(client, {"prompt": "hi"})
+    a = attrs(one(spans))
+    assert a[OUT_TOK] == 0
