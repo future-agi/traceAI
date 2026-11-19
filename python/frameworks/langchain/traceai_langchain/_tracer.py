@@ -49,6 +49,7 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from fi_instrumentation.instrumentation._tracers import FITracer
+from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.human import HumanMessage
 from langchain_core.tracers import BaseTracer, LangChainTracer
@@ -634,26 +635,30 @@ def _children(value: Any) -> Any:
 
 
 def _is_message_like(value: Any) -> bool:
-    """A LangChain message or document, or anything else shaped like one (it has ``content`` or ``page_content``)."""
-    return not isinstance(value, (str, bytes, Mapping, list, tuple, set, frozenset)) and (
-        hasattr(value, "content") or hasattr(value, "page_content")
-    )
+    """A LangChain message or document. Other objects, even with a ``content`` field, are read whole."""
+    return isinstance(value, (BaseMessage, Document))
+
+
+def _part_leaves(part: Any) -> Any:
+    """A content part with its ``type`` and ``id`` keys left out, at every level (``image_url.url``,
+    ``source.data`` and a tool result's nested ``content`` stay)."""
+    if isinstance(part, Mapping):
+        return {k: _part_leaves(v) for k, v in part.items() if k not in ("type", "id")}
+    if isinstance(part, (list, tuple)):
+        return [_part_leaves(item) for item in part]
+    return part
 
 
 def _message_parts(value: Any) -> list:
-    """What a message-like value says: its ``content`` (a string, or the text parts of a content list),
-    ``page_content``, and the argument values of its tool calls. Never its type, id, name, example, metadata or
-    other schema fields, which every message carries whatever its text is."""
+    """What an input message or document says: its ``content`` (a string, or every part of a content list but
+    the parts' ``type`` and ``id``), ``page_content``, and the argument values of its tool calls. Never its type,
+    id, name, example, metadata or other schema fields, which every message carries whatever its text is."""
     parts: list = []
     content = getattr(value, "content", None)
     if isinstance(content, str):
         parts.append(content)
     elif isinstance(content, (list, tuple)):
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, Mapping) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
+        parts.extend(_part_leaves(item) for item in content)
     page_content = getattr(value, "page_content", None)
     if isinstance(page_content, str):
         parts.append(page_content)
@@ -666,15 +671,15 @@ def _message_parts(value: Any) -> list:
     return parts
 
 
-def _echo_children(value: Any) -> Any:
-    """The parts the echo comparison looks at: those of a message-like value are its text-bearing fields only,
-    anything else has all its parts (see ``_children``). None when the value is not a container."""
+def _input_children(value: Any) -> Any:
+    """The parts of an input value the echo comparison looks for: those of a LangChain message or document are its
+    text-bearing fields only, anything else has all its parts (see ``_children``). None when not a container."""
     if _is_message_like(value):
         return [(None, part) for part in _message_parts(value)]
     return _children(value)
 
 
-def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0) -> None:
+def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0, children_of: Callable[[Any], Any] = _children) -> None:
     """Every string leaf of ``value`` (anything unreadable is a text leaf of its own). Every node visited counts
     toward the budget, not only the leaves; running out of budget raises _Undecidable."""
     nodes[0] += 1
@@ -685,12 +690,12 @@ def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0) -> None
     if isinstance(value, str):
         found.append(value)
         return
-    children = _echo_children(value)
+    children = children_of(value)
     if children is None:
         found.append(str(value))
         return
     for _, child in children:
-        _string_leaves(child, found, nodes, depth + 1)
+        _string_leaves(child, found, nodes, depth + 1, children_of)
 
 
 def _contains_value(value: Any, target: Any, nodes: list, depth: int = 0) -> bool:
@@ -698,10 +703,13 @@ def _contains_value(value: Any, target: Any, nodes: list, depth: int = 0) -> boo
     nodes[0] += 1
     if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
         raise _Undecidable
-    if type(value) is type(target) or isinstance(value, type(target)) or isinstance(target, type(value)):
-        if value == target:
-            return True
-    children = _echo_children(value)
+    if isinstance(value, bool) or isinstance(target, bool):
+        comparable = type(value) is type(target)
+    else:
+        comparable = type(value) is type(target) or isinstance(value, type(target)) or isinstance(target, type(value))
+    if comparable and value == target:
+        return True
+    children = _children(value)
     if children is None:
         return False
     return any(_contains_value(child, target, nodes, depth + 1) for _, child in children)
@@ -726,13 +734,13 @@ def _echoes_input(inputs: Any, outputs: Any) -> bool:
     1. Identity: the output, or any part of it, equals the whole unwrapped input (any type, scalars included).
     2. Pass-through / assign shape: the output is a mapping holding every top-level key of the input mapping
        with an equal value.
-    3. String content: an input string of four characters or more occurs in a string of the output (read from
-       the text-bearing fields of messages and documents, from every part of anything else) or in its JSON
-       rendering, also in the JSON-escaped form.
+    3. String content: an input string of four characters or more (read from the text-bearing fields of input
+       LangChain messages and documents, from every part of anything else) occurs in any string of the output
+       (every field, messages and documents included) or in its JSON rendering, also in the JSON-escaped form.
     4. Anything that cannot be decided (too deep, too large, unreadable, any error) counts as an echo.
 
-    Message type, id, name, metadata and other schema fields are not compared, and a boolean or number is never
-    matched by its field name: a node's new message is not an echo of the earlier messages in its state because
+    The input's message type, id, name, metadata and other schema fields are not used as text to look for, a
+    boolean is never matched by an equal number, and nothing is matched by its field name: a node's new message is not an echo of the earlier messages in its state because
     they share ``type: "ai"`` or ``finish_reason``.
     """
     if not inputs or not outputs:
@@ -752,7 +760,7 @@ def _echoes_input(inputs: Any, outputs: Any) -> bool:
         # 3. string content
         in_strings: list = []
         out_strings: list = []
-        _string_leaves(inputs, in_strings, [0])
+        _string_leaves(inputs, in_strings, [0], children_of=_input_children)
         _string_leaves(outputs, out_strings, [0])
         text = "\x00".join(out_strings)
         rendered = safe_json_dumps(outputs)
