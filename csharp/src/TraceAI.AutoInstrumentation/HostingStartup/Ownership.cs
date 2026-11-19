@@ -25,7 +25,7 @@ public sealed class Release
         finally
         {
             if (_implementation is IDisposable disposable) disposable.Dispose();
-            else if (_implementation is IAsyncDisposable asyncDisposable) asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            else if (_implementation is IAsyncDisposable asyncDisposable) Task.Run(() => asyncDisposable.DisposeAsync().AsTask()).GetAwaiter().GetResult(); // off the caller's context, so it never captures a SynchronizationContext
         }
     }
 
@@ -84,6 +84,7 @@ internal static class Ownership
 
     private static ConstructorInfo? Build(string kind, Type serviceType, bool owner)
     {
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported) return null;
         var baseType = DelegatingBase(kind, serviceType);
         if (baseType == null) return null;
         return Cache.GetOrAdd((baseType, owner), key =>

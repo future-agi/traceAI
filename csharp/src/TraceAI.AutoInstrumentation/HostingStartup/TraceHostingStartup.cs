@@ -134,36 +134,51 @@ internal static class Decorator
         // now and registered as an instance too, which the container never disposes.
         if (descriptor.ImplementationInstance != null)
             return new ServiceDescriptor(descriptor.ServiceType, wrapper.Wrap(descriptor.ImplementationInstance, sensitive, kind));
-        // Other registrations are created, and so owned, by the container; the wrapper it creates is disposed with them.
-        if (descriptor.ImplementationFactory != null)
-        {
-            var factory = descriptor.ImplementationFactory;
-            return new ServiceDescriptor(descriptor.ServiceType, provider => wrapper.Wrap(factory(provider), sensitive, kind), descriptor.Lifetime);
-        }
-        var implementation = descriptor.ImplementationType!;
         var serviceType = descriptor.ServiceType;
-        // Container-agnostic: no descriptor is added and no keyed service is used. The replacement keeps the original lifetime,
-        // so the container builds it once (singleton), per scope or per resolve. The container owns only what the factory returns,
-        // so that is a small object that releases the wrapper and the implementation exactly once, with DisposeAsync when the
-        // implementation is IAsyncDisposable and the container is disposed asynchronously. The application's own registrations
-        // of the implementation type are neither used nor changed, and the type does not become resolvable.
+        var factory = descriptor.ImplementationFactory;
+        var implementation = descriptor.ImplementationType!;
+        // Factory and type registrations are created, and so owned, by the container, and take the same path. The container
+        // disposes only what the factory returns, and the library's wrappers do not all dispose what they wrap (the agent
+        // wrapper never does, and no wrapper releases an IAsyncDisposable), so the factory returns a small object that releases
+        // the wrapper and the implementation exactly once, with DisposeAsync when the implementation is IAsyncDisposable and
+        // the container is disposed asynchronously. A type registration is built with ActivatorUtilities, adds no descriptor and
+        // uses no keyed service, so it works on any container; the application's own registrations of the implementation type
+        // are neither used nor changed, and the type does not become resolvable.
         return new ServiceDescriptor(serviceType, provider =>
+            Own(kind, serviceType, wrapper, sensitive, factory != null ? factory(provider) : ActivatorUtilities.CreateInstance(provider, implementation)),
+            descriptor.Lifetime);
+    }
+
+    /// <summary>Wraps a registration the container created and returns the object the container will own; fails open to
+    /// <paramref name="created"/> itself (untraced, released by the container as before).</summary>
+    private static object Own(string kind, Type serviceType, Wrapper wrapper, bool sensitive, object created)
+    {
+        object? wrapped = null;
+        try
         {
-            var created = ActivatorUtilities.CreateInstance(provider, implementation);
-            try
-            {
-                // Stops the library's wrapper from disposing what it wraps (chat and embedding), so the release below is the only one.
-                var guarded = Ownership.Shield(kind, serviceType, created);
-                if (guarded == null) { TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
-                var wrapped = wrapper.Wrap(guarded, sensitive, kind, record: false);
-                if (ReferenceEquals(wrapped, guarded)) return created; // already traced by the application, or could not be wrapped
-                var owner = Ownership.Owner(kind, serviceType, wrapped, new Release(wrapped, created));
-                if (owner == null) { TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
-                TraceHostingStartup.RecordWrapped(kind);
-                return owner;
-            }
-            catch (Exception error) { TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name); return created; }
-        }, descriptor.Lifetime);
+            // Stops the library's wrapper from disposing what it wraps (chat and embedding), so the release below is the only one.
+            var guarded = Ownership.Shield(kind, serviceType, created);
+            if (guarded == null) { TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
+            wrapped = wrapper.Wrap(guarded, sensitive, kind, record: false);
+            if (ReferenceEquals(wrapped, guarded)) return created; // already traced by the application, or could not be wrapped
+            var owner = Ownership.Owner(kind, serviceType, wrapped, new Release(wrapped, created));
+            if (owner == null) { DisposeWrapper(wrapped); TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
+            TraceHostingStartup.RecordWrapped(kind);
+            return owner;
+        }
+        catch (Exception error)
+        {
+            if (wrapped != null) DisposeWrapper(wrapped);
+            TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name);
+            return created;
+        }
+    }
+
+    /// <summary>Releases a library wrapper that will not be used, so its ActivitySource and Meter do not leak. The wrapper
+    /// sits on a shield (chat, embedding) or on nothing it disposes (agent), so the implementation stays untouched.</summary>
+    private static void DisposeWrapper(object wrapped)
+    {
+        try { (wrapped as IDisposable)?.Dispose(); } catch { }
     }
 
     private static string? Classify(Type serviceType, Settings settings)
