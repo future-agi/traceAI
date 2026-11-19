@@ -421,6 +421,12 @@ describe("Bedrock Agents (bedrock-agent-runtime) instrumentation", () => {
     ]) {
       expect(dump).not.toContain(secret);
     }
+    // The bare action-group argument JSON, in any attribute (tool.parameters included).
+    for (const span of spans) {
+      for (const [key, value] of Object.entries(span.attributes)) {
+        expect([key, String(value)]).not.toEqual([key, expect.stringContaining('"value":"Paris"')]);
+      }
+    }
     // Structure stays visible.
     expect(byName(spans, "invoke_agent AGENT1/ALIAS1")).toBeDefined();
     expect(byName(spans, "execute_tool get_weather")).toBeDefined();
