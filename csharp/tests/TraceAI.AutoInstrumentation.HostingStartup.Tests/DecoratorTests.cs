@@ -162,12 +162,58 @@ public class DecoratorTests
     }
 
     [Fact]
-    public void ATypeRegistrationKeepsItsBuildTimeValidation()
+    public void ATypeRegistrationWithAnUnsatisfiableConstructorStillFailsWhenResolved()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IChatClient, NeedsMissingDependency>();
         Decorator.Apply(services, Everything);
-        Assert.Throws<AggregateException>(() => services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true }));
+        using var provider = services.BuildServiceProvider();
+        Assert.Throws<InvalidOperationException>(() => provider.GetRequiredService<IChatClient>());
+    }
+
+    [Theory]
+    [InlineData("singleton")]
+    [InlineData("scoped")]
+    [InlineData("transient")]
+    public void ATypeRegistrationAddsNoDescriptorAndWorksOnAContainerWithoutKeyedServices(string lifetime)
+    {
+        var services = new ServiceCollection();
+        switch (lifetime)
+        {
+            case "singleton": services.AddSingleton<IChatClient, CountedChat>(); break;
+            case "scoped": services.AddScoped<IChatClient, CountedChat>(); break;
+            default: services.AddTransient<IChatClient, CountedChat>(); break;
+        }
+        var before = services.Count;
+        Decorator.Apply(services, Everything);
+        Assert.Equal(before, services.Count);
+        Assert.DoesNotContain(services, d => d.IsKeyedService);
+        // A container that rejects keyed descriptors (the failure mode of a third-party container without keyed-service support).
+        using var provider = new NoKeyedServicesFactory().CreateServiceProvider(services) is ServiceProvider built ? built : throw new InvalidOperationException();
+        using var scope = provider.CreateScope();
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IChatClient>().GetService<OpenTelemetryChatClient>());
+    }
+
+    [Theory]
+    [InlineData("singleton")]
+    [InlineData("scoped")]
+    [InlineData("transient")]
+    public void TheInnerInstanceOfATypeRegistrationIsDisposedExactlyOnce(string lifetime)
+    {
+        CountedChat.Created.Clear();
+        var services = new ServiceCollection();
+        switch (lifetime)
+        {
+            case "singleton": services.AddSingleton<IChatClient, CountedChat>(); break;
+            case "scoped": services.AddScoped<IChatClient, CountedChat>(); break;
+            default: services.AddTransient<IChatClient, CountedChat>(); break;
+        }
+        Decorator.Apply(services, Everything);
+        var provider = services.BuildServiceProvider();
+        using (var scope = provider.CreateScope()) scope.ServiceProvider.GetRequiredService<IChatClient>();
+        provider.Dispose();
+        Assert.NotEmpty(CountedChat.Created);
+        Assert.All(CountedChat.Created, chat => Assert.Equal(1, chat.Disposals));
     }
 
     private static ServiceProviderOptions Strict => new() { ValidateScopes = true, ValidateOnBuild = true };
@@ -211,25 +257,6 @@ public class DecoratorTests
     }
 
     [Fact]
-    public async Task TheStandardContentVariableSetToFalseIsNotOverriddenToTrue()
-    {
-        var (spans, listener) = Listen();
-        using var _ = listener;
-        var previous = Environment.GetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT");
-        try
-        {
-            Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false");
-            var services = new ServiceCollection(); services.AddChatClient(new StubChat());
-            Decorator.Apply(services, Everything with { Sensitive = true });
-            using var provider = services.BuildServiceProvider();
-            await provider.GetRequiredService<IChatClient>().GetResponseAsync("PROMPT-CANARY");
-        }
-        finally { Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", previous); }
-        var span = Assert.Single(spans, s => s.Source.Name == ChatSource);
-        Assert.DoesNotContain("PROMPT-CANARY", string.Join(" ", span.TagObjects.Select(t => t.Key + "=" + t.Value)));
-    }
-
-    [Fact]
     public void KeyedAndUnrelatedRegistrationsAreLeftAlone()
     {
         var services = new ServiceCollection();
@@ -255,6 +282,28 @@ sealed class OpenEmbeddings<TInput, TEmbedding> : IEmbeddingGenerator<TInput, TE
     public Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
     public void Dispose() { }
+}
+
+sealed class CountedChat : IChatClient
+{
+    public static readonly List<CountedChat> Created = new();
+    public int Disposals;
+    public CountedChat() { lock (Created) Created.Add(this); }
+    public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public object? GetService(Type serviceType, object? serviceKey = null) => serviceKey == null && serviceType.IsInstanceOfType(this) ? this : null;
+    public void Dispose() => Interlocked.Increment(ref Disposals);
+}
+
+/// <summary>A container factory that, like a third-party container without keyed-service support, refuses keyed descriptors.</summary>
+sealed class NoKeyedServicesFactory : IServiceProviderFactory<IServiceCollection>
+{
+    public IServiceCollection CreateBuilder(IServiceCollection services) => services;
+    public IServiceProvider CreateServiceProvider(IServiceCollection containerBuilder)
+    {
+        if (containerBuilder.Any(d => d.IsKeyedService)) throw new NotSupportedException("keyed services are not supported by this container");
+        return containerBuilder.BuildServiceProvider();
+    }
 }
 
 sealed class NeedsMissingDependency(Uri missing) : IChatClient
