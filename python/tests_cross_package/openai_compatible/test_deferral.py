@@ -1,4 +1,4 @@
-"""OpenAI-compatible providers are on by default only when the installed provider package defers.
+"""OpenAI-compatible providers are on by default only when the installed provider package defers (real packages).
 
 The default-on decision is made by the core; the deferral lives in separately released provider packages.
 A provider that does not declare ``DEFERS_TO_SHARED_OPENAI`` keeps its previous state, so one span per
@@ -18,7 +18,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-openai = pytest.importorskip("openai")
+import openai
 
 DEFERRING = ("deepseek", "fireworks", "xai", "minimax", "vllm")
 BASE_URLS = {
@@ -106,38 +106,6 @@ def run(exporter):
     yield go
     for instrumentor in reversed(started):
         instrumentor.uninstrument()
-
-
-# --- the marker reader ---------------------------------------------------------------------------
-
-
-def _package(tmp_path, monkeypatch, name, source):
-    root = tmp_path / name
-    root.mkdir()
-    (root / "__init__.py").write_text(textwrap.dedent(source))
-    monkeypatch.syspath_prepend(str(tmp_path))
-    sys.modules.pop(name, None)
-    return _registry.Integration("probe", ("openai",), "probe", name, "Probe")
-
-
-def test_marker_is_read_without_importing_the_package(tmp_path, monkeypatch):
-    integration = _package(tmp_path, monkeypatch, "defers_probe_a", """
-        DEFERS_TO_SHARED_OPENAI = True
-        raise RuntimeError("the package must not be executed to read its marker")
-    """)
-    assert _manager.provider_defers_to_shared_openai(integration) is True
-    assert "defers_probe_a" not in sys.modules
-
-
-@pytest.mark.parametrize("source", ["VALUE = 1\n", "DEFERS_TO_SHARED_OPENAI = False\n", "# DEFERS_TO_SHARED_OPENAI = True\n"])
-def test_missing_or_false_marker_does_not_defer(tmp_path, monkeypatch, source):
-    integration = _package(tmp_path, monkeypatch, "defers_probe_b", source)
-    assert _manager.provider_defers_to_shared_openai(integration) is False
-
-
-def test_missing_package_does_not_defer():
-    integration = _registry.Integration("probe", ("openai",), "probe", "defers_probe_not_installed", "Probe")
-    assert _manager.provider_defers_to_shared_openai(integration) is False
 
 
 @pytest.mark.parametrize("name", DEFERRING)
@@ -279,12 +247,6 @@ async def test_async_streaming_gives_one_span(name, run, exporter):
 # --- teardown order ------------------------------------------------------------------------------
 
 
-def test_cleanups_run_in_reverse_order():
-    calls = []
-    _manager._run_cleanups({"a": lambda: calls.append("a"), "b": lambda: calls.append("b"), "c": lambda: calls.append("c")})
-    assert calls == ["c", "b", "a"]
-
-
 def test_shutdown_leaves_no_wrapper_and_a_later_instrument_gives_one_span(exporter, monkeypatch):
     chat = importlib.import_module("openai.resources.chat")
     targets = [(openai.OpenAI, "request"), (openai.AsyncOpenAI, "request"), (chat.Completions, "create"), (chat.AsyncCompletions, "create")]
@@ -344,21 +306,3 @@ def test_unmarked_provider_stays_off_even_without_traceai_openai(monkeypatch):
     assert "xai" not in _enabled_by_default(["xai"])
 
 
-# --- the marker is a top-level assignment --------------------------------------------------------
-
-
-@pytest.mark.parametrize("source", [
-    '"""Docs.\n\n    DEFERS_TO_SHARED_OPENAI = True\n"""\n',
-    '"""Docs.\nDEFERS_TO_SHARED_OPENAI = True\n"""\n',
-    "def f():\n    DEFERS_TO_SHARED_OPENAI = True\n",
-    "class C:\n    DEFERS_TO_SHARED_OPENAI = True\n",
-    'text = "DEFERS_TO_SHARED_OPENAI = True"\n',
-])
-def test_marker_only_counts_as_a_top_level_assignment(tmp_path, monkeypatch, source):
-    integration = _package(tmp_path, monkeypatch, "defers_probe_c", source)
-    assert _manager.provider_defers_to_shared_openai(integration) is False
-
-
-def test_top_level_marker_after_a_docstring_reads_true(tmp_path, monkeypatch):
-    integration = _package(tmp_path, monkeypatch, "defers_probe_d", '"""Docs."""\n\nDEFERS_TO_SHARED_OPENAI = True\n')
-    assert _manager.provider_defers_to_shared_openai(integration) is True

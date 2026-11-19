@@ -1,13 +1,15 @@
-"""OpenAI-compatible provider integrations are on by default and never double-trace."""
+"""OpenAI-compatible provider integrations never double-trace, across the installed openai and provider packages.
+
+Runs in the openai-compatible-providers workflow, which installs openai, httpx, traceai-openai and the five provider
+packages. None of these tests may skip there."""
 
 import httpx
 import pytest
-from fi_instrumentation.auto import _registry
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-openai = pytest.importorskip("openai")
+import openai
 
 PROVIDERS = {
     "deepseek": ("https://api.deepseek.com/v1", "traceai_deepseek", "DeepSeekInstrumentor", {}),
@@ -68,13 +70,6 @@ def run(exporter):
     yield go
     for instrumentor in reversed(started):
         instrumentor.uninstrument()
-
-
-@pytest.mark.parametrize("name", sorted(PROVIDERS))
-def test_registry_turns_provider_on_by_default(name):
-    integration = next(i for i in _registry.ALL if i.name == name)
-    assert integration.default is True
-    assert integration.note == ""
 
 
 @pytest.mark.parametrize("name", sorted(PROVIDERS))
