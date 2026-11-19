@@ -108,6 +108,47 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
     expect(t.spans()).toHaveLength(2);
   });
 
+  it("ends the span when the result is read through map()", async () => {
+    const { client: c } = client([{}, { status: 400, body: { detail: { error_type: "bad" } } }]);
+    const mapped = ask(c).map((r) => r.answers.billing.noul);
+    expect(await mapped).toBe(0.93);
+    expect(only().status.code).toBe(1);
+    expect(only().attributes["typesafe.question.billing.noul"]).toBe(0.93);
+    await expect(ask(c).map(() => 1)).rejects.toBeInstanceOf(lib.BadRequestError);
+    expect(t.spans()).toHaveLength(2);
+    expect(t.spans()[1].status.code).toBe(2);
+  });
+
+  it("keeps the request id when read through withResponse", async () => {
+    const { client: c } = client([{}]);
+    await ask(c).withResponse();
+    expect(only().attributes["typesafe.request_id"]).toBe("req-synthetic-1");
+  });
+
+  it("notes binary content by type and size, never as numeric bytes", async () => {
+    const { client: c } = client([{}]);
+    await c.systemOne({
+      state: { raw: Buffer.from("SYNTHETIC-BYTES"), view: new Uint8Array([7, 8, 9, 250]) } as never,
+      questions: { q: lib.noul("q?") },
+    });
+    const input = only().attributes[S.INPUT_VALUE] as string;
+    expect(input).toContain("<Buffer: 15 bytes>");
+    expect(input).toContain("<Uint8Array: 4 bytes>");
+    expect(input).not.toContain("SYNTHETIC");
+    expect(input).not.toContain("250");
+  });
+
+  it("redacts the API key from captured input", async () => {
+    const { client: c } = client([{}]);
+    process.env.TYPESAFE_API_KEY = "env-synthetic-key-12345";
+    try {
+      await c.systemOne({ state: "token env-synthetic-key-12345 inside", questions: { q: lib.noul("q?") } });
+    } finally {
+      delete process.env.TYPESAFE_API_KEY;
+    }
+    expect(JSON.stringify(only().attributes)).not.toContain("env-synthetic-key-12345");
+  });
+
   it("re-raises an API error unchanged and marks the span", async () => {
     const { client: c } = client([{ status: 429, body: { detail: { error_type: "rate_limited", message: "slow down" } }, headers: { "retry-after-ms": "250" } }]);
     await expect(ask(c)).rejects.toBeInstanceOf(lib.RateLimitError);
@@ -121,7 +162,7 @@ describe.each(SDKS)("TypeSafe instrumentation over %s", (name) => {
     expect(JSON.stringify(span.events)).not.toContain("stack");
   });
 
-  it("does not export the server's error text when content is hidden", async () => {
+  it("keeps the server's error text in the status while content is visible", async () => {
     const body = { detail: { error_type: "bad_request", message: "echo-of-private-state" } };
     const visible = client([{ status: 400, body }]).client;
     await expect(ask(visible)).rejects.toBeInstanceOf(lib.BadRequestError);
