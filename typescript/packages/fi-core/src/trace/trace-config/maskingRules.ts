@@ -120,6 +120,12 @@ function hasContentPrefix(key: string, prefixes: readonly string[]): boolean {
 
 const maskingRules: MaskingRule[] = [
   {
+    // Vector-query filters are opaque input payloads, not operational metadata.
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideInputText) && key === "db.vector.query.filter",
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
     // Retrieved documents are outputs too, including metadata that can duplicate
     // private content. Cover both opaque payloads and flattened document fields.
     condition: ({ config, key }) =>

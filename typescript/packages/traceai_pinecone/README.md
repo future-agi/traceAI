@@ -1,77 +1,60 @@
 # @traceai/pinecone
 
-OpenTelemetry instrumentation for [Pinecone](https://www.pinecone.io/) - the serverless vector database for high-performance AI applications.
+Trace [Pinecone](https://www.pinecone.io/) index operations in Node.js with OpenTelemetry and send them to Future AGI.
 
-## Overview
-
-This package provides automatic tracing for Pinecone operations in Node.js applications, enabling full observability of your vector database interactions in production AI systems, RAG pipelines, and semantic search applications.
+Supports `@pinecone-database/pinecone` majors **2–9**. SDK 9 requires Node.js 22 or newer. The traced index operations are listed below; control-plane, inference, document, and assistant APIs are not instrumented.
 
 ## Installation
 
 ```bash
-npm install @traceai/pinecone
-# or
-yarn add @traceai/pinecone
-# or
-pnpm add @traceai/pinecone
+npm install @traceai/pinecone @traceai/fi-core @pinecone-database/pinecone@^9
 ```
 
 ## Quick Start
 
-### Basic Setup
+### Basic setup
+
+Set `FI_API_KEY`, `FI_SECRET_KEY`, and `PINECONE_API_KEY` in your environment. Use an existing Pinecone index and a record ID in that index for the query below.
 
 ```typescript
-import { PineconeInstrumentation } from "@traceai/pinecone";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-
-// Set up OpenTelemetry
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(
-  new SimpleSpanProcessor(
-    new OTLPTraceExporter({
-      url: "https://api.futureagi.com/v1/traces",
-      headers: {
-        "Authorization": `Bearer ${process.env.FI_API_KEY}`,
-        "FI-Project-Name": process.env.FI_PROJECT_NAME,
-      },
-    })
-  )
-);
-provider.register();
-
-// Register Pinecone instrumentation
-registerInstrumentations({
-  instrumentations: [
-    new PineconeInstrumentation(),
-  ],
-});
-
-// Now use Pinecone as normal - all operations are traced
-import { Pinecone } from "@pinecone-database/pinecone";
-
-const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-const index = pinecone.index("my-index");
-
-// This operation will be automatically traced
-const results = await index.query({
-  vector: [0.1, 0.2, 0.3, /* ... */],
-  topK: 10,
-  includeMetadata: true,
-});
-```
-
-### Manual Instrumentation
-
-```typescript
+import { register, ProjectType } from "@traceai/fi-core";
 import { PineconeInstrumentation } from "@traceai/pinecone";
 import * as pinecone from "@pinecone-database/pinecone";
 
+const provider = register({
+  projectName: "pinecone-search",
+  projectType: ProjectType.OBSERVE,
+});
 const instrumentation = new PineconeInstrumentation();
+// Explicit registration also works when your SDK import has already loaded.
 instrumentation.manuallyInstrument(pinecone);
+
+const client = new pinecone.Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+const index = client.index("my-index");
+
+async function main() {
+  try {
+    const results = await index.query({ id: "existing-record-id", topK: 5 });
+    console.log(results.matches);
+  } finally {
+    instrumentation.disable();
+    await provider.shutdown();
+  }
+}
+
+main().catch(console.error);
 ```
+
+Open the `pinecone-search` project in Future AGI to inspect the `pinecone query` span. For a long-running application, shut down the provider when the application exits, rather than after each request.
+
+### Pause and resume tracing
+
+```typescript
+instrumentation.disable(); // Restore the original SDK methods.
+instrumentation.enable();  // Resume tracing previously registered modules.
+```
+
+Register each SDK module once. Repeated manual registration is safe, but use one instrumentation instance for each module.
 
 ## Configuration Options
 
@@ -90,12 +73,31 @@ const instrumentation = new PineconeInstrumentation({
     captureQueryVectors: false,  // Recommended for production
     captureResultVectors: false,
   },
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
 });
 ```
+
+### Input privacy
+
+Set `FI_HIDE_INPUTS=true` or `FI_HIDE_INPUT_TEXT=true` before creating the
+instrumentation to replace `db.vector.query.filter` with `__REDACTED__`. With
+both settings off (the default), this attribute contains the JSON query filter.
+The provider request is unchanged, and operation names, index names, namespace
+metadata and result counts remain available. This rule requires the matching
+`@traceai/fi-core` release containing vector-query-filter masking; updating the
+Pinecone package alone does not update a separately pinned core installation.
+
+The equivalent constructor options apply from the first operation, with either
+automatic SDK instrumentation or `manuallyInstrument()`; no extra `enable()`
+call is needed:
+
+```typescript
+new PineconeInstrumentation({ traceConfig: { hideInputs: true } });
+// Alternatively, use traceConfig: { hideInputText: true }.
+```
+
+For SDKs with per-call namespace overrides, `namespace: ""` selects the default
+namespace rather than the index's scoped namespace. Empty/default namespaces
+omit `db.vector.namespace` and `db.namespace`; nonempty namespaces retain both.
 
 ## Traced Operations
 
@@ -135,6 +137,8 @@ Each span includes these semantic convention attributes:
 
 ## Real-World Use Cases
 
+The examples below use SDK 7–9's `{ records }` and `{ ids }` argument forms. SDK 2–6 use arrays for `upsert` and `fetch` instead.
+
 ### 1. Production RAG with Serverless Pinecone
 
 High-scale retrieval-augmented generation:
@@ -163,8 +167,8 @@ async function ingestDocuments(documents: Document[], namespace: string) {
     });
 
     // Upsert to Pinecone (traced automatically)
-    await index.namespace(namespace).upsert(
-      batch.map((doc, j) => ({
+    await index.namespace(namespace).upsert({
+      records: batch.map((doc, j) => ({
         id: doc.id,
         values: embeddings.data[j].embedding,
         metadata: {
@@ -173,8 +177,8 @@ async function ingestDocuments(documents: Document[], namespace: string) {
           created_at: doc.createdAt,
           chunk_index: doc.chunkIndex,
         },
-      }))
-    );
+      })),
+    });
   }
 }
 
@@ -241,14 +245,14 @@ class MultiTenantVectorStore {
   async storeForTenant(tenantId: string, documents: any[]) {
     const ns = this.index.namespace(`tenant_${tenantId}`);
 
-    await ns.upsert(documents.map(doc => ({
+    await ns.upsert({ records: documents.map(doc => ({
       id: `${tenantId}_${doc.id}`,
       values: doc.embedding,
       metadata: {
         tenant_id: tenantId,
         ...doc.metadata,
       },
-    })));
+    })) });
   }
 
   // Query within tenant namespace only (traced)
@@ -312,7 +316,7 @@ class RecommendationEngine {
     const batches = this.chunk(products, 100);
 
     for (const batch of batches) {
-      await this.index.upsert(
+      await this.index.upsert({ records:
         batch.map(p => ({
           id: p.id,
           values: p.embedding,
@@ -325,15 +329,15 @@ class RecommendationEngine {
             in_stock: p.inStock,
             tags: p.tags,
           },
-        }))
-      );
+        })),
+      });
     }
   }
 
   // Find similar products (traced)
   async findSimilar(productId: string, options: RecommendationOptions = {}) {
     // Fetch the source product embedding
-    const { records } = await this.index.fetch([productId]);
+    const { records } = await this.index.fetch({ ids: [productId] });
     const sourceProduct = records[productId];
 
     if (!sourceProduct) {
@@ -562,7 +566,7 @@ For high-throughput scenarios, batch your upserts:
 async function batchUpsert(index: any, vectors: any[], batchSize = 100) {
   for (let i = 0; i < vectors.length; i += batchSize) {
     const batch = vectors.slice(i, i + batchSize);
-    await index.upsert(batch);  // Each batch creates a trace span
+    await index.upsert({ records: batch });  // Each batch creates a trace span
   }
 }
 ```
@@ -586,7 +590,8 @@ const tenantIndex = index.namespace(`tenant_${tenantId}`);
 |----------|-------------|
 | `PINECONE_API_KEY` | Your Pinecone API key |
 | `FI_API_KEY` | Your Future AGI API key |
-| `FI_PROJECT_NAME` | Your project name |
+| `FI_SECRET_KEY` | Your Future AGI secret key |
+| `FI_PROJECT_NAME` | Project name when not passed to `register()` |
 
 ## Troubleshooting
 
@@ -621,6 +626,10 @@ pnpm build
 
 # Run tests
 pnpm test
+
+# Run real-SDK local HTTP/OTLP contracts after building
+node contract/lifecycle.cjs
+node --test contract/privacy-namespace.cjs
 
 # Type check
 pnpm tsc --noEmit
