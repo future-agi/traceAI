@@ -13,6 +13,8 @@ SETTINGS = [
     "hide_input_text",
     "hide_output_text",
     "hide_input_images",
+    "hide_embedding_vectors",
+    "hide_llm_invocation_parameters",
 ]
 PAYLOAD = '{"sentinel": "RAW-PAYLOAD-SENTINEL"}'
 

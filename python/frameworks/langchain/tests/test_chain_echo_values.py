@@ -99,3 +99,67 @@ def test_a_chain_whose_output_does_not_echo_its_input_still_records_it(setting):
         provider.shutdown()
     assert REPLY in _dump(spans)
     assert "SENTINEL_PRIVATE_REQUEST_55" not in _dump(spans)
+
+
+SETTINGS_ALL = ["hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images"]
+
+
+@pytest.mark.parametrize("setting", SETTINGS_ALL)
+def test_a_non_echo_output_sharing_a_boolean_and_a_number_with_its_input_is_kept(setting):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**{setting: True}))
+    try:
+        # The output shares False and 3 with the input but under other keys: a legitimate result.
+        RunnableLambda(lambda x: {"verdict": False, "total": 3, "note": REPLY}).invoke({"flag": False, "count": 3, "q": "SENTINEL_Q_91"})
+        spans = exporter.get_finished_spans()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+    assert REPLY in _dump(spans)
+    assert "SENTINEL_Q_91" not in _dump(spans)
+
+
+@pytest.mark.parametrize("setting", SETTINGS_ALL)
+def test_a_passthrough_that_echoes_a_boolean_or_number_by_key_is_still_dropped(setting):
+    spans = _export(TraceConfig(**{setting: True}), False, extra={"count": 3})
+    for out in _chain_outputs(spans):
+        assert out is None or '"input"' not in str(out)
+
+
+@pytest.mark.parametrize("setting", SETTINGS_ALL)
+def test_a_prompt_template_run_does_not_export_its_formatted_input(setting):
+    from langchain_core.prompts import ChatPromptTemplate
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**{setting: True}))
+    try:
+        ChatPromptTemplate.from_template("Question: {q}").invoke({"q": "SENTINEL_PROMPT_VAR_92"})
+        spans = exporter.get_finished_spans()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+    assert spans
+    assert "SENTINEL_PROMPT_VAR_92" not in _dump(spans)
+
+
+def test_a_prompt_template_run_records_its_formatted_prompt_with_no_setting():
+    from langchain_core.prompts import ChatPromptTemplate
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig())
+    try:
+        ChatPromptTemplate.from_template("Question: {q}").invoke({"q": "SENTINEL_PROMPT_VAR_92"})
+        spans = exporter.get_finished_spans()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+    assert "SENTINEL_PROMPT_VAR_92" in _dump(spans)

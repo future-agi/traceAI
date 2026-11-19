@@ -75,3 +75,24 @@ def test_inputImagesSettingKeepsTheRequestOutOfOutputValue(monkeypatch):
     # hide_input_images hides input.value, not a text prompt in the input messages: check the output side.
     for value in _output_values(_run_text_generation(TraceConfig(hide_input_images=True), monkeypatch)):
         assert PROMPT_SENTINEL not in value
+
+
+@pytest.mark.parametrize(
+    "trace_config",
+    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}],
+)
+def test_input_token_counts_are_kept_under_every_input_setting(trace_config, monkeypatch):
+    # Counts are not content: the prefill token count stays even though the prefill itself is withheld.
+    dumped = _run_text_generation(TraceConfig(**trace_config), monkeypatch)
+    attributes, _ = json.JSONDecoder().raw_decode(dumped)
+    assert attributes["gen_ai.usage.input_tokens"] == 1
+    assert PROMPT_SENTINEL not in json.dumps(attributes.get("output.value"))
+
+
+def test_a_dict_response_reports_its_input_token_count():
+    from traceai_huggingface._response_attributes_extractor import _TextGenerationResponseAttributesExtractor
+
+    response = {"generated_text": "x", "details": {"generated_tokens": 4, "prefill": [{"id": 1, "text": "p"}, {"id": 2, "text": "q"}]}}
+    attributes = dict(_TextGenerationResponseAttributesExtractor().get_attributes(response))
+    assert attributes["gen_ai.usage.input_tokens"] == 2
+    assert attributes["gen_ai.usage.output_tokens"] == 4
