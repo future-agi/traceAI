@@ -224,6 +224,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-voyage` | [voyage](frameworks/voyage/) |
 | `traceAI-weaviate` | [weaviate](frameworks/weaviate/) |
 | `traceAI-writer` | [writer](frameworks/writer/) |
+| `traceAI-alephalpha` | [alephalpha](frameworks/alephalpha/) |
 | `traceAI-xai` | [xai](frameworks/xai/) |
 
 </details>
