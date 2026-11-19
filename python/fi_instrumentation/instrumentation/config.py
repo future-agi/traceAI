@@ -101,6 +101,8 @@ _HIDDEN_WITH_INPUTS = frozenset(
         SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
     }
 )
+# Raw request and response objects: recorded only while no hide setting is on.
+_RAW_PAYLOAD_KEYS = (SpanAttributes.RAW_INPUT, SpanAttributes.RAW_OUTPUT)
 # Known serialized and flattened content fields, including their descendants.
 # Keep identifiers such as model names and token counts available.
 _INPUT_CONTENT_PREFIXES = (
@@ -414,6 +416,15 @@ class TraceConfig:
         private_input = self.hide_inputs or self.hide_input_messages or self.hide_input_text
         private_output = self.hide_outputs or self.hide_output_messages or self.hide_output_text
         if self.hide_error_details and is_error_detail_key(key):
+            return None
+        elif _has_content_prefix(key, _RAW_PAYLOAD_KEYS) and (
+            private_input
+            or private_output
+            or self.hide_input_images
+        ):
+            # A raw request or response object can carry content of either side
+            # (a response echoing the prompt, a request holding the history), so
+            # it is not recorded while any hide setting is on.
             return None
         elif (
             self.hide_llm_invocation_parameters
