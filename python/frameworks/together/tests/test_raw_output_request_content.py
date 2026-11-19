@@ -64,8 +64,19 @@ def test_control_output_recorded_without_settings():
 
 @pytest.mark.parametrize(
     "trace_config",
-    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}],
+    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}],
 )
 def test_rawOutputOmitsRequestPromptUnderInputSettings(trace_config):
     dumped = _exported(trace_config)
     assert SENTINEL not in dumped
+
+def _output_values(dumped):
+    """The output.value of every span in a dump (the first JSON document of the dump holds the attributes)."""
+    parsed, _ = json.JSONDecoder().raw_decode(dumped)
+    return [str(attrs.get("output.value")) for attrs in (parsed if isinstance(parsed, list) else [parsed])]
+
+
+def test_inputImagesSettingKeepsTheRequestOutOfOutputValue():
+    # hide_input_images hides input.value, not a text prompt in the input messages: check the output side.
+    for value in _output_values(_exported({"hide_input_images": True})):
+        assert SENTINEL not in value

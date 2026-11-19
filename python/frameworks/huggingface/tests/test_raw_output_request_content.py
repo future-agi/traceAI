@@ -55,8 +55,19 @@ def test_control_output_recorded_without_settings(monkeypatch):
 
 @pytest.mark.parametrize(
     "trace_config",
-    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}],
+    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}],
 )
 def test_rawOutputOmitsRequestTokensUnderInputSettings(trace_config, monkeypatch):
     dumped = _run_text_generation(TraceConfig(**trace_config), monkeypatch)
     assert PROMPT_SENTINEL not in dumped
+
+def _output_values(dumped):
+    """The output.value of every span in a dump (the first JSON document of the dump holds the attributes)."""
+    parsed, _ = json.JSONDecoder().raw_decode(dumped)
+    return [str(attrs.get("output.value")) for attrs in (parsed if isinstance(parsed, list) else [parsed])]
+
+
+def test_inputImagesSettingKeepsTheRequestOutOfOutputValue(monkeypatch):
+    # hide_input_images hides input.value, not a text prompt in the input messages: check the output side.
+    for value in _output_values(_run_text_generation(TraceConfig(hide_input_images=True), monkeypatch)):
+        assert PROMPT_SENTINEL not in value

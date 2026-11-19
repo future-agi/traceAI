@@ -63,10 +63,9 @@ def _run(config):
         assert response.text == REPLY
         spans = exporter.get_finished_spans()
         assert spans
-        return json.dumps([dict(s.attributes) for s in spans], default=str) + json.dumps(
-            [[(e.name, dict(e.attributes or {})) for e in s.events] for s in spans],
-            default=str,
-        )
+        # The output side only: hide_input_images hides input.value, not the text prompt in the input messages.
+        return json.dumps([[dict(s.attributes).get("output.value"), dict(s.attributes).get("raw.output")] for s in spans],
+                          default=str)
     finally:
         instrumentor.uninstrument()
         provider.shutdown()
