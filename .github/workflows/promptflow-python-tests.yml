@@ -49,7 +49,7 @@ jobs:
           .promptflow-test-venv/bin/python -m build "--$ARTIFACT" python/frameworks/promptflow
           if [ "$ARTIFACT" = wheel ]; then ext='*.whl'; else ext='*.tar.gz'; fi
           if [ "$PROMPTFLOW_VERSION" = latest ]; then sdk='promptflow-tracing promptflow-core'; else sdk="promptflow-tracing==$PROMPTFLOW_VERSION promptflow-core==$PROMPTFLOW_VERSION"; fi
-          .promptflow-test-venv/bin/pip install python/frameworks/promptflow/dist/$ext $sdk pytest pytest-asyncio
+          .promptflow-test-venv/bin/pip install python/frameworks/promptflow/dist/$ext $sdk pytest pytest-asyncio openai httpx
       - name: Run offline tests without external traffic
         shell: bash
         run: |
