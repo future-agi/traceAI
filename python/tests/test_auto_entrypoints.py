@@ -347,6 +347,7 @@ def test_registry_is_consistent():
 @pytest.mark.parametrize("name, target, package, module, entry", [
     ("transformers", "transformers", "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     ("openrouter", "openrouter", "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor"),
+    ("marqo", "marqo", "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor"),
 ])
 def test_registry_enables_transformers_and_openrouter(name, target, package, module, entry):
     integration = _registry.find(name)

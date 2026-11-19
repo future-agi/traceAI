@@ -146,6 +146,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("chromadb", ("chromadb",), "traceAI-chromadb", "traceai_chromadb", "ChromaDBInstrumentor", category="vector_db"),
     Integration("pinecone", ("pinecone",), "traceAI-pinecone", "traceai_pinecone", "PineconeInstrumentor", category="vector_db"),
     Integration("qdrant", ("qdrant_client",), "traceAI-qdrant", "traceai_qdrant", "QdrantInstrumentor", category="vector_db"),
+    Integration("marqo", ("marqo",), "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor", category="vector_db"),
     Integration("weaviate", ("weaviate",), "traceAI-weaviate", "traceai_weaviate", "WeaviateInstrumentor", category="vector_db"),
     Integration("milvus", ("pymilvus",), "traceAI-milvus", "traceai_milvus", "MilvusInstrumentor", category="vector_db"),
     Integration("lancedb", ("lancedb",), "traceAI-lancedb", "traceai_lancedb", "LanceDBInstrumentor", category="vector_db"),
