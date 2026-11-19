@@ -88,6 +88,7 @@
 
 ## Unreleased
 
+- Raw input and raw output are not recorded while any hide setting is on.
 - Prepare Maven Central coordinates under `com.futureagi`; Java packages remain `ai.traceai.*`.
 - Add a BOM covering all instrumentation modules and an opt-in release profile for sources, Javadocs, signing, and Central publishing.
 - Read the runtime SDK version from the parent Maven version instead of a separate hard-coded value.

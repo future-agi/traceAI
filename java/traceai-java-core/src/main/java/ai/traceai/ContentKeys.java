@@ -56,6 +56,9 @@ import java.util.List;
  *                                                 no            yes
  * </pre>
  *
+ * The raw request and response keys (raw.input, raw.output and the Java aliases fi.raw_input, fi.raw_output) are
+ * redacted when any of the four hide flags is set.
+ *
  * Message flags (Python: private_input = hide_inputs or hide_input_messages; private_output likewise).
  * The value keys input.value, raw.input, fi.raw_input and both template-variable keys are redacted when
  * hideInputs or hideInputMessages is set; output.value, raw.output and fi.raw_output when hideOutputs
@@ -129,6 +132,8 @@ public final class ContentKeys {
     private static final List<String> INPUT_VALUES = List.of(
         "input.value", "raw.input", "fi.raw_input",
         "llm.prompt_template.variables", "gen_ai.prompt.template.variables");
+    /** The raw request and response objects: redacted under every hide setting, input and output alike. */
+    private static final List<String> RAW_VALUES = List.of("raw.input", "fi.raw_input", "raw.output", "fi.raw_output");
     /** The keys Python hides under hide_outputs or hide_output_messages (private_output). */
     private static final List<String> OUTPUT_VALUES = List.of("output.value", "raw.output", "fi.raw_output");
     /** Embedding text: Python's embedding.embeddings.N.embedding.text, and the Java alias embedding.input_text[.N]. */
@@ -175,6 +180,7 @@ public final class ContentKeys {
         boolean privateOutput = outputs || config.isHideOutputMessages();
         if (inputs && key.equals(INPUT_MIME_TYPE)) return Action.OMIT;
         if (outputs && key.equals(OUTPUT_MIME_TYPE)) return Action.OMIT;
+        if ((inputs || outputs || privateInput || privateOutput) && under(key, RAW_VALUES)) return Action.REDACT;
         if (privateInput && under(key, INPUT_VALUES)) return Action.REDACT;
         if (privateOutput && under(key, OUTPUT_VALUES)) return Action.REDACT;
         if ((inputs || outputs) && (key.equals(AGGREGATE_TOOL_CALL) || under(key, EITHER))) return Action.REDACT;

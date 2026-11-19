@@ -58,7 +58,7 @@ class TracedCohereClientPrivacyTest {
         assertThat(value(chatSpan, SemanticConventions.INPUT_VALUE) == null).isEqualTo(inputs);
         assertThat(value(chatSpan, SemanticConventions.LLM_INPUT_MESSAGES) == null)
             .isEqualTo(inputs || inputMessages);
-        assertThat(value(chatSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(inputs);
+        assertThat(value(chatSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(flags != 0);
         assertThat(value(chatSpan, SemanticConventions.OUTPUT_VALUE) == null).isEqualTo(outputs);
         assertThat(value(chatSpan, SemanticConventions.LLM_OUTPUT_MESSAGES) == null)
             .isEqualTo(outputs || outputMessages);
@@ -97,7 +97,7 @@ class TracedCohereClientPrivacyTest {
         SpanData rerankSpan = otel.getSpans().get(1);
         assertThat(value(rerankSpan, SemanticConventions.GEN_AI_RERANKER_QUERY))
             .isEqualTo(inputs ? null : "private-query");
-        assertThat(value(rerankSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(inputs);
+        assertThat(value(rerankSpan, SemanticConventions.RAW_INPUT) == null).isEqualTo(flags != 0);
         assertThat(value(rerankSpan, SemanticConventions.RAW_OUTPUT) == null).isEqualTo(flags != 0);
         assertThat(rerankSpan.getAttributes().get(AttributeKey.longKey(
             SemanticConventions.GEN_AI_RERANKER_INPUT_DOCUMENTS))).isEqualTo(1L);

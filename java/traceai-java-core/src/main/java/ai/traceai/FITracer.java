@@ -126,24 +126,31 @@ public class FITracer {
         }
     }
 
+    private boolean hidesAnyContent() {
+        return config.isHideInputs() || config.isHideOutputs()
+            || config.isHideInputMessages() || config.isHideOutputMessages();
+    }
+
     /**
-     * Sets the raw input JSON on a span if not configured to hide inputs.
+     * Sets the raw input JSON on a span. Nothing is recorded while any hide setting is on: the raw request
+     * can carry content that every one of those settings covers.
      * @param span the span
      * @param value the raw input object (will be serialized to JSON)
      */
     public void setRawInput(Span span, Object value) {
-        if (!config.isHideInputs() && value != null) {
+        if (!hidesAnyContent() && value != null) {
             setAttribute(span, SemanticConventions.RAW_INPUT, toJson(value)); // the message flags redact it too
         }
     }
 
     /**
-     * Sets the raw output JSON on a span if not configured to hide outputs.
+     * Sets the raw output JSON on a span. Nothing is recorded while any hide setting is on: a raw response
+     * can echo the request, so every one of those settings covers it.
      * @param span the span
      * @param value the raw output object (will be serialized to JSON)
      */
     public void setRawOutput(Span span, Object value) {
-        if (!config.isHideOutputs() && value != null) {
+        if (!hidesAnyContent() && value != null) {
             setAttribute(span, SemanticConventions.RAW_OUTPUT, toJson(value)); // the message flags redact it too
         }
     }
