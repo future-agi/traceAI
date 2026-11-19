@@ -154,9 +154,11 @@ class _Wrapper:
                         or self._config.hide_input_text
                         or self._config.hide_input_images
                     ):
-                        # Successfully parsed non-text input keeps its existing JSON shape.
-                        value = extracted["eval_input"] or extracted["filtered_messages"] or data
-                        span.set_attribute(INPUT_VALUE, safe_json_dumps(value))
+                        if value := extracted["eval_input"]:
+                            span.set_attribute(INPUT_VALUE, safe_json_dumps(value))
+                        elif _has_only_image_parts(data.get("contents", [])):
+                            # Image-only spans historically use the SDK's request JSON.
+                            span.set_attribute(INPUT_VALUE, safe_json_dumps(data))
             except Exception:
                 # Instrumentation must not replace the SDK result or export a raw fallback.
                 logger.debug("Could not extract Vertex request attributes")
@@ -641,6 +643,30 @@ def _role(role: str) -> str:
     if role == "model":
         return "assistant"
     return role
+
+
+def _has_only_image_parts(contents):
+    if not contents:
+        return False
+    for content in contents:
+        parts = content.get("parts")
+        if not parts:
+            return False
+        for part in parts:
+            file = part.get("file_data") or {}
+            inline = part.get("inline_data") or {}
+            if not (
+                (
+                    file.get("file_uri")
+                    and file.get("mime_type", "").startswith("image/")
+                )
+                or (
+                    inline.get("data")
+                    and inline.get("mime_type", "").startswith("image/")
+                )
+            ):
+                return False
+    return True
 
 
 def _extract_image_data(messages):

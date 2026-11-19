@@ -75,6 +75,38 @@ def test_image_only_request_keeps_its_json_and_image_uri(exported_request):
     assert json.loads(attrs[_wrapper.INPUT_IMAGES]) == [uri]
 
 
+@pytest.mark.parametrize(
+    "contents",
+    [
+        [],
+        [{"role": "user", "parts": []}],
+        [{"role": "user", "parts": [{"text": ""}]}],
+        [{"role": "user", "parts": [{"function_call": {"name": "example"}}]}],
+    ],
+    ids=["no-contents", "no-parts", "empty-text", "no-supported-input"],
+)
+def test_no_extracted_input_omits_value(exported_request, contents):
+    attrs = exported_request(contents, TraceConfig())
+    # Compare presence only: a failing assertion need not render span contents.
+    has_value = _wrapper.INPUT_VALUE in attrs
+    assert not has_value
+
+
+def test_inline_image_keeps_its_existing_request_json(exported_request):
+    contents = [
+        {"parts": [{"inline_data": {"mime_type": "image/png", "data": b"demo"}}]}
+    ]
+    config = TraceConfig()
+    attrs = exported_request(contents, config)
+    request = v1.GenerateContentRequest(model="synthetic-model", contents=contents)
+    # The installed core still applies its own image policy to this attribute.
+    expected = config.mask(
+        _wrapper.INPUT_VALUE, json.dumps(type(request).to_dict(request))
+    )
+    matches = attrs[_wrapper.INPUT_VALUE] == expected
+    assert matches
+
+
 def test_unreadable_contents_do_not_fall_back_to_raw_request(
     exported_request, monkeypatch
 ):
