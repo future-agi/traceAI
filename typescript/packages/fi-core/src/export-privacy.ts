@@ -9,6 +9,7 @@ import { capBase64Images } from "./trace/trace-config/imageCap";
 import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-config/structuredRedaction";
 import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
+import { validRuntimeValue } from "./runtime-metadata";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
@@ -19,8 +20,15 @@ export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credential
 // A Hub receipt UUID is not an authentication session. Only this exact key and
 // canonical UUID shape participate in FI-authored grouping; foreign spans still mask
 // the name, and loss, media and registered-secret checks always apply.
-const isContextReceipt = (key: string, value: unknown): boolean => key === "fi.context.session_id"
-  && typeof value === "string" && value.length === 36 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const RECEIPT = "fi.context.session_id";
+const receipts = new WeakMap<object, string>();
+/** @internal Bind only explicit FI span writes to the exact admitted value. */
+export function rememberContextReceipt(ctx: object, attrs: Attributes | undefined): void {
+  if (!attrs || !Object.prototype.hasOwnProperty.call(attrs, RECEIPT)) return;
+  const value = attrs[RECEIPT];
+  if (typeof value === "string" && validRuntimeValue(RECEIPT, value)) receipts.set(ctx, value);
+  else receipts.delete(ctx);
+}
 const HOST_TRUNCATED = "<unknown: host-truncated>";
 const HOST_DATA_UNKNOWN = "traceai.capture.host_data_unknown";
 // The image cap's whole-value fallback marker (module-private WHOLE_MARKER in
@@ -215,6 +223,7 @@ function metadataDiscoverySources(value: string, charge: (characters: number) =>
 // Only our pre-admission path can attest to a complete text MIME before SDK
 // truncation/projection. Keep evidence out of telemetry and invalidate it if any
 // processor changes the admitted value. Host-owned exporters are never mutated.
+const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
 const admittedText = new WeakMap<object, Map<string, unknown>>();
 // Markers synthesized AFTER native admission can exceed its value limit. Trust
 // only this exact detached map/key/value, never a marker's spelling in telemetry.
@@ -225,15 +234,19 @@ function exportedMarker(attrs: unknown, key: string, value: unknown): boolean {
 }
 function carryAttributeEvidence(source: unknown, target: Attributes): void {
   if (!source || typeof source !== "object" || types.isProxy(source)) return;
-  const proof = admittedText.get(source), next = new Map<string, unknown>(), markers = new Map<string, string>();
+  const proof = admittedText.get(source), runtime = admittedRuntime.get(source), nextRuntime = new Map<string, unknown>(), next = new Map<string, unknown>(), markers = new Map<string, string>();
   for (const [key, value] of entries(target)) {
     const original = data(source, key);
+    if (runtime?.has(key) && sameAttribute(value, runtime.get(key)) && sameAttribute(original, value)) {
+      nextRuntime.set(key, runtime.get(key));
+    }
     if (proof?.has(key) && sameAttribute(original, proof.get(key)) && sameAttribute(original, value)) {
       next.set(key, Array.isArray(value) ? Array.from({ length: data(value, "length") }, (_, i) => data(value, String(i))) : value);
     }
     if (typeof value === "string" && (exportedMarker(source, key, value)
         || value !== original && value.length <= 48 && /^(?:<redacted>|__REDACTED__|\[REDACTED\]|<omitted: (?:[0-9]+ base64 chars|media|data URI)>)$/.test(value))) markers.set(key, value);
   }
+  if (nextRuntime.size) admittedRuntime.set(target, nextRuntime);
   if (next.size) admittedText.set(target, next);
   if (markers.size) exportedMarkers.set(target, markers);
 }
@@ -461,16 +474,22 @@ export function rememberMediaAdmission(span: object, complete: Attributes): void
   try {
     const current = data(span, "attributes");
     if (!current || types.isProxy(current)) return;
-    const hints = indexPrivacyHints(entries(complete)), proven = new Map<string, unknown>();
+    const hints = indexPrivacyHints(entries(complete)), proven = new Map<string, unknown>(), runtime = new Map<string, unknown>();
     for (const [key, original] of entries(complete)) {
-      if (!completeNonMediaMime(key, hints)) continue;
+      const typed = validRuntimeValue(key, original), textMime = completeNonMediaMime(key, hints);
+      if (!typed && !textMime) continue;
       const actual = data(current, key);
+      if (typed && sameAttribute(original, actual)) {
+        runtime.set(key, Array.isArray(original) ? [...original] : original);
+      }
+      if (!textMime) continue;
       // SDK strings may be prefixes. Never accept another processor's different
       // value, or an SDK-dropped key, as evidence of complete admission.
       if (typeof original === "string" && typeof actual === "string" && original.startsWith(actual)) proven.set(key, actual);
       else if (sameAttribute(original, actual)) proven.set(key, Array.isArray(actual) ? Array.from({ length: data(actual, "length") }, (_, i) => data(actual, String(i))) : actual);
     }
     admittedText.set(current, proven);
+    admittedRuntime.set(current, runtime);
   } catch { /* Missing evidence invokes the conservative export fallback. */ }
 }
 export type PrivacyOptions = TraceConfigOptions & { hideLLMInvocationParameters?: boolean };
@@ -508,6 +527,8 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   // span() turns the grouping-key name exemption off for spans not made by an FI
   // tracer. Discovery reads grouping values without their names on every span.
   let identityExemption = true;
+  const attestedReceipt = (key: string, value: unknown, ctx?: object) => identityExemption && key === RECEIPT
+    && typeof value === "string" && ctx !== undefined && receipts.get(ctx) === value;
   const groupingKey = (key: string): boolean => identityExemption && identityKey(key);
   const attributes = (attrs: unknown, requestSecrets?: readonly string[], operation?: unknown, capsuleDepth = 0, admission = false, incomplete = false, valueLimit = Infinity, unattestedCopy = false, spanType?: unknown, responseContext?: object, outputResponseContext?: object, withholdContent = false, authoredHints?: PrivacyHints): Attributes => {
     if (capsuleDepth > 16) throw new Error("Privacy capsule budget");
@@ -563,16 +584,18 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     // grant completeness; unchanged FI pre-admission evidence below still can.
     const hints = indexPrivacyHints(hintItems, "", authoredHints, !admission && incomplete ? 0 : valueLimit);
     const proven = attrs && typeof attrs === "object" ? admittedText.get(attrs) : undefined;
-    const value = (item: unknown, key: string, depth = 0, admitted = false): any => {
+    const runtime = attrs && typeof attrs === "object" ? admittedRuntime.get(attrs) : undefined;
+    const value = (item: unknown, key: string, depth = 0, admitted = false, runtimeMatch = false): any => {
+      if (!depth) runtimeMatch = !!runtime?.has(key) && sameAttribute(item, runtime.get(key));
       if (--budget.nodes < 0 || depth > 32) throw new Error("Privacy value budget");
       // Protected identity/usage is exempt only from the arbitrary-base64
       // heuristic, never from catalog paths/magic or a possibly truncated value.
       admitted ||= !!proven?.has(key) && sameAttribute(item, proven.get(key));
       const truncated = !NON_CONTENT_KEYS.has(key) && typeof item === "string" && item.length >= valueLimit;
       const lostContext = incomplete && !admitted;
-      const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
+      const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !runtimeMatch && !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
-      const grouping = groupingKey(key) || (identityExemption && isContextReceipt(key, item));
+      const grouping = groupingKey(key) || (!capsuleDepth && attestedReceipt(key, item, responseContext));
       if (!admission && !grouping && isCredentialName(key)) return credentialAttributeSentinel;
       if (tc.hideEmbeddingVectors && /(?:^|\.)(?:embedding|embeddings|vector|vectors)(?:\.|$)/i.test(key) && !/(?:count|dimension|text)/i.test(key)) return REDACTED_VALUE;
       if (typeof item === "number" || typeof item === "boolean") {
@@ -580,8 +603,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (secrets.includes(String(item))) return "<redacted>";
         // This exact numeric field is a byte count, not a projected media
         // payload. Do not exempt strings, arrays, or other *.bytes paths.
-        const skillByteCount = key === "fi.skill.bytes" && typeof item === "number" && Number.isSafeInteger(item) && item >= 0;
-        const media = skillByteCount ? undefined : mediaValue(item); if (media !== undefined) return media;
+        const skillByteCount = runtimeMatch && key === "fi.skill.bytes";
+        const media = mediaReplacement(item, key, hints, true, false, false, lostContext && !skillByteCount, ambiguousBase64);
+        if (media !== undefined) return media;
         const raw = String(item), clean = string(raw);
         if (clean !== raw) return clean;
         return typeof item === "number" && !Number.isFinite(item) ? raw : item;
@@ -610,7 +634,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (length > budget.nodes) throw new Error("Privacy array budget");
         const items = Array.from({ length }, (_, i) => data(item, String(i)));
         const media = mediaValue(items); if (media !== undefined) return media;
-        return items.map((item, i) => value(item, `${key}.${i}`, depth + 1, admitted));
+        return items.map((item, i) => value(item, `${key}.${i}`, depth + 1, admitted, runtimeMatch));
       }
       return string(item === null ? "null" : typeof item);
     };
@@ -736,6 +760,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       } else {
         clean[name] = value(item, key);
         if (key === METADATA_KEY && typeof item === "string") clean[name] = metadataGrouping(item, clean[name]);
+        if (!capsuleDepth && outputResponseContext && attestedReceipt(key, item, responseContext) && clean[name] === item) {
+          receipts.set(outputResponseContext, item as string);
+        }
         if (key === "session.id" && outputResponseContext && isSessionIdentity(responseContext, item) && typeof clean[name] === "string") {
           rememberSessionIdentity(outputResponseContext, clean[name] as string);
         }
@@ -813,7 +840,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
-        } else if (identityKey(key) || isContextReceipt(key, item)) {
+        } else if (identityKey(key) || !depth && attestedReceipt(key, item, responseContext)) {
           // Same single debit; the value is discovered without its name, on every
           // span, so a session or user id never becomes a registered secret.
           requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
@@ -851,7 +878,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         // the export masking of their names depends on the span's provenance.
         const metadataParts = key === METADATA_KEY && typeof item === "string"
           ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
-        if (identityKey(key) || isContextReceipt(key, item)) {
+        if (identityKey(key) || !depth && attestedReceipt(key, item, responseContext)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
         } else if (metadataParts) {

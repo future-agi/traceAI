@@ -119,7 +119,7 @@ _skills_processor_failure_logged = False
 def get_registered_tracer_providers() -> Tuple[_TracerProvider, ...]:
     """Snapshot providers returned by register(), oldest to newest (latest last).
 
-    This includes non-global providers. The registry itself holds only weak
+    Only live providers are included, including non-global providers. The registry itself holds only weak
     references; callers should not retain this snapshot longer than necessary.
     Providers constructed directly, without register(), are not discoverable here.
     """
@@ -482,6 +482,11 @@ class TracerProvider(_TracerProvider):
 
     def shutdown(self) -> None:
         """Override shutdown to force flush first"""
+        # Stop advertising this destination before a slow flush or shutdown.
+        # A strong reference held by the application does not imply liveness.
+        with _provider_registry_lock:
+            _registered_tracer_providers.discard(self)
+            _provider_registration_order.pop(self, None)
         # Force flush to ensure all processors export their spans
         if hasattr(self, "force_flush"):
             try:

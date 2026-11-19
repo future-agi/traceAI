@@ -51,9 +51,13 @@ export class FutureAGIRuntimeAttributesSpanProcessor implements SpanProcessor {
     try {
       const globals = globalThis as unknown as Record<symbol, unknown>;
       const configuration = globals[CONFIG_KEY] as ConfigurationReader | undefined;
-      const mode = configuration?.v === 1 && typeof configuration.mode === "function"
-        ? configuration.mode() : process.env.FI_SKILLS_TRACING;
-      if (mode === "off" || mode === "load_only") return;
+      if (configuration?.v === 1 && typeof configuration.mode === "function") {
+        // A live SDK reader is authoritative; an invalid answer cannot enable stamping.
+        if (configuration.mode() !== "on") return;
+      } else {
+        const mode = process.env.FI_SKILLS_TRACING;
+        if (mode === "off" || mode === "load_only") return;
+      }
       const traceId = span.spanContext().traceId;
       // The SDK status helper uses only this last-seen trace id, never a span.
       globals[PROCESSOR_KEY] = traceId;

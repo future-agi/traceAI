@@ -229,3 +229,35 @@ def test_real_sdk_processor_consumes_carrier_when_available(monkeypatch, provide
     assert [span.attributes["gen_ai.agent.name"] for span in exporter.get_finished_spans()] == [
         "carrier-agent", "framework-agent",
     ]
+
+
+def test_shutdown_unregisters_while_provider_is_still_referenced(providers):
+    first, _ = providers()
+    latest, _ = providers()
+    latest.shutdown()
+    assert otel.get_registered_tracer_providers() == (first,)
+    first.shutdown()
+    assert otel.get_registered_tracer_providers() == ()
+
+
+def test_real_sdk_load_falls_back_to_live_provider(providers):
+    pytest.importorskip("fi.telemetry.processor")
+    from fi.context.materialize import LockedLink
+    from fi.telemetry import configure, declare_skill
+
+    first, live = providers()
+    closed, dead = providers()
+    closed.shutdown()  # Keep a strong reference: selection must not wait for GC.
+    try:
+        configure(skills_tracing="on")
+        link = LockedLink(mount="skills/refund/", skill_id="11111111-1111-4111-8111-111111111111",
+                          requested={"version": 1}, version=1, version_id="22222222-2222-4222-8222-222222222222",
+                          digest="sha256:" + "a" * 64)
+        with first.get_tracer(__name__).start_as_current_span("request") as parent:
+            declare_skill(link)
+        loads = [span for span in live.get_finished_spans() if span.name == "skill.load"]
+        assert [span.attributes["fi.skill.version_id"] for span in loads] == [link.version_id]
+        assert loads[0].parent == parent.get_span_context()
+        assert dead.get_finished_spans() == ()
+    finally:
+        configure()

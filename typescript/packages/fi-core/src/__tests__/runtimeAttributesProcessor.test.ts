@@ -71,8 +71,8 @@ test("optional SDK configuration reader wins over environment and changes dynami
   globals[CONFIG] = { v: 1, mode: () => mode };
   const carrier = { v: 1, attrs: { "fi.skills.count": 1 } };
   expect(await stamped(carrier)).toEqual({ "fi.skills.count": 1 });
-  mode = "load_only";
-  expect(await stamped(carrier)).toEqual({});
+  process.env.FI_SKILLS_TRACING = "on";
+  for (mode of ["off", "load_only", "unknown"]) expect(await stamped(carrier)).toEqual({});
 });
 
 test("foreign registry errors cannot affect tracing", async () => {
