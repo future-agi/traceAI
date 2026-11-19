@@ -3,11 +3,15 @@
     "name": "anthropic",
     "package": "@traceai/anthropic",
     "targets": [
-      "@anthropic-ai/sdk"
+      "@anthropic-ai/sdk",
+      "@anthropic-ai/bedrock-sdk",
+      "@anthropic-ai/vertex-sdk"
     ],
     "className": "AnthropicInstrumentation",
     "modules": [
-      "@anthropic-ai/sdk"
+      "@anthropic-ai/sdk",
+      "@anthropic-ai/bedrock-sdk",
+      "@anthropic-ai/vertex-sdk"
     ]
   },
   {

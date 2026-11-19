@@ -1,3 +1,8 @@
+## Unreleased
+
+### Added
+- `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
+
 ## [0.4.1] - 2026-11-19
 
 ### Changed

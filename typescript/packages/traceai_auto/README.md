@@ -100,7 +100,7 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 <!-- BEGIN GENERATED INTEGRATIONS -->
 | Configuration name | Target library | Instrumentation package | Setup |
 | --- | --- | --- | --- |
-| `anthropic` | `@anthropic-ai/sdk` | `@traceai/anthropic` | Import hook |
+| `anthropic` | `@anthropic-ai/sdk`, `@anthropic-ai/bedrock-sdk`, `@anthropic-ai/vertex-sdk` | `@traceai/anthropic` | Import hook |
 | `bedrock` | `@aws-sdk/client-bedrock-runtime`, `@aws-sdk/client-bedrock-agent-runtime` | `@traceai/bedrock` | Import hook |
 | `beeai` | `beeai-framework` | `@traceai/beeai` | Import hook |
 | `cerebras` | `@cerebras/cerebras_cloud_sdk` | `@traceai/cerebras` | Import hook |

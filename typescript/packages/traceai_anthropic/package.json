@@ -44,7 +44,9 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
-    "@anthropic-ai/sdk": "^0.27.3"
+    "@anthropic-ai/sdk": "^0.27.3",
+    "@anthropic-ai/bedrock-sdk": ">=0.10.0",
+    "@anthropic-ai/vertex-sdk": ">=0.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
@@ -55,7 +57,9 @@
     "rimraf": "^6.0.1",
     "tsc-alias": "^1.8.16",
     "typescript": "^5.8.3",
-    "@opentelemetry/core": "^2.0.1"
+    "@opentelemetry/core": "^2.0.1",
+    "@anthropic-ai/bedrock-sdk": "^0.10.4",
+    "@anthropic-ai/vertex-sdk": "^0.4.3"
   },
   "keywords": [
     "opentelemetry",
@@ -72,5 +76,13 @@
   "publishConfig": {
     "access": "public"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "peerDependenciesMeta": {
+    "@anthropic-ai/bedrock-sdk": {
+      "optional": true
+    },
+    "@anthropic-ai/vertex-sdk": {
+      "optional": true
+    }
+  }
 }
