@@ -1,5 +1,6 @@
 """Agent Spec instrumentation over the real pyagentspec Trace, Span and Event classes."""
 import asyncio
+import gc
 import json
 
 import pytest
@@ -417,3 +418,85 @@ def test_an_unknown_event_or_span_type_is_ignored(spans):
         with Custom() as custom:
             custom.add_event(Event(name="whatever"))
     assert spans.get_finished_spans() == ()
+
+
+# --- processor lifetime ---------------------------------------------------------------------------
+
+def _live_processors():
+    from traceai_agentspec import FIAgentSpecSpanProcessor
+
+    gc.collect()
+    return [o for o in gc.get_objects() if isinstance(o, FIAgentSpecSpanProcessor)]
+
+
+def test_closed_traces_do_not_leave_their_processors_behind(spans):
+    for _ in range(1000):
+        with Trace(name="request"):
+            with AgentExecutionSpan(agent=AGENT):
+                pass
+    assert len(spans.get_finished_spans()) == 1000
+    assert len(_live_processors()) < 10
+
+
+def test_a_running_trace_keeps_its_processor_and_uninstrument_deactivates_it(provider, instrument):
+    spans = instrument()
+    from traceai_agentspec import AgentSpecInstrumentor
+
+    with Trace(name="long-running"):
+        gc.collect()
+        with AgentExecutionSpan(agent=AGENT, name="before"):
+            pass
+        assert len(spans.get_finished_spans()) == 1
+        AgentSpecInstrumentor().uninstrument()
+        with AgentExecutionSpan(agent=AGENT, name="after"):
+            pass
+    assert len(spans.get_finished_spans()) == 1
+
+
+# --- swarm, manager-workers and untranslated parents ----------------------------------------------
+
+def test_swarm_span_is_an_agent_span(spans):
+    from pyagentspec.agent import Agent
+    from pyagentspec.swarm import Swarm
+    from pyagentspec.tracing.spans import SwarmExecutionSpan
+
+    other = Agent(name="other", llm_config=LLM, system_prompt="x")
+    swarm = Swarm(name="geo-swarm", first_agent=AGENT, relationships=[(AGENT, other), (other, AGENT)])
+    with Trace(name="swarm"):
+        with SwarmExecutionSpan(swarm=swarm):
+            with AgentExecutionSpan(agent=AGENT):
+                pass
+    swarm_span = by_name(spans, "agentspec.swarm.geo-swarm")
+    assert attrs(swarm_span)["gen_ai.span.kind"] == "AGENT"
+    assert attrs(swarm_span)["gen_ai.agent.name"] == "geo-swarm"
+    assert by_name(spans, "agentspec.agent.geo-helper").parent.span_id == swarm_span.context.span_id
+
+
+def test_manager_workers_span_is_an_agent_span(spans):
+    from pyagentspec.agent import Agent
+    from pyagentspec.managerworkers import ManagerWorkers
+    from pyagentspec.tracing.spans import ManagerWorkersExecutionSpan
+
+    worker = Agent(name="worker", llm_config=LLM, system_prompt="x")
+    group = ManagerWorkers(name="geo-group", group_manager=AGENT, workers=[worker])
+    with Trace(name="mw"):
+        with ManagerWorkersExecutionSpan(managerworkers=group):
+            pass
+    span = by_name(spans, "agentspec.managerworkers.geo-group")
+    assert attrs(span)["gen_ai.span.kind"] == "AGENT"
+    assert attrs(span)["gen_ai.agent.name"] == "geo-group"
+
+
+def test_a_child_nests_under_its_nearest_translated_ancestor(spans):
+    from pyagentspec.tracing.spans.span import Span
+
+    class Runtime(Span):  # a runtime-specific span the instrumentor does not translate
+        pass
+
+    with Trace(name="r"):
+        with AgentExecutionSpan(agent=AGENT):
+            with Runtime():
+                with LlmGenerationSpan(llm_config=LLM):
+                    pass
+    agent = by_name(spans, "agentspec.agent.geo-helper")
+    assert by_name(spans, "agentspec.llm.gpt-served").parent.span_id == agent.context.span_id
