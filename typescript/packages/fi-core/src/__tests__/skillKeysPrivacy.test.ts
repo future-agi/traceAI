@@ -41,13 +41,16 @@ test.each([false, true])("runtime identity survives admission and detached expor
   const options = { hideInputs: hide, hideOutputs: hide, hideEmbeddingVectors: hide, hideInputImages: hide };
   try {
     const tracer = new FITracer({ tracer: provider.getTracer("runtime-test"), traceConfig: options });
-    tracer.startSpan("skill.load", { attributes: attrs }).end();
+    // Untrusted session values enter credential discovery on export. Each
+    // scenario starts with a fresh value, not a prior case's registered secret.
+    const input = { ...attrs, "fi.context.session_id": hide ? "33333333-3333-4333-8333-333333333334" : receipt };
+    tracer.startSpan("skill.load", { attributes: input }).end();
     const native = exporter.getFinishedSpans()[0];
-    expect(native.attributes).toEqual(attrs);
+    expect(native.attributes).toEqual(input);
     const first = privacyFilter(options).span(native);
     expect(first.attributes).toEqual(exportedAttrs);
     expect(privacyFilter(options).span(first).attributes).toEqual(exportedAttrs);
-    expect(native.attributes).toEqual(attrs);
+    expect(native.attributes).toEqual(input);
   } finally { await provider.shutdown(); }
 });
 
