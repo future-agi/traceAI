@@ -479,3 +479,42 @@ def test_a_computed_field_of_a_pydantic_input_is_input_text(setting):
 
 def test_a_computed_field_of_a_pydantic_input_is_recorded_with_no_setting():
     assert any(COMPUTED in str(out) for out in _outputs(_copy_computed(None)))
+
+
+# --- content blocks nested in a holder's or a part's own content keep losing their labels ---------------------
+
+DOC_TEXT = "SENTINEL_DOCUMENT_BLOCK_TEXT_5520"
+PAGE_DATA = "SENTINEL_FETCHED_PAGE_DATA_8803"
+
+
+def _custom_document(text=DOC_TEXT):
+    """An Anthropic custom-content document: its source holds a list of content blocks."""
+    return HumanMessage(content=[{"type": "document", "source": {"type": "content", "content": [{"type": "text", "text": text}]}},
+                                 {"type": "text", "text": "Summarize this."}])
+
+
+def _web_fetch_result(data=PAGE_DATA):
+    """An Anthropic web_fetch_tool_result: its content is a single block that holds a document block."""
+    return AIMessage(content=[{"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_01", "content": {
+        "type": "web_fetch_result", "url": "https://docs.example.com/page", "retrieved_at": "2026-11-19T10:00:00Z",
+        "content": {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": data}}}}])
+
+
+LABEL_LIKE_REPLY = [{"type": "text", "text": "In this context the page is text/plain. " + REPLY}]
+
+
+@pytest.mark.parametrize("message", [_custom_document, _web_fetch_result], ids=["document-source-content", "web-fetch-result"])
+@pytest.mark.parametrize("setting", ALL_SETTINGS)
+def test_a_reply_after_nested_content_blocks_is_kept(setting, message):
+    state = {"messages": [HumanMessage(content=HUMAN), message()]}
+    spans = _spans(_config(setting), lambda: RunnableLambda(
+        lambda s: {"messages": [AIMessage(content=LABEL_LIKE_REPLY)]}).invoke(state))
+    assert _kept(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("message,marker", [(_custom_document, DOC_TEXT), (_web_fetch_result, PAGE_DATA)],
+                         ids=["document-source-content", "web-fetch-result"])
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_the_text_of_nested_content_blocks_is_input_text(setting, message, marker):
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "copied " + marker}).invoke({"messages": [message()]}))
+    assert marker not in output_side(spans), (setting, _outputs(spans))
