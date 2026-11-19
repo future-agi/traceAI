@@ -39,11 +39,14 @@ def _run(config):
     instrumentor = SmolagentsInstrumentor()
     instrumentor.instrument(tracer_provider=provider, config=config)
     try:
-        agent = ToolCallingAgent(tools=[], model=OfflineModel())
-        # RunResult.steps carries the task and the model input messages.
-        result = agent.run(TASK_SENTINEL, return_full_result=True)
+        # The constructor takes return_full_result in every smolagents that has RunResult;
+        # run() only takes it from 1.22.
+        agent = ToolCallingAgent(tools=[], model=OfflineModel(), return_full_result=True)
+        result = agent.run(TASK_SENTINEL)
         assert result.output == ANSWER
-        assert result.steps[0]["task"] == TASK_SENTINEL
+        # RunResult.steps (RunResult.messages up to 1.21) carries the task and the model input messages.
+        steps = result.steps if hasattr(result, "steps") else result.messages
+        assert steps[0]["task"] == TASK_SENTINEL
         spans = exporter.get_finished_spans()
         assert spans
         return json.dumps([dict(s.attributes) for s in spans], default=str) + json.dumps(

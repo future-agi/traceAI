@@ -272,9 +272,14 @@ class _RunWrapper:
                 else:
                     if isinstance(agent_output, FinalAnswerStep):
                         agent_output = agent_output.output
-            # A full run result carries the task and the model input messages (steps): while an
-            # input hide setting is on, only its output is recorded.
-            if _hides_input(span) and hasattr(agent_output, "steps") and hasattr(agent_output, "output"):
+            # A full run result carries the task and the model input messages (`steps`; up to
+            # smolagents 1.21 the field is `messages`): while an input hide setting is on, only its
+            # output is recorded.
+            if (
+                _hides_input(span)
+                and hasattr(agent_output, "output")
+                and (hasattr(agent_output, "steps") or hasattr(agent_output, "messages"))
+            ):
                 agent_output = agent_output.output
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(agent_output))
             span.set_attribute(
