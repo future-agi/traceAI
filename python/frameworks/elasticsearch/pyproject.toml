@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "traceAI-elasticsearch"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Elasticsearch search and kNN (elasticsearch-py)"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+license = "Apache-2.0"
+packages = [{ include = "traceai_elasticsearch" }]
+classifiers = ["Intended Audience :: Developers", "License :: OSI Approved :: Apache Software License", "Programming Language :: Python :: 3.10", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Framework :: OpenTelemetry :: Instrumentations"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+fi-instrumentation-otel = ">=1.1.0"
+elasticsearch = ">=8,<10"
+wrapt = ">=1.15.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7"
+pytest-asyncio = ">=0.23"
+
+[tool.poetry.urls]
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/elasticsearch"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
