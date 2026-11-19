@@ -1,7 +1,7 @@
-## [0.2.4]
+## Unreleased
 
 ### Changed
-- Raw input and raw output are not recorded while any hide setting is on.
+- With any input hide setting, a chain whose output echoes its input does not record that output as `output.value`. The comparison covers every input leaf of any type and size, and a comparison that cannot be completed counts as an echo.
 
 ## [0.2.3] - 2026-11-12
 

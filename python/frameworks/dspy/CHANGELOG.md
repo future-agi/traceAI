@@ -1,7 +1,7 @@
-## [0.1.11]
+## Unreleased
 
 ### Changed
-- Raw input and raw output are not recorded while any hide setting is on.
+- With any input hide setting, a retriever span does not record the bound call arguments (which carry the query) among its output attributes.
 
 
 

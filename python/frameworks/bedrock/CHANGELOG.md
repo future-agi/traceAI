@@ -1,7 +1,7 @@
 ## Unreleased
 
 ### Changed
-- Raw input and raw output are not recorded while any hide setting is on.
+- With any input hide setting, a streamed invoke-model payload is not recorded as output, because it can repeat the request.
 
 
 

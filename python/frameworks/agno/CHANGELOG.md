@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.2.3]
+## Unreleased
 ### Changed
-- Raw input and raw output are not recorded while any hide setting is on.
+- With any input hide setting, a run or workflow response is not written as `output.value`, because the response object carries the run input.
 
 ## [0.2.2] - 2026-11-08
 ### Fix
