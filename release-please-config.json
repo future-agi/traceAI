@@ -228,6 +228,14 @@
         "traceai_google_genai/version.py"
       ]
     },
+    "python/frameworks/google-generativeai": {
+      "release-type": "python",
+      "component": "traceai-google-generativeai",
+      "package-name": "traceAI-google-generativeai",
+      "extra-files": [
+        "traceai_google_generativeai/version.py"
+      ]
+    },
     "python/frameworks/google-genai-live": {
       "release-type": "python",
       "component": "traceai-google-genai-live",

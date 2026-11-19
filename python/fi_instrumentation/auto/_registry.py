@@ -53,6 +53,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("openai_realtime", ("openai.resources.realtime.realtime",), "traceAI-openai-realtime", "traceai_openai_realtime", "OpenAIRealtimeInstrumentor", category="voice"),
     Integration("anthropic", ("anthropic",), "traceAI-anthropic", "traceai_anthropic", "AnthropicInstrumentor"),
     Integration("google_genai", ("google.genai",), "traceAI-google-genai", "traceai_google_genai", "GoogleGenAIInstrumentor"),
+    Integration("google_generativeai", ("google.generativeai",), "traceAI-google-generativeai", "traceai_google_generativeai", "GoogleGenerativeAIInstrumentor"),
     Integration("google_genai_live", ("google.genai",), "traceAI-google-genai-live", "traceai_google_genai_live", "GoogleGenAILiveInstrumentor", category="voice"),
     Integration("vertexai", ("vertexai",), "traceAI-vertexai", "traceai_vertexai", "VertexAIInstrumentor"),
     Integration("bedrock", ("boto3",), "traceAI-bedrock", "traceai_bedrock", "BedrockInstrumentor"),
