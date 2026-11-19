@@ -25,6 +25,7 @@ import contextvars
 import importlib
 import logging
 import os
+import sys
 from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
 
 import wrapt
@@ -55,6 +56,19 @@ _KINDS = {
     "Function": "TOOL",
 }
 
+# Prompt flow's own content attributes and events. They carry raw inputs, outputs, prompt templates
+# and variables, so they never reach a traceAI span, whichever code path writes them (a hook this
+# instrumentor replaced, a binding it missed, or a Prompt flow version with new hooks).
+_NATIVE_ATTRIBUTES = frozenset({
+    "inputs", "output", "llm.generated_message", "embedding.embeddings", "prompt.template", "prompt.variables",
+})
+_NATIVE_EVENT_PREFIX = "promptflow."
+
+
+def _native_attribute(key: Any) -> bool:
+    return isinstance(key, str) and (key in _NATIVE_ATTRIBUTES or key.startswith("prompt."))
+
+
 # How many promptflow spans enclose the span being started (0 = outermost).
 _DEPTH: "contextvars.ContextVar[int]" = contextvars.ContextVar("traceai_promptflow_depth", default=0)
 
@@ -84,11 +98,13 @@ def _serialize(value: Any) -> Optional[str]:
 
 
 class _Span(wrapt.ObjectProxy):  # type: ignore[misc]
-    """The traceAI span handed to promptflow; maps its ``span_type`` onto the span kind."""
+    """The traceAI span handed to promptflow; maps its ``span_type`` onto the span kind and drops
+    Prompt flow's native content attributes, events, exception messages and status descriptions."""
 
     def __init__(self, wrapped: Any, outermost: bool) -> None:
         super().__init__(wrapped)
         self._self_outermost = outermost
+        self._self_span_type: Optional[str] = None
 
     def __enter__(self) -> "_Span":
         return self
@@ -98,18 +114,40 @@ class _Span(wrapt.ObjectProxy):  # type: ignore[misc]
         kind = _KINDS.get(span_type) if isinstance(span_type, str) else None
         if kind is None:
             return
+        self._self_span_type = span_type
         if span_type == "Function" and self._self_outermost:
             kind = "CHAIN"
         self.__wrapped__.set_attribute(A.GEN_AI_SPAN_KIND, kind)
 
     def set_attribute(self, key: str, value: Any) -> None:
+        if _native_attribute(key):
+            return
         self.__wrapped__.set_attribute(key, value)
         if key == "span_type":
             self._kind({key: value})
 
     def set_attributes(self, attributes: Any) -> None:
+        attributes = _without_native(attributes)
         self.__wrapped__.set_attributes(attributes)
         self._kind(attributes)
+
+    def add_event(self, name: str, *args: Any, **kwargs: Any) -> None:
+        if isinstance(name, str) and name.startswith(_NATIVE_EVENT_PREFIX):
+            return
+        self.__wrapped__.add_event(name, *args, **kwargs)
+
+    def record_exception(self, exception: BaseException, *args: Any, **kwargs: Any) -> None:
+        _fail(self.__wrapped__, exception)  # class name only: the message and traceback are never exported
+
+    def set_status(self, status: Any, description: Optional[str] = None) -> None:
+        code = getattr(status, "status_code", status)
+        self.__wrapped__.set_status(Status(code) if isinstance(code, StatusCode) else status)
+
+
+def _without_native(attributes: Any) -> Any:
+    if not hasattr(attributes, "items"):
+        return attributes
+    return {k: v for k, v in attributes.items() if not _native_attribute(k)}
 
 
 def _fail(span: Any, exc: BaseException) -> None:
@@ -129,7 +167,8 @@ def _start_as_current_span(tracer: Any, name: str, context: Any = None, kind: An
     token = None
     try:
         raw = fi_tracer.start_span(
-            name, context=context, kind=kind, attributes=dict(attributes or {}, **{A.GEN_AI_PROVIDER_NAME: _PROVIDER}),
+            name, context=context, kind=kind,
+            attributes=dict(_without_native(attributes or {}), **{A.GEN_AI_PROVIDER_NAME: _PROVIDER}),
             links=links, start_time=start_time, record_exception=False, set_status_on_exception=False,
         )
         depth = _DEPTH.get()
@@ -176,8 +215,38 @@ def _handle_span_exception(span: Any, exception: BaseException) -> None:
         logger.debug("promptflow error recording failed", exc_info=True)
 
 
+_REQUEST_PARAMETERS = (
+    ("temperature", A.GEN_AI_REQUEST_TEMPERATURE),
+    ("top_p", A.GEN_AI_REQUEST_TOP_P),
+    ("max_tokens", A.GEN_AI_REQUEST_MAX_TOKENS),
+    ("max_completion_tokens", A.GEN_AI_REQUEST_MAX_TOKENS),
+    ("presence_penalty", A.GEN_AI_REQUEST_PRESENCE_PENALTY),
+    ("frequency_penalty", A.GEN_AI_REQUEST_FREQUENCY_PENALTY),
+    ("seed", A.GEN_AI_REQUEST_SEED),
+)
+
+
+def _request_parameters(span: Any, inputs: Any) -> None:
+    """Request model and sampling parameters of an LLM or embedding call (never message content)."""
+    if getattr(span, "_self_span_type", None) not in ("LLM", "Embedding") or not isinstance(inputs, dict):
+        return
+    for name in ("model", "engine", "deployment_id"):
+        if isinstance(inputs.get(name), str) and inputs[name]:
+            span.set_attribute(A.GEN_AI_REQUEST_MODEL, inputs[name])
+            break
+    for name, attribute in _REQUEST_PARAMETERS:
+        value = inputs.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            span.set_attribute(attribute, value)
+    stop = inputs.get("stop")
+    stop = [stop] if isinstance(stop, str) else stop
+    if isinstance(stop, (list, tuple)) and stop and all(isinstance(item, str) for item in stop):
+        span.set_attribute(A.GEN_AI_REQUEST_STOP_SEQUENCES, list(stop))
+
+
 def _enrich_span_with_input(span: Any, input: Any) -> Any:
     try:
+        _request_parameters(span, input)
         if not _state["config"].hide_inputs:
             text = _serialize(input)
             if text is not None:
@@ -328,12 +397,28 @@ def _enrich_span_with_trace_chained(span: Any, trace_: Any) -> None:
     _enrich_span_with_trace(span, trace_)
 
 
-# Modules that bind promptflow's helpers by name, and which of them each rebinds.
+# Modules imported on request, in case they are not loaded yet: ``_experimental`` re-exports
+# ``enrich_prompt_template`` and the flow executor binds two helpers by name.
 _TARGETS = (
-    ("promptflow.tracing._trace", None),
     ("promptflow.tracing._experimental", ("enrich_prompt_template",)),
     ("promptflow.executor.flow_executor", ("start_as_current_span", "enrich_span_with_input")),
 )
+
+# Hooks that write native content onto a span, and the one that routes spans to traceAI.
+_CONTENT_HOOKS = (
+    "enrich_span_with_input", "enrich_span_with_output", "enrich_span_with_llm", "enrich_span_with_embedding",
+    "enrich_span_with_prompt_info", "enrich_prompt_template", "handle_span_exception", "TracedIterator",
+)
+_SPAN_HOOK = "start_as_current_span"
+
+
+def _bound_modules(name: str, original: Any) -> List[Any]:
+    """Every loaded ``promptflow`` module that bound ``original`` under ``name`` at import time
+    (``from ..._trace import name``). Those bindings never see a patch of ``_trace`` itself."""
+    return [
+        module for module_name, module in list(sys.modules.items())
+        if module is not None and module_name.startswith("promptflow") and getattr(module, name, None) is original
+    ]
 
 
 class PromptflowInstrumentor(BaseInstrumentor):  # type: ignore[misc]
@@ -346,29 +431,48 @@ class PromptflowInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         config = kwargs.get("config") or TraceConfig()
         if not isinstance(config, TraceConfig):
             raise TypeError("config must be a TraceConfig")
+        base = importlib.import_module("promptflow.tracing._trace")
+        if not hasattr(base, _SPAN_HOOK):
+            # Without it Prompt flow's spans cannot be routed to traceAI: refuse rather than leave
+            # its native content hooks live on spans we do not control.
+            logger.warning(
+                "traceai-promptflow: promptflow.tracing._trace.%s is missing in this Prompt flow version; "
+                "not instrumenting", _SPAN_HOOK,
+            )
+            self._set_env = False
+            return
+        for name in _CONTENT_HOOKS:
+            if not hasattr(base, name):
+                # Native content stays off our spans regardless: the span drops those attributes and events.
+                logger.warning(
+                    "traceai-promptflow: promptflow.tracing._trace.%s is missing in this Prompt flow version; "
+                    "native content is still masked on traceAI spans", name,
+                )
         _state["tracer"] = FITracer(trace.get_tracer(__name__, __version__, kwargs.get("tracer_provider")), config)
         _state["config"] = config
         originals: Dict[Tuple[str, str], Any] = {}
         _state["originals"] = originals
-        base = importlib.import_module("promptflow.tracing._trace")
         replacements = _replacements(base)
-        for module_name, names in _TARGETS:
+        for module_name, _names in _TARGETS:
             try:
-                module = importlib.import_module(module_name)
+                importlib.import_module(module_name)
             except ImportError:
-                continue  # e.g. promptflow-core (the executor) is not installed
-            for name in names or tuple(replacements):
-                if hasattr(module, name) and name in replacements:
-                    originals[(module_name, name)] = getattr(module, name)
+                pass  # e.g. promptflow-core (the executor) is not installed
+        for name in replacements:
+            original = getattr(base, name, None)
+            if original is None:
+                continue
+            for module in _bound_modules(name, original):
+                originals[(module.__name__, name)] = original
         for (module_name, name) in list(originals):
-            setattr(importlib.import_module(module_name), name, replacements[name])
+            setattr(sys.modules[module_name], name, replacements[name])
         self._set_env = _ENV not in os.environ
         if self._set_env:
             os.environ[_ENV] = "false"
 
     def _uninstrument(self, **kwargs: Any) -> None:
         for (module_name, name), original in (_state.get("originals") or {}).items():
-            setattr(importlib.import_module(module_name), name, original)
+            setattr(sys.modules[module_name], name, original)
         _state["originals"] = {}
         _state["tracer"] = _state["config"] = None
         if getattr(self, "_set_env", False):

@@ -39,8 +39,16 @@ provider:
   message and traceback are never exported;
 * inputs and outputs are exported as `input.value` / `output.value` and follow the `TraceConfig`
   hide settings. Prompt flow's own `inputs`, `output`, `prompt.template`, `prompt.variables` and
-  `promptflow.*` events are not exported, so hiding works for them too;
+  `promptflow.*` events are never exported, whichever Prompt flow code path writes them (for
+  example a Prompty call): the span drops them, so hiding works for them too. If an installed
+  Prompt flow version lacks a content hook this package patches, one warning is logged and the
+  content stays masked; if it lacks `start_as_current_span`, nothing is instrumented;
+* LLM and embedding spans carry `gen_ai.request.model` and the request parameters (temperature,
+  top_p, max tokens, penalties, seed, stop) when the call's inputs include them;
 * a failure inside the instrumentation never reaches your call.
+
+`PF_DISABLE_TRACING=false` is set process-wide, so child processes inherit it, but the patches are
+not: a worker process has to call `instrument()` itself.
 
 Limits: the patches live in the instrumenting process. Prompt flow batch runs that execute lines in
 worker processes, and the serving `/feedback` endpoint (which opens its own span on the global
