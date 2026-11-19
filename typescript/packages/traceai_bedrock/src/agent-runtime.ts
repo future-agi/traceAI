@@ -266,7 +266,7 @@ class AgentTraceBuilder {
       const parameters = action.parameters ?? action.requestBody;
       if (parameters !== undefined) {
         const serialized = safelyJSONStringify(parameters);
-        setSpanAttribute(span, SemanticConventions.TOOL_PARAMETERS, serialized);
+        // Not tool.parameters: the hide settings mask input.value but not that key.
         setSpanAttribute(span, SemanticConventions.INPUT_VALUE, serialized);
         setSpanAttribute(span, SemanticConventions.INPUT_MIME_TYPE, MimeType.JSON);
       }
