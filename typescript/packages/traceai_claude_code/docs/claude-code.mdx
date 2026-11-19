@@ -1,0 +1,100 @@
+---
+title: "Claude Code tracing"
+description: "Connect Claude Code to Future AGI with one setup command. See prompts, model generations, tools, subagents and token usage grouped by conversation."
+---
+
+Trace Claude Code prompts, model generations and tool calls in Future AGI with one setup command—no collector or copied instrumentation scripts.
+
+Use Claude Code **2.x** and Node.js **22.16–22.x or 24.x**. Keep Claude Code's transcript persistence enabled; do not use `--no-session-persistence`.
+
+## 1. Set up tracing
+
+Create an API key and secret key on the [Future AGI keys page](https://app.futureagi.com/dashboard/keys), then run:
+
+```bash
+npx @traceai/agents setup claude --project coding-agents
+```
+
+Enter your keys in the hidden terminal prompts. Setup validates the destination, saves credentials in an owner-only file, and installs the packaged user hooks without replacing unrelated settings. Restart any Claude Code session that was already open.
+
+Content capture is **on by default**. Prompts, model responses and tool content can include file text and secrets the agent reads. To send structure, timing and token usage without content:
+
+```bash
+npx @traceai/agents setup claude --project coding-agents --no-capture-content
+```
+
+For unattended setup, inject `FI_API_KEY` and `FI_SECRET_KEY` through your secret manager. Do not put keys in command arguments, prompts or repository files.
+
+### Migrating from collector-based tracing
+
+Before running setup, remove or disable `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`, `ENABLE_ENHANCED_TELEMETRY_BETA` and `ENABLE_BETA_TRACING_DETAILED` in both Claude Code settings and the launching environment. Stop the old collector if it was dedicated to this integration. Keep unrelated metrics or application collectors unchanged.
+
+The package uses hooks and transcripts instead of native beta generation tracing. Running both would duplicate observations, so setup reports `NATIVE_TRACING_CONFLICT` rather than changing your telemetry settings for you.
+
+## 2. Run Claude Code
+
+```bash
+claude
+```
+
+Ask Claude to read a small file, for example: **“Read README.md and summarize the setup steps.”**
+
+Open **Observe** in Future AGI, select **coding-agents**, and open the trace. The **Sessions** view groups prompts from one conversation. Generations show available input/output and cache token counts; tools show their input, output and failure status. Subagent work appears beneath the Agent tool that started it.
+
+Each Stop sends new generations and tools. The completed turn and final answer are sent when you submit the next human prompt or end the session, because another Stop hook can still make Claude continue. Finish the session or send your next prompt to see the completed turn.
+
+## Configure one repository
+
+```bash
+npx @traceai/agents setup claude --scope project --project my-project --no-capture-content
+```
+
+The repository's `.claude/futureagi.json` contains no credentials. Launching Claude from a subdirectory uses the nearest enclosing configuration without crossing a repository boundary. Repeating setup retains the approved destination and content opt-out unless you explicitly change them.
+
+A repository can reduce capture, but cannot raise the user-approved privacy setting or redirect credentials to an unapproved destination. This also applies to credentials injected through the environment.
+
+| Setting                          | Effect                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| `FI_AGENT_CAPTURE_CONTENT=false` | Disable content capture for the process.                               |
+| `FI_AGENT_ENABLED=false`         | Disable tracing for the process.                                       |
+| `FI_USER_ID`                     | Use an explicit user identifier instead of an opaque local identifier. |
+| `FI_BASE_URL`                    | Select a self-hosted Future AGI API origin.                            |
+| `FI_OTLP_ENDPOINT`               | Select an exact OTLP/HTTP traces endpoint.                             |
+
+Environment settings override integration files. Existing `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and `FI_HIDE_ERROR_DETAILS` restrictions remain in effect. Credentials are stored separately from repository configuration under `${XDG_CONFIG_HOME:-$HOME/.config}/futureagi/agents/credentials.json`.
+
+## Check or remove the integration
+
+```bash
+npx @traceai/agents status claude --json
+npx @traceai/agents doctor claude
+npx @traceai/agents disable claude
+npx @traceai/agents update claude
+npx @traceai/agents uninstall claude
+```
+
+Status and doctor use the current repository configuration. Pass `--project-dir /path/to/repository` to inspect another project or `--user-only` to inspect the user configuration. Disable works offline. Uninstall removes only the integration's owned hooks and runtime bundle.
+
+## Privacy and delivery
+
+Content fields are bounded to 20,000 characters and receive best-effort credential redaction. Redaction cannot guarantee removal of arbitrary secrets: use content-off mode for sensitive work. Thinking blocks, images and native account identifiers are not exported. Re-enabling capture does not backfill private main-thread or subagent history.
+
+Generation inputs are bounded visible transcript history, not full API requests or hidden system prompts. Generation timing is reconstructed from message timestamps, not measured request latency. Token usage belongs to each source generation once; the package does not report Anthropic billing costs.
+
+Export is bounded and fail-open: tracing does not change Claude Code's answer or exit status. Process termination, oversized turns and unavailable destinations can lose spans. No background service is installed.
+
+## Troubleshooting
+
+**No trace appears.** Run `doctor claude`, check registration and export diagnostics, and restart sessions opened before setup. Keep transcript persistence enabled. End the session or submit another prompt if generations have arrived but the completed turn is still missing.
+
+**`PROJECT_CONFIG_IGNORED`.** The repository configuration is malformed or unsafe. The integration ignores that layer and uses the protected user configuration. Keep the configuration valid and move the project to an owner-controlled directory or correct permissions before relying on project-specific routing or privacy.
+
+**`HOST_HOOKS_DISABLED`.** Claude Code's `disableAllHooks` setting prevents tracing hooks from running. Review that setting and re-enable hooks to resume tracing. Setup does not change it; an earlier successful export does not mean hooks are currently enabled.
+
+**`RUNTIME_MISSING_OR_CHANGED`.** Restore your Node.js installation, then run `npx @traceai/agents update claude`. Hooks reuse your existing interpreter rather than copying it.
+
+**`NATIVE_TRACING_CONFLICT`.** Follow the [migration steps](#migrating-from-collector-based-tracing), then repeat setup.
+
+**Settings cannot be updated.** Keep settings valid JSON and owned by your user. The installer refuses unsafe, symlinked or malformed files instead of overwriting them. Organization policy can also prevent user hooks from running.
+
+Learn more about [session grouping](/docs/observe/features/session).

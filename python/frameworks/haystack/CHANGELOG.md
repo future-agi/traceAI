@@ -1,4 +1,10 @@
+## [0.1.11](https://github.com/future-agi/traceAI/compare/traceai-haystack-v0.1.10...traceai-haystack-v0.1.11) (2026-11-05)
 
+
+### Bug Fixes
+
+* **haystack:** preserve cancellation and provider usage metadata ([#593](https://github.com/future-agi/traceAI/issues/593)) ([3650426](https://github.com/future-agi/traceAI/commit/3650426799e3425b5b4fe3427a6716732ee6c23c))
+* **haystack:** use native tracing for sync and async pipelines ([#391](https://github.com/future-agi/traceAI/issues/391)) ([c85b659](https://github.com/future-agi/traceAI/commit/c85b659b91f25571affcd5e0487aaa6baf498136))
 
 ## [0.1.10] - 2026-10-29
 

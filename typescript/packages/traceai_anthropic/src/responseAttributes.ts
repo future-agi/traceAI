@@ -52,13 +52,13 @@ export function getAnthropicOutputMessagesAttributes(
   response: Anthropic.Message,
 ): Attributes {
   const outputMessage: Record<string, unknown> = { role: response.role };
-  let lastTextContent = "";
+  let textContent = "";
   const toolCalls: Record<string, unknown>[] = [];
 
   if (response.content && Array.isArray(response.content)) {
     response.content.forEach((contentBlock: Anthropic.ContentBlock) => {
       if (contentBlock.type === "text") {
-        lastTextContent = (contentBlock as Anthropic.TextBlock).text;
+        textContent += (contentBlock as Anthropic.TextBlock).text;
       } else if (contentBlock.type === "tool_use") {
         const toolUseBlock = contentBlock as Anthropic.ToolUseBlock;
         toolCalls.push({
@@ -68,8 +68,8 @@ export function getAnthropicOutputMessagesAttributes(
     });
   }
 
-  if (lastTextContent) {
-    outputMessage.content = lastTextContent;
+  if (textContent) {
+    outputMessage.content = textContent;
   }
   if (toolCalls.length > 0) {
     outputMessage.tool_calls = toolCalls;

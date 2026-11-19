@@ -1,0 +1,78 @@
+{
+  "name": "anthropic-snapshot-null-and-zero-replace",
+  "request": {
+    "method": "POST",
+    "url": "https://api.anthropic.com/v1/messages",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "claude-fixture",
+      "max_tokens": 100,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "message_start",
+        "message": {
+          "id": "msg-reset",
+          "content": [],
+          "usage": {
+            "input_tokens": 30,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 20
+          }
+        }
+      },
+      {
+        "type": "message_delta",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        }
+      },
+      {
+        "type": "message_stop"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat claude-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true,
+      "gen_ai.usage.output_tokens": 0,
+      "gen_ai.usage.cache_read_tokens": 0,
+      "gen_ai.usage.cache_write_tokens": 0
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text",
+      "gen_ai.usage.input_tokens",
+      "gen_ai.usage.total_tokens",
+      "gen_ai.usage.output_tokens.reasoning",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

@@ -21,7 +21,8 @@ def fi_env(monkeypatch):
 
 def _exporter(provider):
     processor = provider._active_span_processor._span_processors[0]
-    return getattr(processor, "span_exporter", None) or processor._batch_processor._exporter
+    exporter = getattr(processor, "span_exporter", None) or processor._batch_processor._exporter
+    return getattr(exporter, "exporter", exporter)
 
 
 def _headers(exporter):

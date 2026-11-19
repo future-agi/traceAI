@@ -1,0 +1,5 @@
+# Maintained launchers are source assets, not compiled binaries.
+!bin/
+!bin/futureagi-hook.sh
+!bin/futureagi-hook.ps1
+!bin/futureagi-hook.cmd

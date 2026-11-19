@@ -233,7 +233,7 @@ environment variables before calling `instrument()`:
 |---|---|
 | `hide_inputs` / `FI_HIDE_INPUTS=true` | Records `input.value` as `__REDACTED__` and drops `gen_ai.retrieval.query`. The query is also removed from error text as described above. Counts and resource names stay. |
 | `hide_outputs` / `FI_HIDE_OUTPUTS=true` | No effect: no output text is recorded. |
-| `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>` in every recorded text: attributes, the error status and the `exception` event. It runs after credentials (and the hidden query) are removed and before the size caps, so a cut cannot leave part of an email. The patterns also match ids: in a resource name with a GCP project number, the last ten digits are replaced (`projects/123456789012/...` is recorded as `projects/12<PHONE_NUMBER>/...`). |
+| `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>` in every recorded text: attributes, the error status and the `exception` event. It runs after credentials (and the hidden query) are removed and before the size caps, so a cut cannot leave part of an email. With a core that includes the issue #195 fix (fi-instrumentation-otel after 1.3.0), a GCP project number inside a resource name is kept; older cores replace its last ten digits (`projects/123456789012/...` is recorded as `projects/12<PHONE_NUMBER>/...`). |
 
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError` and nothing is wrapped.

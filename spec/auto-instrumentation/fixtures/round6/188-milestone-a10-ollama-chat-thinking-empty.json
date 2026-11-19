@@ -1,0 +1,72 @@
+{
+  "name": "milestone-a10-ollama-chat-thinking-empty",
+  "description": "Empty/null payloads and role/ID/finish scaffolds never establish first output.",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:11434/api/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "model": "fixture-model",
+        "message": {
+          "role": "assistant"
+        },
+        "done": false
+      },
+      {
+        "model": "fixture-model",
+        "message": {
+          "role": "assistant",
+          "thinking": ""
+        },
+        "done": false
+      },
+      {
+        "model": "fixture-model",
+        "message": {
+          "role": "assistant",
+          "thinking": null
+        },
+        "done": false
+      },
+      {
+        "done": true
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

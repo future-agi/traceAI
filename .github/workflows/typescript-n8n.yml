@@ -1,0 +1,69 @@
+name: TypeScript n8n
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_n8n/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/package.json'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - 'typescript/tsconfig*.json'
+      - '.github/workflows/typescript-n8n.yml'
+  push:
+    paths:
+      - 'typescript/packages/traceai_n8n/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/package.json'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - 'typescript/tsconfig*.json'
+      - '.github/workflows/typescript-n8n.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-n8n-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: n8n real-engine integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: typescript
+    env:
+      N8N_DIAGNOSTICS_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.21.1'
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Install locked dependencies without lifecycle scripts
+        run: pnpm --filter '@traceai/n8n...' install --frozen-lockfile --ignore-scripts
+      - name: Build shared dependencies
+        run: pnpm run build:deps
+      - name: Build CommonJS and ESM entries
+        run: pnpm --filter @traceai/n8n build
+      - name: Check types
+        run: pnpm --filter @traceai/n8n typecheck
+      - name: Check formatting
+        run: pnpm --filter @traceai/n8n lint
+      - name: Test the real engine and automatic loading
+        run: pnpm --filter @traceai/n8n test:coverage
+      - name: Pack the package
+        run: pnpm --filter @traceai/n8n pack --pack-destination "$RUNNER_TEMP"

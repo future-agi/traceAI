@@ -1,0 +1,72 @@
+{
+  "name": "milestone-error-before-output",
+  "description": "Only the first chunk arrives; a future output event cannot produce a milestone on failure.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant"
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "unobserved"
+            }
+          }
+        ]
+      },
+      "[DONE]"
+    ],
+    "arrival_offsets_ms": [
+      10,
+      50,
+      100
+    ],
+    "error_after_chunks": 1
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

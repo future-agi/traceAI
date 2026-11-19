@@ -2,6 +2,16 @@
 
 All notable changes to `traceAI-tavily` will be documented here.
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-tavily-v0.1.0...traceai-tavily-v0.1.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **tavily:** complete direct-client operation tracing ([#475](https://github.com/future-agi/traceAI/issues/475)) ([240ffa6](https://github.com/future-agi/traceAI/commit/240ffa64ba0c2e22b4153679a7154ee0aaba3d9c))
+* **tavily:** keep extraction errors free of submitted URLs ([#566](https://github.com/future-agi/traceAI/issues/566)) ([cfc1f20](https://github.com/future-agi/traceAI/commit/cfc1f20a91e2bb3db32fbbdf37dd21184f83475e))
+* **tavily:** preserve incomplete streams and gate README coverage ([#526](https://github.com/future-agi/traceAI/issues/526)) ([d0b8782](https://github.com/future-agi/traceAI/commit/d0b87823b2e3c8dccab594cb986d3e8e1d9bc3dc))
+* **tavily:** protect endpoint credentials and redact PII before truncation ([#577](https://github.com/future-agi/traceAI/issues/577)) ([f3babef](https://github.com/future-agi/traceAI/commit/f3babefdd65c8eb5011aaa108510a8140d75cbce))
+
 ## [0.1.0] - Unreleased
 
 ### Fixed

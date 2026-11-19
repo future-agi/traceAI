@@ -10,7 +10,8 @@ import {
   type SpanStatus,
   trace,
 } from "@opentelemetry/api";
-import { getAttributesFromContext, REDACTED_VALUE, type TraceConfigOptions } from "@traceai/fi-core";
+import { getAttributesFromContext, REDACTED_VALUE, rememberSpanValueLimit, type TraceConfigOptions } from "@traceai/fi-core";
+import * as fiCore from "@traceai/fi-core";
 import { mapGenkitAttributes } from "./mapping";
 import {
   type ContentPolicy,
@@ -212,6 +213,36 @@ function isGlobalTracerProvider(provider: unknown): boolean {
   }
 }
 
+// A @traceai/fi-core release without this mark keeps its own export behaviour.
+const rememberFITracerSpan = (fiCore as { rememberFITracerSpan?: (context: object) => void }).rememberFITracerSpan;
+
+/**
+ * A Genkit span: from Genkit's tracer, or carrying Genkit's own attributes. Genkit's manual
+ * setup attaches the processor to the provider the application uses, so the application's
+ * own spans reach it too; only Genkit spans are first-party copies.
+ */
+function isGenkitSpan(span: GenkitReadableSpan): boolean {
+  try {
+    const scope = span.instrumentationScope ?? span.instrumentationLibrary;
+    return scope?.name === "genkit-tracer" || typeof span.attributes?.["genkit:type"] === "string";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Converted Genkit spans are first-party traceAI spans. Marking the native span context
+ * makes the Future AGI export boundary treat the copy like an FI tracer span, so
+ * the session and user ids it carries export as set for Sessions grouping.
+ */
+function markFIAuthored(ctx: SpanContext): void {
+  try {
+    if (typeof rememberFITracerSpan === "function" && ctx && typeof ctx === "object") rememberFITracerSpan(ctx);
+  } catch {
+    // The span is still exported; its grouping keys then keep the credential name rule.
+  }
+}
+
 /** Build the sdk-trace-base 2.x view of a span with new attributes and the Future AGI resource. */
 export function toExportableSpan(
   span: GenkitReadableSpan,
@@ -220,6 +251,7 @@ export function toExportableSpan(
   privacy: ExportPrivacy = {},
 ): ExportableSpan {
   const ctx = span.spanContext();
+  if (isGenkitSpan(span)) markFIAuthored(ctx);
   let parentSpanContext = span.parentSpanContext;
   const parentSpanId = parentSpanContext?.spanId ?? span.parentSpanId;
   if (!parentSpanContext && parentSpanId) {
@@ -334,6 +366,8 @@ export class FIGenkitSpanProcessor {
   onStart(span: object, parentContext: Context): void {
     if (this.isShutdown) return;
     try {
+      // Retain native code-only SDK limits before mapping drops private slots.
+      rememberSpanValueLimit(span);
       // Session, user, metadata and tags set with the fi-core context helpers
       // around a flow call. Genkit creates its spans with that context.
       const attributes = getAttributesFromContext(parentContext);
@@ -348,6 +382,10 @@ export class FIGenkitSpanProcessor {
   onEnd(span: GenkitReadableSpan): void {
     if (this.isShutdown) return;
     try {
+      // Record loss at completion before path/identity scrubbing can shorten an
+      // SDK-truncated value. The shared exporter joins this evidence by context;
+      // no raw content or host span is modified or retained.
+      rememberSpanValueLimit(span);
       const contextAttributes = this.contextAttributes.get(span);
       const attributes = mapGenkitAttributes(span.attributes, {
         policy: this.policy,

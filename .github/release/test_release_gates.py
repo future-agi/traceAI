@@ -11,7 +11,8 @@ WORKFLOW = Path(__file__).resolve().parents[1] / 'workflows/release.yml'
 
 
 class CredentialGateTests(unittest.TestCase):
-    def run_gate(self, *, token=False, trusted=False, release=True, pending=True, nuget_user='nvjkkartik'):
+    def run_gate(self, *, token=False, trusted=False, release=True, pending=True, nuget_user='nvjkkartik',
+                 ruby_trusted='true', event='push', ref='refs/heads/main', dry_run=False):
         workflow = WORKFLOW.read_text()
         step = workflow.split('      - name: Credential and event gates\n', 1)[1].split('\n  python-core-build:', 1)[0]
         # Bind the exercised booleans to the real workflow inputs. Never expose a token.
@@ -26,11 +27,13 @@ class CredentialGateTests(unittest.TestCase):
             output.touch()
             env = {
                 'PATH': os.defpath,
-                'RELEASE_EVENT': str(release).lower(),
+                'RELEASE_EVENT': str(release and ref == 'refs/heads/main' and event != 'pull_request' and not dry_run).lower(),
                 'NPM_TOKEN_AVAILABLE': str(token).lower(),
                 'NPM_TRUSTED_PUBLISHING': str(trusted).lower(),
                 'TYPESCRIPT_PENDING': str(pending).lower(),
                 'PYPI': 'true', 'MAVEN': 'true', 'NUGET': str(bool(nuget_user)).lower(),
+                # GitHub Actions expression equality ignores case, so 'TRUE' opts in as 'true' does.
+                'RUBYGEMS': str(ruby_trusted.lower() == 'true').lower(),
                 'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary),
             }
             result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script],
@@ -91,6 +94,47 @@ class CredentialGateTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(outputs['nuget'], 'false')
                 self.assertNotIn('::warning::', result.stdout)
+
+    def test_ruby_gate_uses_only_trusted_publishing_opt_in(self):
+        workflow = WORKFLOW.read_text()
+        step = workflow.split('      - name: Credential and event gates\n', 1)[1].split('\n  python-core-build:', 1)[0]
+        self.assertIn("RUBYGEMS: ${{ vars.RUBYGEMS_TRUSTED_PUBLISHING == 'true' }}", step)
+        self.assertIn('      ruby: ${{ steps.plan.outputs.ruby }}', workflow)
+        self.assertIn('      publish_ruby: ${{ steps.gates.outputs.ruby }}', workflow)
+
+    def test_ruby_trusted_publishing_enables_main_push(self):
+        for value in ('true', 'TRUE'):
+            with self.subTest(variable=value):
+                result, outputs = self.run_gate(token=True, ruby_trusted=value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs['ruby'], 'true')
+                self.assertNotIn('::warning::ruby', result.stdout)
+
+    def test_missing_ruby_opt_in_warns_without_disabling_other_ecosystems(self):
+        for value in ('', 'false', 'yes'):
+            with self.subTest(variable=value):
+                result, outputs = self.run_gate(token=True, ruby_trusted=value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs['ruby'], 'false')
+                self.assertIn('::warning::ruby publishing disabled: complete the RELEASING.md checklist. Builds still run.', result.stdout)
+                for eco in ('python', 'typescript', 'java', 'go', 'nuget'):
+                    self.assertEqual(outputs[eco], 'true')
+
+    def test_ruby_opt_in_never_overrides_pull_request_dry_run_or_branch_gate(self):
+        cases = (
+            {'event': 'pull_request'},
+            {'event': 'workflow_dispatch', 'dry_run': True},
+            {'ref': 'refs/heads/dev'},
+        )
+        for case in cases:
+            for value in ('', 'true'):
+                with self.subTest(event=case, variable=value):
+                    result, outputs = self.run_gate(ruby_trusted=value, **case)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(outputs['ruby'], 'false')
+                    self.assertTrue(all(value == 'false' for value in outputs.values()))
+                    self.assertNotIn('::warning::', result.stdout)
+                    self.assertNotIn('::error::', result.stdout)
 
     def test_non_npm_selection_does_not_require_npm_credentials(self):
         result, outputs = self.run_gate(pending=False)

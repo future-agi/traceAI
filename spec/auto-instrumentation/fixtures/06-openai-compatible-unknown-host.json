@@ -1,0 +1,55 @@
+{
+  "name": "openai-compatible-unknown-host",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:8000/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "meta-llama/Llama-3.3-70B-Instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "ping"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "x",
+      "model": "meta-llama/Llama-3.3-70B-Instruct",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "pong"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 3,
+        "completion_tokens": 1
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat meta-llama/Llama-3.3-70B-Instruct",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "openai_compatible",
+      "server.address": "localhost",
+      "server.port": 8000,
+      "gen_ai.usage.total_tokens": 4,
+      "output.value": "pong"
+    }
+  }
+}

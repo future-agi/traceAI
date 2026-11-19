@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.esm.json","compilerOptions":{"module":"ESNext","outDir":"dist/esnext","tsBuildInfoFile":"dist/esnext/tsconfig.esnext.tsbuildinfo"}}

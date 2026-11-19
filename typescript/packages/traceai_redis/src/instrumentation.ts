@@ -15,7 +15,7 @@ import { types } from "node:util";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
-const VERSION = "0.1.2"; // x-release-please-version
+const VERSION = "0.1.3"; // x-release-please-version
 
 // node-redis generates different client types for standalone, cluster, pool and
 // sentinel clients. Only the public methods below are inspected, not internals.
@@ -88,6 +88,35 @@ export interface RedisInstrumentationConfig extends InstrumentationConfig {
   captureQueryVectors?: boolean;
   /** @deprecated Retained for compatibility; result vectors are never captured. */
   captureResultVectors?: boolean;
+  /**
+   * Trace only vector operations: FT.SEARCH and FT.AGGREGATE with a KNN clause and
+   * FT.CREATE with a VECTOR field. Hash, JSON and DEL commands run without a span.
+   */
+  vectorOnly?: boolean;
+}
+
+function vectorSchema(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  return Object.values(schema as Record<string, unknown>).some((field) => {
+    const type = field && typeof field === "object" ? (field as { type?: unknown }).type : field;
+    return typeof type === "string" && type.toUpperCase() === "VECTOR";
+  });
+}
+
+// A KNN clause ("=>[KNN 10 @field $blob]", or with a $K parameter) or a VECTOR_RANGE
+// filter ("@field:[VECTOR_RANGE $radius $blob]"); the word knn alone is text.
+const VECTOR_QUERY = /\[\s*KNN\s+(?:\d+|\$\w+)\s+@|@[\w.-]+\s*:\s*\[\s*VECTOR_RANGE\b/i;
+
+function vectorOperation(operation: RedisVectorOperation, args: any[]): boolean {
+  switch (operation) {
+    case "ftSearch":
+    case "ftAggregate":
+      return typeof args[1] === "string" && VECTOR_QUERY.test(args[1]);
+    case "ftCreate":
+      return vectorSchema(args[1]);
+    default:
+      return false;
+  }
 }
 
 export class RedisInstrumentation extends InstrumentationBase<RedisInstrumentationConfig> {
@@ -113,6 +142,16 @@ export class RedisInstrumentation extends InstrumentationBase<RedisInstrumentati
 
   private refreshTracer(): void {
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+  }
+
+  /** True when only vector operations are traced. */
+  public get vectorOnly(): boolean {
+    return (this.getConfig() as RedisInstrumentationConfig).vectorOnly === true;
+  }
+
+  /** Whether this command gets a span. */
+  private traces(operation: RedisVectorOperation, args: any[]): boolean {
+    return !this.vectorOnly || vectorOperation(operation, args);
   }
 
   public override setTracerProvider(provider: TracerProvider): void {
@@ -208,7 +247,7 @@ export class RedisInstrumentation extends InstrumentationBase<RedisInstrumentati
           return client;
         }
         const owner = owners[0];
-        return owner
+        return owner && owner.traces(operation, args)
           ? owner._wrapMethod(this, record.original, operation, args)
           : record.original.apply(this, args);
       };

@@ -1,18 +1,23 @@
 import asyncio
 import collections
 import inspect
+import sys
 from collections.abc import Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
+from functools import partial
 from secrets import randbits
 from types import ModuleType
 from typing import (
     TYPE_CHECKING,
     Any,  # type: ignore[attr-defined]
+    AsyncGenerator,
     Awaitable,
     Callable,
+    ContextManager,
     Dict,
+    Generator,
     Iterator,
     Literal,
     Optional,
@@ -27,7 +32,14 @@ from typing import (
 import wrapt  # type: ignore[import-untyped]
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from opentelemetry.attributes import BoundedAttributes
-from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, Context, get_value
+from opentelemetry.context import (
+    _SUPPRESS_INSTRUMENTATION_KEY,
+    Context,
+    attach,
+    detach,
+    get_current,
+    get_value,
+)
 from opentelemetry.sdk.trace.id_generator import IdGenerator, RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import Sampler, SamplingResult
 from opentelemetry.trace import (
@@ -40,6 +52,7 @@ from opentelemetry.trace import (
     Status,
     StatusCode,
     Tracer,
+    set_span_in_context,
     use_span,
 )
 from opentelemetry.util.types import Attributes
@@ -380,16 +393,27 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
             args: Tuple[Any, ...],
             kwargs: Dict[str, Any],
         ) -> ReturnType:
-            tracer = self
-            with _chain_context(
-                tracer=tracer,
+            context = partial(
+                _chain_context,
+                tracer=self,
                 name=name,
                 kind=kind,
                 wrapped=wrapped,
                 instance=instance,
                 args=args,
                 kwargs=kwargs,
-            ) as chain_context:
+            )
+            if inspect.isgeneratorfunction(wrapped):
+                return cast(
+                    ReturnType,
+                    _trace_generator(wrapped(*args, **kwargs), context(streaming=True)),
+                )
+            if inspect.isasyncgenfunction(wrapped):
+                return cast(
+                    ReturnType,
+                    _trace_async_generator(wrapped(*args, **kwargs), context(streaming=True)),
+                )
+            with context() as chain_context:
                 output = wrapped(*args, **kwargs)
                 return chain_context.process_output(output)
 
@@ -466,9 +490,9 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
             args: Tuple[Any, ...],
             kwargs: Dict[str, Any],
         ) -> ReturnType:
-            tracer = self
-            with _tool_context(
-                tracer=tracer,
+            context = partial(
+                _tool_context,
+                tracer=self,
                 name=name,
                 description=description,
                 parameters=parameters,
@@ -476,7 +500,18 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
                 instance=instance,
                 args=args,
                 kwargs=kwargs,
-            ) as tool_context:
+            )
+            if inspect.isgeneratorfunction(wrapped):
+                return cast(
+                    ReturnType,
+                    _trace_generator(wrapped(*args, **kwargs), context(streaming=True)),
+                )
+            if inspect.isasyncgenfunction(wrapped):
+                return cast(
+                    ReturnType,
+                    _trace_async_generator(wrapped(*args, **kwargs), context(streaming=True)),
+                )
+            with context() as tool_context:
                 output = wrapped(*args, **kwargs)
                 return tool_context.process_output(output)
 
@@ -532,6 +567,7 @@ def _chain_context(
     instance: Any,
     args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
+    streaming: bool = False,
 ) -> Iterator[_ChainContext]:
     span_name = name or _infer_span_name(instance=instance, callable=wrapped)
     bound_args = inspect.signature(wrapped).bind(*args, **kwargs)
@@ -544,7 +580,8 @@ def _chain_context(
     else:
         input_attributes = get_input_attributes(arguments)
 
-    with tracer.start_as_current_span(
+    start_span = partial(_stream_span, tracer) if streaming else tracer.start_as_current_span
+    with start_span(
         span_name,
         fi_span_kind=kind,
         attributes=input_attributes,
@@ -576,6 +613,7 @@ def _tool_context(
     instance: Any,
     args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
+    streaming: bool = False,
 ) -> Iterator[_ToolContext]:
     tool_name = name or _infer_span_name(instance=instance, callable=wrapped)
     bound_args = inspect.signature(wrapped).bind(*args, **kwargs)
@@ -593,7 +631,8 @@ def _tool_context(
         description=tool_description,
         parameters=tool_parameters,
     )
-    with tracer.start_as_current_span(
+    start_span = partial(_stream_span, tracer) if streaming else tracer.start_as_current_span
+    with start_span(
         tool_name,
         fi_span_kind=FiSpanKindValues.TOOL,
         attributes={
@@ -603,6 +642,114 @@ def _tool_context(
     ) as span:
         context = _ToolContext(span=span)
         yield context
+
+
+@contextmanager
+def _stream_span(tracer: FITracer, name: str, **kwargs: Any) -> Iterator[FiSpan]:
+    """Own the lifetime without leaving a current-span token across a yield."""
+    span = tracer.start_span(name, **kwargs)
+    try:
+        yield span
+    except GeneratorExit:
+        # Explicit close/aclose is normal termination, not an application error.
+        raise
+    except BaseException as exception:
+        if span.is_recording():
+            span.record_exception(exception, escaped=True)
+            span.set_status(
+                Status(StatusCode.ERROR, f"{type(exception).__name__}: {exception}")
+            )
+        raise
+    finally:
+        span.end()
+
+
+class _Stream:
+    """Resume only the producer under its saved OTel context.
+
+    A child span may itself cross a yield. Save that context as well, but restore
+    the consumer's context after every operation. Do not copy the Python context:
+    application ContextVar writes must still behave like an undecorated generator.
+    Only the last yielded value is retained, so infinite streams are not buffered.
+    """
+
+    def __init__(self, generator: Any, span: FiSpan) -> None:
+        self.generator = generator
+        self.context = set_span_in_context(cast(Span, span))
+        self.output: Any = None
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        token = attach(self.context)
+        try:
+            yield
+        finally:
+            self.context = get_current()
+            detach(token)
+
+    def __iter__(self) -> "_Stream":
+        return self
+
+    def __next__(self) -> Any:
+        return self.send(None)
+
+    def send(self, value: Any) -> Any:
+        with self.activate():
+            self.output = self.generator.send(value)
+            return self.output
+
+    def throw(self, *args: Any) -> Any:
+        with self.activate():
+            self.output = self.generator.throw(*args)
+            return self.output
+
+    def close(self) -> Any:
+        with self.activate():
+            return self.generator.close()
+
+    async def step(self, method: Callable[..., Awaitable[Any]], *args: Any) -> Any:
+        with self.activate():
+            self.output = await method(*args)
+            return self.output
+
+
+def _trace_generator(
+    generator: Any,
+    context: ContextManager[Union[_ChainContext, _ToolContext]],
+) -> Generator[Any, Any, Any]:
+    with context as span_context:
+        stream = _Stream(generator, span_context._span)
+        try:
+            # Native delegation preserves send/throw/close and StopIteration.value.
+            return (yield from stream)
+        finally:
+            span_context.process_output(stream.output)
+
+
+async def _trace_async_generator(
+    generator: Any,
+    context: ContextManager[Union[_ChainContext, _ToolContext]],
+) -> AsyncGenerator[Any, Any]:
+    with context as span_context:
+        stream = _Stream(generator, span_context._span)
+        try:
+            try:
+                output = await stream.step(generator.__anext__)
+                while True:
+                    try:
+                        value = yield output
+                    except GeneratorExit:
+                        with stream.activate():
+                            await generator.aclose()
+                        raise
+                    except BaseException:
+                        output = await stream.step(generator.athrow, *sys.exc_info())
+                    else:
+                        output = await stream.step(generator.asend, value)
+            except StopAsyncIteration:
+                return
+        finally:
+            span_context.process_output(stream.output)
 
 
 def _infer_span_name(*, instance: Any, callable: Callable[..., Any]) -> str:

@@ -6,13 +6,15 @@
  * exported by default, and the standard flags hide them: `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
  * `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`,
  * `FI_HIDE_EMBEDDING_VECTORS`, or the same options on `traceConfig`. Precedence and parsing are fi-core's: option > env var >
- * default, and only the string "true" (any case) hides.
+ * default. In a variable, true, 1, yes and on turn a switch on, false, 0, no and off turn it off
+ * (any case), an empty value counts as unset, and any other value turns it on with one warning.
  *
  * Never exported, in either mode: Genkit's request context, stack traces, and local file paths
  * (rewritten to `[cwd]`, `~` or `[path]`). Error text additionally loses emails and this
  * machine's user and host names.
  */
 import * as os from "os";
+import { diag } from "@opentelemetry/api";
 import {
   DEFAULT_HIDE_EMBEDDING_VECTORS,
   DEFAULT_HIDE_INPUTS,
@@ -41,6 +43,7 @@ export interface ContentPolicy {
   hideInputText: boolean;
   hideOutputText: boolean;
   hideEmbeddingVectors: boolean;
+  hideLLMInvocationParameters?: boolean;
 }
 
 /** Content captured, nothing hidden: fi-core's defaults (`DEFAULT_HIDE_* = false`). */
@@ -52,6 +55,7 @@ export const SHOW_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideInputText: DEFAULT_HIDE_INPUT_TEXT,
   hideOutputText: DEFAULT_HIDE_OUTPUT_TEXT,
   hideEmbeddingVectors: DEFAULT_HIDE_EMBEDDING_VECTORS,
+  hideLLMInvocationParameters: false,
 });
 
 /** Every content flag on. */
@@ -63,18 +67,41 @@ export const HIDE_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideInputText: true,
   hideOutputText: true,
   hideEmbeddingVectors: true,
+  hideLLMInvocationParameters: true,
 });
 
+const SWITCH_ON = ["true", "1", "yes", "on"];
+const SWITCH_OFF = ["false", "0", "no", "off"];
+const warnedSwitches = new Set<string>();
+
 /**
- * One fi-core boolean flag: option > env var > default, with fi-core's env rule
- * (`value.toLowerCase() === "true"`). Read here because fi-core's `generateTraceConfig` is not
- * exported and reads the env vars only when a config object is passed.
+ * One fi-core boolean flag: option > env var > default. The env var follows the rule of every
+ * traceAI privacy switch, so a switch someone set never silently does nothing: true, 1, yes and
+ * on turn it on, false, 0, no and off turn it off (any case, surrounding spaces ignored), and an
+ * empty value counts as unset. Any other value turns it on, with one warning per variable that
+ * names the accepted values and never the value. This is the package's own copy of the rule
+ * fi-core's trace configuration follows, so the span processor reads the variables the same way
+ * with or without a config object.
  */
 function flag(option: boolean | undefined, envKey: string, fallback: boolean): boolean {
   if (option !== undefined) return option;
   const value = typeof process !== "undefined" ? process.env?.[envKey] : undefined;
-  if (value !== undefined) return value.toLowerCase() === "true";
-  return fallback;
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") return fallback;
+  if (SWITCH_ON.includes(normalized)) return true;
+  if (SWITCH_OFF.includes(normalized)) return false;
+  if (!warnedSwitches.has(envKey)) {
+    warnedSwitches.add(envKey);
+    try {
+      diag.warn(
+        `@traceai/genkit: ${envKey} is not one of true, 1, yes, on, false, 0, no or off; treating it as on, so the content it controls is hidden.`,
+      );
+    } catch {
+      // a diagnostic logger that throws never changes the policy
+    }
+  }
+  return true;
 }
 
 /**
@@ -82,7 +109,7 @@ function flag(option: boolean | undefined, envKey: string, fallback: boolean): b
  * `captureContent: false` option, which must never export more than it asked for).
  */
 export function resolveContentPolicy(
-  traceConfig?: TraceConfigOptions,
+  traceConfig?: TraceConfigOptions & { hideLLMInvocationParameters?: boolean },
   fallback: Partial<ContentPolicy> = {},
 ): ContentPolicy {
   const d = { ...SHOW_ALL, ...fallback };
@@ -94,6 +121,7 @@ export function resolveContentPolicy(
     hideInputText: flag(traceConfig?.hideInputText, FI_HIDE_INPUT_TEXT, d.hideInputText),
     hideOutputText: flag(traceConfig?.hideOutputText, FI_HIDE_OUTPUT_TEXT, d.hideOutputText),
     hideEmbeddingVectors: flag(traceConfig?.hideEmbeddingVectors, FI_HIDE_EMBEDDING_VECTORS, d.hideEmbeddingVectors),
+    hideLLMInvocationParameters: flag(traceConfig?.hideLLMInvocationParameters, "FI_HIDE_LLM_INVOCATION_PARAMETERS", d.hideLLMInvocationParameters ?? false),
   };
 }
 

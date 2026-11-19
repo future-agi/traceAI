@@ -123,7 +123,8 @@ it.each([false, true])("traces real v2=%s SDK streaming through terminal usage a
   expect(spans[0].status.code).toBe(SpanStatusCode.OK);
   if (v2) {
     const messages = JSON.parse(spans[0].attributes[S.LLM_OUTPUT_MESSAGES] as string);
-    expect(messages[0].tool_calls[0]).toEqual({ id: "call-1", type: "function", function: { name: "lookup", arguments: '{"key":"value"}' } });
+    // Shared-core catalog rules mask VALUES; the tool schema and property name survive.
+    expect(messages[0].tool_calls[0]).toEqual({ id: "call-1", type: "function", function: { name: "lookup", arguments: '{"key":"<redacted>"}' } });
   }
 });
 
@@ -694,12 +695,14 @@ describe.each(outputModes)("generated content with %s", (mode) => {
         expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
         expect(JSON.stringify(attrs)).not.toContain("synthetic-generated-");
       } else {
-        const calls = ["terminal", "generation"].includes(ending) ? finalCalls : [
-          { name: "lookup", parameters: '{"synthetic-generated-key":"value"}' },
+        // Only values under credential-catalog names change. Property-only
+        // fragments and authoritative noncredential final parameters stay intact.
+        const exportedCalls = ["terminal", "generation"].includes(ending) ? finalCalls : [
+          { name: "lookup", parameters: '{"synthetic-generated-key":"<redacted>"}' },
           { name: "second", parameters: '{"synthetic-generated-second":' },
         ];
-        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).toolCalls).toEqual(calls);
-        expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_calls).toEqual(calls.map(call => ({
+        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).toolCalls).toEqual(exportedCalls);
+        expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_calls).toEqual(exportedCalls.map(call => ({
           function: { name: call.name, arguments: typeof call.parameters === "string" ? call.parameters : JSON.stringify(call.parameters) },
         })));
       }

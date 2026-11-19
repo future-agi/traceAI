@@ -1,0 +1,7 @@
+{
+  "id": "futureagi-openclaw",
+  "name": "Future AGI lifecycle",
+  "activation": { "onStartup": true },
+  "description": "Flushes the preloaded Future AGI exporter when the official OpenClaw plugin services stop. Does not read conversations or instrument models.",
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

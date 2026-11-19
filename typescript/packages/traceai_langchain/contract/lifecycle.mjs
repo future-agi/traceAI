@@ -16,6 +16,7 @@ const { LangChainInstrumentation, isPatched } = await load("@traceai/langchain")
 const { BasicTracerProvider, SimpleSpanProcessor } = await load("@opentelemetry/sdk-trace-base");
 const { OTLPTraceExporter } = await load("@opentelemetry/exporter-trace-otlp-http");
 const { SemanticConventions } = await load("@traceai/fi-semantic-conventions");
+const { diag, DiagLogLevel } = await load("@opentelemetry/api");
 
 const requests = [];
 const collector = createServer(async (request, response) => {
@@ -45,14 +46,28 @@ const instrumentation = new LangChainInstrumentation({
   tracerProvider: provider,
   traceConfig: hidden ? { hideInputs: true, hideOutputs: true, hideErrorDetails: true } : {},
 });
+// Patching and unpatching must not log failures. An ES module namespace cannot
+// take new properties, so setup must not try to store a flag on it.
+const setupFailures = [];
+let watchingSetup = false;
+const watchSetup = (level) => (message, ...args) => {
+  if (watchingSetup && (level === "warn" || level === "error" || args.some((arg) => arg instanceof Error))) {
+    setupFailures.push(`${level}: ${message} ${args.join(" ")}`);
+  }
+};
+diag.setLogger(Object.fromEntries(
+  ["error", "warn", "info", "debug", "verbose"].map((level) => [level, watchSetup(level)]),
+), DiagLogLevel.ALL);
 
 try {
+  watchingSetup = true;
   // Loading these AFTER initialization is essential to the automatic hook test.
   const manager = await load("@langchain/core/callbacks/manager");
   if (mode !== "automatic") {
     instrumentation.manuallyInstrument(manager);
     instrumentation.manuallyInstrument(manager); // Repeated setup must not duplicate spans.
   }
+  watchingSetup = false;
   assert.equal(isPatched(), true, `${mode} must patch core ${require("@langchain/core/package.json").version}`);
   const { RunnableLambda } = await load("@langchain/core/runnables");
   const { awaitAllCallbacks } = await load("@langchain/core/callbacks/promises");
@@ -110,6 +125,10 @@ try {
     if (hidden) assert.ok(!JSON.stringify(requests).includes(secret), "private content must not reach OTLP");
     else assert.ok(JSON.stringify(requests).includes(secret));
   }
+  watchingSetup = true;
+  instrumentation.disable();
+  watchingSetup = false;
+  assert.deepEqual(setupFailures, [], "patching and unpatching must not log failures");
   console.log(JSON.stringify({ core: require("@langchain/core/package.json").version, mode, hidden, spans: names, result: "PASS" }));
 } finally {
   instrumentation.disable();

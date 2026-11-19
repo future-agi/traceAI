@@ -12,11 +12,52 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 | [Anthropic](anthropic/README.md) | `traceaianthropic` | `anthropic-sdk-go` middleware | Messages, including streaming and tool calls |
 | [Amazon Bedrock](bedrock/README.md) | `traceaibedrock` | AWS SDK v2 typed client adapter | Converse sync/stream; Anthropic Messages InvokeModel sync/stream |
 | [Google Gen AI](genai/README.md) | `traceaigenai` | HTTP transport | Gemini Developer API content generation and streaming |
+| [LangChainGo](langchaingo/README.md) | `traceailangchaingo` | LangChainGo callbacks and embedder wrapper | Chains, chat models, tools, retrievers and embeddings |
 | [Eino](eino/README.md) | `traceaieino` | Eino callbacks | Agents, graphs, models, tools, retrieval and embedding components |
 | [A2A](a2a/README.md) | `traceaia2a` | `a2a-go/v2` client interceptor | Remote-agent calls over JSON-RPC, REST and gRPC |
 | [AWS Lambda](lambda/README.md) | `traceailambda` | Maintained `otellambda` adapter | Invocation spans, HTTP-v2 parents and bounded flushing |
 
 The provider modules are not interchangeable: the OpenAI module does not trace the Responses API or embeddings, and the Gen AI module does not claim Vertex AI support. See each module's limitations before choosing it. Instrumentors use the tracer provider you supply (or the OpenTelemetry global provider); none configures an exporter automatically.
+
+## Zero-code tracing with one import
+
+[`go/auto`](auto/README.md) traces AI calls without per-SDK code. Import it once and rebuild; it wraps `http.DefaultTransport`, so calls made by any client built on the default transport (including the default OpenAI and Anthropic Go clients) become wire-layer spans, exported to Future AGI under the same shared privacy catalog (version 3) as traceAI's other SDKs, with [a few differences](auto/README.md#privacy-differences-from-other-traceai-sdks). It configures its own exporter from `FI_API_KEY` and `FI_SECRET_KEY`. Only AI spans are sent to Future AGI: the wire spans, and spans from the modules above when they run on an SDK tracer provider the agent attaches to. It never replaces your OpenTelemetry tracer provider; if you install one, do it before the first AI call, or pass it to `auto.Init(ctx, auto.WithTracerProvider(tp))` before that call. When the agent attaches to your provider, the wire spans, with their captured content, also go to that provider's own exporters; `FI_HIDE_*` applies to both copies, and known-secret replacement only to the copy sent to Future AGI.
+
+```sh
+go get github.com/future-agi/traceAI/go/auto@v0.1.0
+```
+
+```go
+import (
+    "context"
+    "time"
+
+    "github.com/future-agi/traceAI/go/auto"
+)
+
+func main() {
+    // Go has no exit hook: flush queued spans before main returns.
+    defer func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+        _ = auto.Shutdown(ctx)
+    }()
+    // Your code. AI calls through http.DefaultTransport are traced.
+}
+```
+
+**`http.DefaultTransport` changes type.** With FI keys set and wire capture on, `http.DefaultTransport` is the agent's wrapper, not an `*http.Transport`, from package initialization on. An unchecked `http.DefaultTransport.(*http.Transport)` assertion, such as `http.DefaultTransport.(*http.Transport).Clone()`, then panics; a checked assertion takes its fallback. Build custom transports from `&http.Transport{...}` and wrap them with `auto.Transport`, or set `FI_WIRE_CAPTURE=false` if a dependency makes the unchecked assertion.
+
+**Module spans need an SDK tracer provider.** The modules above use the global tracer provider unless you pass them one, and their spans reach Future AGI only through an SDK tracer provider the agent attaches to. With only the import and no provider of your own, module spans go nowhere. Install one as the global provider before the first AI call, or pass it to `auto.Init` with `auto.WithTracerProvider(tp)` (and to each module's own `WithTracerProvider` option):
+
+```go
+tp := sdktrace.NewTracerProvider() // sdktrace "go.opentelemetry.io/otel/sdk/trace"
+otel.SetTracerProvider(tp)         // before the first AI call
+```
+
+Module spans that end before the agent activates are not forwarded, so call `auto.Init` at startup if a step can finish before the first AI call.
+
+The example installs `go/auto` v0.1.0; use `@dev` to follow unreleased work. A long-running service can use `import _ "github.com/future-agi/traceAI/go/auto"` and skip the `Shutdown` call. Wire spans cover the HTTP call (model, messages, usage, timing); agent, chain and tool steps still need the modules above, on an SDK tracer provider as shown. Custom transports need `auto.Transport(base)`, and gRPC, WebSocket and realtime audio are not covered. See the [go/auto README](auto/README.md) and its [example](auto/example/main.go).
 
 ## Install
 
@@ -34,6 +75,7 @@ go get github.com/future-agi/traceAI/go/anthropic@latest
 go get github.com/future-agi/traceAI/go/bedrock@latest
 go get github.com/future-agi/traceAI/go/genai@latest
 go get github.com/future-agi/traceAI/go/eino@latest
+go get github.com/future-agi/traceAI/go/langchaingo@latest
 go get github.com/future-agi/traceAI/go/a2a@latest
 go get github.com/future-agi/traceAI/go/lambda@latest
 ```
@@ -149,6 +191,7 @@ Each module has its own semantic version. The first planned release is **v0.1.0*
 | Anthropic | `go/anthropic/v0.1.0` |
 | Bedrock | `go/bedrock/v0.1.0` |
 | Eino | `go/eino/v0.1.0` |
+| LangChainGo | `go/langchaingo/v0.1.0` |
 | Gen AI | `go/genai/v0.1.0` |
 | Lambda | `go/lambda/v0.1.0` |
 | OpenAI | `go/openai/v0.1.0` |
@@ -167,4 +210,4 @@ go build -o /tmp/traceai-example ./example
 go doc .
 ```
 
-Tests use local servers and in-memory exporters, not live credentials. The [Go CI workflow](../.github/workflows/go-ci.yml) checks all seven modules independently at the minimum Go version and the current stable Go version, checks module paths and rejects local replacements, and builds every example. Package documentation lives in each module's `doc.go` for `go doc` and pkg.go.dev.
+Tests use local servers and in-memory exporters, not live credentials. The [Go CI workflow](../.github/workflows/go-ci.yml) checks all eight modules independently at the minimum Go version and the current stable Go version, checks module paths and rejects local replacements, and builds every example. Package documentation lives in each module's `doc.go` for `go doc` and pkg.go.dev.

@@ -1,0 +1,117 @@
+{
+  "name": "openai-chat-stream-tool-calls",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4.1",
+      "stream": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Weather?"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "parameters": {}
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "c4",
+        "model": "gpt-4.1",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "id": "call_9",
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": ""
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c4",
+        "model": "gpt-4.1",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "{\"city\":"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c4",
+        "model": "gpt-4.1",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "\"Oslo\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ]
+      },
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4.1",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id": "call_9",
+      "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name": "get_weather",
+      "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"city\":\"Oslo\"}",
+      "gen_ai.response.finish_reasons": [
+        "tool_calls"
+      ],
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.usage.input_tokens"
+    ]
+  }
+}

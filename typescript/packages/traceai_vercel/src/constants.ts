@@ -30,6 +30,8 @@ import {
     ["ai.embedMany", FISpanKind.CHAIN],
     ["ai.embedMany.doEmbed", FISpanKind.EMBEDDING],
     ["ai.toolCall", FISpanKind.TOOL],
+    ["ai.rerank", FISpanKind.RERANKER],
+    ["ai.rerank.doRerank", FISpanKind.RERANKER],
   ]);
   
   export const AISemConvToFISemConvMap: Record<

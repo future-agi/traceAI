@@ -6,7 +6,7 @@ OpenTelemetry instrumentation for Java AI applications. Trace LLM calls, embeddi
 
 Release coordinates use **`com.futureagi`**. Artifact names are unchanged, and **Java package names remain `ai.traceai.*`**; existing imports do not change.
 
-The install examples track Java SDK `1.0.1`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
+The install examples track Java SDK `1.3.0`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
 
 > **Unreleased API:** the [provider ownership and shutdown](#provider-ownership-and-shutdown) behavior below, including `TraceAI.init(TraceConfig, OpenTelemetry)`, is not in the immutable Central releases `1.0.0` or `1.0.1`. Until a new release containing it is published and passes the [external-consumer check](#validate-readme-coordinates), that section requires a verified source build of this checkout. Installing an older Central release or the historical JitPack commit below is not sufficient. The basic OpenAI quickstart remains available from Central.
 
@@ -20,7 +20,7 @@ Import the BOM once, then add the instrumentation you need:
         <dependency>
             <groupId>com.futureagi</groupId>
             <artifactId>traceai-bom</artifactId>
-            <version>1.0.1</version> <!-- x-release-please-version -->
+            <version>1.3.0</version> <!-- x-release-please-version -->
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -42,7 +42,7 @@ Import the BOM once, then add the instrumentation you need:
 </dependencies>
 ```
 
-Without the BOM, specify `<version>1.0.1</version>` on each traceAI dependency. <!-- x-release-please-version -->
+Without the BOM, specify `<version>1.3.0</version>` on each traceAI dependency. <!-- x-release-please-version -->
 
 For Spring Boot auto-configuration, **add** `traceai-spring-boot-starter` alongside `traceai-java-openai` and the OpenAI SDK shown above:
 
@@ -63,7 +63,7 @@ repositories {
 }
 
 dependencies {
-    implementation platform('com.futureagi:traceai-bom:1.0.1') // x-release-please-version
+    implementation platform('com.futureagi:traceai-bom:1.3.0') // x-release-please-version
     implementation 'com.futureagi:traceai-java-openai'
     implementation 'com.openai:openai-java:0.8.0'
     // For Spring Boot auto-configuration, add this as well (do not replace OpenAI):
@@ -190,11 +190,15 @@ Add `com.futureagi:traceai-java-core` to your application using the BOM above, o
 <dependency>
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-core</artifactId>
-    <version>1.0.1</version> <!-- x-release-please-version -->
+    <version>1.3.0</version> <!-- x-release-please-version -->
 </dependency>
 ```
 
 `TraceAI.init(config)` and `TraceAI.initFromEnvironment()` create a provider used by `TraceAI.getTracer()` and the TraceAI wrappers. They do **not** register, replace or read global OpenTelemetry. Global tracers do not send spans through this local provider. This lets a Java agent or application SDK coexist without registration errors, including when the application registers its SDK after TraceAI starts.
+
+For these owned providers, `TraceConfig.builder().sampler(Sampler.alwaysOff())` (import `io.opentelemetry.sdk.trace.samplers.Sampler`) selects an explicit sampler. If the option is absent or null, `FI_SAMPLE_RATE` wins and selects `ParentBased(TraceIdRatio(rate))`; otherwise `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` select one of the six [standard sampler choices](traceai-javaagent/README.md#configuration). With no settings, or invalid standard settings (one warning), the default is `ParentBased(TraceIdRatio(1.0))`. Parent-based choices preserve the parent's sampled decision; even rate `0` retains children of sampled parents. This sampler option is unreleased and requires the source build above.
+
+On TraceAI-owned providers, sampled spans carry the double attribute `fi.sampling.ratio` only for a known partial keep probability (`0 < r < 1`); dashboards can weight counts and cost by `1/r` as estimated, and absence means `1.0`. Our own partial ratio decisions write W3C tracestate `fi=r:<ratio>` while preserving other entries from valid parents; parent-based children copy only a valid ratio from their sampled parent's `fi` entry, including remote parents, and retain that entry. Only a valid span context counts as a parent: for recognized factory samplers, an invalid or absent parent makes a locally decided root and its inherited tracestate is reset (all vendors, including stale `fi`), even on a dropped root; a kept partial root writes only its own `fi`, while a full-rate root stays empty. This copying also applies to the default sampler, `parentbased_always_on/off`, and parent-based root rates `0` or `1` (including `FI_SAMPLE_RATE=1`); roots with rate `1` never gain a ratio attribute or `fi` entry. Upstream parents without valid metadata, non-parent-based always-on/off samplers, dropped/record-only spans, unknown custom samplers and application-owned providers are not stamped. Non-parent-based `traceidratio` uses only its own partial ratio, never copying upstream metadata. An explicit builder sampler is recognized only when obtained from `TraceConfig.samplerFromEnvironment(...)`, not from an arbitrary OTel/custom sampler's description.
 
 If your application already owns OpenTelemetry, share its pipeline instead:
 
@@ -211,7 +215,7 @@ TraceAI.init(TraceConfig.builder()
     .build(), GlobalOpenTelemetry.get());
 ```
 
-You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection or resource settings. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
+You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection, resource or sampler settings. An application-owned provider keeps its own sampler, regardless of these options or environment variables. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
 
 The first initialization wins until `TraceAI.shutdown()`. Shutdown flushes and closes only a TraceAI-owned provider, with a ten-second wait each for flush and shutdown. In borrowed mode it only detaches TraceAI; the application remains responsible for flushing and closing its SDK. Reinitialization is supported in either mode. Obtain a new `FITracer` and rebuild wrappers after restarting a TraceAI-owned provider; existing wrappers retain their previous tracer.
 

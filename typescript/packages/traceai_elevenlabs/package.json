@@ -1,6 +1,6 @@
 {
   "name": "@traceai/elevenlabs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry tracing for ElevenLabs TypeScript speech synthesis and transcription",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -19,19 +19,36 @@
     "typecheck:contract": "tsc -p test/tsconfig.json",
     "prepare": "pnpm run build"
   },
-  "files": ["dist", "README.md", "!**/*.tsbuildinfo"],
-  "engines": { "node": ">=20.19.0" },
+  "files": [
+    "dist",
+    "README.md",
+    "!**/*.tsbuildinfo"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/future-agi/traceAI.git",
     "directory": "typescript/packages/traceai_elevenlabs"
   },
-  "bugs": { "url": "https://github.com/future-agi/traceAI/issues" },
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
   "homepage": "https://docs.futureagi.com/docs/tracing",
   "author": "Future AGI",
   "license": "Apache-2.0",
-  "publishConfig": { "access": "public" },
-  "keywords": ["elevenlabs", "opentelemetry", "speech", "tts", "stt", "traceai"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "elevenlabs",
+    "opentelemetry",
+    "speech",
+    "tts",
+    "stt",
+    "traceai"
+  ],
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",
@@ -39,7 +56,9 @@
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
-  "peerDependencies": { "@elevenlabs/elevenlabs-js": ">=2.67.0 <3.0.0" },
+  "peerDependencies": {
+    "@elevenlabs/elevenlabs-js": ">=2.67.0 <3.0.0"
+  },
   "devDependencies": {
     "@elevenlabs/elevenlabs-js": "2.75.0",
     "@elevenlabs/sdk-floor": "npm:@elevenlabs/elevenlabs-js@2.67.0",

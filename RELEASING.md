@@ -8,7 +8,7 @@
 4. At the end of a main push, release-please maintains **one combined release PR targeting main** with per-package versions and changelogs. Changes are scoped by package path. `fix` bumps patch; `feat` also bumps patch before 1.0 (`bump-patch-for-minor-pre-major`, matching [OpenInference](https://github.com/Arize-ai/openinference)). Breaking changes follow release-please's pre-major versioning rules. Java is one Maven reactor; `skip-snapshot` prevents a second SNAPSHOT PR. The Python core watches `python/` using the **non-recursive `simple` strategy** with explicit TOML/runtime updaters; this includes dependency-only fixes in `python/pyproject.toml` without discovering or overwriting sibling SDK `version.py` files. Its optional `version.txt` is absent and is not created; the manifest and marked runtime file remain authoritative. Sibling SDK paths have their own components and `python/frameworks`/`python/traceai` are excluded from core-only commit detection. All npm deliveries run sequentially in dependency-DAG order, including semantic conventions → fi-core and Vercel → Mastra, waiting for each published dependency version to be served before delivering its consumer.
 5. Review and merge that release PR. Its version changes trigger the same build/verify/publish pipeline. The next ordinary changes accumulate in the next release PR. No automatic merging is configured.
 
-This extends **Tanmay's [#300](https://github.com/future-agi/traceAI/pull/300)**: his planner, core-first publishing, clean-install checks and changelog-based GitHub releases are retained and extended to five languages. The branch contains a normal merge of his publishing branch, not a rewrite of it.
+This extends **Tanmay's [#300](https://github.com/future-agi/traceAI/pull/300)**: his planner, core-first publishing, clean-install checks and changelog-based GitHub releases are retained and extended to six languages. The branch contains a normal merge of his publishing branch, not a rewrite of it.
 
 ### Exactly one owner for tags
 
@@ -23,6 +23,9 @@ The publisher acknowledges each completed merged release PR by replacing `autore
 | Java | `java/pom.xml`; release-please updates reactor POMs together | `java-vX.Y.Z` | signed Maven Central reactor, `com.futureagi` |
 | Go | `.release-please-manifest.json` entry per module | `go/<module>/vX.Y.Z` | source tag; request Go proxy `.info` afterwards |
 | NuGet | `csharp/src/FIInstrumentation/FIInstrumentation.csproj` | `nuget-fi-instrumentation-otel-vX.Y.Z` | `dotnet pack`, verified local consumer, push with `--skip-duplicate` |
+| NuGet (startup hook) | `csharp/src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj` | `nuget-TraceAI.AutoInstrumentation-vX.Y.Z` | same gated route; the package holds the published hook directory under `tools/net8.0/any/`, and the build installs the packed file into stock .NET 8 and .NET 10 applications and requires a real AI span to be delivered. The hook embeds the SDK sources, so release-please's linked-versions plugin releases it and `fi-instrumentation-otel` together at one version |
+| Ruby (`traceai-auto`) | `ruby/traceai-auto.gemspec` (`s.version`, marked `x-release-please-version`); release-please's `simple` strategy with component `ruby-traceai-auto` updates it, so the component is the tag prefix | `ruby-traceai-auto-vX.Y.Z` | read-only gem build, artifact handoff, RubyGems OIDC push, registry verification before tagging |
+| Ruby (`traceai-roast`) | `ruby/roast/lib/traceai/roast/version.rb` (`VERSION`, marked `x-release-please-version`; component `ruby-traceai-roast`) | `ruby-traceai-roast-vX.Y.Z` | same gated RubyGems route |
 
 The Go proxy URL escapes uppercase letters: `traceAI` becomes `trace!a!i`. A module tag such as `go/openai/v0.1.0` is queried at `https://proxy.golang.org/github.com/future-agi/trace!a!i/go/openai/@v/v0.1.0.info`. No Go registry credentials are needed. JitPack remains a Java commit-preview route; Maven Central is the release route.
 
@@ -51,6 +54,8 @@ Two manifests are tracked but intentionally **never published**:
 - `python/frameworks/hermes-agent/hermes-plugin/futureagi`: a Hermes dependency manifest, explicitly not a buildable distribution.
 
 Java publishing refuses legacy `ai.traceai` coordinates and SNAPSHOT versions. Merge the Java namespace/release-profile PR before expecting Central delivery. The release workflow will not claim that a legacy-coordinate build is a Central release.
+
+A Java reactor module listed under `hold_artifacts` in `.github/release/config.json` is built and tested by the Java release but not deployed: its own `release` profile sets `skipPublishing` for the Central plugin, and the release plan leaves it out of the Central check. No module is held today: the zero-code agent, `com.futureagi:traceai-javaagent`, was released with Java SDK 1.2.0. A hold also keeps a module out of `java/traceai-bom/pom.xml` and out of the JitPack harvest (the module's `jitpack` profile skips its install, and `java/scripts/check_central.py` and `java/scripts/prepare_jitpack.py` read the same list). To publish it, remove its `hold_artifacts` entry, the `release` and `jitpack` profiles in `java/traceai-javaagent/pom.xml`, and add its `<dependency>` back to `java/traceai-bom/pom.xml`; `check_central.py` then fails until the BOM names it.
 
 ## One-time maintainer setup
 
@@ -98,10 +103,21 @@ Sources: [namespace verification](https://central.sonatype.org/register/namespac
 
 ### NuGet: trusted publishing only
 
-- [ ] On nuget.org, create a Trusted Publishing policy for **`fi-instrumentation-otel`**: Package owner **`nvjkkartik`** (the account that currently owns the package), Repository owner **`future-agi`**, Repository **`traceAI`**, Workflow file **`release.yml`**, Environment **`nuget`**.
+The NuGet publisher is enabled only when `nuget-build` succeeds and `publish_nuget=true`: the existing release-event gate requires **main**, no pull request, `dry_run` not true, and a non-empty **`NUGET_USER`** repository variable. This covers main pushes and deliberate non-dry-run main dispatches; a variable alone cannot bypass the build or event gates.
+
+- [ ] On nuget.org, create a Trusted Publishing policy covering **`fi-instrumentation-otel`** and **`TraceAI.AutoInstrumentation`**: Package owner **`nvjkkartik`** (the account that currently owns the package), Repository owner **`future-agi`**, Repository **`traceAI`**, Workflow file **`release.yml`**, Environment **`nuget`**.
 - [ ] Set repository **variable** **`NUGET_USER`** to the nuget.org profile name used for the policy (**not** an email address). No stored NuGet API key or token fallback is used.
 - [ ] Create the GitHub environment **`nuget`** and restrict deployment branches to **`main`**. OIDC login and publishing run in the top-level `release.yml`; `release-nuget.yml` only builds, verifies and uploads the artifact.
 - [ ] The build targets **.NET 10** (`net10.0` in the current project), installs the exact packed nupkg into a fresh consumer, and uses `dotnet nuget push --skip-duplicate`. Registry verification precedes tagging.
+
+### RubyGems: trusted publishing only
+
+- [ ] On **rubygems.org**, create a Trusted Publisher for each gem: **`traceai-auto`** and **`traceai-roast`**. Use repository owner **`future-agi`**, repository **`traceAI`**, workflow filename **`release.yml`**, and environment **`rubygems`**.
+- [ ] Create the GitHub environment **`rubygems`** and restrict deployment branches to **`main`**.
+- [ ] Once both publisher entries are configured, set repository **variable** **`RUBYGEMS_TRUSTED_PUBLISHING=true`** (lowercase `true`). No stored RubyGems API key or token fallback is used.
+- [ ] The read-only **`ruby-build`** job uses Ruby **3.3**, builds each planned gemspec, and uploads a tag-named artifact. The top-level **`ruby`** job uses the pinned `rubygems/configure-rubygems-credentials` action with `id-token: write` and `trusted-publisher: true`, then pushes only that artifact to rubygems.org.
+- [ ] Publication requires a successful **`ruby-build`** and **`publish_ruby=true`**: the same main/non-PR/non-dry-run release-event gate plus the explicit RubyGems opt-in. The opt-in does not create or validate the registry's trusted publishers; a misconfigured publisher fails the upload.
+- [ ] Both fresh uploads and reconciliation must observe the planned version in **`https://rubygems.org/api/v1/versions/<name>.json`** before the GitHub tag/release is created. Already-published versions skip gem building, artifact upload/download, OIDC login and gem push; reruns only verify the registry and repair missing tags/releases. Both Ruby jobs contribute to the final Release verdict.
 
 Missing credentials disable uploads for that ecosystem and emit a warning; build/check jobs still run. Go can create its source tags on main without registry credentials. Setup does not retroactively start a failed/finished run: rerun Release after finishing the checklist.
 

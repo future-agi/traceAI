@@ -1,0 +1,140 @@
+---
+title: "Oh My Pi tracing"
+description: "Install native Oh My Pi tracing with one command and see prompts, model generations, tool calls, and task activity in Future AGI."
+---
+
+<TLDR>
+  Run `npx @traceai/agents setup oh-my-pi --project coding-agents`, enter your
+  Future AGI keys, and restart Oh My Pi. Each prompt becomes a trace, with model
+  generations and tool calls grouped by conversation. Content capture is on by
+  default; use `--no-capture-content` to keep only structure, timing, and usage.
+</TLDR>
+
+## Before you start
+
+Use [Oh My Pi](https://omp.sh) (`omp`) 18.x, starting at 18.17.0, with Bun 1.4.4 or later and a working model configuration. The setup command needs Node.js 22.16+ on the 22.x line, or Node.js 24.x. This integration is for `@oh-my-pi/pi-coding-agent`, not the upstream `pi` binary.
+
+If you previously installed the copied `futureagi-otlp.ts` hook, [remove the old registration](#replace-the-copied-hook) before setup. Keep only one Future AGI exporter active for an OMP session.
+
+## Set up tracing
+
+<Steps>
+<Step title="Get your Future AGI keys">
+
+Create an API key and secret key on the [Future AGI keys page](https://app.futureagi.com/dashboard/keys). Enter them in your terminal, not in an agent conversation or command arguments.
+
+</Step>
+<Step title="Run setup">
+
+```bash
+npx @traceai/agents setup oh-my-pi --project coding-agents
+```
+
+Enter both keys at the masked prompts. Setup validates the destination, saves the keys in an owner-only profile, and installs `@traceai/oh-my-pi-plugin` through OMP's native npm installer. No copied hooks or separate background service are needed.
+
+Prompts, answers, and tool inputs and outputs are captured by default. To omit content, add `--no-capture-content` to setup.
+
+</Step>
+<Step title="Restart OMP and send a prompt">
+
+From a project with a README:
+
+```bash
+omp --print "Read README.md and summarize this project."
+```
+
+You can also use OMP interactively. Restart an existing OMP process after the first install or a credential change.
+
+</Step>
+<Step title="Open the result">
+
+Open **Observe** in Future AGI and select `coding-agents`. Find the prompt's trace and expand its generations and tools. Each dequeued prompt has its own trace; prompts in the same conversation share a session.
+
+```bash
+npx @traceai/agents status oh-my-pi --check
+```
+
+Status distinguishes configuration, native registration, activation, and export delivery. A registered plugin has not necessarily loaded in an already-running OMP process.
+
+</Step>
+</Steps>
+
+## What the trace contains
+
+- The prompt, actual primary and task assistant generations, and tool calls with inputs, outputs, and errors.
+- Per-generation token and cache counts reported by OMP, counted once. Cost uses OMP's model price table, not a provider invoice.
+- Reconstructed generation inputs from the prompt and bounded observed context, where available. Tool-call-only messages list their tool calls. These are not complete provider requests or measured wire durations.
+- Task activity under its verified spawning tool, including nested tasks and background completion. Retained tasks waking after their original trace completes use a linked continuation.
+- Compaction completion during an active prompt, without invented model calls or durations.
+
+OMP's provider callbacks do not distinguish primary requests from advisors. Advisor and other auxiliary generations and their usage are not exported. The trace records `AUXILIARY_GENERATIONS_UNAVAILABLE` as a coverage gap, without marking a successful prompt as failed. Hidden retry attempts are not inferred from ambiguous callbacks.
+
+## Control content and destinations
+
+Content is bounded and common credential fields are redacted, including provider API-key and AWS secret-key names. Images, binary data, transport headers, and thinking signatures are excluded. Redaction cannot identify every secret an agent may read; use content-off mode for sensitive work.
+
+For a single launch:
+
+```bash
+FI_AGENT_CAPTURE_CONTENT=false omp
+```
+
+To save the choice:
+
+```bash
+npx @traceai/agents setup oh-my-pi --no-capture-content
+```
+
+`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, and `FI_HIDE_ERROR_DETAILS` can further restrict content. This package uses `FI_AGENT_CAPTURE_CONTENT`, not the old copied hook's `FI_CAPTURE_CONTENT` variable.
+
+For a project-specific destination, run setup from that project:
+
+```bash
+npx @traceai/agents setup oh-my-pi --project my-project --scope project
+```
+
+The tracing profile is project-specific; OMP's native npm installation remains user-scoped. Project files cannot redirect saved credentials to an unapproved destination. Environment settings override saved settings:
+
+| Variable                         | Purpose                                                                 |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| `FI_API_KEY` and `FI_SECRET_KEY` | Credential pair; supply both through your secret manager for automation |
+| `FI_PROJECT_NAME`                | Destination project                                                     |
+| `FI_BASE_URL`                    | Self-hosted API origin                                                  |
+| `FI_OTLP_ENDPOINT`               | Full OTLP/HTTP traces URL                                               |
+| `FI_AGENT_CAPTURE_CONTENT=false` | Omit content                                                            |
+| `FI_AGENT_ENABLED=false`         | Disable collection and export                                           |
+| `FI_USER_ID`                     | Explicit user ID instead of the profile's opaque local ID               |
+
+## Replace rejected credentials
+
+If setup or `status --check` reports `AUTH_REJECTED`, run:
+
+```bash
+npx @traceai/agents setup oh-my-pi --replace-credentials
+```
+
+Unset old `FI_API_KEY` and `FI_SECRET_KEY` environment overrides first to use masked entry. For a project-scoped profile, run from that project and add `--scope project`. Replacement keys are validated before the saved profile is overwritten. Restart OMP afterward.
+
+In automation, inject both new keys through your secret manager and rerun setup. Never pass credentials as CLI arguments.
+
+## Replace the copied hook
+
+Remove your old `futureagi-otlp.ts` registration before installing the native package. Check `.omp/hooks/pre/`, `.omp/hooks/post/`, and `.omp/extensions/` in the project, and the same locations under your OMP agent directory (normally `~/.omp/agent`). Remove explicit `--hook` or extension configuration entries for any renamed copy too. Setup identifies recognized legacy copies instead of installing a duplicate.
+
+Do not send OMP's built-in OTLP traces to Future AGI alongside this plugin for the same session. Turn off **OTLP Telemetry Export** in OMP's settings if it is already configured for that destination. This leaves the plugin's export active.
+
+## Troubleshoot and uninstall
+
+```bash
+npx @traceai/agents doctor oh-my-pi
+omp plugin list --json
+npx @traceai/agents disable oh-my-pi
+npx @traceai/agents enable oh-my-pi
+npx @traceai/agents uninstall oh-my-pi
+```
+
+- **Registered but no traces:** Restart OMP, send a prompt, and check that the plugin is enabled. Project-level plugin overrides or launching OMP with extension discovery disabled can prevent loading.
+- **`PROJECT_CONFIG_IGNORED`:** The project configuration could not be read safely, for example on a shared external volume. The user profile still applies, but project overrides do not. Keep credential-file permissions private. For sensitive work, set `FI_AGENT_CAPTURE_CONTENT=false` in the launch environment or disable tracing instead of relying on an ignored override.
+- **`UNKNOWN_OMP_EVENT_SHAPE`:** A host event does not match the supported extension contract. The prompt trace is kept with this gap instead of inventing a generation; update the plugin and check your OMP version.
+- **Export failures:** OMP continues. Export is bounded and spans can be dropped rather than persisted with prompt content. Check the last delivery result in status.
+- **Uninstall leaves a manual install:** The setup CLI removes only its own unchanged registration. Remove a manually installed or modified package with `omp plugin uninstall @traceai/oh-my-pi-plugin`.

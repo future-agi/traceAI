@@ -1,0 +1,151 @@
+{
+  "name": "milestone-a10-gemini-code-scaffolds",
+  "description": "Type/ID/language metadata, empty content lists, citations, stop events and tool results are not model-output deltas.",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "executableCode": {
+                    "language": "PYTHON"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "executableCode": {
+                    "language": "PYTHON",
+                    "code": ""
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "executableCode": {
+                    "language": "PYTHON",
+                    "code": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "codeExecutionResult": {
+                    "outcome": "OUTCOME_OK",
+                    "output": "1"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "functionResponse": {
+                    "name": "lookup",
+                    "response": {
+                      "result": "Oslo"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "thought": true
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "generate_content gemini-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

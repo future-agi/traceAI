@@ -1,0 +1,77 @@
+{
+  "name": "milestone-a10-bedrock-tool-input-empty",
+  "description": "Empty/null payloads and role/ID/finish scaffolds never establish first output. Synthetic decoded Bedrock payloads, not binary framing coverage.",
+  "request": {
+    "method": "POST",
+    "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-fixture/converse-stream",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "messageStart": {
+          "role": "assistant"
+        }
+      },
+      {
+        "contentBlockDelta": {
+          "delta": {
+            "toolUse": {
+              "input": ""
+            }
+          }
+        }
+      },
+      {
+        "contentBlockDelta": {
+          "delta": {
+            "toolUse": {
+              "input": null
+            }
+          }
+        }
+      },
+      {
+        "messageStop": {
+          "stopReason": "end_turn"
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat anthropic.claude-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

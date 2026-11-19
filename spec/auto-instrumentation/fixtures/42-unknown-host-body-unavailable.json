@@ -1,0 +1,23 @@
+{
+  "name": "unknown-host-body-unavailable",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:8000/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "unavailable": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "captured": false
+  }
+}

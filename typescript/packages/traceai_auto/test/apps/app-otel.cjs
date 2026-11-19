@@ -1,0 +1,32 @@
+// The application's own OpenTelemetry setup, registered the way NodeSDK.start()
+// registers it: a global tracer provider, context manager, propagator and meter
+// provider. Load it with -r before the agent, or require it after the agent's
+// preload, to model an application that starts its SDK first or later.
+const { trace, context, propagation, metrics } = require('@opentelemetry/api');
+const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-async-hooks');
+const { W3CTraceContextPropagator } = require('@opentelemetry/core');
+const { AlwaysOffSampler, BasicTracerProvider, ParentBasedSampler, SimpleSpanProcessor, TraceIdRatioBasedSampler } = require('@opentelemetry/sdk-trace-base');
+const { resourceFromAttributes } = require('@opentelemetry/resources');
+const spans = [];
+const exporter = { export(batch, done) { spans.push(...batch); done({ code: 0 }); }, async shutdown() {} };
+// APP_SAMPLER=off: the application samples none of its own spans.
+// APP_SAMPLER=parentbased-zero: ParentBased(TraceIdRatioBased(0)). The application
+// samples no new trace, and each child span follows its parent's sampled flag.
+const sampler = process.env.APP_SAMPLER === 'off' ? { sampler: new AlwaysOffSampler() }
+  : process.env.APP_SAMPLER === 'parentbased-zero' ? { sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(0) }) } : {};
+const provider = new BasicTracerProvider({ resource: resourceFromAttributes({ 'service.name': 'own-app' }), ...sampler, spanProcessors: [new SimpleSpanProcessor(exporter)] });
+const registered = {
+  // APP_TRACE=off: a context manager and propagator only, with no tracer provider.
+  trace: process.env.APP_TRACE === 'off' ? false : trace.setGlobalTracerProvider(provider),
+  context: context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()),
+  propagation: propagation.setGlobalPropagator(new W3CTraceContextPropagator()),
+  // A complete no-op meter provider: instrumentations create their histograms on it.
+  metrics: metrics.setGlobalMeterProvider(metrics.getMeterProvider()),
+};
+if (process.env.APP_HTTP === 'true') {
+  // The application's own incoming and outgoing HTTP spans, on its own provider.
+  const { registerInstrumentations } = require('@opentelemetry/instrumentation');
+  const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
+  registerInstrumentations({ tracerProvider: provider, instrumentations: [new HttpInstrumentation()] });
+}
+globalThis.__app = { provider, spans, registered };

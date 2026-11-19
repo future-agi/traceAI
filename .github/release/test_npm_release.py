@@ -23,6 +23,13 @@ class NpmTests(unittest.TestCase):
             for dep in package['workspace_dependencies']:
                 self.assertLess(ordered.index(dep), ordered.index(package['name']))
 
+    def test_hermes_companion_is_released_before_unified_cli(self):
+        packages = release_plan.typescript_packages()
+        cli = next(p for p in packages if p['name'] == '@traceai/agents')
+        closure = [p['name'] for p in npm_release.dependency_closure([cli], packages)]
+        self.assertLess(closure.index('@traceai/agent-core'), closure.index('@traceai/hermes-agent'))
+        self.assertLess(closure.index('@traceai/hermes-agent'), closure.index('@traceai/agents'))
+
     def test_internal_semver_optional_and_peer_edges_are_detected_not_dev_edges(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -130,6 +137,20 @@ class NpmTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'not served'):
                 npm_release.publish(Path('/fixture'), [inventory[0]], Path('/dist'))
             run.assert_not_called()
+
+
+class CommonJsEntryTests(unittest.TestCase):
+    def test_esm_only_packages_skip_require(self):
+        esm = {"type": "module", "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}}}
+        self.assertFalse(npm_release.has_commonjs_entry(esm))
+        self.assertFalse(npm_release.has_commonjs_entry({"type": "module", "main": "./dist/index.js"}))
+
+    def test_commonjs_and_dual_packages_keep_require(self):
+        self.assertTrue(npm_release.has_commonjs_entry({"main": "dist/index.js"}))
+        self.assertTrue(npm_release.has_commonjs_entry({"exports": {".": {"import": "./a.mjs", "require": "./a.cjs"}}}))
+        self.assertTrue(npm_release.has_commonjs_entry({"type": "module", "exports": {".": {"import": "./a.js", "require": "./a.cjs"}}}))
+        self.assertTrue(npm_release.has_commonjs_entry({"exports": {".": {"types": "./a.d.ts", "default": "./a.js"}}}))
+        self.assertTrue(npm_release.has_commonjs_entry({"type": "module", "exports": "./index.cjs"}))
 
 
 if __name__ == '__main__':

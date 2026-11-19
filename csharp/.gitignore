@@ -9,3 +9,5 @@ obj/
 *.snupkg
 .vs/
 TestResults/
+.dotnet/
+artifacts/

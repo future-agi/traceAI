@@ -1,0 +1,19 @@
+{
+  "name": "openai-list-models-ignored",
+  "request": {
+    "method": "GET",
+    "url": "https://api.openai.com/v1/models"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "data": []
+    }
+  },
+  "expect": {
+    "captured": false
+  }
+}

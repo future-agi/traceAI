@@ -1,11 +1,13 @@
 import json
 import logging
+import sys
 from typing import Any, AsyncIterator, Callable, Generator, Iterator, Optional, Protocol, Tuple
 
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._response_accumulator import (
+    _ChatCompletionAccumulator,
     _ResponsesAccumulator,
     _raw_response_status,
     _response_status,
@@ -60,7 +62,8 @@ class _ResponseCloseProxy(ObjectProxy):
         self._self_stream = stream
 
     def close(self) -> None:
-        error = None
+        # High-level SDK contexts close this proxy while unwinding the caller.
+        error: Optional[BaseException] = sys.exc_info()[1]
         try:
             self.__wrapped__.close()
         except BaseException as exc:
@@ -70,7 +73,8 @@ class _ResponseCloseProxy(ObjectProxy):
             _finish_on_exit(self._self_stream, error)
 
     async def aclose(self) -> None:
-        error = None
+        # High-level SDK contexts close this proxy while unwinding the caller.
+        error: Optional[BaseException] = sys.exc_info()[1]
         try:
             await self.__wrapped__.aclose()
         except BaseException as exc:
@@ -424,7 +428,7 @@ class _Stream(ObjectProxy):  # type: ignore
         except StopIteration:
             if not self._self_is_finished:
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
-                self._finish_tracing(status=status)
+                self._finish_tracing(status=status, exhausted=True)
             raise
         except BaseException as exception:
             if not self._self_is_finished:
@@ -455,12 +459,17 @@ class _Stream(ObjectProxy):  # type: ignore
     def _finish_tracing(
         self,
         status: Optional[trace_api.Status] = None,
+        *,
+        exhausted: bool = False,
     ) -> None:
         if self._self_is_finished:
             return
         if status is None or status.status_code is not trace_api.StatusCode.ERROR:
-            get_status = getattr(self._self_response_accumulator, "get_status", None)
-            if get_status is not None:
+            accumulator = self._self_response_accumulator
+            get_status = getattr(accumulator, "get_status", None)
+            if isinstance(accumulator, _ChatCompletionAccumulator):
+                status = accumulator.get_status(exhausted=exhausted) or status
+            elif get_status is not None:
                 status = get_status() or status
         _finish_tracing(
             status=status,
@@ -528,6 +537,10 @@ class _AsyncStream(ObjectProxy):
         finally:
             _finish_on_exit(self, error)
 
+    async def aclose(self) -> None:
+        # Keep the SDK alias on the traced, idempotent close path.
+        await self.close()
+
     def __aiter__(self):
         return self
 
@@ -537,7 +550,7 @@ class _AsyncStream(ObjectProxy):
         except StopAsyncIteration:
             if not self._self_is_finished:
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
-                self._finish_tracing(status=status)
+                self._finish_tracing(status=status, exhausted=True)
             raise
         except BaseException as exception:
             if not self._self_is_finished:
@@ -568,12 +581,17 @@ class _AsyncStream(ObjectProxy):
     def _finish_tracing(
         self,
         status: Optional[trace_api.Status] = None,
+        *,
+        exhausted: bool = False,
     ) -> None:
         if self._self_is_finished:
             return
         if status is None or status.status_code is not trace_api.StatusCode.ERROR:
-            get_status = getattr(self._self_response_accumulator, "get_status", None)
-            if get_status is not None:
+            accumulator = self._self_response_accumulator
+            get_status = getattr(accumulator, "get_status", None)
+            if isinstance(accumulator, _ChatCompletionAccumulator):
+                status = accumulator.get_status(exhausted=exhausted) or status
+            elif get_status is not None:
                 status = get_status() or status
         _finish_tracing(
             status=status,

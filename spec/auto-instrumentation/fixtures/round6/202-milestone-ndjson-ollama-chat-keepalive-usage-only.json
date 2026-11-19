@@ -1,0 +1,58 @@
+{
+  "name": "milestone-ndjson-ollama-chat-keepalive-usage-only",
+  "description": "Empty keep-alive objects, role scaffolds and usage-only finish records are not model output.",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:11434/api/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {},
+      {
+        "model": "fixture-model",
+        "message": {
+          "role": "assistant"
+        },
+        "done": false
+      },
+      {
+        "done": true,
+        "prompt_eval_count": 9,
+        "eval_count": 0
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

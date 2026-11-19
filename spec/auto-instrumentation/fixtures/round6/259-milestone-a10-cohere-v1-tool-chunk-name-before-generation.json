@@ -1,0 +1,79 @@
+{
+  "name": "milestone-a10-cohere-v1-tool-chunk-name-before-generation",
+  "description": "The earliest nonempty tool-calls-chunk payload establishes output, not the final tool-calls-generation at 70ms.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v1/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "message": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "event_type": "stream-start",
+        "generation_id": "co-r6b"
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "text": ""
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "tool_call_delta": {
+          "name": "lookup"
+        }
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "tool_call_delta": {
+          "parameters": {
+            "city": "Oslo"
+          }
+        }
+      },
+      {
+        "event_type": "tool-calls-generation",
+        "tool_calls": [
+          {
+            "name": "lookup",
+            "parameters": {
+              "city": "Oslo"
+            }
+          }
+        ]
+      },
+      {
+        "event_type": "stream-end"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      30,
+      40,
+      50,
+      70,
+      90
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.04,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

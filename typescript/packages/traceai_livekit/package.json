@@ -65,8 +65,8 @@
     "typescript": "^5.3.0"
   },
   "peerDependencies": {
-    "livekit-client": ">=1.0.0 || >=2.0.0",
-    "@livekit/rtc-node": ">=0.3.0"
+    "livekit-client": ">=1.0.0 <3",
+    "@livekit/rtc-node": ">=0.3.0 <2"
   },
   "peerDependenciesMeta": {
     "livekit-client": {

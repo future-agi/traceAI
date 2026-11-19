@@ -135,6 +135,98 @@ class _TimeoutWrapper:
         return decorate
 
 
+class _RunIterator:
+    """Keep a run alive while isolating its producer context at every boundary."""
+
+    def __init__(self, iterator, span, producer_context, finish):
+        self._iterator = iterator
+        self._span = span
+        self._producer_context = producer_context
+        self._finish = finish
+        self._last = None
+        self._ended = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self._advance("__next__")
+
+    def send(self, value):
+        # Ordinary iterators support next/send(None), but not send(value).
+        return self._advance("__next__") if value is None else self._advance("send", value)
+
+    def throw(self, *args):
+        return self._advance("throw", *args)
+
+    def close(self):
+        return self._advance("close")
+
+    def _end(self):
+        if not self._ended:
+            self._ended = True
+            self._span.end()
+
+    def _advance(self, method, *args):
+        token = context_api.attach(self._producer_context)
+        try:
+            try:
+                if method == "close":
+                    try:
+                        close = self._iterator.close
+                    except AttributeError:
+                        # Releasing map/other ordinary iterators may finalize an
+                        # owned generator. Do so before restoring the consumer.
+                        self._iterator = iter(())
+                        result = None
+                    else:
+                        result = close()
+                else:
+                    result = getattr(self._iterator, method)(*args)
+            except StopIteration as stopped:
+                try:
+                    if not self._ended and method != "close":
+                        # Native runs yield their final answer; decorators may
+                        # instead return it as the generator's terminal value.
+                        self._finish(stopped.value if stopped.value is not None else self._last)
+                finally:
+                    self._end()
+                raise
+            except GeneratorExit:
+                self._end()
+                raise
+            except BaseException as exc:
+                if not self._ended:
+                    self._span.record_exception(exc)
+                    self._span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exc)))
+                self._end()
+                raise
+            else:
+                if method == "close":
+                    # Closing or abandoning a stream is not a successful run.
+                    self._end()
+                else:
+                    self._last = result
+                return result
+        finally:
+            self._producer_context = context_api.get_current()
+            context_api.detach(token)
+
+    def __del__(self):
+        try:
+            if not self._ended:
+                self.close()
+        except BaseException:
+            # Explicit close propagates errors; finalization cannot do so.
+            pass
+        finally:
+            token = context_api.attach(self._producer_context)
+            try:
+                self._iterator = None
+            finally:
+                context_api.detach(token)
+
+
 class _RunWrapper:
     def __init__(self, tracer: trace_api.Tracer) -> None:
         self._tracer = tracer
@@ -151,7 +243,7 @@ class _RunWrapper:
         span_name = f"{instance.__class__.__name__}.run"
         agent = instance
         arguments = _bind_arguments(wrapped, *args, **kwargs)
-        with self._tracer.start_as_current_span(
+        span = self._tracer.start_span(
             span_name,
             attributes=dict(
                 _flatten(
@@ -168,8 +260,18 @@ class _RunWrapper:
                     }
                 )
             ),
-        ) as span:
-            agent_output = wrapped(*args, **kwargs)
+        )
+
+        def finish(agent_output):
+            if arguments.get("stream"):
+                # 1.20 yields FinalAnswerStep; older SDKs yield the answer itself.
+                try:
+                    from smolagents.memory import FinalAnswerStep
+                except ImportError:
+                    pass
+                else:
+                    if isinstance(agent_output, FinalAnswerStep):
+                        agent_output = agent_output.output
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(agent_output))
             span.set_attribute(
                 GEN_AI_USAGE_INPUT_TOKENS, agent.monitor.total_input_token_count
@@ -184,7 +286,26 @@ class _RunWrapper:
             )
             span.set_status(trace_api.StatusCode.OK)
             span.set_attribute(OUTPUT_VALUE, str(agent_output))
-        return agent_output
+
+        token = context_api.attach(trace_api.set_span_in_context(span))
+        streaming = False
+        try:
+            # Keep SDK initialization and validation eager, including errors.
+            agent_output = wrapped(*args, **kwargs)
+            if arguments.get("stream") and isinstance(agent_output, Iterator):
+                iterator = _RunIterator(agent_output, span, context_api.get_current(), finish)
+                streaming = True
+                return iterator
+            finish(agent_output)
+            return agent_output
+        except BaseException as exc:
+            span.record_exception(exc)
+            span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exc)))
+            raise
+        finally:
+            context_api.detach(token)
+            if not streaming:
+                span.end()
 
 
 class _StepWrapper:

@@ -1,0 +1,66 @@
+{
+  "name": "milestone-cartesia-sse-generated-audio",
+  "description": "A nonempty base64 audio payload in Cartesia's chunk.data is generated output, never playback or exported raw audio.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cartesia.ai/tts/sse",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model_id": "sonic-2",
+      "transcript": "Hi",
+      "voice": {
+        "mode": "id",
+        "id": "v1"
+      },
+      "output_format": {
+        "container": "raw",
+        "encoding": "pcm_f32le",
+        "sample_rate": 44100
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "chunk",
+        "context_id": "ctx-r6",
+        "data": ""
+      },
+      {
+        "type": "chunk",
+        "context_id": "ctx-r6",
+        "data": "UklGRgAAAABXQVZF"
+      },
+      {
+        "type": "done",
+        "context_id": "ctx-r6",
+        "done": true
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      25,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_to_speech sonic-2",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.025,
+      "traceai.audio.output_bytes": 12,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.audio.data"
+    ]
+  }
+}

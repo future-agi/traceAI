@@ -1,5 +1,8 @@
 package ai.traceai;
 
+import io.opentelemetry.sdk.trace.samplers.Sampler;
+import java.util.Map;
+
 /**
  * Configuration options for TraceAI tracing.
  * Use the builder pattern to create instances.
@@ -29,6 +32,7 @@ public class TraceConfig {
     private boolean enableConsoleExporter = false;
     private int batchSize = 512;
     private long exportIntervalMs = 5000;
+    private Sampler sampler;
 
     /**
      * Creates a new builder for TraceConfig.
@@ -52,12 +56,71 @@ public class TraceConfig {
     }
 
     /**
+     * Resolves sampling for a TraceAI-owned provider. Shared with the shaded auto agent;
+     * application-owned providers must not use this to replace their sampler.
+     * An explicit FI_SAMPLE_RATE wins; otherwise the six standard OTel sampler names apply.
+     * Invalid standard settings produce one value-free warning and the parent-based default.
+     *
+     * @param environment sampling environment (or resolved auto configuration without synthetic defaults)
+     * @return the selected sampler
+     */
+    public static Sampler samplerFromEnvironment(Map<String, String> environment) {
+        String explicitRate = environment.get("FI_SAMPLE_RATE");
+        if (explicitRate != null) {
+            double rate = 1.0;
+            try {
+                rate = Double.parseDouble(explicitRate);
+                if (!Double.isFinite(rate) || rate < 0 || rate > 1) rate = 1.0;
+            } catch (NumberFormatException ignored) { }
+            return SamplingRatioSampler.ratioSampler(rate, true);
+        }
+        String name = environment.get("OTEL_TRACES_SAMPLER");
+        if (name == null) return SamplingRatioSampler.ratioSampler(1.0, true);
+        try {
+            switch (name) {
+                case "always_on": return SamplingRatioSampler.alwaysSampler(true);
+                case "always_off": return SamplingRatioSampler.alwaysSampler(false);
+                case "parentbased_always_on": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOn(), 1.0);
+                case "parentbased_always_off": return SamplingRatioSampler.parentBasedSampler(Sampler.alwaysOff(), 0.0);
+                case "traceidratio":
+                case "parentbased_traceidratio":
+                    String arg = environment.get("OTEL_TRACES_SAMPLER_ARG");
+                    double rate = arg == null || arg.isEmpty() ? 1.0 : Double.parseDouble(arg);
+                    if (!Double.isFinite(rate) || rate < 0 || rate > 1) throw new IllegalArgumentException();
+                    return SamplingRatioSampler.ratioSampler(rate, name.equals("parentbased_traceidratio"));
+                default: throw new IllegalArgumentException();
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Do not echo configuration values: they may contain unrelated private data.
+            System.err.println("[traceai] Invalid OTEL_TRACES_SAMPLER or OTEL_TRACES_SAMPLER_ARG; using default ParentBased(TraceIdRatio(1.0))");
+            return SamplingRatioSampler.ratioSampler(1.0, true);
+        }
+    }
+
+    /**
+     * Enables sampling-ratio attributes and invalid-root state reset only for a TraceAI-owned
+     * provider. Recognizes samplers returned by {@link #samplerFromEnvironment(Map)}, including
+     * an explicit builder sampler obtained from that factory. Parent-based samplers copy valid
+     * upstream ratios even at root rates zero or one. Known always-on/off and ratio boundary
+     * samplers only reset invalid-root state, without stamping. All other samplers are returned
+     * unchanged. This must not be applied to an application-owned provider.
+     *
+     * @param sampler the selected sampler
+     * @return a decision-preserving sampler carrying ratio metadata when the ratio is known
+     */
+    public static Sampler samplerForOwnedProvider(Sampler sampler) {
+        return SamplingRatioSampler.forOwnedProvider(sampler);
+    }
+
+    /**
      * Builder for TraceConfig instances.
      */
     public static class Builder {
         private final TraceConfig config = new TraceConfig();
         private Boolean hideInputs;
         private Boolean hideOutputs;
+        private Boolean hideInputMessages;
+        private Boolean hideOutputMessages;
         private Boolean hideErrorDetails;
 
         /**
@@ -86,7 +149,7 @@ public class TraceConfig {
          * @return this builder
          */
         public Builder hideInputMessages(boolean hide) {
-            config.hideInputMessages = hide;
+            hideInputMessages = hide;
             return this;
         }
 
@@ -96,7 +159,7 @@ public class TraceConfig {
          * @return this builder
          */
         public Builder hideOutputMessages(boolean hide) {
-            config.hideOutputMessages = hide;
+            hideOutputMessages = hide;
             return this;
         }
 
@@ -173,6 +236,19 @@ public class TraceConfig {
         }
 
         /**
+         * Sets the sampler used only when TraceAI creates its own provider.
+         * This takes precedence over FI_SAMPLE_RATE and OTEL_TRACES_SAMPLER/_ARG.
+         * A null or absent option uses those environment settings; it never changes
+         * an application-owned provider passed to TraceAI.init(config, openTelemetry).
+         * @param sampler the sampler, or null for environment/default selection
+         * @return this builder
+         */
+        public Builder sampler(Sampler sampler) {
+            config.sampler = sampler;
+            return this;
+        }
+
+        /**
          * Sets the batch size for span export.
          * @param size the batch size
          * @return this builder
@@ -195,8 +271,10 @@ public class TraceConfig {
         /**
          * Builds the TraceConfig instance.
          * Fields not explicitly set will fall back to environment variables:
-         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME, FI_HIDE_INPUTS,
-         * FI_HIDE_OUTPUTS, FI_HIDE_ERROR_DETAILS. Explicit boolean values (including false) win.
+         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME,
+         * FI_HIDE_INPUTS, FI_HIDE_OUTPUTS, FI_HIDE_INPUT_MESSAGES,
+         * FI_HIDE_OUTPUT_MESSAGES, FI_HIDE_ERROR_DETAILS.
+         * Explicit boolean values (including false) win.
          * @return the configured TraceConfig
          */
         public TraceConfig build() {
@@ -216,6 +294,10 @@ public class TraceConfig {
                 ? hideInputs : Boolean.parseBoolean(System.getenv("FI_HIDE_INPUTS"));
             config.hideOutputs = hideOutputs != null
                 ? hideOutputs : Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUTS"));
+            config.hideInputMessages = hideInputMessages != null
+                ? hideInputMessages : Boolean.parseBoolean(System.getenv("FI_HIDE_INPUT_MESSAGES"));
+            config.hideOutputMessages = hideOutputMessages != null
+                ? hideOutputMessages : Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUT_MESSAGES"));
             config.hideErrorDetails = hideErrorDetails != null
                 ? hideErrorDetails : Boolean.parseBoolean(System.getenv("FI_HIDE_ERROR_DETAILS"));
             return config;
@@ -236,4 +318,6 @@ public class TraceConfig {
     public boolean isEnableConsoleExporter() { return enableConsoleExporter; }
     public int getBatchSize() { return batchSize; }
     public long getExportIntervalMs() { return exportIntervalMs; }
+    /** @return the explicit owned-provider sampler, or null for environment/default selection */
+    public Sampler getSampler() { return sampler; }
 }

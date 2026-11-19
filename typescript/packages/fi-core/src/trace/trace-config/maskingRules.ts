@@ -5,6 +5,7 @@ import { MaskingRule, MaskingRuleArgs, TraceConfig } from "./types";
 import { redactPiiInValue } from "./piiRedaction";
 import { isErrorDetailAttribute } from "./errorDetails";
 import { redactMessages } from "./messageRedaction";
+import { capBase64Images } from "./imageCap";
 
 // Apply text and image settings together: the masking rule list stops at its
 // first match, so independent rules would let image hiding bypass text hiding.
@@ -132,11 +133,23 @@ export function mask({
       break;
     }
   }
-  // Apply PII redaction to retained text even when a content rule matched.
-  if (config.piiRedaction && value != null) {
-    return redactPiiInValue(value);
+  if (value == null) {
+    return value;
   }
-  return value;
+  // Applied to retained text even when a content rule matched
+  return redactValue(config, value);
+}
+
+/**
+ * The value-level redaction every exported value gets, whatever its key: the base64 image cap
+ * (`base64ImageMaxLength`, see {@link capBase64Images}), then PII redaction when `piiRedaction`
+ * is on. The cap runs first so PII redaction never rewrites part of an oversized image. {@link mask}
+ * applies it to span and link attributes; `FISpan` applies it to event attributes, the
+ * recorded exception and the ERROR status description.
+ */
+export function redactValue(config: TraceConfig, value: AttributeValue): AttributeValue {
+  const capped = capBase64Images(value, config.base64ImageMaxLength);
+  return config.piiRedaction ? redactPiiInValue(capped) : capped;
 }
 
 /**

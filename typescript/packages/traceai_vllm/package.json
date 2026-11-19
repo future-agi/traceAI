@@ -1,6 +1,6 @@
 {
   "name": "@traceai/vllm",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "TraceAI instrumentation for vLLM inference server",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",

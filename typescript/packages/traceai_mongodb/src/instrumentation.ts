@@ -16,7 +16,7 @@ import type {
   CommandFailedEvent,
 } from "mongodb";
 
-const VERSION = "0.1.1"; // x-release-please-version
+const VERSION = "0.1.2"; // x-release-please-version
 
 // Only application commands: never authentication, handshakes or session payloads.
 const COMMANDS = new Set([
@@ -37,6 +37,18 @@ export interface MongoDBInstrumentationConfig extends InstrumentationConfig {
   captureQueryVectors?: boolean;
   /** @deprecated Result documents/vectors are never captured. */
   captureResultVectors?: boolean;
+  /** Trace only aggregate commands with a vector search stage; other commands get no span. */
+  vectorOnly?: boolean;
+}
+
+// A vector search stage, including one in a $unionWith or $lookup sub-pipeline and
+// the $search knnBeta and vectorSearch operators.
+function vectorStage(pipeline: unknown, depth = 0): boolean {
+  return depth < 4 && Array.isArray(pipeline) && pipeline.some((stage) => {
+    const vector = stage?.$vectorSearch ?? stage?.$search?.knnBeta ?? stage?.$search?.vectorSearch;
+    if (!!vector && typeof vector === "object") return true;
+    return vectorStage(stage?.$unionWith?.pipeline, depth + 1) || vectorStage(stage?.$lookup?.pipeline, depth + 1);
+  });
 }
 
 interface ClientState {
@@ -87,6 +99,11 @@ export class MongoDBInstrumentation extends InstrumentationBase {
     this.traceConfig = traceConfig;
     this.setConfig({ enabled: true, ...instrumentationConfig });
     if (this.getConfig().enabled) this.enable();
+  }
+
+  /** True when only vector search commands are traced. */
+  public get vectorOnly(): boolean {
+    return (this.getConfig() as MongoDBInstrumentationConfig).vectorOnly === true;
   }
 
   protected init() {
@@ -248,6 +265,7 @@ export class MongoDBInstrumentation extends InstrumentationBase {
   private startCommand(state: ClientState, event: CommandStartedEvent): void {
     if (!this.isEnabled() || !COMMANDS.has(event.commandName) || isTracingSuppressed(context.active())) return;
     const command = event.command;
+    if (this.vectorOnly && !(event.commandName === "aggregate" && vectorStage(command.pipeline))) return;
     const collection = command[event.commandName] ?? command.collection;
     const attributes: Attributes = {
       "db.system": "mongodb",

@@ -1,4 +1,4 @@
-"""Run the README's actual Quickstart and gateway blocks without vendor traffic."""
+"""Run the README's actual client blocks without vendor traffic."""
 
 import json
 import re
@@ -27,13 +27,14 @@ pytest_plugins = ("tests.test_vercel_gateway",)
     [
         ("Quickstart", "api.openai.com", "openai", "gpt-4o-mini"),
         ("Vercel AI Gateway", "ai-gateway.vercel.sh", "vercel", REQUEST_MODEL),
+        ("Azure v1", "resource.openai.azure.com", "azure", "azure-deployment"),
+        ("Azure versioned", "resource.openai.azure.com", "azure", "azure-deployment"),
+        ("Azure versioned", "resource.openai.azure.us", "azure", "azure-deployment"),
     ],
 )
 def test_readme_request_blocks(collector, monkeypatch, section, host, provider, model):
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
-    quickstart = readme.split("## Quickstart\n", 1)[1].split(
-        "## Vercel AI Gateway\n", 1
-    )[0]
+    quickstart = readme.split("## Quickstart\n", 1)[1].split("\n## ", 1)[0]
     setup, instrument, openai_request = re.findall(
         r"```python\n(.*?)```", quickstart, flags=re.DOTALL
     )
@@ -41,9 +42,15 @@ def test_readme_request_blocks(collector, monkeypatch, section, host, provider, 
     gateway_request = re.findall(r"```python\n(.*?)```", gateway, flags=re.DOTALL)
     assert len(gateway_request) == 1
     request = gateway_request[0] if section == "Vercel AI Gateway" else openai_request
+    if section.startswith("Azure"):
+        azure = readme.split("## Azure OpenAI\n", 1)[1].split("\n## ", 1)[0]
+        azure_requests = re.findall(r"```python\n(.*?)```", azure, flags=re.DOTALL)
+        assert len(azure_requests) == 2
+        request = azure_requests[0 if section == "Azure v1" else 1]
 
     seen = []
-    original_init = openai.OpenAI.__init__
+    client_class = openai.AzureOpenAI if section == "Azure versioned" else openai.OpenAI
+    original_init = client_class.__init__
 
     def handle(http_request):
         seen.append(http_request)
@@ -58,7 +65,14 @@ def test_readme_request_blocks(collector, monkeypatch, section, host, provider, 
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-openai-key")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", GATEWAY_KEY)
     monkeypatch.setenv("AI_GATEWAY_MODEL", REQUEST_MODEL)
-    monkeypatch.setattr(openai.OpenAI, "__init__", mock_transport_only)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "synthetic-azure-key")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", model)
+    monkeypatch.setenv("AZURE_OPENAI_BASE_URL", f"https://{host}/openai/v1/")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", f"https://{host}")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+    if section.startswith("Azure"):
+        monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setattr(client_class, "__init__", mock_transport_only)
     namespace = {}
     try:
         for block in (setup, instrument, request):

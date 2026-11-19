@@ -1,0 +1,43 @@
+{
+  "name": "openai-audio-speech",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/audio/speech",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4o-mini-tts",
+      "voice": "alloy",
+      "input": "Your order has shipped.",
+      "response_format": "mp3"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "audio/mpeg"
+    },
+    "binary": {
+      "size": 4096,
+      "content_type": "audio/mpeg"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_to_speech gpt-4o-mini-tts",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.operation.name": "text_to_speech",
+      "gen_ai.request.voice": "alloy",
+      "input.value": "Your order has shipped.",
+      "input.mime_type": "text/plain",
+      "gen_ai.audio.transcript": "Your order has shipped.",
+      "gen_ai.audio.mime_type": "audio/mpeg",
+      "traceai.audio.output_bytes": 4096
+    },
+    "absent": [
+      "output.value"
+    ]
+  }
+}

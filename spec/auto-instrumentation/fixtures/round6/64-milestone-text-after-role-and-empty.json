@@ -1,0 +1,84 @@
+{
+  "name": "milestone-text-after-role-and-empty",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "content": ""
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": ""
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "Hi"
+            }
+          }
+        ]
+      },
+      "[DONE]"
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      50,
+      100
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.05,
+      "output.value": "Hi",
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

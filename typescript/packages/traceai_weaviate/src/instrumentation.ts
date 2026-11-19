@@ -14,7 +14,7 @@ import {
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
-const VERSION = "0.1.2"; // x-release-please-version
+const VERSION = "0.1.3"; // x-release-please-version
 const FACTORIES = [
   "client",
   "connectToLocal",

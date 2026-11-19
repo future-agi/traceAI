@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "traceai-claude-agent-sdk"
-version = "0.1.1"
+version = "0.1.2"
 description = "OpenTelemetry instrumentation for Claude Agent SDK"
 authors = ["FutureAGI <dev@futureagi.com>"]
 license = "Apache-2.0"
@@ -35,7 +35,7 @@ python = ">=3.10,<3.14"
 opentelemetry-api = ">=1.0.0"
 opentelemetry-sdk = ">=1.0.0"
 opentelemetry-instrumentation = ">=0.40b0"
-fi-instrumentation-otel = ">=0.1.0"
+fi-instrumentation-otel = ">=0.1.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

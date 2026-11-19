@@ -43,6 +43,10 @@ Instrument the Groq client to enable telemetry collection. This step ensures tha
 
 ```python
 from groq import Groq
+from groq.types.chat import ChatCompletionToolMessageParam
+from traceai_groq import GroqInstrumentor
+
+GroqInstrumentor().instrument(tracer_provider=trace_provider)
 
 def test():
     client = Groq(

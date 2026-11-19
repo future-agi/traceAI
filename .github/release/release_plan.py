@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only release inventory and registry plan for all five SDK ecosystems.
+"""Read-only release inventory and registry plan for all six SDK ecosystems.
 
 --check validates Python and npm runtime versions and release-please coverage without network.
 --offline inventories publishable packages without registry calls. --only NAME ...
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = Path(__file__).resolve().parent / "config.json"
 PYTHON_CORE = {"fi-instrumentation-otel"}
 TS_CORE = {"@traceai/fi-core", "@traceai/fi-semantic-conventions"}
-ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget")
+ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget", "ruby")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
 # npm packages that report their own version at runtime keep it in a VERSION or
 # INSTRUMENTATION_VERSION constant somewhere under src/ (tests excluded).
@@ -155,13 +155,35 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
         out.append({"ecosystem": "go", "name": module, "version": version,
                     "dir": path, "tag": f"{path}/v{version}", "core": False,
                     "changelog": f"{path}/CHANGELOG.md"})
-    for f in sorted((root / "csharp/src/FIInstrumentation").glob("*.csproj")):
-        p = ET.fromstring(f.read_text())
-        name, version = p.findtext(".//PackageId"), p.findtext(".//Version")
-        out.append({"ecosystem": "nuget", "name": name, "version": version,
-                    "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
-                    "tag": f"nuget-{name}-v{version}", "core": False,
-                    "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # The startup hook's own folder also holds its private runtime and SDK projects; only the
+    # project in the folder's top level is a package.
+    for folder in ("csharp/src/FIInstrumentation", "csharp/src/TraceAI.AutoInstrumentation"):
+        for f in sorted((root / folder).glob("*.csproj")):
+            p = ET.fromstring(f.read_text())
+            name, version = p.findtext(".//PackageId"), p.findtext(".//Version")
+            out.append({"ecosystem": "nuget", "name": name, "version": version,
+                        "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
+                        "tag": f"nuget-{name}-v{version}", "core": False,
+                        "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # Read version declarations without evaluating gemspecs or Ruby package code.
+    ruby_gemspec = root / "ruby/traceai-auto.gemspec"
+    if ruby_gemspec.is_file():
+        match = re.search(r'^\s*s\.version\s*=\s*["\']([^"\']+)["\']', ruby_gemspec.read_text(), re.M)
+        if not match:
+            raise ValueError(f"{ruby_gemspec}: missing Ruby gem version")
+        version = match.group(1)
+        out.append({"ecosystem": "ruby", "name": "traceai-auto", "version": version,
+                    "dir": "ruby", "tag": f"ruby-traceai-auto-v{version}",
+                    "core": False, "changelog": None})
+    ruby_version = root / "ruby/roast/lib/traceai/roast/version.rb"
+    if ruby_version.is_file():
+        match = re.search(r'^\s*VERSION\s*=\s*["\']([^"\']+)["\']', ruby_version.read_text(), re.M)
+        if not match:
+            raise ValueError(f"{ruby_version}: missing Ruby gem VERSION")
+        version = match.group(1)
+        out.append({"ecosystem": "ruby", "name": "traceai-roast", "version": version,
+                    "dir": "ruby/roast", "tag": f"ruby-traceai-roast-v{version}",
+                    "core": False, "changelog": None})
     return out
 
 
@@ -206,7 +228,7 @@ def coverage_problems(root: Path, packages: list[dict]) -> list[str]:
     return problems
 
 
-def _get_json(url: str) -> dict | None:
+def _get_json(url: str) -> dict | list[dict] | None:
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "traceAI-release-plan"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -228,6 +250,9 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     if eco == "nuget":
         d = _get_json(f"https://api.nuget.org/v3-flatcontainer/{p['name'].lower()}/index.json")
         return set(d["versions"]) if d else None
+    if eco == "ruby":
+        d = _get_json(f"https://rubygems.org/api/v1/versions/{p['name']}.json")
+        return {entry["number"] for entry in d} if d is not None else None
     if eco == "go":
         # Go proxy escaping: every uppercase letter becomes ! plus lowercase.
         module = re.sub(r"[A-Z]", lambda m: "!" + m.group().lower(), p["name"])
@@ -272,6 +297,14 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
         if p["ecosystem"] == "java" and (p["group"] != "com.futureagi" or "SNAPSHOT" in p["version"]):
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
+        if p["ecosystem"] == "java":
+            # A held module is built and tested with the reactor but not deployed (its release profile
+            # sets skipPublishing), so the Central checks must not wait for it.
+            hold = config.get("hold_artifacts", {})
+            names = {a: f"{p['group']}:{a}" for a in p.get("artifacts", [])}
+            held = [a for a, name in names.items() if name in hold]
+            p = {**p, "artifacts": [a for a in names if a not in held], "held_artifacts": held}
+            out["skipped"].extend({"name": names[a], "reason": hold[names[a]]} for a in held)
         if not offline:
             have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have

@@ -1,3 +1,8 @@
+## [0.1.14] - pending release
+
+### Fixed
+- Traced messages.create and messages.count_tokens calls whose messages are a generator or other single-use iterable send those messages to Anthropic instead of an emptied iterable, and the span still records them. Spans also record tool call IDs from the model output, for streamed and non-streamed responses.
+
 ## [0.1.12](https://github.com/future-agi/traceAI/compare/traceai-anthropic-v0.1.11...traceai-anthropic-v0.1.12) (2026-10-31)
 
 
@@ -9,6 +14,14 @@
 * **anthropic:** report dropped stream telemetry without logging content ([#327](https://github.com/future-agi/traceAI/issues/327)) ([8600a66](https://github.com/future-agi/traceAI/commit/8600a66c1a692f44a9f937640bb4c3ecbd42c98d))
 * **anthropic:** require fi-instrumentation-otel&gt;=1.2.2 for its error-detail policy ([8600a66](https://github.com/future-agi/traceAI/commit/8600a66c1a692f44a9f937640bb4c3ecbd42c98d))
 * **anthropic:** restore token-count hooks and accept mapping-shaped tool inputs ([8600a66](https://github.com/future-agi/traceAI/commit/8600a66c1a692f44a9f937640bb4c3ecbd42c98d))
+
+## [0.1.13](https://github.com/future-agi/traceAI/compare/traceai-anthropic-v0.1.12...traceai-anthropic-v0.1.13) (2026-11-05)
+
+
+### Bug Fixes
+
+* **anthropic:** preserve response lifecycles and cache token usage ([#556](https://github.com/future-agi/traceAI/issues/556)) ([d46aeb4](https://github.com/future-agi/traceAI/commit/d46aeb409ed44635db89675c157a0773489e0f58))
+* **anthropic:** trace each call once when the SDK already traces it natively ([#507](https://github.com/future-agi/traceAI/issues/507)) ([5ae2b9b](https://github.com/future-agi/traceAI/commit/5ae2b9b4a3678af52abc01d90e4fe2fe1d4c2099))
 
 ## [0.1.11] - 2026-10-29
 

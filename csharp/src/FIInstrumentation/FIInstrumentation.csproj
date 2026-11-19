@@ -5,7 +5,7 @@
     <RootNamespace>FIInstrumentation</RootNamespace>
     <AssemblyName>FIInstrumentation</AssemblyName>
     <PackageId>fi-instrumentation-otel</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>Future AGI</Authors>
     <Company>Future AGI</Company>
     <Description>OpenTelemetry tracing for .NET AI applications: typed spans, context propagation, privacy controls, and OTLP export to Future AGI.</Description>
@@ -23,15 +23,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="FIInstrumentation.Tests" />
-    <None Update="README.md" Pack="true" PackagePath="/" />
-    <None Update="icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="FIInstrumentation.Tests"/>
+    <None Update="README.md" Pack="true" PackagePath="/"/>
+    <None Update="icon.png" Pack="true" PackagePath="/"/>
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
-    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="$(OpenTelemetryVersion)" />
+    <PackageReference Include="OpenTelemetry" Version="$(OpenTelemetryVersion)"/>
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)"/>
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="$(OpenTelemetryVersion)"/>
   </ItemGroup>
 
 </Project>

@@ -28,6 +28,6 @@ class MappedGRPCSpanExporter(BaseMappedSpanExporter, _FIGRPCSpanExporter):
             )
         super().__init__(*args, **kwargs)
 
-    def _convert_attributes(self, attributes):
-        """Override to use the base class mapping."""
-        return super()._convert_attributes(attributes)
+    def _convert_attributes(self, attributes, *, recording_snapshot=False):
+        """Forward the optional recording discriminator without changing callers."""
+        return super()._convert_attributes(attributes, recording_snapshot=recording_snapshot)

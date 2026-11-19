@@ -12,10 +12,10 @@ This guide covers installing traceAI for Python and TypeScript applications.
 
 ### Core Library
 
-The core `fi-instrumentation` library is required for all Python integrations:
+The core `fi-instrumentation-otel` distribution is required for all Python integrations:
 
 ```bash
-pip install fi-instrumentation
+pip install fi-instrumentation-otel
 ```
 
 ### Framework Packages
@@ -52,7 +52,7 @@ pip install traceai-weaviate        # Weaviate
 
 For gRPC transport:
 ```bash
-pip install fi-instrumentation[grpc]
+pip install "fi-instrumentation-otel[grpc]"
 ```
 
 ## TypeScript Installation

@@ -1,0 +1,43 @@
+{
+  "name": "assemblyai-audio-url-private",
+  "request": {
+    "method": "POST",
+    "url": "https://api.assemblyai.com/v2/transcript",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "audio_url": "https://private.example/rec.mp3?sig=SECRET_SIG_456&exp=1",
+      "speech_model": "universal"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "t37",
+      "status": "queued"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription universal",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.id": "t37"
+    },
+    "present": [
+      "input.value"
+    ],
+    "not_contains": {
+      "input.value": [
+        "SECRET_SIG_456"
+      ],
+      "gen_ai.request.parameters": [
+        "private.example"
+      ]
+    }
+  }
+}

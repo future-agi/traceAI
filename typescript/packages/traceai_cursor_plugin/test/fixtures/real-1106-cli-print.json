@@ -1,0 +1,221 @@
+[
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Grep",
+    "tool_input": {
+      "pattern": "",
+      "glob": "**/stats.py",
+      "output_mode": "files_with_matches"
+    },
+    "tool_use_id": "call-075db8a8-20c5-4712-8599-8db545c04bd7-0\nfc_e0aee268-4fc3-93df-b93c-8b5d71c5e3a9_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "preToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": null
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Grep",
+    "tool_input": {
+      "pattern": "",
+      "glob": "**/stats.py",
+      "output_mode": "files_with_matches"
+    },
+    "tool_output": "{\"pattern\":\"\",\"success\":true}",
+    "duration": 94.685,
+    "tool_use_id": "call-075db8a8-20c5-4712-8599-8db545c04bd7-0\nfc_e0aee268-4fc3-93df-b93c-8b5d71c5e3a9_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "postToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/fixture/project/stats.py"
+    },
+    "tool_use_id": "call-4bfd7ed7-f531-4bc1-96e5-4fb9fb81535b-1\nfc_1e56ae9d-df4b-94b6-8afd-f22b3b8b1276_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "preToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/fixture/project/stats.py"
+    },
+    "tool_output": "{\"file_path\":\"/Users/fixture/project/stats.py\",\"content_length\":164}",
+    "duration": 62.634,
+    "tool_use_id": "call-4bfd7ed7-f531-4bc1-96e5-4fb9fb81535b-1\nfc_1e56ae9d-df4b-94b6-8afd-f22b3b8b1276_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "postToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/fixture/project/stats.py"
+    },
+    "tool_use_id": "call-b2b72976-f392-4624-8790-ecde3231dbe4-2\nfc_03d63555-9e14-903d-a76d-4de8b4aea2ec_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "preToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/fixture/project/stats.py"
+    },
+    "tool_output": "{\"file_path\":\"/Users/fixture/project/stats.py\",\"content_length\":164}",
+    "duration": 15.963,
+    "tool_use_id": "call-b2b72976-f392-4624-8790-ecde3231dbe4-2\nfc_03d63555-9e14-903d-a76d-4de8b4aea2ec_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "postToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Write",
+    "tool_input": {
+      "file_path": "/Users/fixture/project/stats.py",
+      "content": "def mean(values):\n    return sum(values) / len(values)\n\n\ndef median(values):\n    ordered = sorted(values)\n    middle = len(ordered) // 2\n    return ordered[middle]\n\n\ndef variance(values):\n    average = mean(values)\n    return sum((value - average) ** 2 for value in values) / len(values)\n"
+    },
+    "tool_use_id": "call-b2b72976-f392-4624-8790-ecde3231dbe4-2\nfc_03d63555-9e14-903d-a76d-4de8b4aea2ec_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "preToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Write",
+    "tool_input": {
+      "file_path": "/Users/fixture/project/stats.py",
+      "content": "def mean(values):\n    return sum(values) / len(values)\n\n\ndef median(values):\n    ordered = sorted(values)\n    middle = len(ordered) // 2\n    return ordered[middle]\n\n\ndef variance(values):\n    average = mean(values)\n    return sum((value - average) ** 2 for value in values) / len(values)\n"
+    },
+    "tool_output": "{\"file_path\":\"/Users/fixture/project/stats.py\",\"success\":true}",
+    "duration": 290.026,
+    "tool_use_id": "call-b2b72976-f392-4624-8790-ecde3231dbe4-2\nfc_03d63555-9e14-903d-a76d-4de8b4aea2ec_0",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "postToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Shell",
+    "tool_input": {
+      "command": "python3 -c \"import stats; print(stats.variance([1, 2, 3, 4]))\"",
+      "cwd": "",
+      "timeout": 30000
+    },
+    "tool_use_id": "ab03afa6-8134-4adc-97b4-8418941aa443",
+    "cwd": "",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "preToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "tool_name": "Shell",
+    "tool_input": {
+      "command": "python3 -c \"import stats; print(stats.variance([1, 2, 3, 4]))\"",
+      "cwd": "",
+      "timeout": 30000
+    },
+    "tool_output": "{\"output\":\"1.25\\n\",\"exitCode\":0}",
+    "duration": 1203.284,
+    "tool_use_id": "ab03afa6-8134-4adc-97b4-8418941aa443",
+    "cwd": "",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "postToolUse",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  },
+  {
+    "conversation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "generation_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "model": "default",
+    "reason": "completed",
+    "duration_ms": 25990,
+    "is_background_agent": false,
+    "final_status": "completed",
+    "session_id": "96dcdee1-c647-4c35-b1ce-50add5270b6a",
+    "hook_event_name": "sessionEnd",
+    "cursor_version": "2026.11.05-86047df",
+    "workspace_roots": [
+      "/Users/fixture/project"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture/agent-transcripts/session.jsonl"
+  }
+]

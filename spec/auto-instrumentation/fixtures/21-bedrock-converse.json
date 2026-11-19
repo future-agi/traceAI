@@ -1,0 +1,74 @@
+{
+  "name": "bedrock-converse",
+  "request": {
+    "method": "POST",
+    "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/converse",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ],
+      "system": [
+        {
+          "text": "Be nice."
+        }
+      ],
+      "inferenceConfig": {
+        "maxTokens": 100,
+        "temperature": 0.3
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "text": "Hello there."
+            }
+          ]
+        }
+      },
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 8,
+        "outputTokens": 3,
+        "totalTokens": 11
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat anthropic.claude-3-5-haiku-20241022-v1:0",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "aws.bedrock",
+      "gen_ai.request.model": "anthropic.claude-3-5-haiku-20241022-v1:0",
+      "gen_ai.input.messages.0.message.role": "system",
+      "gen_ai.input.messages.0.message.content": "Be nice.",
+      "output.value": "Hello there.",
+      "gen_ai.usage.input_tokens": 8,
+      "gen_ai.usage.output_tokens": 3,
+      "gen_ai.response.finish_reasons": [
+        "end_turn"
+      ],
+      "gen_ai.request.max_tokens": 100,
+      "gen_ai.request.temperature": 0.3
+    }
+  }
+}

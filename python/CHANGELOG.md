@@ -1,3 +1,76 @@
+## [1.5.0] - pending release
+
+### Added
+- `FI_TRACES_URL` sends span exports to a trace collector separate from the platform API (#710). Self-hosted Docker installs serve them on different ports (often 8100 for the API and 4318 for traces), so an app can set `FI_TRACES_URL` to the traces address while `FI_BASE_URL` and the `fagi` CLI keep using the API. When it is unset or blank, exports go to `FI_BASE_URL` as before; custom eval API calls always use `FI_BASE_URL`.
+- Sampled spans on agent-created providers carry the trace's keep probability as the numeric `fi.sampling.ratio` attribute when it is strictly between 0 and 1, and a local fractional decision writes `fi=r:<ratio>` in W3C tracestate so services downstream inherit it (#713). Parent-based samplers copy a sampled parent's valid ratio at any local root rate. An absent attribute means `1.0`. Roots decided at rate 1, dropped or record-only spans, explicit custom samplers and application-owned providers get no sampling metadata.
+
+### Fixed
+- Agent-owned providers honour `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` when no explicit sample rate is set (#711). Explicit rates still win; invalid sampler settings warn once and use the parent-based default. Application-owned providers keep their sampler unchanged.
+
+## [1.4.0] - 2026-11-17
+
+### Added
+- Zero-code auto-instrumentation. Start an unchanged app with `FI_AUTO_INSTRUMENT=true python app.py` (or under `opentelemetry-instrument`), or call `fi_instrumentation.init()` once in code: every installed traceAI integration turns on when the app first imports its library, and Future AGI receives only AI spans while your other OpenTelemetry exporters keep every span.
+- `fi-instrument` command: `fi-instrument doctor` shows which libraries are covered, and `fi-instrument bootstrap --install` adds the missing traceAI packages.
+
+## [1.3.2] - 2026-11-12
+
+### Fixed
+- using_session, using_user and the other context helpers keep the session and user on spans inside async functions and async generators when used as decorators.
+- Generator functions traced with tracer.chain, tracer.agent or tracer.tool, sync or async, keep their span open until the generator finishes or is closed, so spans created inside them nest under it and the span's output defaults to the last yielded value.
+- Eval tags for custom evaluations with no model set no longer make register fail.
+- The get_session_attributes and get_context_attributes helpers set session.id alongside gen_ai.conversation.id.
+
+## [1.3.1] - 2026-11-10
+### Fixed
+- PII redaction (`pii_redaction` / `FI_PII_REDACTION`) no longer corrupts correlation identifiers (#195):
+  `session.id`, `user.id` and conversation ids are exported unchanged, numbers inside a longer
+  identifier are no longer read as phone numbers, and card numbers must be card-shaped and pass the
+  Luhn check. Free text and metadata are still redacted when the flag is on; hide flags and the image
+  cap apply to every field.
+- With `FI_PII_REDACTION` on, a phone number that follows a JSON escape (`\n`, `\t`, `\r`) in serialized
+  text is now redacted; digits inside longer identifiers stay intact.
+- Exporter credentials (#155): an empty `Authorization` header no longer hides valid
+  `FI_API_KEY`/`FI_SECRET_KEY` environment keys, and explicit `X-Api-Key`/`X-Secret-Key`
+  headers are sent once instead of alongside case-variant copies from the environment.
+  Explicit credential headers still take precedence; header names are sent lower-case.
+  Blank credential headers are skipped before case variants are merged.
+  Known limitation: with `opentelemetry-exporter-otlp-proto-http` 1.45 or later, a blank
+  `Authorization=` entry in `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is
+  still sent as an empty header next to the FI keys, because the exporter re-reads those variables.
+  Remove blank entries from the environment; headers passed in code are unaffected.
+
+## [1.3.0] - 2026-11-07
+### Added
+- Semantic conventions for agent cost, time to first token and coding-agent spans in
+  `fi_instrumentation.fi_types` (#605): `tool_call.id`, `tool.name`, `fi.usage.*`, `fi.cost.kind`
+  and the `fi.agent.*` attributes.
+
+### Changed
+- **The base64 image cap now defaults to 0** (it was 32000). `base64_image_max_length` and
+  `FI_BASE64_IMAGE_MAX_LENGTH` keep working: set a positive value to export image payloads up
+  to that many characters.
+- Default cap 0 redacts any value or token that mentions a data: image URL, including mentions with no payload.
+- The replacement is `[image-redacted]`, for the whole value or JSON string token.
+- At the default cap 0, a non-URL value in an image payload position (typed image attributes,
+  and the payload fields of image content parts) is replaced with `[image-redacted]`, even when it
+  is short or is already a `__REDACTED__` marker. URL references in image content parts, such as
+  `https://...`, are kept.
+- An invalid, negative or non-integer cap resolves to 0 and logs
+  `Invalid base64 image cap; using 0.` instead of raising.
+- The TypeScript SDK is stricter: it never exports base64 images at any cap.
+
+### Known limitations
+- `fi-instrumentation-otel` currently requires `wrapt>=1.15.0,<2.0.0`; environments that require `wrapt>=2` cannot satisfy this dependency.
+- Headerless base64 images (PNG, JPEG, GIF, WebP without a data: URL) are redacted only when they are the whole value or a whole JSON string token; padded or embedded headerless runs are exported.
+- A declared image payload whose base64 contains spaces is exported.
+- An over-cap image payload stored under a key outside the payload fields (data, bytes, content, image, image_url, url, base64, b64_json) of an image-declaring object, without a data: URL, is not detected by the image cap (e.g. {"type":"image","mime_type":"image/heic","blob":"<base64>"}); other media policy may still withhold it.
+- Residual with an explicit positive cap: a payload that becomes recognizable only after multi-pass decoding inside a JSON string token, after a precise redaction has made the scope strict JSON, can be exported. The default cap 0 is not affected.
+- With an explicit positive cap, the precise recognizer keeps this residual.
+
+### Notes
+- `traceai-agno` needs `fi-instrumentation-otel>=1.3.0`; its dependency floor will be raised in the agno release that follows the core release.
+
 ## [1.2.2] - 2026-10-30
 ### Fixed
 - Apply content privacy to creation attributes and links before OpenTelemetry SDK

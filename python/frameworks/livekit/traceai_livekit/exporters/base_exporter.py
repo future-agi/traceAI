@@ -10,11 +10,19 @@ import logging
 import threading
 from typing import Any, Dict, Iterable, Tuple
 
-from opentelemetry.sdk.trace import ReadableSpan
+from fi_instrumentation import TraceConfig
+from opentelemetry.sdk.trace import Event
+from opentelemetry.trace import Link
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 # Import Future AGI span attribute keys
 from fi_instrumentation.fi_types import SpanAttributes
+
+from .._recording_attributes import (
+    _is_recording_snapshot, _map_recording_attributes, _recheck_recording_attributes,
+    _withhold_recording_failures,
+)
+from .._recording_boundary import _copy_span, _RecordingScope
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +107,14 @@ def _is_empty_function_calls(value: Any) -> bool:
     return False
 
 
-def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, Any]:
+def _map_attributes_to_fi_conventions(
+    attributes: Dict[str, Any], *, recording_snapshot: bool = False,
+) -> Dict[str, Any]:
     """Map LiveKit attributes to Future AGI conventions."""
     if not attributes:
         return {}
 
+    recording_snapshot = recording_snapshot or _is_recording_snapshot(attributes)
     mapped: Dict[str, Any] = dict(attributes)  # start by preserving originals
 
     # --- LiveKit Constant Keys (from livekit-agents/telemetry/trace_types.py) ---
@@ -279,8 +290,13 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
     # 5. Session & User Info
     found, room_name = _first(attributes, LK_ROOM_NAME)
-    if found:
+    if found and not recording_snapshot:
         mapped[SpanAttributes.GEN_AI_CONVERSATION_ID] = room_name
+
+    # Only retained recording sources supply aliases; there is no room fallback,
+    # including when a sampler or the SDK evicted the operation attribute.
+    # The exporter rechecks reserved names under the recording policy afterward.
+    _map_recording_attributes(attributes, mapped, recording_snapshot=recording_snapshot)
 
     found, participant_identity = _first(attributes, LK_PARTICIPANT_IDENTITY)
     if found:
@@ -352,7 +368,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 class BaseMappedSpanExporter(SpanExporter):
     """Base class for span exporters that map LiveKit attributes to Future AGI conventions."""
 
-    def _convert_attributes(self, attributes):
+    def _convert_attributes(self, attributes, *, recording_snapshot=False):
         """Convert attributes by mapping them to Future AGI conventions."""
         if attributes is None:
             base = {}
@@ -361,6 +377,8 @@ class BaseMappedSpanExporter(SpanExporter):
         else:
             base = attributes
         try:
+            if recording_snapshot:
+                return _map_attributes_to_fi_conventions(base, recording_snapshot=True)
             return _map_attributes_to_fi_conventions(base)
         except Exception as exc:
             # The span is still exported, without the Future AGI mapping.
@@ -374,36 +392,67 @@ class BaseMappedSpanExporter(SpanExporter):
         # metadata JSON, gen_ai.conversation.id, user.id), so it must never be written back onto
         # a span we were handed: it goes on a copy, as LiveKit's own pii.redact() builds one.
         exported = []
+        dropped = False
         for span in spans:
+            recording = False
             try:
+                recording = (
+                    isinstance(getattr(span, "instrumentation_scope", None), _RecordingScope)
+                    or _is_recording_snapshot({}, span_name=getattr(span, "name", None))
+                )
+                recording = recording or _is_recording_snapshot(span.attributes or {})
                 exported.append(self._mapped_copy(span))
             except Exception as exc:
-                # The span is still exported, as it is, without the Future AGI mapping.
+                if recording:
+                    # A broken recording copy must never bypass the policy by
+                    # falling back to the original. Normal mask Exceptions are
+                    # handled per key and still export the withheld marker.
+                    logger.debug("traceai-livekit recording export skipped (%s)", type(exc).__name__)
+                    dropped = True
+                    continue
                 _warn_mapping_failed_once(exc)
                 exported.append(span)
 
-        return super().export(exported)
+        result = super().export(exported)
+        return SpanExportResult.FAILURE if dropped else result
 
     def _mapped_copy(self, span):
-        """A copy of `span` carrying the mapped attributes; `span` itself when there is nothing to map."""
-        attributes = span.attributes
-        if not attributes:
+        """Map a copy; recording reserved keys are checked regardless of writer."""
+        original = dict(span.attributes or {})
+        scope = span.instrumentation_scope
+        recording = isinstance(scope, _RecordingScope) or _is_recording_snapshot(original, span_name=span.name)
+        if not recording:
+            if not original:
+                return span
+            mapped = self._convert_attributes(dict(original))
+            return span if mapped == original else _copy_span(span, attributes=mapped)
+
+        policies = scope.recording_policies if isinstance(scope, _RecordingScope) else (TraceConfig(),)
+        mapped = self._convert_attributes(dict(original), recording_snapshot=True)
+        # Run even if conversion returned its fallback; no raw reserved-key
+        # passthrough is allowed on a recording export.
+        failed_sources = set()
+        mapped = _recheck_recording_attributes(mapped, policies, failed_sources=failed_sources)
+        event_attributes = [
+            _recheck_recording_attributes(event.attributes or {}, policies, failed_sources=failed_sources)
+            for event in span.events
+        ]
+        link_attributes = [
+            _recheck_recording_attributes(link.attributes or {}, policies, failed_sources=failed_sources)
+            for link in span.links
+        ]
+        # A later event/link failure also invalidates earlier copies of that
+        # reserved family. Finalize without another policy call or raw retry.
+        mapped = _withhold_recording_failures(mapped, failed_sources)
+        events = []
+        for event, checked in zip(span.events, event_attributes):
+            checked = _withhold_recording_failures(checked, failed_sources)
+            events.append(event if checked == dict(event.attributes or {}) else
+                          Event(event.name, checked, timestamp=event.timestamp))
+        links = []
+        for link, checked in zip(span.links, link_attributes):
+            checked = _withhold_recording_failures(checked, failed_sources)
+            links.append(link if checked == dict(link.attributes or {}) else Link(link.context, checked))
+        if mapped == original and events == list(span.events) and links == list(span.links):
             return span
-        original = dict(attributes)
-        mapped = self._convert_attributes(dict(original))
-        if mapped == original:
-            return span
-        return ReadableSpan(
-            name=span.name,
-            context=span.context,
-            parent=span.parent,
-            resource=span.resource,
-            attributes=mapped,
-            events=span.events,
-            links=span.links,
-            kind=span.kind,
-            status=span.status,
-            start_time=span.start_time,
-            end_time=span.end_time,
-            instrumentation_scope=span.instrumentation_scope,
-        )
+        return _copy_span(span, attributes=mapped, events=events, links=links)

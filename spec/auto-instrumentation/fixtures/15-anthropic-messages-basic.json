@@ -1,0 +1,70 @@
+{
+  "name": "anthropic-messages-basic",
+  "request": {
+    "method": "POST",
+    "url": "https://api.anthropic.com/v1/messages",
+    "headers": {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    },
+    "json": {
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 256,
+      "system": "You are a pirate.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ],
+      "temperature": 0.5
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5-20250929",
+      "content": [
+        {
+          "type": "text",
+          "text": "Ahoy!"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 15,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 100,
+        "cache_creation_input_tokens": 20
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat claude-sonnet-4-5",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.input.messages.0.message.role": "system",
+      "gen_ai.input.messages.0.message.content": "You are a pirate.",
+      "gen_ai.input.messages.1.message.content": "Hello",
+      "gen_ai.output.messages.0.message.content": "Ahoy!",
+      "gen_ai.response.finish_reasons": [
+        "end_turn"
+      ],
+      "gen_ai.usage.input_tokens": 135,
+      "gen_ai.usage.output_tokens": 4,
+      "gen_ai.usage.total_tokens": 139,
+      "gen_ai.usage.cache_read_tokens": 100,
+      "gen_ai.usage.cache_write_tokens": 20,
+      "gen_ai.request.max_tokens": 256,
+      "gen_ai.request.temperature": 0.5
+    }
+  }
+}

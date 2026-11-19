@@ -1,0 +1,53 @@
+{
+  "name": "cohere-rerank",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/rerank",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "rerank-v3.5",
+      "query": "capital of France",
+      "documents": [
+        "Paris is in France",
+        "Berlin"
+      ],
+      "top_n": 1
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "rr",
+      "results": [
+        {
+          "index": 0,
+          "relevance_score": 0.98
+        }
+      ],
+      "meta": {
+        "billed_units": {
+          "search_units": 1
+        }
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "rerank rerank-v3.5",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.span.kind": "RERANKER",
+      "gen_ai.request.top_n": 1,
+      "gen_ai.rerank.documents_count": 2,
+      "output.mime_type": "application/json"
+    },
+    "present": [
+      "output.value"
+    ]
+  }
+}

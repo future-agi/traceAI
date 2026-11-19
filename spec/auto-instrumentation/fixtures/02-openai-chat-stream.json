@@ -1,0 +1,105 @@
+{
+  "name": "openai-chat-stream",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4o-mini",
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "Count to 3"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "c2",
+        "object": "chat.completion.chunk",
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "content": ""
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "id": "c2",
+        "object": "chat.completion.chunk",
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "1, 2"
+            },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "id": "c2",
+        "object": "chat.completion.chunk",
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": ", 3"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      },
+      {
+        "id": "c2",
+        "object": "chat.completion.chunk",
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [],
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "total_tokens": 14
+        }
+      },
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o-mini",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.request.stream": true,
+      "gen_ai.response.id": "c2",
+      "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+      "gen_ai.response.finish_reasons": [
+        "stop"
+      ],
+      "gen_ai.usage.input_tokens": 9,
+      "gen_ai.usage.output_tokens": 5,
+      "gen_ai.usage.total_tokens": 14,
+      "gen_ai.output.messages.0.message.role": "assistant",
+      "gen_ai.output.messages.0.message.content": "1, 2, 3",
+      "output.value": "1, 2, 3"
+    }
+  }
+}

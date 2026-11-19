@@ -1,0 +1,20 @@
+{
+  "name": "assemblyai-poll-processing",
+  "request": {
+    "method": "GET",
+    "url": "https://api.assemblyai.com/v2/transcript/abc123"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "abc123",
+      "status": "processing"
+    }
+  },
+  "expect": {
+    "captured": false
+  }
+}

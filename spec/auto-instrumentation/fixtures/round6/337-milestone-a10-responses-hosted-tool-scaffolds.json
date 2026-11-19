@@ -1,0 +1,90 @@
+{
+  "name": "milestone-a10-responses-hosted-tool-scaffolds",
+  "description": "Type/ID/language metadata, empty content lists, citations, stop events and tool results are not model-output deltas.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "input": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "mcp_call",
+          "id": "mcp-r6b",
+          "server_label": "catalog"
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "code_interpreter_call",
+          "id": "ci-r6b",
+          "container_id": "container"
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "mcp_list_tools",
+          "tools": [
+            {
+              "name": "lookup"
+            }
+          ]
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "mcp_approval_request",
+          "name": "lookup",
+          "arguments": "{}"
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "function_call_output",
+          "output": "tool result"
+        }
+      },
+      {
+        "type": "response.code_interpreter_call.completed",
+        "code": "print(1)"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+/** Explicit static messages survive the core's diagnostic allowlist without
+ * exposing arbitrary host/provider errors or filesystem paths. */
+export const cursorDiagnostics = Object.freeze({
+  NOT_REGISTERED: "Run setup to install the owned Cursor hooks.",
+  CURSOR_IDE_NOT_FOUND_OR_UNQUALIFIED: "Install a supported Cursor IDE and run setup again.",
+  UNKNOWN_CURSOR_VERSION: "Update the integration for this Cursor hook version.",
+  CURSOR_DUPLICATE_REGISTRATION: "Remove the duplicate Future AGI hook registration before retrying.",
+  CURSOR_OWNED_HOOK_MODIFIED: "Review the modified owned hook; setup will not overwrite host edits.",
+  CURSOR_INVALID_HOOK_CONFIG: "Repair the Cursor hooks JSON before retrying setup.",
+  CURSOR_OWNERSHIP_CONFLICT: "Review the existing Cursor registration receipt before retrying.",
+  CURSOR_INTERPRETER_MISSING: "Restore Node.js, then update the Cursor integration.",
+  CURSOR_RUNTIME_MISSING: "Run update to restore the installed Cursor hook bundles.",
+  CURSOR_RUNTIME_UPDATE_REQUIRED: "Run update to pin the current Node.js interpreter.",
+  GUI_ACTIVATION_NOT_OBSERVED: "Send a Cursor prompt and check status after the turn completes.",
+  CURSOR_CLI_NOT_FOUND: "Install Cursor CLI and ensure agent or cursor-agent is on PATH.",
+  CURSOR_CLI_VERSION_NOT_QUALIFIED: "This Cursor CLI version has not been qualified for this profile.",
+  CURSOR_CLI_LIVE_CAPTURE_REQUIRED: "The separate CLI profile remains held pending its capture qualification.",
+  CURSOR_SHARED_HOOKS_PRESENT_CLI_UNQUALIFIED: "Shared Cursor hooks exist; the separate CLI profile remains held.",
+  CURSOR_IDE_SHARED_HOOKS_RETAINED: "The IDE still owns these shared Cursor hooks; they were retained.",
+  AUTHORIZED_CLOUD_RUN_REQUIRED: "Qualify an authorized Cursor Cloud run before enabling this profile.",
+  CLOUD_ENVIRONMENT_NOT_PREPARED: "Prepare the maintained package inside the authorized Cloud environment.",
+  PROJECT_HOOKS_MISSING: "Restore the owned project hooks in the Cloud environment.",
+  PROJECT_HOOKS_OR_RUNTIME_MISSING: "Prepare the Cloud environment again to restore hooks and runtime.",
+  PROJECT_HOOKS_PREPARED_CLOUD_DEPLOYMENT_UNVERIFIED: "Project hooks are prepared; a real hosted run is still required.",
+});

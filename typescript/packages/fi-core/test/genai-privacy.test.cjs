@@ -8,7 +8,7 @@ const { createServer } = require('node:http');
 const { once } = require('node:events');
 const { test } = require('node:test');
 const load = createRequire(resolve(process.env.FI_CORE_FIXTURE || __dirname + '/..', 'package.json'));
-const { FITracer } = process.env.FI_CORE_FIXTURE ? load('@traceai/fi-core') : load('./dist/src/index.js');
+const { FITracer, registerSecret } = process.env.FI_CORE_FIXTURE ? load('@traceai/fi-core') : load('./dist/src/index.js');
 const { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor, SamplingDecision } = load('@opentelemetry/sdk-trace-base');
 const { OTLPTraceExporter } = load('@opentelemetry/exporter-trace-otlp-http');
 const { ROOT_CONTEXT, trace } = load('@opentelemetry/api');
@@ -116,13 +116,17 @@ for (const part of [
   }
 }
 
-test('hideInputImages: preserves declared non-image media and legacy text', async () => {
+test('hideInputImages: preserves non-image structure and text, never audio payload bytes', async () => {
   const parts = [{ type: 'blob', modality: 'audio', mime_type: 'audio/wav', content: 'audio' },
     { type: 'uri', modality: 'video', uri: 'https://example.invalid/video' },
     { type: 'text', content: 'keep text' }];
   const value = JSON.stringify([{ role: 'user', parts, content: 'keep legacy' }]);
   const { attributes } = await record({ hideInputImages: true }, INPUT, value);
-  assert.deepEqual(JSON.parse(attributes[INPUT]), JSON.parse(value));
+  // Image hiding does not remove the audio part, but the shared media policy
+  // independently withholds its declared payload at every hide-flag setting.
+  assert.deepEqual(JSON.parse(attributes[INPUT]), [{ role: 'user', parts: [
+    { ...parts[0], content: '<omitted: 5 base64 chars>' }, ...parts.slice(1),
+  ], content: 'keep legacy' }]);
 });
 
 test('hideInputImages: opaque tool payloads and unknown parts fail closed', async () => {
@@ -163,9 +167,14 @@ test('image hiding still applies PII redaction to retained text', async () => {
   assert.ok(attributes[INPUT].includes('<EMAIL_ADDRESS>'));
 });
 
-test('disabled and opposite-direction flags preserve bytes; broad flags remove messages', async () => {
+test('disabled and opposite-direction flags preserve public bytes, never discovered secrets; broad flags remove messages', async () => {
+  const publicText = native([{ type: 'text', content: 'public-direction-control' }]);
+  registerSecret(SECRET);
   for (const config of [{}, { hideOutputText: true }]) {
-    assert.equal((await record(config, INPUT, text)).attributes[INPUT], text);
+    assert.equal((await record(config, INPUT, publicText)).attributes[INPUT], publicText);
+    // Turning hiding off must not make a process-wide known credential public.
+    assert.deepEqual(JSON.parse((await record(config, INPUT, text)).attributes[INPUT]),
+      [{ role: 'user', parts: [{ type: 'text', content: '<redacted>' }] }]);
   }
   for (const flag of ['hideInputs', 'hideInputMessages']) {
     assert.equal((await record({ [flag]: true }, INPUT, text)).attributes[INPUT], undefined);
@@ -182,14 +191,23 @@ test('empty messages and repeated masking are stable', async () => {
   assert.equal((await record(config, INPUT, onceMasked)).attributes[INPUT], onceMasked);
 });
 
-test('structured metadata and a large mixed message batch cannot carry payloads through', async () => {
-  const value = JSON.stringify(Array.from({ length: 1000 }, () => ({ role: 'user',
-    name: { data: SECRET }, parts: [{ type: 'text', content: SECRET, id: { data: SECRET } },
-      { type: 'tool_call_response', response: [SECRET] }] })));
-  const { attributes } = await record({ hideInputText: true }, INPUT, value);
-  assert.ok(!attributes[INPUT].includes(SECRET));
-  assert.equal(JSON.parse(attributes[INPUT]).length, 1000);
-});
+for (const count of [100, 1000]) {
+  test(`structured metadata in ${count} mixed messages stays private, including budget exhaustion`, async () => {
+    const value = JSON.stringify(Array.from({ length: count }, () => ({ role: 'user',
+      name: { data: SECRET }, parts: [{ type: 'text', content: SECRET, id: { data: SECRET } },
+        { type: 'tool_call_response', response: [SECRET] }] })));
+    const result = await record({ hideInputText: true }, INPUT, value);
+    assert.ok(!JSON.stringify(result).includes(SECRET));
+    if (count === 100) {
+      assert.equal(JSON.parse(result.attributes[INPUT]).length, count);
+    } else {
+      // The shared privacy inspection budget fails closed, before the sampler,
+      // instead of partially retaining an uninspected oversized message batch.
+      assert.equal(result.attributes[INPUT], undefined);
+      assert.equal(result.sampled[0][INPUT], undefined);
+    }
+  });
+}
 
 test('environment privacy flags use the same native message masking', async () => {
   const previous = process.env.FI_HIDE_INPUT_TEXT;

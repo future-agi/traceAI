@@ -1,0 +1,71 @@
+{
+  "name": "milestone-ndjson-baseline22-complete",
+  "description": "Unchanged baseline 22 body, now with arrival times; its first complete record already carries text.",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:11434/api/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "model": "llama3.2",
+        "message": {
+          "role": "assistant",
+          "content": "Hel"
+        },
+        "done": false
+      },
+      {
+        "model": "llama3.2",
+        "message": {
+          "role": "assistant",
+          "content": "lo"
+        },
+        "done": false
+      },
+      {
+        "model": "llama3.2",
+        "message": {
+          "role": "assistant",
+          "content": ""
+        },
+        "done": true,
+        "done_reason": "stop",
+        "prompt_eval_count": 6,
+        "eval_count": 2
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      30,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

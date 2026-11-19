@@ -50,6 +50,9 @@ const TOKEN_COUNT_COMPLETION =
 const TOKEN_COUNT_PROMPT =
   `${AI_PREFIX}.${AIPrefixes.usage}.${AIUsagePostfixes.promptTokens}` as const;
 
+/** Embedding usage maps to both input and total counts, not a single FI key. */
+export const EMBEDDING_TOKEN_COUNT = `${AI_PREFIX}.${AIPrefixes.usage}.tokens` as const;
+
 const RESPONSE_TEXT =
   `${AI_PREFIX}.${AIPrefixes.response}.${AIResponsePostfixes.text}` as const;
 

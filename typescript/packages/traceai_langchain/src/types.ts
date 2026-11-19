@@ -1,6 +1,7 @@
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
 type LLMMessageToolCall = {
+  [SemanticConventions.TOOL_CALL_ID]?: string;
   [SemanticConventions.TOOL_CALL_FUNCTION_NAME]?: string;
   [SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON]?: string;
 };
@@ -18,6 +19,7 @@ export type LLMMessage = LLMMessageToolCalls &
   LLMMessageFunctionCall & {
     [SemanticConventions.MESSAGE_ROLE]?: string;
     [SemanticConventions.MESSAGE_CONTENT]?: string;
+    [SemanticConventions.MESSAGE_TOOL_CALL_ID]?: string;
   };
 
 export type LLMMessagesAttributes =

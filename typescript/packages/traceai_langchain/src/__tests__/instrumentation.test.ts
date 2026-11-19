@@ -367,17 +367,36 @@ describe('LangChain Instrumentation', () => {
   });
 
   describe('Module Flag Management', () => {
-    it('should set fiPatched flag on successful patch', () => {
-      const moduleWithFlag: any = {
+    it('should not write a patched flag onto the module', () => {
+      const writableModule: any = {
         CallbackManager: {
           configure: jest.fn(),
           _configureSync: jest.fn(),
         },
       };
-      // Ensure property is writable
-      Object.defineProperty(moduleWithFlag, 'fiPatched', { value: undefined, writable: true, configurable: true });
-      instrumentation.manuallyInstrument(moduleWithFlag);
-      expect(moduleWithFlag.fiPatched).toBe(true);
+      instrumentation.manuallyInstrument(writableModule);
+      expect(isPatched()).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(writableModule, 'fiPatched')).toBe(false);
+
+      instrumentation.disable();
+      expect(isPatched()).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(writableModule, 'fiPatched')).toBe(false);
+    });
+
+    it('should respect a patched flag that is already set on the module', () => {
+      const configure = jest.fn();
+      const configureSync = jest.fn();
+      const flaggedModule = {
+        fiPatched: true,
+        CallbackManager: {
+          configure,
+          _configureSync: configureSync,
+        },
+      };
+      instrumentation.manuallyInstrument(flaggedModule as any);
+      expect(flaggedModule.CallbackManager.configure).toBe(configure);
+      expect(flaggedModule.CallbackManager._configureSync).toBe(configureSync);
+      expect(isPatched()).toBe(false);
     });
 
     it('should handle flag setting failure gracefully', () => {

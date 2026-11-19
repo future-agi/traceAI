@@ -1,0 +1,156 @@
+[
+  {
+    "conversation_id": "b1a379ab-cfb6-48ca-bde4-fe28ffb458ce",
+    "generation_id": "",
+    "model": "grok-4.7",
+    "model_id": "grok-4.7",
+    "model_params": [
+      {
+        "id": "context",
+        "value": "256k"
+      },
+      {
+        "id": "reasoning_effort",
+        "value": "medium"
+      },
+      {
+        "id": "fast",
+        "value": "false"
+      }
+    ],
+    "reason": "user_close",
+    "duration_ms": 0,
+    "is_background_agent": false,
+    "final_status": "none",
+    "session_id": "b1a379ab-cfb6-48ca-bde4-fe28ffb458ce",
+    "hook_event_name": "sessionEnd",
+    "cursor_version": "3.26.13",
+    "workspace_roots": [
+      "/Users/fixture/workspace"
+    ],
+    "user_email": null,
+    "transcript_path": null
+  },
+  {
+    "conversation_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "generation_id": "870a4500-2f1d-4ad6-a6d7-e33403be47c3",
+    "model": "grok-4.7-medium",
+    "model_id": "grok-4.7",
+    "model_params": [
+      {
+        "id": "context",
+        "value": "256k"
+      },
+      {
+        "id": "reasoning_effort",
+        "value": "medium"
+      },
+      {
+        "id": "fast",
+        "value": "false"
+      }
+    ],
+    "composer_mode": "agent",
+    "prompt": "Read stats.py and fix median() so it returns the average of the two middle values for even-length lists. Then run python3 -c \"import stats; print(stats.median([1, 2, 3, 4]))\" in the terminal to check the result is 2.5.",
+    "attachments": [],
+    "session_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "hook_event_name": "beforeSubmitPrompt",
+    "cursor_version": "3.26.13",
+    "workspace_roots": [
+      "/Users/fixture/workspace"
+    ],
+    "user_email": null,
+    "transcript_path": null
+  },
+  {
+    "conversation_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "generation_id": "870a4500-2f1d-4ad6-a6d7-e33403be47c3",
+    "model": "grok-4.7-medium",
+    "model_id": "grok-4.7",
+    "model_params": [
+      {
+        "id": "context",
+        "value": "256k"
+      },
+      {
+        "id": "reasoning_effort",
+        "value": "medium"
+      },
+      {
+        "id": "fast",
+        "value": "false"
+      }
+    ],
+    "status": "error",
+    "loop_count": 0,
+    "session_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "hook_event_name": "stop",
+    "cursor_version": "3.26.13",
+    "workspace_roots": [
+      "/Users/fixture/workspace"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture-workspace/agent-transcripts/0823d190-002c-4a51-8805-50907e6a8d03/0823d190-002c-4a51-8805-50907e6a8d03.jsonl"
+  },
+  {
+    "conversation_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "generation_id": "f120f6b0-af6d-4995-97a6-690744d70554",
+    "model": "grok-4.7-medium",
+    "model_id": "grok-4.7",
+    "model_params": [
+      {
+        "id": "context",
+        "value": "256k"
+      },
+      {
+        "id": "reasoning_effort",
+        "value": "medium"
+      },
+      {
+        "id": "fast",
+        "value": "false"
+      }
+    ],
+    "composer_mode": "agent",
+    "prompt": "Read stats.py and fix median() so it returns the average of the two middle values for even-length lists. Then run python3 -c \"import stats; print(stats.median([1, 2, 3, 4]))\" in the terminal to check the result is 2.5.",
+    "attachments": [],
+    "session_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "hook_event_name": "beforeSubmitPrompt",
+    "cursor_version": "3.26.13",
+    "workspace_roots": [
+      "/Users/fixture/workspace"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture-workspace/agent-transcripts/0823d190-002c-4a51-8805-50907e6a8d03/0823d190-002c-4a51-8805-50907e6a8d03.jsonl"
+  },
+  {
+    "conversation_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "generation_id": "f120f6b0-af6d-4995-97a6-690744d70554",
+    "model": "grok-4.7-medium",
+    "model_id": "grok-4.7",
+    "model_params": [
+      {
+        "id": "context",
+        "value": "256k"
+      },
+      {
+        "id": "reasoning_effort",
+        "value": "medium"
+      },
+      {
+        "id": "fast",
+        "value": "false"
+      }
+    ],
+    "status": "error",
+    "loop_count": 0,
+    "session_id": "0823d190-002c-4a51-8805-50907e6a8d03",
+    "hook_event_name": "stop",
+    "cursor_version": "3.26.13",
+    "workspace_roots": [
+      "/Users/fixture/workspace"
+    ],
+    "user_email": null,
+    "transcript_path": "/Users/fixture/.cursor/projects/fixture-workspace/agent-transcripts/0823d190-002c-4a51-8805-50907e6a8d03/0823d190-002c-4a51-8805-50907e6a8d03.jsonl"
+  }
+]

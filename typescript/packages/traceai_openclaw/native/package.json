@@ -1,0 +1,7 @@
+{
+  "name": "@traceai/futureagi-openclaw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lifecycle-only flush bridge for @traceai/openclaw (no model instrumentation or hooks)",
+  "openclaw": { "extensions": ["./index.cjs"] }
+}

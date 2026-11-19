@@ -30,10 +30,17 @@ import { type MessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { Stream } from "@anthropic-ai/sdk/streaming";
 
 const MODULE_NAME = "@anthropic-ai/sdk";
-let _isFIPatched = false;
+// Key ownership by the concrete target, not the module namespace: ESM aliases
+// can share Messages, and frozen namespaces cannot carry a fiPatched flag.
+const patchedMessages = new Map<Anthropic.Messages, {
+  owner: AnthropicInstrumentation;
+  moduleExports: typeof Anthropic;
+  create: Anthropic.Messages["create"];
+  generation: symbol;
+}>();
 
 export function isPatched() {
-  return _isFIPatched;
+  return patchedMessages.size > 0;
 }
 
 function getExecContext(span: Span) {
@@ -334,6 +341,7 @@ function finishInstrumentationStream(
 export class AnthropicInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private _manualModules = new Set<typeof Anthropic>();
 
   constructor({
     instrumentationConfig,
@@ -349,6 +357,16 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   public override enable(): void {
     super.enable();
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    // InstrumentationBase can call enable() before subclass fields initialize.
+    for (const module of this._manualModules ?? []) this.patch(module);
+  }
+
+  public override disable(): void {
+    super.disable();
+    // The automatic loader never sees native-ESM manual targets.
+    for (const [messagesPrototype, patch] of patchedMessages) {
+      if (patch.owner === this) this.unpatchMessages(messagesPrototype);
+    }
   }
 
   protected init(){
@@ -362,7 +380,8 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   }
 
   manuallyInstrument(module: typeof Anthropic) {
-    this.patch(module);
+    this._manualModules.add(module);
+    if (this.isEnabled()) this.patch(module);
   }
 
   private patch(moduleExports: typeof Anthropic, moduleVersion?: string) {
@@ -380,22 +399,23 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       return moduleExports;
     }
 
-    if ((moduleExports as any).fiPatched || _isFIPatched) {
-      return moduleExports;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const instrumentation: AnthropicInstrumentation = this;
-
-    if (!(instrumentation.fiTracer as any).tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
-        instrumentation.fiTracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: instrumentation._traceConfig });
-    }
-
     const messagesPrototype = getMessagesPrototype(moduleExports);
     if (!messagesPrototype) {
       diag.error("Anthropic.Messages.prototype not found, cannot patch messages.create.");
       return moduleExports;
     }
+    if (patchedMessages.has(messagesPrototype) || (moduleExports as any).fiPatched) {
+      return moduleExports;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const instrumentation: AnthropicInstrumentation = this;
 
+    if (!instrumentation.fiTracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
+        instrumentation.fiTracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: instrumentation._traceConfig });
+    }
+
+    const previousCreate = messagesPrototype.create;
+    const generation = Symbol("messages.create");
     // Patch messages.create
     this._wrap(
       messagesPrototype,
@@ -404,6 +424,11 @@ export class AnthropicInstrumentation extends InstrumentationBase{
         // Not async: the SDK returns an APIPromise whose withResponse(), asResponse()
         // and lazy body parsing callers (including messages.stream()) depend on.
         return function patchedMessagesCreate(this: Anthropic.Messages, ...args: Parameters<Anthropic.Messages['create']>) {
+          // Retained wrappers stay inactive even after this instance is re-enabled.
+          // Unpatch removes the registration; a later patch gets a new generation.
+          if (!instrumentation.isEnabled() || patchedMessages.get(messagesPrototype)?.generation !== generation) {
+            return originalCreate.apply(this, args);
+          }
           const params = args[0] as Anthropic.MessageCreateParams;
           const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = params;
 
@@ -504,7 +529,13 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       }
     );
 
-    _isFIPatched = true;
+    if (messagesPrototype.create === previousCreate) return moduleExports;
+    patchedMessages.set(messagesPrototype, {
+      owner: this,
+      moduleExports,
+      create: messagesPrototype.create,
+      generation,
+    });
     try {
       (moduleExports as any).fiPatched = true;
     } catch (e) {
@@ -516,13 +547,20 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   private unpatch(moduleExports: typeof Anthropic & { fiPatched?: boolean }) {
     const messagesPrototype = getMessagesPrototype(moduleExports);
     if (messagesPrototype) {
-      this._unwrap(messagesPrototype, "create");
+      this.unpatchMessages(messagesPrototype);
     } else {
       diag.warn("Anthropic.Messages.prototype not found during unpatch, could not unwrap messages.create.");
     }
-    _isFIPatched = false;
+  }
+
+  private unpatchMessages(messagesPrototype: Anthropic.Messages) {
+    const patch = patchedMessages.get(messagesPrototype);
+    // Loader callbacks from a different instance must not remove our wrapper.
+    if (!patch || patch.owner !== this) return;
+    if (messagesPrototype.create === patch.create) this._unwrap(messagesPrototype, "create");
+    patchedMessages.delete(messagesPrototype);
     try {
-      (moduleExports as any).fiPatched = false;
+      (patch.moduleExports as any).fiPatched = false;
     } catch (e) {
       diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
     }

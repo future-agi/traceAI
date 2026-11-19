@@ -1,0 +1,44 @@
+{
+  "agent": "kiro-ide",
+  "state": "HOLD",
+  "candidateSchema": "Kiro IDE 1.4.121 standalone v1 workspace hooks",
+  "qualifiedHostVersions": [],
+  "registrationScope": "project",
+  "releaseBlockers": [
+    "Real IDE GUI loading, hook consent, dispatch ordering and fail-open behavior need a separately approved cloud GUI/account run. Version/help execution is not trace evidence.",
+    "IDE 1.4.121 serializer has session_id but no turn_id, tool call ID, final response, usage or terminal outcome. Serialized observed prompt sequence is implemented; concurrent sessions/turns, interrupted turns, retry and duplicate dispatch require real IDE qualification.",
+    "Shared v1 hook files can also execute in CLI V3; IDE-vs-CLI source provenance is not pinned. The production runtime refuses collection and unified setup refuses registration until independently qualified.",
+    "Global IDE hook availability conflicts between current hook reference and changelog; only workspace registration is implemented.",
+    "No real Future AGI Kiro IDE trace screenshot or GIF exists. Keep the new docs route and registry publication held."
+  ],
+  "captures": {
+    "turnSession": "observed prompt sequence within source session_id, not resume/branch-stable turn identity",
+    "prompt": "v1 stdin prompt, with documented USER_PROMPT fallback",
+    "tool": "PostToolUse notification, zero-duration observed time; no source call ID or proven ancestry",
+    "fileTask": "span events with privacy-filtered file/spec/task names, never model requests",
+    "compaction": "PreCompact/PostCompact notification events within an active turn; no transcript reads",
+    "finalResponse": false,
+    "modelRequests": false,
+    "tokens": false,
+    "cost": false,
+    "subagentAncestry": false
+  },
+  "distributionProbe": {
+    "version": "1.4.121",
+    "commit": "c79656137dca6dfc8e00b1356826b7c84366895f",
+    "platform": "linux-x64",
+    "sha256": "818b815e34f126360fe379aa383c0d6f382ca1e46f8afeadb38c4c3129065b42",
+    "url": "https://prod.download.desktop.kiro.dev/releases/stable/linux-x64/signed/1.4.121/tar/kiro-ide-1.4.121-stable-linux-x64.tar.gz",
+    "serializer": "resources/app/extensions/kiro.kiro-agent/dist/extension.js function v8t",
+    "versionCommandPassed": true,
+    "realIdeHookCapture": false,
+    "realIdeSpansReceived": 0
+  },
+  "sources": [
+    "https://kiro.dev/docs/hooks/",
+    "https://kiro.dev/docs/hooks/types/",
+    "https://kiro.dev/docs/hooks/actions/",
+    "https://kiro.dev/docs/ide/whats-new-v1/hooks/"
+  ],
+  "reviewedAt": "2026-11-06"
+}

@@ -14,6 +14,11 @@ type Operation = 'chat' | 'text_completion' | 'embeddings' | 'responses';
 type Patch = { target: any; key: string; original: any; wrapped: any };
 const owners = new WeakMap<Function, PortkeyInstrumentation>();
 const active = new Set<PortkeyInstrumentation>();
+// The zero-code agent (@traceai/auto) defines a function under this key on the
+// instrumentation instance it builds. Traced calls run through it so the call's
+// own request is not traced twice. Without it, calls run as before. The v1 key
+// is shared with the agent: change both together.
+const INTEGRATION_CALL = Symbol.for('traceai.auto.integration-call.v1');
 const json = (value: unknown): string => safelyJSONStringify(value) ?? '';
 
 /** Instruments actual SDK resources, including resources created after registration. */
@@ -114,7 +119,9 @@ export class PortkeyInstrumentation extends InstrumentationBase {
         if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
           return original.apply(this, args);
         }
-        return instrumentation.traceCall(original, this, args, operation);
+        const scope = (instrumentation as unknown as Record<symbol, unknown>)[INTEGRATION_CALL];
+        const traced = () => instrumentation.traceCall(original, this, args, operation);
+        return typeof scope === 'function' ? (scope as <T>(fn: () => T) => T)(traced) : traced();
       });
     }
   }

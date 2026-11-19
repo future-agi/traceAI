@@ -199,6 +199,9 @@ def test_async_streamed_and_failed_chat_record_the_requested_model(make_tracer):
 
 @pytest.mark.parametrize("base_url,provider", [
     ("https://api.openai.com/v1", "openai"),
+    ("https://openrouter.ai/api/v1", "openrouter"),
+    ("https://OPENROUTER.AI./api/v1", "openrouter"),
+    ("https://openrouter.ai.customer.example/api/v1", "openai"),
     ("https://my-resource.openai.azure.com/openai/v1/", "azure"),
     ("https://my-resource.services.ai.azure.com/openai/v1/", "azure"),
     ("https://generativelanguage.googleapis.com/v1beta/openai/", "google"),

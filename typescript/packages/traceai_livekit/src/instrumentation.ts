@@ -1,28 +1,12 @@
-/**
- * OpenTelemetry instrumentation for LiveKit.
- *
- * LiveKit is a real-time communication platform for WebRTC.
- * This instrumentation captures room events, participant tracking,
- * audio/video track management, and agent interactions.
- */
-
+/// <reference lib="es2021.weakref" />
+/** OpenTelemetry instrumentation for LiveKit client and Node RTC operations. */
 import {
   InstrumentationBase,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
-import {
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  context,
-  trace,
-} from "@opentelemetry/api";
+import { Attributes, Span, SpanKind, SpanStatusCode, context, trace } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-} from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 
 export interface LiveKitInstrumentationConfig {
@@ -30,540 +14,291 @@ export interface LiveKitInstrumentationConfig {
   traceConfig?: TraceConfigOptions;
 }
 
-/**
- * LiveKit Instrumentation class.
- *
- * Provides automatic instrumentation for the LiveKit SDKs:
- * - livekit-client (browser/client SDK)
- * - @livekit/rtc-node (server-side SDK)
- * - livekit-server-sdk (server API SDK)
- */
+type Operation = "room.connect" | "room.disconnect" | "track.publish" | "track.unpublish" | "audio.capture" | "video.capture";
+type Method = (...args: any[]) => any;
+interface Patch {
+  target: WeakRef<Record<string, Method>>;
+  name: string;
+  wrapped: WeakRef<Method>;
+  deactivate: () => void;
+}
+// Ownership belongs to the actual method, not the module namespace (which can be frozen).
+const owners = new WeakMap<Method, LiveKitInstrumentation>();
+// A third-party wrapper can hide our function without removing it. Keep active
+// target/method ownership too, so repeat registration does not add another span.
+const activeMethods = new WeakMap<object, Set<string>>();
+let patchCount = 0;
+
+/** Instruments RTC operations, not LiveKit Agents' native LLM/session spans. */
 export class LiveKitInstrumentation extends InstrumentationBase {
-  private fiTracer!: FITracer;
-  private _traceConfig?: TraceConfigOptions;
-  private activeSpans: Map<string, Span> = new Map();
+  private readonly traceConfig?: TraceConfigOptions;
+  private readonly patches = new Set<Patch>();
+  // Do not retain disconnected Room instances through their bound methods.
+  private readonly collected = new FinalizationRegistry<Patch>(patch => this.removePatch(patch));
+  private readonly clientModules = new WeakMap<object, any>();
+  private readonly knownRooms = new WeakSet<object>();
+  private readonly rooms = new Set<WeakRef<object>>();
+  private readonly collectedRooms = new FinalizationRegistry<WeakRef<object>>(room => this.rooms.delete(room));
 
   constructor(config: LiveKitInstrumentationConfig = {}) {
-    super(
-      "@traceai/fi-instrumentation-livekit",
-      VERSION,
-      config.instrumentationConfig || {}
-    );
-    this._traceConfig = config.traceConfig;
+    // InstrumentationBase may call enable() from its constructor. Initialize our state first.
+    super("@traceai/fi-instrumentation-livekit", VERSION, {
+      ...config.instrumentationConfig,
+      enabled: false,
+    });
+    this.traceConfig = config.traceConfig;
+    this.setConfig({ ...config.instrumentationConfig, enabled: config.instrumentationConfig?.enabled !== false });
+    if (this.getConfig().enabled) this.enable();
+  }
+
+  protected init() {
+    return [
+      new InstrumentationNodeModuleDefinition(
+        "livekit-client", [">=1.0.0 <3"],
+        this.patchClient.bind(this), this.unpatchModule.bind(this)
+      ),
+      new InstrumentationNodeModuleDefinition(
+        "@livekit/rtc-node", [">=0.3.0 <2"],
+        this.patchRtcNode.bind(this), this.unpatchModule.bind(this)
+      ),
+    ];
+  }
+
+  /** Use the returned module for client Room constructors, including frozen ESM namespaces. */
+  manuallyInstrument<T>(module: T): T {
+    if (!this.isEnabled()) return module;
+    const sdk = module as any;
+    if (sdk?.AudioSource || sdk?.VideoSource) return this.patchRtcNode(sdk);
+    if (sdk?.Room) return this.patchClient(sdk);
+    return module;
+  }
+
+  /** Instrument a client Room created before setup, or constructed from an existing ESM binding. */
+  instrumentRoom<T extends object>(room: T): T {
+    // Keep only weak references across disable(): applications may retain rooms
+    // (or construct them through a saved facade) while tracing is turned off.
+    if (!this.knownRooms.has(room)) {
+      this.knownRooms.add(room);
+      const reference = new WeakRef(room);
+      this.rooms.add(reference);
+      this.collectedRooms.register(room, reference);
+    }
+    if (this.isEnabled()) {
+      this.wrap(room as Record<string, Method>, "connect", "room.connect");
+      this.wrap(room as Record<string, Method>, "disconnect", "room.disconnect");
+    }
+    return room;
   }
 
   override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
+    for (const reference of this.rooms) {
+      const room = reference.deref();
+      if (room) this.instrumentRoom(room);
+      else this.rooms.delete(reference);
+    }
+  }
+
+  override disable(): void {
+    super.disable();
+    // The base class only knows modules seen by its loader, not manual registrations.
+    for (const patch of this.patches) this.removePatch(patch);
+  }
+
+  private wrap(target: Record<string, Method> | undefined, name: string, operation: Operation): void {
+    if (!target || typeof target[name] !== "function" ||
+        activeMethods.get(target)?.has(name) || owners.has(target[name])) return;
+    const instrumentation = this;
+    let active = true;
+    this._wrap(target, name, (original: Method) => function (this: any, ...args: any[]) {
+      // A later third-party wrapper may still retain this function after disable().
+      if (!active || !instrumentation.isEnabled()) return original.apply(this, args);
+      return instrumentation.traceOperation(operation, original, this, args);
     });
+    const wrapped = target[name];
+    owners.set(wrapped, this);
+    const methods = activeMethods.get(target) ?? new Set<string>();
+    methods.add(name);
+    activeMethods.set(target, methods);
+    const patch = { target: new WeakRef(target), name, wrapped: new WeakRef(wrapped), deactivate: () => { active = false; } };
+    this.patches.add(patch);
+    this.collected.register(target, patch, patch);
+    patchCount++;
   }
 
-  protected init() {
-    const modules = [
-      new InstrumentationNodeModuleDefinition(
-        "livekit-client",
-        ["^1.0.0", "^2.0.0"],
-        this.patchClient.bind(this),
-        this.unpatchClient.bind(this)
-      ),
-      new InstrumentationNodeModuleDefinition(
-        "@livekit/rtc-node",
-        ["^0.3.0", "^0.4.0", "^0.5.0"],
-        this.patchRtcNode.bind(this),
-        this.unpatchRtcNode.bind(this)
-      ),
-    ];
-    return modules;
+  private removePatch(patch: Patch): void {
+    if (!this.patches.delete(patch)) return;
+    patch.deactivate();
+    const target = patch.target.deref();
+    const wrapped = patch.wrapped.deref();
+    if (target) activeMethods.get(target)?.delete(patch.name);
+    if (target && target[patch.name] === wrapped) this._unwrap(target, patch.name);
+    if (wrapped) owners.delete(wrapped);
+    this.collected.unregister(patch);
+    patchCount--;
   }
 
-  /**
-   * Manually instrument the LiveKit modules.
-   */
-  manuallyInstrument(livekitModule: any): void {
-    if (livekitModule?.Room) {
-      this.patchClient(livekitModule);
-    } else if (livekitModule?.AudioSource || livekitModule?.VideoSource) {
-      this.patchRtcNode(livekitModule);
-    }
-  }
-
-  private patchClient(clientModule: any & { _fiPatched?: boolean }): any {
-    if (clientModule?._fiPatched || _isFIPatched) {
-      return clientModule;
-    }
-
+  private patchClient(module: any): any {
+    this.wrap(module?.Room?.prototype, "connect", "room.connect");
+    this.wrap(module?.Room?.prototype, "disconnect", "room.disconnect");
+    this.wrap(module?.LocalParticipant?.prototype, "publishTrack", "track.publish");
+    this.wrap(module?.LocalParticipant?.prototype, "unpublishTrack", "track.unpublish");
+    // livekit-client implements room operations as instance fields, not prototype methods.
+    // Return a facade rather than assigning into a possibly immutable ESM namespace.
+    if (typeof module?.Room !== "function" ||
+        (module.Room.prototype.connect && module.Room.prototype.disconnect)) return module;
+    const existing = this.clientModules.get(module);
+    if (existing) return existing;
     const instrumentation = this;
-
-    // Wrap Room.connect
-    if (clientModule.Room?.prototype?.connect) {
-      this._wrap(
-        clientModule.Room.prototype,
-        "connect",
-        (original: Function) => {
-          return function patchedConnect(this: any, ...args: any[]) {
-            return instrumentation.traceRoomConnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap Room.disconnect
-    if (clientModule.Room?.prototype?.disconnect) {
-      this._wrap(
-        clientModule.Room.prototype,
-        "disconnect",
-        (original: Function) => {
-          return function patchedDisconnect(this: any, ...args: any[]) {
-            return instrumentation.traceRoomDisconnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap LocalParticipant.publishTrack
-    if (clientModule.LocalParticipant?.prototype?.publishTrack) {
-      this._wrap(
-        clientModule.LocalParticipant.prototype,
-        "publishTrack",
-        (original: Function) => {
-          return function patchedPublishTrack(this: any, ...args: any[]) {
-            return instrumentation.tracePublishTrack(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap LocalParticipant.unpublishTrack
-    if (clientModule.LocalParticipant?.prototype?.unpublishTrack) {
-      this._wrap(
-        clientModule.LocalParticipant.prototype,
-        "unpublishTrack",
-        (original: Function) => {
-          return function patchedUnpublishTrack(this: any, ...args: any[]) {
-            return instrumentation.traceUnpublishTrack(original, this, args);
-          };
-        }
-      );
-    }
-
-    clientModule._fiPatched = true;
-    _isFIPatched = true;
-    return clientModule;
-  }
-
-  private unpatchClient(clientModule: any & { _fiPatched?: boolean }): void {
-    if (clientModule?.Room?.prototype?.connect) {
-      this._unwrap(clientModule.Room.prototype, "connect");
-    }
-    if (clientModule?.Room?.prototype?.disconnect) {
-      this._unwrap(clientModule.Room.prototype, "disconnect");
-    }
-    if (clientModule?.LocalParticipant?.prototype?.publishTrack) {
-      this._unwrap(clientModule.LocalParticipant.prototype, "publishTrack");
-    }
-    if (clientModule?.LocalParticipant?.prototype?.unpublishTrack) {
-      this._unwrap(clientModule.LocalParticipant.prototype, "unpublishTrack");
-    }
-    if (clientModule) {
-      clientModule._fiPatched = false;
-    }
-    _isFIPatched = false;
-  }
-
-  private patchRtcNode(rtcModule: any & { _fiPatched?: boolean }): any {
-    if (rtcModule?._fiPatched) {
-      return rtcModule;
-    }
-
-    const instrumentation = this;
-
-    // Wrap Room.connect for server-side
-    if (rtcModule.Room?.prototype?.connect) {
-      this._wrap(
-        rtcModule.Room.prototype,
-        "connect",
-        (original: Function) => {
-          return function patchedConnect(this: any, ...args: any[]) {
-            return instrumentation.traceRoomConnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap AudioSource.captureFrame
-    if (rtcModule.AudioSource?.prototype?.captureFrame) {
-      this._wrap(
-        rtcModule.AudioSource.prototype,
-        "captureFrame",
-        (original: Function) => {
-          return function patchedCaptureFrame(this: any, ...args: any[]) {
-            return instrumentation.traceAudioCapture(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap VideoSource.captureFrame
-    if (rtcModule.VideoSource?.prototype?.captureFrame) {
-      this._wrap(
-        rtcModule.VideoSource.prototype,
-        "captureFrame",
-        (original: Function) => {
-          return function patchedCaptureFrame(this: any, ...args: any[]) {
-            return instrumentation.traceVideoCapture(original, this, args);
-          };
-        }
-      );
-    }
-
-    rtcModule._fiPatched = true;
-    return rtcModule;
-  }
-
-  private unpatchRtcNode(rtcModule: any & { _fiPatched?: boolean }): void {
-    if (rtcModule?.Room?.prototype?.connect) {
-      this._unwrap(rtcModule.Room.prototype, "connect");
-    }
-    if (rtcModule?.AudioSource?.prototype?.captureFrame) {
-      this._unwrap(rtcModule.AudioSource.prototype, "captureFrame");
-    }
-    if (rtcModule?.VideoSource?.prototype?.captureFrame) {
-      this._unwrap(rtcModule.VideoSource.prototype, "captureFrame");
-    }
-    if (rtcModule) {
-      rtcModule._fiPatched = false;
-    }
-  }
-
-  private async traceRoomConnect(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const url = args[0] || "";
-    const token = args[1] || "";
-    const roomName = instance.name || this.extractRoomFromToken(token) || "unknown";
-
-    const span = this.fiTracer.startSpan(`LiveKit Room Connect: ${roomName}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "livekit.operation": "room.connect",
-        "livekit.room_name": roomName,
-        "livekit.server_url": this.sanitizeUrl(url),
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify({ url: this.sanitizeUrl(url), roomName }),
+    const Room = new Proxy(module.Room, {
+      construct(target, args, newTarget) {
+        const room = Reflect.construct(target, args, newTarget);
+        return instrumentation.instrumentRoom(room);
       },
     });
+    const facade = { ...module, Room };
+    this.clientModules.set(module, facade);
+    return facade;
+  }
 
-    // Store span for room lifecycle tracking
-    this.activeSpans.set(`room:${roomName}`, span);
-    const execContext = trace.setSpan(context.active(), span);
+  private patchRtcNode(module: any): any {
+    this.patchClient(module);
+    this.wrap(module?.AudioSource?.prototype, "captureFrame", "audio.capture");
+    this.wrap(module?.VideoSource?.prototype, "captureFrame", "video.capture");
+    return module;
+  }
 
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "livekit.connected": true,
-        "livekit.participant_id": instance.localParticipant?.identity || "unknown",
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({
-          connected: true,
-          participantId: instance.localParticipant?.identity,
-        }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      // Don't end span yet - it will be ended on disconnect
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      this.activeSpans.delete(`room:${roomName}`);
-      throw error;
+  private unpatchModule(module: any): void {
+    const targets = [module?.Room?.prototype, module?.LocalParticipant?.prototype,
+      module?.AudioSource?.prototype, module?.VideoSource?.prototype];
+    for (const patch of this.patches) {
+      if (targets.includes(patch.target.deref())) this.removePatch(patch);
     }
   }
 
-  private async traceRoomDisconnect(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const roomName = instance.name || "unknown";
-    const roomSpan = this.activeSpans.get(`room:${roomName}`);
-
-    const span = this.fiTracer.startSpan(`LiveKit Room Disconnect: ${roomName}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "livekit.operation": "room.disconnect",
-        "livekit.room_name": roomName,
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "livekit.disconnected": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ disconnected: true }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      // End the room connection span
-      if (roomSpan) {
-        roomSpan.setStatus({ code: SpanStatusCode.OK });
-        roomSpan.end();
-        this.activeSpans.delete(`room:${roomName}`);
+  private traceOperation(operation: Operation, original: Method, instance: any, args: any[]): any {
+    const attributes: Attributes = {
+      [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
+      "livekit.operation": operation,
+    };
+    let name: string;
+    const track = args[0];
+    switch (operation) {
+      case "room.connect":
+      case "room.disconnect": {
+        const roomName = safeRead(() => instance.name) || "unknown";
+        name = `LiveKit Room ${operation === "room.connect" ? "Connect" : "Disconnect"}: ${roomName}`;
+        attributes["livekit.room_name"] = roomName;
+        if (operation === "room.connect") {
+          const url = sanitizeUrl(args[0]);
+          attributes["livekit.server_url"] = url;
+          attributes[SemanticConventions.INPUT_VALUE] = safeJsonStringify({ url, roomName });
+        }
+        break;
       }
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
+      case "track.publish":
+      case "track.unpublish": {
+        const trackKind = track?.kind ?? "unknown";
+        name = `LiveKit ${operation === "track.publish" ? "Publish" : "Unpublish"} Track: ${trackKind}`;
+        attributes["livekit.track_kind"] = trackKind;
+        attributes["livekit.participant_id"] = instance.identity || "unknown";
+        if (operation === "track.publish") {
+          const options = args[1] || {};
+          const trackName = options.name || track?.name || "unnamed";
+          attributes["livekit.track_name"] = trackName;
+          attributes[SemanticConventions.INPUT_VALUE] = safeJsonStringify({ trackKind, trackName, options });
+        } else {
+          // rtc-node takes a SID; livekit-client takes a Track.
+          attributes["livekit.track_sid"] = typeof track === "string" ? track : track?.sid || "unknown";
+        }
+        break;
+      }
+      case "audio.capture":
+        name = "LiveKit Audio Capture";
+        attributes["livekit.frame_samples"] = track?.samplesPerChannel ?? track?.samples ?? 0;
+        attributes["livekit.sample_rate"] = track?.sampleRate ?? 0;
+        attributes["livekit.channels"] = track?.channels ?? track?.numChannels ?? 0;
+        break;
+      case "video.capture":
+        name = "LiveKit Video Capture";
+        attributes["livekit.frame_width"] = track?.width ?? 0;
+        attributes["livekit.frame_height"] = track?.height ?? 0;
+        attributes["livekit.frame_format"] = track?.type ?? track?.format ?? "unknown";
+        break;
     }
-  }
-
-  private async tracePublishTrack(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const track = args[0];
-    const options = args[1] || {};
-    const trackKind = track?.kind || "unknown";
-    const trackName = options?.name || track?.name || "unnamed";
-
-    const span = this.fiTracer.startSpan(`LiveKit Publish Track: ${trackKind}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "livekit.operation": "track.publish",
-        "livekit.track_kind": trackKind,
-        "livekit.track_name": trackName,
-        "livekit.participant_id": instance.identity || "unknown",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify({
-          trackKind,
-          trackName,
-          options,
-        }),
-      },
+    // Read the current tracer after setTracerProvider(), and use the constructor's privacy config.
+    const span = new FITracer({ tracer: this.tracer, traceConfig: this.traceConfig }).startSpan(name, {
+      kind: operation.endsWith(".capture") ? SpanKind.INTERNAL : SpanKind.CLIENT,
+      attributes,
     });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "livekit.track_sid": result?.trackSid || result?.sid || "unknown",
-        "livekit.published": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({
-          trackSid: result?.trackSid || result?.sid,
-          published: true,
-        }),
-      });
-
+    const success = (result: any) => {
+      this.setResult(span, operation, instance, result);
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
-
       return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
+    };
+    const failure = (error: unknown): never => {
+      span.recordException(error instanceof Error ? error : String(error));
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
       span.end();
       throw error;
-    }
-  }
-
-  private async traceUnpublishTrack(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const track = args[0];
-    const trackKind = track?.kind || "unknown";
-    const trackSid = track?.sid || "unknown";
-
-    const span = this.fiTracer.startSpan(`LiveKit Unpublish Track: ${trackKind}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "livekit.operation": "track.unpublish",
-        "livekit.track_kind": trackKind,
-        "livekit.track_sid": trackSid,
-        "livekit.participant_id": instance.identity || "unknown",
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
+    };
     try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "livekit.unpublished": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ unpublished: true }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
+      const result = context.with(trace.setSpan(context.active(), span), () => original.apply(instance, args));
+      // Do not turn synchronous client methods into promises, or end async audio spans early.
+      return result && typeof result.then === "function"
+        ? Promise.resolve(result).then(success, failure)
+        : success(result);
     } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
+      return failure(error);
     }
   }
 
-  private traceAudioCapture(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): any {
-    const frame = args[0];
-
-    const span = this.fiTracer.startSpan("LiveKit Audio Capture", {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "livekit.operation": "audio.capture",
-        "livekit.frame_samples": frame?.samplesPerChannel || frame?.samples || 0,
-        "livekit.sample_rate": frame?.sampleRate || 0,
-        "livekit.channels": frame?.channels || frame?.numChannels || 0,
-      },
-    });
-
-    try {
-      const result = original.apply(instance, args);
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private traceVideoCapture(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): any {
-    const frame = args[0];
-
-    const span = this.fiTracer.startSpan("LiveKit Video Capture", {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "livekit.operation": "video.capture",
-        "livekit.frame_width": frame?.width || 0,
-        "livekit.frame_height": frame?.height || 0,
-        "livekit.frame_format": frame?.format || "unknown",
-      },
-    });
-
-    try {
-      const result = original.apply(instance, args);
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private sanitizeUrl(url: string): string {
-    try {
-      const parsed = new URL(url);
-      return `${parsed.protocol}//${parsed.host}`;
-    } catch {
-      return "unknown";
-    }
-  }
-
-  private extractRoomFromToken(token: string): string | null {
-    // JWT tokens have 3 parts separated by dots
-    // The payload is the second part, base64 encoded
-    try {
-      const parts = token.split(".");
-      if (parts.length !== 3) return null;
-      const payload = JSON.parse(atob(parts[1]));
-      return payload.video?.room || payload.room || null;
-    } catch {
-      return null;
+  private setResult(span: Span, operation: Operation, instance: any, result: any): void {
+    switch (operation) {
+      case "room.connect": {
+        const participantId = safeRead(() => instance.localParticipant?.identity);
+        span.setAttributes({
+          "livekit.connected": true,
+          "livekit.room_name": safeRead(() => instance.name) || "unknown",
+          "livekit.participant_id": participantId || "unknown",
+          [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ connected: true, participantId }),
+        });
+        // This is a connect operation, not a session root. End when connect settles.
+        break;
+      }
+      case "room.disconnect":
+        span.setAttributes({ "livekit.disconnected": true, [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ disconnected: true }) });
+        break;
+      case "track.publish":
+        span.setAttributes({
+          "livekit.published": true,
+          "livekit.track_sid": result?.trackSid || result?.sid || "unknown",
+          [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ published: true, trackSid: result?.trackSid || result?.sid }),
+        });
+        break;
+      case "track.unpublish":
+        span.setAttributes({ "livekit.unpublished": true, [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ unpublished: true }) });
+        break;
     }
   }
 }
 
-// Global patched flag
-let _isFIPatched = false;
+/** Whether this package currently owns any patched LiveKit methods. */
+export function isPatched(): boolean { return patchCount > 0; }
 
-/**
- * Check if the module has been patched.
- */
-export function isPatched(): boolean {
-  return _isFIPatched;
+// Older rtc-node getters throw until the room has connected. Metadata is best-effort.
+function safeRead<T>(read: () => T): T | undefined {
+  try { return read(); } catch { return undefined; }
 }
 
-/**
- * Reset the patched state (for testing only).
- */
-export function _resetPatchedStateForTesting(): void {
-  _isFIPatched = false;
-}
-
-// Helper functions
-
-function safeJsonStringify(obj: unknown): string {
+function sanitizeUrl(url: string): string {
   try {
-    return JSON.stringify(obj);
-  } catch {
-    return String(obj);
-  }
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch { return "unknown"; }
+}
+
+function safeJsonStringify(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return "[unserializable]"; }
 }

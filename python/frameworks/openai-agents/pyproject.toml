@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-openai-agents"
-version = "0.1.7"
+version = "0.1.8"
 description = "OpenTelemetry instrumentation for OpenAI Agents"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -30,7 +30,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.14"
 openai-agents = ">= 0.2.6"
-fi-instrumentation-otel = ">=0.1.11"
+fi-instrumentation-otel = ">=1.2.2"
 
 
 [tool.poetry.urls]

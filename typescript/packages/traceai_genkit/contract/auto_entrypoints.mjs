@@ -1,0 +1,21 @@
+// Run after compiling the package. Checks the actual built CJS and ESM entries.
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const before = [process.rawListeners('SIGTERM'), process.rawListeners('SIGINT'), process.rawListeners('beforeExit')];
+const cjs = require('../dist/src/index.js');
+const esm = await import('../dist/esm/index.js');
+assert.equal(typeof cjs.enable, 'function');
+assert.equal(typeof esm.enable, 'function');
+assert.equal(cjs.enable().status, 'manual');
+const key = Symbol.for('traceai.auto.agent.v1');
+const target = { onStart() {}, onEnd() {} };
+globalThis[key] = { processor: target, config: { apiKey: 'test-api-key', secretKey: 'test-secret-key' } };
+const result = cjs.enable();
+assert.equal(result.status, 'instrumented');
+const wrapped = target.onEnd;
+assert.equal(esm.enable(), result);
+assert.equal(target.onEnd, wrapped);
+assert.deepEqual([process.rawListeners('SIGTERM'), process.rawListeners('SIGINT'), process.rawListeners('beforeExit')], before);
+delete globalThis[key];
+console.log('Built CJS/ESM entrypoints: 7 assertions passed');

@@ -1,0 +1,89 @@
+{
+  "name": "milestone-cohere-sse-tool-name-before-arguments",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "tool-call-start",
+        "index": 0,
+        "delta": {
+          "message": {
+            "tool_calls": {
+              "id": "call-r6",
+              "type": "function",
+              "function": {
+                "name": "",
+                "arguments": ""
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "tool-call-delta",
+        "index": 0,
+        "delta": {
+          "message": {
+            "tool_calls": {
+              "function": {
+                "name": "get_weather",
+                "arguments": ""
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "tool-call-delta",
+        "index": 0,
+        "delta": {
+          "message": {
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{}"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.02,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

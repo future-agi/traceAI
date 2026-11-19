@@ -10,13 +10,12 @@ model calls, and tool calls.
 For a managed Hermes installation:
 
 ```sh
-hermes plugins install future-agi/traceAI/python/frameworks/hermes-agent/hermes-plugin/futureagi
-hermes plugins enable futureagi
+hermes plugins install future-agi/traceAI/python/frameworks/hermes-agent/hermes-plugin/futureagi --enable
 ```
 
-Set `FI_API_KEY`, `FI_SECRET_KEY`, and `FI_PROJECT_NAME` in your Hermes environment,
-then restart Hermes. Content capture is off by default. No keys belong in this
-wrapper or in a committed configuration file.
+For validated saved configuration, use `npx @traceai/agents setup hermes --project coding-agents` instead; it invokes the native installer for you. Shared setup enables content capture by default; add `--no-capture-content` for metadata only. Node is not needed at runtime.
+
+For a Python-only installation, set `FI_API_KEY`, `FI_SECRET_KEY`, and `FI_PROJECT_NAME` through your secret manager, then restart Hermes. Env-only installs retain the earlier metadata-only default; opt in with `FI_AGENT_CAPTURE_CONTENT=true`. No keys belong in this wrapper or a committed configuration file. Review Hermes' dependency consent prompt.
 
 See the [integration README](https://github.com/future-agi/traceAI/tree/dev/python/frameworks/hermes-agent)
 for supported Hermes versions, installation alternatives, privacy controls, and

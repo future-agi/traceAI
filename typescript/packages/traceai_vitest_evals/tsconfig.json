@@ -1,0 +1,1 @@
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "target": "ES2022", "module": "CommonJS", "moduleResolution": "node", "outDir": "dist", "rootDir": "src", "composite": false, "incremental": false, "strict": true }, "include": ["src/**/*.ts"] }

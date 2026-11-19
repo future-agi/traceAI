@@ -19,7 +19,9 @@ from .integration import (
     flush_on_job_shutdown,
 )
 
-__version__ = "0.1.3"  # x-release-please-version
+from .recording import record_egress, wrap_egress_client
+
+__version__ = "0.2.1"  # x-release-please-version
 
 __all__ = [
     "enable_fi_attribute_mapping",
@@ -28,6 +30,8 @@ __all__ = [
     "create_mapped_http_exporter",
     "create_mapped_grpc_exporter",
     "flush_on_job_shutdown",
+    "record_egress",
+    "wrap_egress_client",
     # Exporters
     "MappedHTTPSpanExporter",
     "MappedGRPCSpanExporter",

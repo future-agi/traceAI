@@ -12,6 +12,10 @@ from traceai_bedrock._attribute_extractor import AttributeExtractor
 from traceai_bedrock._rag_wrappers import _RagEventStream
 from traceai_bedrock._response_accumulator import _ResponseAccumulator
 from traceai_bedrock.utils import _EventStream, _use_span
+from traceai_bedrock.utils._invoke_model_stream import (
+    _InvokeModelEventStream,
+    _InvokeModelStreamCallback,
+)
 from traceai_bedrock.utils.anthropic._messages import (
     _AnthropicMessagesCallback,
 )
@@ -47,24 +51,37 @@ class _InvokeModelWithResponseStream(_WithTracer):
         with self._tracer.start_as_current_span(
             self._name,
             end_on_exit=False,
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
-            response = wrapped(*args, **kwargs)
             from botocore.eventstream import EventStream
 
-            kwargs["body"] = json.loads(kwargs["body"])
+            # Do not mutate the caller's kwargs or read a file-like request body.
+            # Parsing for telemetry must not prevent a valid provider invocation.
+            body = None
+            if isinstance(raw_body := kwargs.get("body"), (str, bytes, bytearray)):
+                try:
+                    body = json.loads(raw_body)
+                except (TypeError, ValueError):
+                    pass
+            request = {**kwargs, "body": body}
+            callback: Callable[[Any], Any]
+            stream_type: type[_EventStream]
+            if isinstance(body, dict) and "anthropic_version" in body:
+                callback = _AnthropicMessagesCallback(span, request)
+                stream_type = _EventStream
+            else:
+                callback = _InvokeModelStreamCallback(span, request)
+                stream_type = _InvokeModelEventStream
+            try:
+                response = wrapped(*args, **kwargs)
+            except BaseException as exc:
+                callback(exc)
+                raise
             if isinstance(response["body"], EventStream):
-                if "anthropic_version" in kwargs["body"]:
-                    response["body"] = _EventStream(
-                        response["body"],
-                        _AnthropicMessagesCallback(span, kwargs),
-                        _use_span(span),
-                    )
-                    return response
-            span.set_attribute(GEN_AI_REQUEST_PARAMETERS, kwargs["body"])
-            span.set_attribute(INPUT_MIME_TYPE, JSON)
-            span.set_attribute(INPUT_VALUE, kwargs["body"])
-            span.set_attribute(GEN_AI_SPAN_KIND, LLM)
-            span.end()
+                response["body"] = stream_type(response["body"], callback, _use_span(span))
+            else:
+                callback(StopIteration())
             return response
 
 

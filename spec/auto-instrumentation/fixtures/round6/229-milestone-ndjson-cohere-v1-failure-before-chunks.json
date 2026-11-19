@@ -1,0 +1,57 @@
+{
+  "name": "milestone-ndjson-cohere-v1-failure-before-chunks",
+  "description": "Only complete newline-terminated records in delivered chunks contribute; no future bytes, incomplete line or later parse time may supply a milestone.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v1/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "message": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "event_type": "stream-start"
+      },
+      {
+        "event_type": "text-generation",
+        "text": "Hé"
+      },
+      {
+        "event_type": "stream-end"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      30,
+      70
+    ],
+    "chunk_sizes": [
+      30,
+      46,
+      28
+    ],
+    "error_after_chunks": 0
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_chunk",
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

@@ -22,6 +22,7 @@ pip install "pyautogen>=0.2.0,<0.3"
 **AutoGen v0.4 (AgentChat)**:
 ```bash
 pip install "autogen-agentchat>=0.4.0"
+pip install "autogen-ext[openai]"
 ```
 
 ## Quick Start

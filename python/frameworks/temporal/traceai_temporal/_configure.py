@@ -194,7 +194,8 @@ def configure(
             base_url = (
                 base_url
                 if base_url is not None
-                else os.getenv("FI_BASE_URL", "https://api.futureagi.com")
+                else (os.getenv("FI_TRACES_URL") or "").strip()
+                or os.getenv("FI_BASE_URL", "https://api.futureagi.com")
             )
             if not isinstance(base_url, str):
                 raise TypeError("base_url must be a string")

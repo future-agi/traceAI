@@ -1,0 +1,96 @@
+{
+  "name": "milestone-a10-cohere-thinking-scaffolds",
+  "description": "Type/ID/language metadata, empty content lists, citations, stop events and tool results are not model-output deltas.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "thinking"
+            }
+          }
+        }
+      },
+      {
+        "type": "content-delta",
+        "delta": {
+          "message": {
+            "content": {
+              "thinking": ""
+            }
+          }
+        }
+      },
+      {
+        "type": "content-delta",
+        "delta": {
+          "message": {
+            "content": {
+              "thinking": null
+            }
+          }
+        }
+      },
+      {
+        "type": "content-delta",
+        "delta": {
+          "message": {
+            "content": []
+          }
+        }
+      },
+      {
+        "type": "citation-start",
+        "delta": {
+          "message": {
+            "content": {
+              "thinking": "metadata"
+            }
+          }
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      40,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

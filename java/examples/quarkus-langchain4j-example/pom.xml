@@ -4,7 +4,7 @@
 
     <groupId>com.futureagi.examples</groupId>
     <artifactId>quarkus-langchain4j-example</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
     <name>TraceAI Quarkus LangChain4j Example</name>
     <description>Quarkus LangChain4j native spans with the packaged TraceAI error and resource contributors</description>
 

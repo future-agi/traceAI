@@ -117,6 +117,42 @@ class FITracerPrivacyTest {
             .isEqualTo(expected);
     }
 
+    @Test
+    void shouldReadContentHidingEnvironmentAndHonorExplicitOverrides() {
+        TraceConfig defaults = TraceConfig.fromEnvironment();
+        TraceConfig builderDefaults = TraceConfig.builder().build();
+        assertThat(defaults.isHideInputs()).isEqualTo(Boolean.parseBoolean(System.getenv("FI_HIDE_INPUTS")));
+        assertThat(defaults.isHideOutputs()).isEqualTo(Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUTS")));
+        assertThat(defaults.isHideInputMessages()).isEqualTo(Boolean.parseBoolean(System.getenv("FI_HIDE_INPUT_MESSAGES")));
+        assertThat(defaults.isHideOutputMessages()).isEqualTo(Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUT_MESSAGES")));
+        assertThat(builderDefaults.isHideInputs()).isEqualTo(defaults.isHideInputs());
+        assertThat(builderDefaults.isHideOutputs()).isEqualTo(defaults.isHideOutputs());
+        assertThat(builderDefaults.isHideInputMessages()).isEqualTo(defaults.isHideInputMessages());
+        assertThat(builderDefaults.isHideOutputMessages()).isEqualTo(defaults.isHideOutputMessages());
+        FITracer tracer = tracer(defaults);
+        Span span = tracer.startSpan("environment-privacy", FISpanKind.LLM);
+        tracer.setInputValue(span, "private-input");
+        tracer.setOutputValue(span, "private-output");
+        tracer.setInputMessages(span, List.of(FITracer.message("user", "private-input")));
+        tracer.setOutputMessages(span, List.of(FITracer.message("assistant", "private-output")));
+        span.end();
+        SpanData exported = otel.getSpans().get(0);
+        assertThat(value(exported, SemanticConventions.INPUT_VALUE) == null)
+            .isEqualTo(defaults.isHideInputs());
+        assertThat(value(exported, SemanticConventions.OUTPUT_VALUE) == null)
+            .isEqualTo(defaults.isHideOutputs());
+        assertThat(value(exported, SemanticConventions.LLM_INPUT_MESSAGES) == null)
+            .isEqualTo(defaults.isHideInputs() || defaults.isHideInputMessages());
+        assertThat(value(exported, SemanticConventions.LLM_OUTPUT_MESSAGES) == null)
+            .isEqualTo(defaults.isHideOutputs() || defaults.isHideOutputMessages());
+        TraceConfig explicit = TraceConfig.builder().hideInputs(false).hideOutputs(false)
+            .hideInputMessages(false).hideOutputMessages(false).build();
+        assertThat(explicit.isHideInputs()).isFalse();
+        assertThat(explicit.isHideOutputs()).isFalse();
+        assertThat(explicit.isHideInputMessages()).isFalse();
+        assertThat(explicit.isHideOutputMessages()).isFalse();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void shouldPreferExplicitErrorDetailsFlagOverEnvironment(boolean hide) {

@@ -2,10 +2,12 @@
 import importlib
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
 import urllib.error
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -43,6 +45,199 @@ class ExtensionTests(unittest.TestCase):
             (root / '.release-please-manifest.json').write_text('{"go/openai":"0.1.7"}')
             p = release_plan.other_packages(root)[0]
             self.assertEqual((p['version'], p['tag']), ('0.1.7', 'go/openai/v0.1.7'))
+
+    def test_both_ruby_gems_are_inventoried_with_their_own_versions_and_tags(self):
+        root = release_plan.REPO_ROOT
+        auto_version = re.search(r'''^\s*s\.version\s*=\s*["']([^"']+)["']''',
+                                 (root / 'ruby/traceai-auto.gemspec').read_text(), re.M).group(1)
+        roast_version = re.search(r'''^\s*VERSION\s*=\s*["']([^"']+)["']''',
+                                  (root / 'ruby/roast/lib/traceai/roast/version.rb').read_text(), re.M).group(1)
+        gems = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']
+        self.assertEqual([(p['name'], p['version'], p['dir'], p['tag']) for p in gems], [
+            ('traceai-auto', auto_version, 'ruby', f'ruby-traceai-auto-v{auto_version}'),
+            ('traceai-roast', roast_version, 'ruby/roast', f'ruby-traceai-roast-v{roast_version}'),
+        ])
+
+    def test_ruby_auto_has_release_please_version_file_and_manifest_entry(self):
+        root = release_plan.REPO_ROOT
+        config = json.loads((root / 'release-please-config.json').read_text())['packages']
+        manifest = json.loads((root / '.release-please-manifest.json').read_text())
+        # The component is the publisher's tag prefix (ruby-<gem>-v<version>), so release-please reads the
+        # publisher-created tag as the release boundary, as the NuGet packages do.
+        self.assertEqual(config['ruby'], {
+            'release-type': 'simple', 'component': 'ruby-traceai-auto',
+            'package-name': 'traceai-auto', 'extra-files': ['traceai-auto.gemspec'],
+        })
+        self.assertEqual(config['ruby/roast'], {
+            'release-type': 'simple', 'component': 'ruby-traceai-roast',
+            'package-name': 'traceai-roast', 'extra-files': ['lib/traceai/roast/version.rb'],
+        })
+        for path in ('ruby/traceai-auto.gemspec', 'ruby/roast/lib/traceai/roast/version.rb'):
+            versioned = [line for line in (root / path).read_text().splitlines() if 'x-release-please-version' in line]
+            self.assertEqual(len(versioned), 1, path)
+        for gem in [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']:
+            component = config[gem['dir']]['component']
+            self.assertEqual(gem['tag'], f"{component}-v{gem['version']}")
+        version = re.search(r'''^\s*s\.version\s*=\s*["']([^"']+)["']''',
+                            (root / 'ruby/traceai-auto.gemspec').read_text(), re.M).group(1)
+        self.assertEqual(manifest['ruby'], version)
+        gems = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']
+        self.assertEqual(release_plan.coverage_problems(root, gems), [])
+
+    def test_ruby_auto_version_is_read_from_the_gemspec_without_execution(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'ruby').mkdir()
+            (root / 'ruby/traceai-auto.gemspec').write_text(
+                'raise "gemspec must not execute"\nGem::Specification.new do |s|\n'
+                '  s.name = "traceai-auto"\n  s.version = "0.9.7"\nend\n')
+            gems = release_plan.other_packages(root)
+            self.assertEqual([(p['name'], p['version'], p['tag']) for p in gems],
+                             [('traceai-auto', '0.9.7', 'ruby-traceai-auto-v0.9.7')])
+
+    def test_ruby_auto_missing_literal_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'ruby').mkdir()
+            gemspec = root / 'ruby/traceai-auto.gemspec'
+            for text in ('s.name = "traceai-auto"\n', 's.version = calculate_version()\n'):
+                with self.subTest(gemspec=text):
+                    gemspec.write_text(text)
+                    with self.assertRaisesRegex(ValueError, 'missing Ruby gem version'):
+                        release_plan.other_packages(root)
+
+    def test_both_ruby_gems_are_planned_in_the_ruby_ecosystem_without_holds(self):
+        gems = [p for p in release_plan.other_packages() if p['ecosystem'] == 'ruby']
+        planned = release_plan.plan(gems, release_plan.load_config(), offline=True)
+        self.assertEqual([p['name'] for p in planned['ruby']], ['traceai-auto', 'traceai-roast'])
+        self.assertEqual(planned['skipped'], [])
+
+    def test_ruby_registry_versions_use_the_public_versions_api(self):
+        for name in ('traceai-auto', 'traceai-roast'):
+            with self.subTest(name=name), patch.object(release_plan, '_get_json', return_value=[
+                {'number': '0.1.0'}, {'number': '0.2.0'}, {'number': '0.2.0', 'platform': 'java'},
+            ]) as get:
+                self.assertEqual(release_plan.published_versions({'ecosystem': 'ruby', 'name': name}),
+                                 {'0.1.0', '0.2.0'})
+                get.assert_called_once_with(f'https://rubygems.org/api/v1/versions/{name}.json')
+
+    def test_ruby_registry_404_is_unpublished_but_other_errors_raise(self):
+        package = {'ecosystem': 'ruby', 'name': 'traceai-auto'}
+        for status in (404, 401, 403, 429, 503):
+            error = urllib.error.HTTPError('https://rubygems.org/api/v1/versions/traceai-auto.json', status, 'failed', {}, None)
+            with self.subTest(status=status), patch('urllib.request.urlopen', side_effect=error):
+                if status == 404:
+                    self.assertIsNone(release_plan.published_versions(package))
+                else:
+                    with self.assertRaises(urllib.error.HTTPError):
+                        release_plan.published_versions(package)
+
+    def test_ruby_published_version_is_retained_only_for_reconciliation(self):
+        package = {'ecosystem': 'ruby', 'name': 'traceai-auto', 'version': '0.1.0', 'dir': 'ruby',
+                   'tag': 'ruby-traceai-auto-v0.1.0', 'core': False}
+        with patch.object(release_plan, '_get_json', return_value=[{'number': '0.1.0'}]):
+            planned = release_plan.plan([package], {}, include_published=True)
+            self.assertTrue(planned['ruby'][0]['registry_published'])
+            self.assertFalse(planned['ruby'][0]['first_release'])
+            self.assertEqual(workflow_plan.unfinished(json.loads(json.dumps(planned)), set())['ruby'], planned['ruby'])
+            self.assertEqual(workflow_plan.unfinished(planned, {package['tag']})['ruby'], [])
+            skipped = release_plan.plan([package], {})
+            self.assertEqual(skipped['ruby'], [])
+            self.assertEqual(skipped['skipped'][0]['name'], 'traceai-auto')
+
+    def test_go_auto_is_inventoried_and_released_with_its_own_tag(self):
+        root = release_plan.REPO_ROOT
+        auto = [p for p in release_plan.other_packages(root) if p['dir'] == 'go/auto']
+        # Each release PR bumps the manifest version; the tag follows it.
+        self.assertEqual([p['name'] for p in auto], ['github.com/future-agi/traceAI/go/auto'])
+        self.assertEqual(auto[0]['tag'], f"go/auto/v{auto[0]['version']}")
+        plan = release_plan.plan(auto, release_plan.load_config(), offline=True)
+        self.assertEqual([p['name'] for p in plan['go']], ['github.com/future-agi/traceAI/go/auto'])
+        self.assertEqual(plan['skipped'], [])
+
+    def test_java_agent_is_released_with_the_reactor(self):
+        root = release_plan.REPO_ROOT
+        java = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'java']
+        self.assertEqual([p['name'] for p in java], ['com.futureagi:traceai-java-parent'])
+        self.assertIn('traceai-javaagent', java[0]['artifacts'])
+        plan = release_plan.plan(java, release_plan.load_config(), offline=True)
+        # The agent is deployed with the rest of the reactor, so the Central check waits for it too.
+        self.assertEqual([p['name'] for p in plan['java']], ['com.futureagi:traceai-java-parent'])
+        planned = plan['java'][0]
+        self.assertIn('traceai-javaagent', planned['artifacts'])
+        self.assertIn('traceai-java-core', planned['artifacts'])
+        self.assertEqual(planned['held_artifacts'], [])
+        self.assertEqual([p for p in plan['skipped'] if p['name'] == 'com.futureagi:traceai-javaagent'], [])
+        # No release profile turns Central publishing off for the agent.
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        pom = ET.parse(root / 'java/traceai-javaagent/pom.xml').getroot()
+        skips = [p.findtext('m:configuration/m:skipPublishing', namespaces=ns)
+                 for profile in pom.findall('m:profiles/m:profile', ns)
+                 for p in profile.findall('m:build/m:plugins/m:plugin', ns)
+                 if p.findtext('m:artifactId', namespaces=ns) == 'central-publishing-maven-plugin']
+        self.assertEqual(skips, [])
+
+    @staticmethod
+    def _java_script(name):
+        # Loaded inside each test so that a script that cannot be loaded fails that test only.
+        import runpy
+        return runpy.run_path(str(release_plan.REPO_ROOT / 'java/scripts' / name))
+
+    def test_bom_names_every_released_module_and_no_held_one(self):
+        root = release_plan.REPO_ROOT
+        held = {name.split(':', 1)[1] for name in release_plan.load_config().get('hold_artifacts', {})}
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        bom = ET.parse(root / 'java/traceai-bom/pom.xml').getroot()
+        managed = {d.findtext('m:artifactId', namespaces=ns) for d in bom.findall('m:dependencyManagement/m:dependencies/m:dependency', ns)}
+        self.assertEqual(managed & held, set(), 'a released BOM must not name an artifact Central does not serve')
+        self.assertIn('traceai-java-core', managed)
+        self.assertIn('traceai-javaagent', managed, 'the released agent is aligned by the BOM')
+
+    def test_central_check_expects_the_bom_to_leave_out_a_held_module_and_to_name_it_again_once_released(self):
+        check = self._java_script('check_central.py')
+        expected = {'traceai-java-parent', 'traceai-bom', 'traceai-java-core', 'traceai-javaagent'}
+        hold = {'com.futureagi:traceai-javaagent': 'held'}
+        self.assertEqual(check['bom_errors']({'traceai-java-core'}, expected, hold), [])
+        self.assertTrue(check['bom_errors']({'traceai-java-core', 'traceai-javaagent'}, expected, hold), 'a held module in the BOM is an error')
+        self.assertTrue(check['bom_errors']({'traceai-java-core'}, expected, {}), 'once the hold is lifted the BOM must name the module')
+        self.assertEqual(check['bom_errors']({'traceai-java-core', 'traceai-javaagent'}, expected, {}), [])
+        # The exception comes from the release hold list, not from a name written into the checker.
+        self.assertEqual(check['held_artifact_ids'](release_plan.REPO_ROOT / '.github/release/config.json'), set())
+
+    def test_jitpack_harvest_takes_every_module_including_the_released_agent(self):
+        prepare_script = self._java_script('prepare_jitpack.py')
+        root = release_plan.REPO_ROOT / 'java'
+        ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
+        parent = ET.parse(root / 'pom.xml').getroot()
+        version = parent.findtext('m:version', namespaces=ns)
+        artifacts = [parent.findtext('m:artifactId', namespaces=ns)] + [
+            ET.parse(root / m.text.strip() / 'pom.xml').getroot().findtext('m:artifactId', namespaces=ns) for m in parent.findall('m:modules/m:module', ns)]
+        self.assertIn('traceai-javaagent', artifacts)
+
+        def installed(repo, leave_out=()):
+            # What a JitPack install leaves behind: a flattened POM for each module that was installed.
+            for artifact in artifacts:
+                if artifact in leave_out:
+                    continue
+                path = repo / 'com/futureagi' / artifact / version / f'{artifact}-{version}.pom'
+                path.parent.mkdir(parents=True)
+                path.write_text(f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>com.futureagi</groupId>'
+                                f'<artifactId>{artifact}</artifactId><version>{version}</version></project>')
+
+        with tempfile.TemporaryDirectory() as d:
+            installed(Path(d))
+            self.assertEqual(prepare_script['prepare'](Path(d), 'com.github.future-agi.traceAI', 'some-commit'), len(artifacts))
+        with tempfile.TemporaryDirectory() as d:
+            installed(Path(d), leave_out={'traceai-javaagent'})
+            with self.assertRaises(OSError):
+                prepare_script['prepare'](Path(d), 'com.github.future-agi.traceAI', 'some-commit')
+        # The agent is installed on the JitPack route: no profile turns its install plugin off.
+        agent = ET.parse(root / 'traceai-javaagent/pom.xml').getroot()
+        skips = [p.findtext('m:configuration/m:skip', namespaces=ns)
+                 for profile in agent.findall('m:profiles/m:profile', ns)
+                 for p in profile.findall('m:build/m:plugins/m:plugin', ns)
+                 if p.findtext('m:artifactId', namespaces=ns) == 'maven-install-plugin']
+        self.assertEqual(skips, [])
 
     def test_go_proxy_case_escaping(self):
         with patch.object(release_plan, '_get_json', return_value={'Version': 'v0.1.0'}) as get:
@@ -284,8 +479,21 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(release_plan.coverage_problems(root, packages), [])
         config = json.loads((root / 'release-please-config.json').read_text())
         manifest = json.loads((root / '.release-please-manifest.json').read_text())
-        self.assertEqual(set(config['packages']), {p.get('release_path', p['dir']) for p in packages})
+        publishable_paths = {p.get('release_path', p['dir']) for p in packages}
+        # Held adapter prototypes keep version metadata for eventual qualification,
+        # but private:true must still exclude them from every publication plan.
+        private_paths = {
+            str(file.parent.relative_to(root)): json.loads(file.read_text())
+            for file in (root / 'typescript/packages').glob('*/package.json')
+            if json.loads(file.read_text()).get('private')
+        }
+        self.assertTrue(publishable_paths <= set(config['packages']))
+        self.assertTrue(set(config['packages']) - publishable_paths <= set(private_paths))
         self.assertEqual(set(manifest), set(config['packages']))
+        for path in set(config['packages']) - publishable_paths:
+            self.assertEqual(manifest[path], private_paths[path]['version'])
+            self.assertEqual(config['packages'][path]['release-type'], 'node')
+            self.assertEqual(config['packages'][path]['package-name'], private_paths[path]['name'])
         for p in packages:
             self.assertEqual(manifest[p.get('release_path', p['dir'])], p['version'])
 

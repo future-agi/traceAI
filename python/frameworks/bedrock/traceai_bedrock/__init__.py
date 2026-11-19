@@ -39,6 +39,7 @@ from fi_instrumentation import (
     get_attributes_from_context,
     safe_json_dumps,
 )
+from traceai_bedrock._converse_stream import _ConverseStream
 from traceai_bedrock._rag_wrappers import (
     _retrieve_and_generate_wrapper,
     _retrieve_wrapper,
@@ -90,6 +91,9 @@ class InstrumentedClient(BaseClient):  # type: ignore
 
     converse: Callable[..., Any]
     _unwrapped_converse: Callable[..., Any]
+
+    converse_stream: Callable[..., Any]
+    _unwrapped_converse_stream: Callable[..., Any]
 
     invoke_agent: Callable[..., Any]
     _unwrapped_invoke_agent: Callable[..., Any]
@@ -171,6 +175,11 @@ def _client_creation_wrapper(
             if module_version >= _MINIMUM_CONVERSE_BOTOCORE_VERSION:
                 client._unwrapped_converse = client.converse
                 client.converse = _model_converse_wrapper(tracer)(client)
+            # ConverseStream is an independent operation, not a call to converse.
+            # Feature-detect it so older botocore service models remain supported.
+            if hasattr(client, "converse_stream"):
+                client._unwrapped_converse_stream = client.converse_stream
+                client.converse_stream = _ConverseStream(tracer)(client.converse_stream)
         return client
 
     return _client_wrapper  # type: ignore
@@ -186,18 +195,28 @@ def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], 
                 return wrapped_client._unwrapped_invoke_model(*args, **kwargs)  # type: ignore
 
             with tracer.start_as_current_span("bedrock.invoke_model") as span:
-                request_body = json.loads(kwargs["body"])
+                # Leave file-like bodies and their positions untouched for the SDK.
+                request_body = None
+                body = kwargs.get("body")
+                if isinstance(body, (str, bytes, bytearray)):
+                    try:
+                        request_body = json.loads(body)
+                    except Exception:
+                        # Optional capture must not replace SDK validation.
+                        pass
+
                 model_id = str(kwargs.get("modelId"))
                 # Determine if this is a Claude Messages API model
                 is_claude_message_api = _extract_invoke_model_attributes.is_claude_message_api(
                     model_id
                 )
 
-                # Set input attributes based on model type
-                if is_claude_message_api:
-                    anthropic_attributes.set_input_attributes(span, request_body, model_id)
-                else:
-                    _extract_invoke_model_attributes.set_input_attributes(span, request_body)
+                # Set input attributes only when the request can be captured.
+                if isinstance(request_body, dict):
+                    if is_claude_message_api:
+                        anthropic_attributes.set_input_attributes(span, request_body, model_id)
+                    else:
+                        _extract_invoke_model_attributes.set_input_attributes(span, request_body)
 
                 # Execute the model invocation with proper error handling
                 try:

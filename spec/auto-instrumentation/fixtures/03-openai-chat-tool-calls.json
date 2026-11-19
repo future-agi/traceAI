@@ -1,0 +1,114 @@
+{
+  "name": "openai-chat-tool-calls",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4.1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Weather in Paris?"
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\":\"Rome\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_0",
+          "content": "sunny"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "chatcmpl-3",
+      "model": "gpt-4.1",
+      "choices": [
+        {
+          "index": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "get_weather",
+                  "arguments": "{\"city\":\"Paris\"}"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 40,
+        "completion_tokens": 10,
+        "total_tokens": 50
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4.1",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.input.messages.2.message.role": "tool",
+      "gen_ai.input.messages.2.message.tool_call_id": "call_0",
+      "gen_ai.input.messages.2.message.content": "sunny",
+      "gen_ai.input.messages.1.message.tool_calls.0.tool_call.function.name": "get_weather",
+      "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id": "call_1",
+      "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name": "get_weather",
+      "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"city\":\"Paris\"}",
+      "gen_ai.response.finish_reasons": [
+        "tool_calls"
+      ],
+      "output.mime_type": "application/json"
+    },
+    "present": [
+      "gen_ai.tool.definitions.0.tool.json_schema",
+      "output.value"
+    ],
+    "absent": [
+      "gen_ai.output.messages.0.message.content"
+    ]
+  }
+}

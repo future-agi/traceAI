@@ -262,10 +262,12 @@ class TestRealWorldIntegration:
 
         try:
             agent = Agent(TestModel())
+            calls = []
 
             @agent.tool
             def add_numbers(ctx: RunContext, a: int, b: int) -> int:
                 """Add two numbers together."""
+                calls.append((a, b))
                 return a + b
 
             result = agent.run_sync(
@@ -274,9 +276,22 @@ class TestRealWorldIntegration:
 
             spans = exporter.get_finished_spans()
 
-            # Should have agent run span
-            agent_spans = [s for s in spans if "agent.run" in s.name]
-            assert len(agent_spans) >= 1
+            # Default instrumentation must observe execution, not registration.
+            import json
+            assert len(calls) == 1
+            agent_spans = [s for s in spans if s.name == "pydantic_ai.agent.run"]
+            tool_spans = [s for s in spans if s.name == "pydantic_ai.tool.call.add_numbers"]
+            model_spans = [s for s in spans if s.name == "pydantic_ai.model.request"]
+            assert len(agent_spans) == 1
+            assert len(tool_spans) == 1
+            assert len(model_spans) == 2
+            for child in tool_spans + model_spans:
+                assert child.parent.span_id == agent_spans[0].context.span_id
+                assert child.context.trace_id == agent_spans[0].context.trace_id
+            a, b = calls[0]
+            assert json.loads(tool_spans[0].attributes["pydantic_ai.tool.args"]) == {"a": a, "b": b}
+            assert tool_spans[0].attributes["pydantic_ai.tool.result"] == str(a + b)
+            assert tool_spans[0].attributes["pydantic_ai.tool.is_error"] is False
 
         finally:
             instrumentor.uninstrument()

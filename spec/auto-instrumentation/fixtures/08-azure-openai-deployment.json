@@ -1,0 +1,55 @@
+{
+  "name": "azure-openai-deployment",
+  "request": {
+    "method": "POST",
+    "url": "https://myres.openai.azure.com/openai/deployments/prod-4o/chat/completions?api-version=2024-10-21",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "a",
+      "model": "gpt-4o-2024-11-20",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "hey"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 1,
+        "total_tokens": 3
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o-2024-11-20",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "azure.ai.openai",
+      "gen_ai.response.model": "gpt-4o-2024-11-20"
+    },
+    "absent": [
+      "gen_ai.request.model"
+    ]
+  }
+}

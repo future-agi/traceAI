@@ -1,0 +1,46 @@
+{
+  "name": "milestone-a10-cohere-empty-argument-object",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v1/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "message": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "event_type": "tool-calls-generation",
+        "tool_calls": [
+          {
+            "parameters": {}
+          }
+        ]
+      }
+    ],
+    "arrival_offsets_ms": [
+      10
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

@@ -1,5 +1,15 @@
 
 
+## [0.1.12] - pending release
+
+### Changed
+- traceai-bedrock now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
+### Fixed
+- converse_stream calls are instrumented.
+- invoke_model_with_response_stream spans for non-Anthropic models end when the caller finishes or closes the stream, and record the model, plus output and token usage when the stream includes them.
+- invoke_model calls with a file-like request body are accepted, and tracing leaves the body unread for the SDK.
+
 ## [0.1.11] - 2026-10-29
 
 ### Fixed

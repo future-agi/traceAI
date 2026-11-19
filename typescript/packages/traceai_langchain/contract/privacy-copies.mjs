@@ -21,6 +21,9 @@ if (privacy === "environment") for (const name of flags) process.env[envNames[na
 const hidden = privacy !== "public";
 const hidePrompt = hidden && flags.some(name => name.startsWith("hideInput"));
 const hideFunction = hidden && flags.some(name => name.startsWith("hideOutput"));
+// Opaque tool payloads are withheld under input/text/message or output hiding.
+// Image-only input hiding does not withhold a text-only function response.
+const hideOpaqueFunction = hidden && flags.some(name => name !== "hideInputImages");
 const load = mode === "manual-esm" ? name => import(name) : async name => require(name);
 const { LangChainInstrumentation } = await load("@traceai/langchain");
 const { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } = await load("@opentelemetry/sdk-trace-base");
@@ -46,9 +49,14 @@ const { ChatPromptTemplate } = await load("@langchain/core/prompts");
 const { awaitAllCallbacks } = await load("@langchain/core/callbacks/promises");
 const system = "synthetic-private-static-system-instructions";
 const argument = "synthetic-private-legacy-function-argument";
+const queryArgument = "synthetic-private-legacy-function-query";
 const key = "synthetic-not-a-provider-key";
-const functions = [{ name: "lookup", parameters: { type: "object", properties: { secret: { type: "string" } } } }];
-const functionCall = { name: "lookup", arguments: JSON.stringify({ secret: argument }) };
+// Keep the original credential-marked canary, and add an ordinary content canary.
+// Public content capture must not require exporting a credential-named member.
+const functions = [{ name: "lookup", parameters: { type: "object", properties: {
+  query: { type: "string" }, secret: { type: "string" },
+} } }];
+const functionCall = { name: "lookup", arguments: JSON.stringify({ query: queryArgument, secret: argument }) };
 const requests = [], checks = [];
 const server = createServer(async (req, res) => {
   let body = ""; for await (const part of req) body += part;
@@ -86,10 +94,34 @@ try {
     if (hidePrompt && hideFunction) assert.equal(serialize(spans).includes(system), false, "no other exported copies");
   });
   await check("legacy function copy respects output privacy", () => {
-    const span = spans.find(span => span.name === "legacy-function"); assert.ok(span);
-    assert.ok("gen_ai.tool.call" in span.attributes, "exercise the legacy function attribute");
-    assert.equal(JSON.stringify(span.attributes["gen_ai.tool.call"]).includes(argument), !hideFunction);
-    if (hideFunction) assert.equal(serialize([span]).includes(argument), false, "no other exported argument copies");
+    const matches = spans.filter(span => span.name === "legacy-function"); assert.equal(matches.length, 1);
+    const span = matches[0];
+    if (hideOpaqueFunction) {
+      assert.equal("gen_ai.tool.call" in span.attributes, false, "opaque tool payload must be withheld");
+    } else {
+      assert.ok("gen_ai.tool.call" in span.attributes, "exercise the legacy function attribute");
+      const call = JSON.parse(span.attributes["gen_ai.tool.call"]);
+      assert.equal(call.name, "lookup");
+      assert.deepEqual(JSON.parse(call.arguments), { query: queryArgument, secret: "<redacted>" });
+    }
+    // Input hiding may withhold the opaque alias, but it must not erase otherwise
+    // public output messages. Conversely, every output-hiding flag removes all copies.
+    assert.equal(serialize([span]).includes(queryArgument), !hideFunction);
+    if (!hideFunction) {
+      assert.ok("gen_ai.output.messages" in span.attributes, "exercise the ordinary output copy");
+      const messages = JSON.parse(span.attributes["gen_ai.output.messages"]);
+      const calls = messages.filter(message => message.function_call).map(message => message.function_call);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].name, "lookup");
+      assert.deepEqual(JSON.parse(calls[0].arguments), { query: queryArgument, secret: "<redacted>" });
+    } else {
+      assert.equal(serialize(spans).includes(queryArgument), false, "no other exported argument copies");
+    }
+  });
+  await check("credential-marked function arguments are always redacted", () => {
+    assert.equal(serialize(spans).includes(argument), false, "credential policy also applies in public mode");
+    assert.deepEqual(JSON.parse(functionCall.arguments), { query: queryArgument, secret: argument });
+    assert.deepEqual(legacy.additional_kwargs.function_call, functionCall, "export must not mutate the caller's response");
   });
   await check("model and usage survive masking", () => {
     for (const name of ["template-model", "legacy-function"]) {

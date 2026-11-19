@@ -1,0 +1,114 @@
+{
+  "name": "milestone-a10-mistral-thinking-list-positive",
+  "description": "Nonempty thinking/list content or model-generated hosted-tool output at 30ms wins over ordinary text at 70ms.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.mistral.ai/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant"
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": [
+                    {
+                      "type": "text",
+                      "text": ""
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": [
+                    {
+                      "type": "text",
+                      "text": "Thinking"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "Later"
+            }
+          }
+        ]
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

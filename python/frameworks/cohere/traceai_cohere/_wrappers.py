@@ -37,6 +37,18 @@ class _WithTracer(ABC):
         config = getattr(tracer, "_self_config", None)
         self._config = config if isinstance(config, TraceConfig) else TraceConfig()
 
+    @staticmethod
+    def _collect_attributes(
+        attributes: Iterable[Tuple[str, AttributeValue]],
+    ) -> Dict[str, AttributeValue]:
+        collected: Dict[str, AttributeValue] = {}
+        try:
+            for key, value in attributes:
+                collected[key] = value
+        except Exception:
+            logger.exception("Failed to extract request attributes")
+        return collected
+
     @contextmanager
     def _start_as_current_span(
         self,
@@ -45,9 +57,14 @@ class _WithTracer(ABC):
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
     ) -> Iterator[_WithSpan]:
+        # Attribute extraction is best effort, not a prerequisite for a span.
+        # Keep each group independent and retain values yielded before a failure.
+        initial_attributes = self._collect_attributes(extra_attributes)
+        final_attributes = self._collect_attributes(attributes)
+        span_context_attributes = self._collect_attributes(context_attributes)
         try:
             span = self._tracer.start_span(
-                name=span_name, attributes=dict(extra_attributes)
+                name=span_name, attributes=initial_attributes
             )
         except Exception:
             span = INVALID_SPAN
@@ -59,8 +76,8 @@ class _WithTracer(ABC):
         ) as span:
             yield _WithSpan(
                 span=span,
-                context_attributes=dict(context_attributes),
-                extra_attributes=dict(attributes),
+                context_attributes=span_context_attributes,
+                extra_attributes=final_attributes,
             )
 
 
@@ -270,6 +287,99 @@ class _ChatStreamWrapper(_WithTracer):
                     span.finish_tracing()
 
         return streaming_wrapper()
+
+
+class _AsyncChatStreamWrapper(_ChatStreamWrapper):
+    """Preserve the SDK's lazy async iterator and close its HTTP stream."""
+
+    def __call__(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        response = wrapped(*args, **kwargs)
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return response
+        return self._handle_async_stream(response, dict(kwargs))
+
+    async def _handle_async_stream(
+        self, response: Any, request_parameters: Dict[str, Any]
+    ):
+        # Start on first consumption, not construction. Closing an unstarted
+        # stream therefore neither sends a request nor leaves an open span.
+        with self._start_as_current_span(
+            span_name="cohere.chat_stream",
+            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            context_attributes=get_attributes_from_context(),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+        ) as span:
+            pass
+        content_parts: List[str] = []
+        final_response: Dict[str, Any] = {}
+        try:
+            try:
+                iterator = response.__aiter__()
+                while True:
+                    # Never keep our context attached across a yield into
+                    # application code (or across iteration in another task).
+                    with trace_api.use_span(
+                        span._span, end_on_exit=False,
+                        record_exception=False, set_status_on_exception=False,
+                    ):
+                        try:
+                            event = await iterator.__anext__()
+                        except StopAsyncIteration:
+                            break
+                    try:
+                        event_dict = _to_dict(event)
+                        if event_dict.get("event_type") == "text-generation":
+                            if text := event_dict.get("text"):
+                                content_parts.append(text)
+                        elif event_dict.get("event_type") == "stream-end":
+                            final_response = dict(event_dict.get("response") or {})
+                    except Exception:
+                        logger.exception("Failed to extract streaming response")
+                    yield event
+            finally:
+                # Explicit close, cancellation and upstream failures must all
+                # release the actual SDK generator's HTTP context immediately.
+                with trace_api.use_span(
+                    span._span, end_on_exit=False,
+                    record_exception=False, set_status_on_exception=False,
+                ):
+                    await response.aclose()
+        except Exception as exception:
+            span.record_exception(exception)
+            span.finish_tracing(status=trace_api.Status(
+                status_code=trace_api.StatusCode.ERROR,
+                description=f"{type(exception).__name__}: {exception}",
+            ))
+            raise
+        else:
+            try:
+                final_response["text"] = "".join(content_parts)
+                # Legacy provider-specific tool fields do not pass through
+                # the core's canonical output-message masking rules.
+                if (self._config.hide_outputs or self._config.hide_output_messages
+                        or self._config.hide_output_text):
+                    final_response.pop("tool_calls", None)
+                _finish_tracing(
+                    status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                    with_span=span,
+                    attributes=self._response_extractor.get_attributes(final_response, is_streaming=True),
+                    extra_attributes=self._response_extractor.get_extra_attributes(
+                        final_response, request_parameters, is_streaming=True
+                    ),
+                )
+            except Exception:
+                logger.exception("Failed to finalize streaming response")
+                span.finish_tracing()
+        finally:
+            # GeneratorExit and CancelledError also take this path. They do not
+            # claim that a partially consumed stream completed successfully.
+            span.finish_tracing()
 
 
 class _EmbedWrapper(_WithTracer):

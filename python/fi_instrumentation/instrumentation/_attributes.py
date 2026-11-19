@@ -172,7 +172,10 @@ def get_context_attributes(
 
 
 def get_session_attributes(*, session_id: str) -> Dict[str, AttributeValue]:
-    return {GEN_AI_CONVERSATION_ID: session_id}
+    return {
+        SESSION_ID: session_id,
+        GEN_AI_CONVERSATION_ID: session_id,
+    }
 
 
 def get_tag_attributes(*, tags: List[str]) -> Dict[str, AttributeValue]:
@@ -577,6 +580,7 @@ GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
+SESSION_ID = SpanAttributes.SESSION_ID
 GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
 TAG_TAGS = SpanAttributes.TAG_TAGS
 GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION

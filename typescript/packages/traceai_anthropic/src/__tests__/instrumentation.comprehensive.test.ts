@@ -72,13 +72,9 @@ describe('Anthropic Instrumentation Comprehensive Tests', () => {
       instrumentation.manuallyInstrument(MockAnthropic);
       expect(isPatched()).toBe(true);
 
-      // Note: disable() calls super.disable() which only unpatches modules
-      // registered through the module definition system. manuallyInstrument
-      // bypasses that, so the global _isFIPatched flag remains true.
-      // The unpatch for manual instrumentation would require calling unpatch
-      // directly on the module exports.
       instrumentation.disable();
-      expect(isPatched()).toBe(true);
+      expect(isPatched()).toBe(false);
+      expect(MockAnthropic.Messages.prototype.create).toBe(mockCreate);
     });
 
     it('should handle multiple enable/disable cycles', () => {
@@ -87,9 +83,9 @@ describe('Anthropic Instrumentation Comprehensive Tests', () => {
       instrumentation.manuallyInstrument(MockAnthropic);
       expect(isPatched()).toBe(true);
 
-      // disable() does not reset _isFIPatched for manually instrumented modules
       instrumentation.disable();
-      expect(isPatched()).toBe(true);
+      expect(isPatched()).toBe(false);
+      expect(MockAnthropic.Messages.prototype.create).toBe(mockCreate);
     });
 
     it('should prevent double patching', () => {
@@ -462,9 +458,7 @@ describe('Anthropic Instrumentation Comprehensive Tests', () => {
       } as any;
 
       instrumentation.enable();
-      // patch() checks for Messages?.prototype and returns early if not found,
-      // but since _isFIPatched may already be true from prior tests in this
-      // suite sharing the same module-level global, we just verify no throw.
+      // A missing prototype must leave instrumentation state unchanged.
       expect(() => instrumentation.manuallyInstrument(IncompleteAnthropic)).not.toThrow();
     });
 
@@ -539,9 +533,9 @@ describe('Anthropic Instrumentation Comprehensive Tests', () => {
       instrumentation.manuallyInstrument(MockAnthropic);
       expect(isPatched()).toBe(true);
 
-      // disable() does not reset _isFIPatched for manually instrumented modules
       instrumentation.disable();
-      expect(isPatched()).toBe(true);
+      expect(isPatched()).toBe(false);
+      expect(MockAnthropic.Messages.prototype.create).toBe(mockCreate);
     });
   });
 }); 

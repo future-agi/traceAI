@@ -1,6 +1,6 @@
 {
   "name": "@traceai/cursor-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry tracing for the Cursor TypeScript SDK (@cursor/sdk) agent runs",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",

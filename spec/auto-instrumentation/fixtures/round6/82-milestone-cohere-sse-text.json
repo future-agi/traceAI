@@ -1,0 +1,79 @@
+{
+  "name": "milestone-cohere-sse-text",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "event": "message-start",
+        "type": "message-start",
+        "id": "co-r6",
+        "delta": {
+          "message": {
+            "role": "assistant"
+          }
+        }
+      },
+      {
+        "event": "content-delta",
+        "type": "content-delta",
+        "index": 0,
+        "delta": {
+          "message": {
+            "content": {
+              "text": ""
+            }
+          }
+        }
+      },
+      {
+        "event": "content-delta",
+        "type": "content-delta",
+        "index": 0,
+        "delta": {
+          "message": {
+            "content": {
+              "text": "Hi"
+            }
+          }
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "output.value": "Hi",
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

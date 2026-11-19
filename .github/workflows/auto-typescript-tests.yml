@@ -1,0 +1,46 @@
+name: Zero-code agent (@traceai/auto) tests
+
+# The registry test reads every typescript/packages/traceai_* manifest, and the
+# integration tests load the built instrumentors, so the whole workspace is built.
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_auto/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/packages/traceai_*/package.json'
+      - 'spec/auto-instrumentation/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/package.json'
+      - 'typescript/tsconfig*'
+      - '.github/workflows/auto-typescript-tests.yml'
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auto:
+    name: '@traceai/auto suite'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - name: Install the workspace
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build every package in dependency order
+        run: pnpm run build:ordered
+      - name: Run the @traceai/auto suite
+        run: pnpm --filter @traceai/auto test

@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import gc
 import inspect
 import threading
 import time
@@ -463,17 +464,26 @@ def test_timed_out_flush_does_not_accumulate_workers(setup):
         return True
 
     provider.force_flush = blocking_flush
-    start = time.monotonic()
+    # The worker must start within the 40 ms budget. A garbage-collection pause of a large
+    # test process on a slow runner can delay it past the deadline, so collection is off
+    # for the timed section only and restored to its previous state afterwards.
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
     try:
-        assert tracing.flush(invocation()) is False
-        assert time.monotonic() - start < 0.4
-        assert entered.is_set() and not finished.is_set()
-        for _ in range(20):
+        start = time.monotonic()
+        try:
             assert tracing.flush(invocation()) is False
-        assert len(calls) == 1
+            assert time.monotonic() - start < 0.4
+            assert entered.is_set() and not finished.is_set()
+            for _ in range(20):
+                assert tracing.flush(invocation()) is False
+            assert len(calls) == 1
+        finally:
+            release.set()
+            assert finished.wait(1)
     finally:
-        release.set()
-        assert finished.wait(1)
+        if gc_was_enabled:
+            gc.enable()
     # Acquire waits for the worker's finally block, without polling or sleeping.
     with tracing._flush_lock:
         pass

@@ -1,0 +1,77 @@
+{
+  "name": "usage-responses-json-complete-object-before-empty-chunk",
+  "description": "A JSON object contributes usage/cache/reasoning only after its closing brace arrives; nonstreaming calls have no streaming milestones.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "input": "Hi"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "resp_1",
+      "object": "response",
+      "model": "gpt-5-2025-08-07",
+      "status": "completed",
+      "output": [
+        {
+          "type": "reasoning",
+          "summary": []
+        },
+        {
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "4"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 70,
+        "total_tokens": 90,
+        "output_tokens_details": {
+          "reasoning_tokens": 64
+        },
+        "input_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    "chunk_sizes": [
+      368,
+      0
+    ],
+    "error_after_chunks": 1
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.usage.input_tokens": 20,
+      "gen_ai.usage.output_tokens": 70,
+      "gen_ai.usage.total_tokens": 90,
+      "gen_ai.usage.cache_read_tokens": 0,
+      "gen_ai.usage.output_tokens.reasoning": 64
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_chunk",
+      "gen_ai.response.time_to_first_text",
+      "gen_ai.usage.cache_write_tokens",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

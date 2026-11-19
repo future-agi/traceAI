@@ -183,11 +183,12 @@ class TestHideErrorDetailsDerivation:
         with patch.dict(os.environ, {FI_HIDE_ERROR_DETAILS: "true"}):
             assert TraceConfig(hide_error_details=False).hide_error_details is False
 
-    def test_invalid_env_falls_back_to_derived(self, clean_env):
+    def test_an_unrecognised_env_value_hides_error_details(self, clean_env):
         with patch.dict(os.environ, {"FI_HIDE_OUTPUTS": "true", FI_HIDE_ERROR_DETAILS: "maybe"}):
             assert TraceConfig().hide_error_details is True
+        # With every content switch off, the unrecognised value alone hides them.
         with patch.dict(os.environ, {FI_HIDE_ERROR_DETAILS: "maybe"}):
-            assert TraceConfig().hide_error_details is False
+            assert TraceConfig().hide_error_details is True
 
     def test_type_is_checked(self, clean_env):
         with pytest.raises(TypeError, match="hide_error_details"):

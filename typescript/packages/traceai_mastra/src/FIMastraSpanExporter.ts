@@ -14,6 +14,7 @@ import { sanitizeSpan } from "./privacy.js";
 import { NativeToolErrorHistory } from "./toolErrorHistory.js";
 import { toolErrorLifecycle } from "./toolErrorLifecycle.js";
 import { VERSION } from "./version.js";
+import { converterFormat } from "./converterFormat.js";
 
 function runtimeEmitsInference(): boolean {
   // Use the emitting runtime, NOT the converter's potentially nested dependency.
@@ -242,7 +243,7 @@ export class FIMastraSpanExporter extends BaseExporter {
   constructor(config: FISpanExporterConfig) {
     super();
     this.converter = new SpanConverter({
-      format: "GenAI_v1_38_0",
+      format: converterFormat,
       packageName: "@traceai/mastra",
       serviceName: config.serviceName,
       // Only `resourceAttributes` is read off this config by the converter.

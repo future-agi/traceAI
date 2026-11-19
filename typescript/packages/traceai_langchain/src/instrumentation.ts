@@ -19,10 +19,12 @@ const MODULE_NAME = "@langchain/core/callbacks";
 
 const INSTRUMENTATION_NAME = "@traceai/langchain";
 /**
- * Flag to check if the openai module has been patched
- * Note: This is a fallback in case the module is made immutable (e.x. Deno, webpack, etc.)
+ * Flag to check if the callback manager module has been patched.
+ * Patched state is kept here, never on the module: ES module namespaces and
+ * frozen bundler exports cannot take new properties.
  */
 let _isFIPatched = false;
+let _patchedModules = new WeakSet<object>();
 
 /**
  * function to check if instrumentation is enabled / disabled
@@ -36,6 +38,7 @@ export function isPatched() {
  */
 export function _resetPatchedStateForTesting(): void {
   _isFIPatched = false;
+  _patchedModules = new WeakSet<object>();
 }
 
 type CallbackManagerModule = typeof CallbackManagerModuleV02;
@@ -239,7 +242,8 @@ export class LangChainInstrumentation extends InstrumentationBase {
         moduleVersion != null ? `@${moduleVersion}` : ""
       }`,
     );
-    if (module?.fiPatched || _isFIPatched) {
+    // A flag already set on the module is still honored.
+    if (module?.fiPatched || _isFIPatched || _patchedModules.has(module)) {
       return module;
     }
     if (module?.CallbackManager == null) {
@@ -283,12 +287,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
       });
     }
     _isFIPatched = true;
-    try {
-      // This can fail if the module is made immutable via the runtime or bundler
-      module.fiPatched = true;
-    } catch (e) {
-      diag.debug(`Failed to set ${MODULE_NAME} patched flag on the module`, e);
-    }
+    _patchedModules.add(module);
 
     return module;
   }
@@ -321,12 +320,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
       this._unwrap(module.CallbackManager, "_configureSync");
     }
     _isFIPatched = false;
-    try {
-      // This can fail if the module is made immutable via the runtime or bundler
-      module.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset ${MODULE_NAME} patched flag on the module`, e);
-    }
+    _patchedModules.delete(module);
     return module;
   }
 }

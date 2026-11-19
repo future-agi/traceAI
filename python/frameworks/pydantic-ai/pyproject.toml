@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "traceai-pydantic-ai"
-version = "0.1.0"
+version = "0.2.0"
 description = "OpenTelemetry instrumentation for Pydantic AI"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "FutureAGI", email = "support@futureagi.com" }
 ]
@@ -21,7 +21,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -34,6 +33,8 @@ classifiers = [
 keywords = ["pydantic-ai", "opentelemetry", "tracing", "observability", "llm", "agents", "traceai", "futureagi"]
 
 dependencies = [
+    "fi-instrumentation-otel>=1.3.0",
+    "wrapt>=1.15.0,<2",
     "opentelemetry-api>=1.0.0",
     "opentelemetry-sdk>=1.0.0",
     "opentelemetry-instrumentation>=0.40b0",

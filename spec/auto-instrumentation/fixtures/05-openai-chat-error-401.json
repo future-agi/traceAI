@@ -1,0 +1,46 @@
+{
+  "name": "openai-chat-error-401",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4o",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "error": {
+        "message": "Incorrect API key provided",
+        "type": "invalid_request_error",
+        "code": "invalid_api_key"
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o",
+    "status": "ERROR",
+    "status_description": "Incorrect API key provided",
+    "attributes": {
+      "error.type": "401",
+      "http.response.status_code": 401,
+      "gen_ai.request.model": "gpt-4o"
+    },
+    "absent": [
+      "gen_ai.output.messages.0.message.content"
+    ]
+  }
+}

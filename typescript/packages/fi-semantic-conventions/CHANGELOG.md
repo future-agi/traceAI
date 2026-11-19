@@ -1,3 +1,15 @@
+## [1.3.0] - pending release
+
+### Changed
+- ATTR_PROJECT_NAME now emits project_name instead of fi.project.name, and ATTR_SERVICE_NAME now emits service.name instead of SERVICE_NAME. Action: Update any resource lookups, processors or queries that read the old keys; traces already recorded keep the old keys.
+
+## [1.2.0] - 2026-11-10
+### Added
+- Align GenAI constant names with Python's `SpanAttributes`: expose `GEN_AI_*` names as named exports and on `SemanticConventions`.
+- Preserve existing `LLM_*` exports as deprecated aliases without changing attribute keys or literal types.
+- Document canonical names and replace legacy `llm.*` keys in the usage example.
+- Check every exported `gen_ai.*` value against Python's canonical names in CI, including changes to the Python reference.
+
 ## [0.1.8] - 2025-06-10
 ### Feature
 - Dependencies Updated

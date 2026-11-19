@@ -1,0 +1,38 @@
+name: Roast Ruby tests
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - ruby/roast/**
+      - .github/workflows/roast-ruby-tests.yml
+  pull_request:
+    paths:
+      - ruby/roast/**
+      - .github/workflows/roast-ruby-tests.yml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.3', '3.4']
+        roast: ['1.1.0', 'latest']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # v1.334.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: false
+      - name: Install public dependencies
+        working-directory: ruby/roast
+        env:
+          ROAST_VERSION: ${{ matrix.roast }}
+        run: bundle install
+      - name: Test instrumentation
+        working-directory: ruby/roast
+        env:
+          ROAST_VERSION: ${{ matrix.roast }}
+        run: bundle exec ruby -Ilib test/instrumentation_test.rb
+      - name: Build RubyGem
+        working-directory: ruby/roast
+        run: gem build traceai-roast.gemspec

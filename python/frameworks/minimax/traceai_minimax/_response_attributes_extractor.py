@@ -113,38 +113,40 @@ class _StreamingChatCompletionResponseExtractor:
         if "model" in chunk and not self._model:
             self._model = chunk["model"]
 
-        # Handle usage in final chunk
-        if "usage" in chunk:
+        # Handle usage in final chunk. SDK chunks dumped with model_dump() carry
+        # usage=None on every other chunk, which must not erase the real usage.
+        if chunk.get("usage"):
             self._usage = chunk["usage"]
 
-        choices = chunk.get("choices", [])
-        for choice in choices:
-            delta = choice.get("delta", {})
+        # model_dump() also sets absent fields to None (delta.tool_calls,
+        # function.arguments, ...), so treat None like a missing field.
+        for choice in chunk.get("choices") or []:
+            delta = choice.get("delta") or {}
 
             # Content
-            if "content" in delta and delta["content"]:
+            if delta.get("content"):
                 self._content_parts.append(delta["content"])
 
             # Tool calls
-            if "tool_calls" in delta:
-                for tc in delta["tool_calls"]:
-                    idx = tc.get("index", 0)
-                    if idx not in self._tool_calls:
-                        self._tool_calls[idx] = {
-                            "id": tc.get("id", ""),
-                            "type": tc.get("type", "function"),
-                            "function": {"name": "", "arguments": ""}
-                        }
-                    if "id" in tc and tc["id"]:
-                        self._tool_calls[idx]["id"] = tc["id"]
-                    if "function" in tc:
-                        if "name" in tc["function"] and tc["function"]["name"]:
-                            self._tool_calls[idx]["function"]["name"] = tc["function"]["name"]
-                        if "arguments" in tc["function"]:
-                            self._tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index")
+                idx = 0 if idx is None else idx
+                if idx not in self._tool_calls:
+                    self._tool_calls[idx] = {
+                        "id": tc.get("id") or "",
+                        "type": tc.get("type") or "function",
+                        "function": {"name": "", "arguments": ""}
+                    }
+                if tc.get("id"):
+                    self._tool_calls[idx]["id"] = tc["id"]
+                function = tc.get("function") or {}
+                if function.get("name"):
+                    self._tool_calls[idx]["function"]["name"] = function["name"]
+                if function.get("arguments"):
+                    self._tool_calls[idx]["function"]["arguments"] += function["arguments"]
 
             # Finish reason
-            if "finish_reason" in choice and choice["finish_reason"]:
+            if choice.get("finish_reason"):
                 self._finish_reason = choice["finish_reason"]
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:

@@ -1,0 +1,45 @@
+{
+  "name": "@traceai/muse-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native Muse Code hooks for Future AGI turn tracing",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "qualification.json"
+  ],
+  "scripts": {
+    "build": "node build.cjs",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "typescript": "^5.8.3",
+    "esbuild": "0.25.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_muse_plugin"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  }
+}

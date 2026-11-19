@@ -1,0 +1,29 @@
+{
+  "name": "non-ai-responses-route",
+  "request": {
+    "method": "POST",
+    "url": "https://example.com/api/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "survey": 3,
+      "answers": [
+        1,
+        2
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "captured": false
+  }
+}

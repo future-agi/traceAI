@@ -6,7 +6,8 @@ import {
     Span,
     SpanExporter,
   } from "@opentelemetry/sdk-trace-base";
-  import { addFIAttributesToSpan, shouldExportSpan } from "./utils";
+  import { shouldExportSpan } from "./utils";
+  import { prepareSpanForExport, readPrivacyConfig } from "./privacy";
   import { SpanFilter } from "./types";
   import { Context } from "@opentelemetry/api";
   
@@ -31,6 +32,7 @@ import {
    */
   export class FISimpleSpanProcessor extends SimpleSpanProcessor {
     private readonly spanFilter?: SpanFilter;
+    private readonly privacyConfig = readPrivacyConfig();
     constructor({
       exporter,
       spanFilter,
@@ -50,8 +52,8 @@ import {
       this.spanFilter = spanFilter;
     }
   
-    onEnd(span: ReadableSpan): void {
-      addFIAttributesToSpan(span);
+    onEnd(originalSpan: ReadableSpan): void {
+      const span = prepareSpanForExport(originalSpan, this.privacyConfig);
       if (
         shouldExportSpan({
           span,
@@ -85,6 +87,7 @@ import {
    */
   export class FIBatchSpanProcessor extends BatchSpanProcessor {
     private readonly spanFilter?: SpanFilter;
+    private readonly privacyConfig = readPrivacyConfig();
     constructor({
       exporter,
       spanFilter,
@@ -119,8 +122,8 @@ import {
       return super.onStart(_span, _parentContext);
     }
   
-    onEnd(span: ReadableSpan): void {
-      addFIAttributesToSpan(span);
+    onEnd(originalSpan: ReadableSpan): void {
+      const span = prepareSpanForExport(originalSpan, this.privacyConfig);
       if (
         shouldExportSpan({
           span,

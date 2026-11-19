@@ -6,6 +6,7 @@ loopback servers, self-hosted endpoints, look-alike domains) keeps the
 instrumentor's historical label, "openai", rather than a guess.
 """
 
+import re
 from typing import Optional
 
 from fi_instrumentation.fi_types import FiLLMProviderValues
@@ -15,10 +16,13 @@ DEFAULT_PROVIDER = FiLLMProviderValues.OPENAI.value
 # Exact API hosts.
 _HOSTS = {
     "api.openai.com": FiLLMProviderValues.OPENAI.value,
+    "openrouter.ai": "openrouter",
     "ollama.com": "ollama",
     "generativelanguage.googleapis.com": FiLLMProviderValues.GOOGLE.value,
     "api.anthropic.com": FiLLMProviderValues.ANTHROPIC.value,
+    "api.cometapi.com": "cometapi",
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
+    "api.novita.ai": "novita",
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
     "api.x.ai": FiLLMProviderValues.XAI.value,
     "api.z.ai": "zai",
@@ -41,6 +45,7 @@ _HOSTS = {
 # Vendors that give every resource, workspace or endpoint its own subdomain.
 _SUFFIXES = (
     (".openai.azure.com", FiLLMProviderValues.AZURE.value),
+    (".openai.azure.us", FiLLMProviderValues.AZURE.value),
     (".services.ai.azure.com", FiLLMProviderValues.AZURE.value),
     (".cognitiveservices.azure.com", FiLLMProviderValues.AZURE.value),
     ("-aiplatform.googleapis.com", FiLLMProviderValues.VERTEXAI.value),
@@ -58,6 +63,10 @@ def provider_from_host(host: Optional[str]) -> str:
     host = host.lower().rstrip(".")
     if host in _HOSTS:
         return _HOSTS[host]
+    # Dedicated and regional Baseten endpoints use a single model-* DNS label.
+    # Bound it to 63 characters; do not label arbitrary subdomains or look-alikes.
+    if re.fullmatch(r"model-[a-z0-9](?:[a-z0-9-]{0,55}[a-z0-9])?\.api\.baseten\.co", host):
+        return "baseten"
     for suffix, provider in _SUFFIXES:
         if host.endswith(suffix):
             return provider

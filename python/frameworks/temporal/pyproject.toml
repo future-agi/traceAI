@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "traceAI-temporal"
-version = "0.1.0"
+version = "0.1.1"
 description = "Future AGI configuration for Temporal's native replay-safe OpenTelemetry tracing"
 readme = "README.md"
 license = "Apache-2.0"

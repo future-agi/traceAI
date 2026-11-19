@@ -1,0 +1,83 @@
+{
+  "name": "@traceai/pi-plugin",
+  "version": "0.1.0",
+  "description": "Native Pi extension for Future AGI turn, model and tool tracing",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "default": "./dist/adapter.js"
+    },
+    "./subagent": {
+      "types": "./dist/subagent.d.ts",
+      "default": "./dist/subagent.js"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./extension.mjs"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "futureagi",
+    "tracing",
+    "opentelemetry"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.cjs",
+    "prepare": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "extension.mjs",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^",
+    "@traceai/pi-coding-agent": "workspace:^",
+    "minimatch": "11.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29",
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_pi_plugin"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  },
+  "typesVersions": {
+    "*": {
+      "adapter": [
+        "dist/adapter.d.ts"
+      ],
+      "subagent": [
+        "dist/subagent.d.ts"
+      ]
+    }
+  }
+}

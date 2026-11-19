@@ -1,0 +1,63 @@
+{
+  "name": "milestone-responses-tool-name-before-arguments",
+  "description": "A nonempty function-call name in output_item.added is model output before argument deltas arrive.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "input": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "response.created",
+        "response": {
+          "id": "resp-tool",
+          "output": []
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "function_call",
+          "id": "fc-r6",
+          "call_id": "call-r6",
+          "name": "get_weather",
+          "arguments": ""
+        }
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "fc-r6",
+        "delta": "{}"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.02,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

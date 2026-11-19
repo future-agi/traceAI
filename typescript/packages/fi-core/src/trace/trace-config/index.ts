@@ -39,6 +39,7 @@ export {
   stripStackTrace,
 } from "./errorDetails";
 export { FITracer } from "./FITracer";
+export { activeFIContext, runInFIContext } from "./activeContext";
 export { type FISpan } from "./FISpan";
 export { redactPiiInString, redactPiiInValue } from "./piiRedaction";
 export { maskAttributes } from "./maskingRules";

@@ -37,7 +37,9 @@ class NuGetWorkflowTests(unittest.TestCase):
 
     def test_publish_is_top_level_gated_and_included_in_verdict(self):
         self.assertIn('needs: [plan, nuget-build]', self.publish)
-        self.assertIn("!cancelled() && needs.nuget-build.result == 'success'\n      && needs.plan.outputs.publish_nuget == 'true'", self.publish)
+        self.assertIn("    if: >-\n      !cancelled() && needs.nuget-build.result == 'success'\n"
+                      "      && needs.plan.outputs.publish_nuget == 'true'\n", self.publish)
+        self.assertNotIn('if: ${{ false }}', self.publish)
         self.assertIn('environment: nuget', self.publish)
         self.assertIn('    permissions:\n      contents: write\n      id-token: write\n', self.publish)
         self.assertIn('include: ${{ fromJson(needs.plan.outputs.nuget) }}', self.publish)
@@ -126,6 +128,101 @@ class NuGetWorkflowTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError):
                 self.verify_registry()
         sleep.assert_not_called()
+
+
+class RubyWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (WORKFLOWS / 'release.yml').read_text()
+
+        def job(name):
+            match = re.search(rf'^  {name}:\n(.*?)(?=^  [\w-]+:\n|\Z)', self.workflow, re.M | re.S)
+            self.assertIsNotNone(match, f'missing {name} job')
+            return match.group(1)
+
+        self.build = job('ruby-build')
+        self.publish = job('ruby')
+        self.verdict = job('release')
+
+    def test_ruby_build_is_read_only_and_only_builds_unpublished_gems(self):
+        self.assertIn('needs: plan', self.build)
+        self.assertIn("if: github.event_name != 'pull_request' && needs.plan.outputs.ruby != '[]'", self.build)
+        self.assertIn('    permissions:\n      contents: read\n', self.build)
+        self.assertIn('include: ${{ fromJson(needs.plan.outputs.ruby) }}', self.build)
+        self.assertIn('working-directory: ${{ matrix.dir }}', self.build)
+        build = next(step for step in self.build.split('      - ') if 'gem build ' in step)
+        upload = next(step for step in self.build.split('      - ') if 'actions/upload-artifact@' in step)
+        for step in (build, upload):
+            self.assertIn("if: '!matrix.registry_published'", step)
+        self.assertIn('name: ${{ matrix.tag }}', upload)
+        self.assertIn('path: ${{ runner.temp }}/dist/*.gem', upload)
+        self.assertIn('if-no-files-found: error', upload)
+        for forbidden in ('id-token:', 'contents: write', 'environment:', 'configure-rubygems-credentials',
+                          'gem push ', 'github_release.py'):
+            self.assertNotIn(forbidden, self.build)
+
+    def test_ruby_publish_is_top_level_gated_and_included_in_verdict(self):
+        self.assertIn('needs: [plan, ruby-build]', self.publish)
+        self.assertIn("    if: >-\n      !cancelled() && needs.ruby-build.result == 'success'\n"
+                      "      && needs.plan.outputs.publish_ruby == 'true'\n", self.publish)
+        self.assertIn('environment: rubygems', self.publish)
+        self.assertIn('    permissions:\n      contents: write\n      id-token: write\n', self.publish)
+        self.assertIn('include: ${{ fromJson(needs.plan.outputs.ruby) }}', self.publish)
+        self.assertNotIn('uses: ./.github/workflows/', self.publish)
+        needs = self.verdict.split('needs: [', 1)[1].split(']', 1)[0].split(', ')
+        self.assertIn('ruby-build', needs)
+        self.assertIn('ruby', needs)
+        self.assertIn('if: always()', self.verdict)
+        self.assertIn('RESULTS: ${{ toJson(needs) }}', self.verdict)
+        self.assertIn('any(. == "failure" or . == "cancelled")', self.verdict)
+
+    def test_ruby_artifact_and_oidc_push_are_skipped_on_reconciliation(self):
+        steps = self.publish.split('      - ')[1:]
+        download_index = next(i for i, step in enumerate(steps) if 'actions/download-artifact@' in step)
+        login_index = next(i for i, step in enumerate(steps) if 'rubygems/configure-rubygems-credentials@' in step)
+        push_index = next(i for i, step in enumerate(steps) if 'gem push ' in step)
+        download, login, push = steps[download_index], steps[login_index], steps[push_index]
+        self.assertLess(download_index, login_index)
+        self.assertEqual(push_index, login_index + 1)
+        for step in (download, login, push):
+            self.assertIn("if: '!matrix.registry_published'", step)
+        self.assertIn('name: ${{ matrix.tag }}', download)
+        self.assertIn('path: ${{ runner.temp }}/dist\n', download)
+        self.assertIn('"$RUNNER_TEMP/dist/', push)
+        self.assertIn('.gem', push)
+        self.assertNotIn('gem build ', self.publish)
+        self.assertNotIn('secrets.', self.build + self.publish)
+        self.assertNotIn('RUBYGEMS_API_KEY', self.build + self.publish)
+
+    def test_ruby_setup_and_all_actions_are_pinned(self):
+        for text in (self.build, self.publish):
+            self.assertIn('ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec', text)
+            self.assertIn("ruby-version: '3.3'", text)
+            self.assertIn('persist-credentials: false', text)
+            for action in re.findall(r'\buses: (\S+)', text):
+                self.assertRegex(action, r'^[^@]+@[0-9a-f]{40}$')
+            for line in text.splitlines():
+                if 'uses:' in line:
+                    self.assertRegex(line, r'@[0-9a-f]{40} # \S+')
+
+    def test_ruby_registry_is_verified_before_tagging_even_on_reconciliation(self):
+        verify, release = self.publish.split('      - name: Verify the public registry version\n', 1)[1].split('      - name: Tag and create the GitHub release\n', 1)
+        self.assertNotIn('        if:', verify + release)
+        self.assertIn('https://rubygems.org/api/v1/versions/', verify)
+        self.assertIn("os.environ['NAME']", verify)
+        self.assertIn("os.environ['VERSION']", verify)
+        self.assertIn("['number']", verify)
+        self.assertIn('for attempt in range(', verify)
+        self.assertIn('time.sleep(', verify)
+        self.assertIn('if e.code != 404: raise', verify)
+        self.assertIn('raise SystemExit(', verify)
+        self.assertIn('GH_TOKEN: ${{ github.token }}', release)
+        self.assertIn('python3 .github/release/github_release.py --install "gem install $NAME --version $VERSION" --dist "$RUNNER_TEMP/dist"', release)
+        for key in ('name', 'version', 'tag', 'changelog', 'registry_published'):
+            self.assertIn(f'{key.upper()}: ${{{{ matrix.{key} }}}}', self.publish)
+        for text in (self.build, self.publish):
+            for step in text.split('      - '):
+                if '        run:' in step:
+                    self.assertNotIn('${{', step.split('        run:', 1)[1])
 
 
 if __name__ == '__main__':

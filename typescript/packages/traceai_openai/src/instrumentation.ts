@@ -43,6 +43,7 @@ import { isTracingSuppressed } from "@opentelemetry/core";
 
 import {
   FITracer,
+  rememberProviderResponse,
   safelyJSONStringify,
   TraceConfigOptions,
 } from "@traceai/fi-core";
@@ -260,12 +261,14 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           // --- ADD LOG ---
           // diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
 
-          const execContext = getExecContext(span);
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
+          const requestStartedAt = performance.now();
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<ChatCompletionCreateType>
           >(
             () => {
-              return context.with(trace.setSpan(execContext, span), () => {
+              return context.with(trace.setSpan(execContext, contextSpan), () => {
                 return original.apply(this, args);
               });
             },
@@ -284,8 +287,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
 
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
-            if (isChatCompletionResponse(result)) {
-              span.setAttributes({
+            if (isChatCompletionResponse(result) && !hasResponseError(result)) {
+              const responseAttributes = {
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
@@ -296,14 +299,18 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 ...getChatCompletionLLMOutputMessagesAttributes(result),
                 ...getUsageAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-              });
+              };
+              rememberProviderResponse(span.spanContext(), responseAttributes, "openai.chat");
+              span.setAttributes(responseAttributes);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
-            } else {
-              result = observeStream(result, span, (chunks) =>
+            } else if (isStream<ChatCompletionChunk>(result)) {
+              result = observeStream(result, span, requestStartedAt, (chunks) =>
                 consumeChatCompletionStreamChunks(chunks, span),
                 args[1]?.signal,
               );
+            } else {
+              endNonStreamResponseSpan(span, result);
             }
             return result;
           }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
@@ -345,13 +352,15 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               },
             },
           );
-          const execContext = getExecContext(span);
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
 
+          const requestStartedAt = performance.now();
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<CompletionsCreateType>
           >(
             () => {
-              return context.with(trace.setSpan(execContext, span), () => {
+              return context.with(trace.setSpan(execContext, contextSpan), () => {
                 return original.apply(this, args);
               });
             },
@@ -369,7 +378,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
-            if (isCompletionResponse(result)) {
+            if (isCompletionResponse(result) && !hasResponseError(result)) {
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -384,8 +393,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
-            } else {
-              result = observeStream(result, span, (chunks) => {
+            } else if (isStream<Completion>(result)) {
+              result = observeStream(result, span, requestStartedAt, (chunks) => {
                 span.setAttributes({
                   ...getStreamMetadataAttributes(chunks),
                   [SemanticConventions.OUTPUT_VALUE]: chunks
@@ -396,6 +405,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 });
                 span.setStatus({ code: SpanStatusCode.OK });
               }, args[1]?.signal);
+            } else {
+              endNonStreamResponseSpan(span, result);
             }
             return result;
           }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
@@ -425,6 +436,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.FI_SPAN_KIND]:
                 FISpanKind.EMBEDDING,
               [SemanticConventions.EMBEDDING_MODEL_NAME]: body.model,
+              [SemanticConventions.LLM_MODEL_NAME]: body.model,
               [SemanticConventions.INPUT_VALUE]: isStringInput
                 ? input
                 : JSON.stringify(input),
@@ -437,12 +449,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           });
-          const execContext = getExecContext(span);
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<EmbeddingsCreateType>
           >(
             () => {
-              return context.with(trace.setSpan(execContext, span), () => {
+              return context.with(trace.setSpan(execContext, contextSpan), () => {
                 return original.apply(this, args);
               });
             },
@@ -460,9 +473,18 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
+            if (hasResponseError(result)) {
+              endNonStreamResponseSpan(span, result);
+              return result;
+            }
             if (result) {
               // Record the results
               span.setAttributes({
+                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+                ...(result.usage && {
+                  [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: result.usage.prompt_tokens,
+                  [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: result.usage.total_tokens,
+                }),
                 // Do not record the output data as it can be large
                 ...getEmbeddingEmbeddingsAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -528,12 +550,14 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 },
               },
             );
-            const execContext = getExecContext(span);
+            const contextSpan = span.getContextSpan();
+            const execContext = getExecContext(contextSpan);
+            const requestStartedAt = performance.now();
             const execPromise = safeExecuteInTheMiddle<
               ReturnType<ResponsesCreateType>
             >(
               () => {
-                return context.with(trace.setSpan(execContext, span), () => {
+                return context.with(trace.setSpan(execContext, contextSpan), () => {
                   return original.apply(this, args);
                 });
               },
@@ -581,16 +605,19 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               };
               if (isResponseCreateResponse(result)) {
                 recordSpan(result);
-              } else {
+              } else if (isStream<ResponseStreamEvent>(result)) {
                 result = observeStream(
                   result,
                   span,
+                  requestStartedAt,
                   async (chunks) => {
                     recordSpan(await consumeResponseStreamEvents(chunks), false);
                   },
                   args[1]?.signal,
                   (event) => event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete",
                 );
+              } else {
+                endNonStreamResponseSpan(span, result);
               }
 
               return result;
@@ -631,6 +658,36 @@ export class OpenAIInstrumentation extends InstrumentationBase{
 
 }
 
+/** First generated content, not the role/created/usage/terminal bookkeeping.
+ * Only inspect SDK events already being consumed; do not serialize or retain
+ * content for timing. Includes reasoning, refusals, tool calls and audio.
+ */
+function hasGeneratedContent(chunk: any): boolean {
+  const nonempty = (value: unknown) => typeof value === "string" && value.length > 0;
+  const tool = (call: any) => {
+    const fn = call?.function ?? call;
+    // Chat custom tools nest their generated name/input under custom, unlike
+    // Responses custom_tool_call items. Continuation deltas may omit type/id.
+    return nonempty(fn?.name) || nonempty(fn?.arguments) || nonempty(fn?.input) || nonempty(fn?.code)
+      || nonempty(call?.custom?.name) || nonempty(call?.custom?.input);
+  };
+  if (!chunk || typeof chunk !== "object") return false;
+  if (Array.isArray(chunk.choices) && chunk.choices.some((choice: any) => {
+    const delta = choice?.delta;
+    return [choice?.text, delta?.content, delta?.refusal, delta?.reasoning_content,
+      delta?.reasoning, delta?.audio?.transcript, delta?.audio?.data].some(nonempty)
+      || Array.isArray(delta?.tool_calls) && delta.tool_calls.some(tool)
+      || tool(delta?.function_call);
+  })) return true;
+  if (typeof chunk.type !== "string") return false;
+  if (/^response\.(?:output_text|refusal|audio\.transcript|reasoning(?:_summary)?(?:_text)?|function_call_arguments|mcp_call_arguments|code_interpreter_call_code|custom_tool_call_input|audio|output_audio)\.delta$/.test(chunk.type)) {
+    return nonempty(chunk.delta);
+  }
+  return chunk.type === "response.output_item.added"
+    && ["function_call", "tool_call", "custom_tool_call", "mcp_call", "code_interpreter_call"].includes(chunk.item?.type)
+    && tool(chunk.item);
+}
+
 /** Observe the caller's iterator, including errors and early return, without a
  * background tee that can lose errors, keep requests alive or require newer SDKs.
  * Keep the original Stream object, controller and SDK helpers intact.
@@ -638,6 +695,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
 function observeStream<T>(
   stream: Stream<T>,
   span: Span,
+  requestStartedAt: number,
   onComplete: (chunks: T[]) => void | Promise<void>,
   requestSignal?: AbortSignal | null,
   retainChunk: (chunk: T) => boolean = () => true,
@@ -654,6 +712,7 @@ function observeStream<T>(
   );
   let ended = false;
   let awaitingNext = false;
+  let firstTokenRecorded = false;
   const finish = () => {
     if (ended) return;
     ended = true;
@@ -696,6 +755,21 @@ function observeStream<T>(
         },
       };
       for await (const chunk of source) {
+        if (!ended && !firstTokenRecorded) {
+          // Timestamp before classification/aggregation and before yielding to the
+          // consumer. Responses retention keeps only terminal events, so timing
+          // must run before retainChunk. The request clock includes provider wait.
+          const observedAt = performance.now();
+          try {
+            if (hasGeneratedContent(chunk)) {
+              const seconds = (observedAt - requestStartedAt) / 1000;
+              if (Number.isFinite(seconds) && seconds >= 0) {
+                firstTokenRecorded = true;
+                span.setAttribute("gen_ai.response.time_to_first_token", seconds);
+              }
+            }
+          } catch { /* Timing observation must not change SDK delivery. */ }
+        }
         if (!ended && retainChunk(chunk)) chunks.push(chunk);
         yield chunk;
       }
@@ -737,28 +811,57 @@ function endRawResponseSpan(span: Span, response: { status: number }): void {
   span.end();
 }
 
+function isObject(response: unknown): response is Record<PropertyKey, unknown> {
+  return response !== null && typeof response === "object";
+}
+
+/** Missing completion fields do not imply a stream, even on an HTTP 200. */
+function isStream<T>(response: unknown): response is Stream<T> {
+  return isObject(response) && (
+    typeof response[Symbol.asyncIterator] === "function" ||
+    typeof response.iterator === "function"
+  );
+}
+
+function hasResponseError(response: unknown): response is { error: Record<string, unknown> } {
+  return isObject(response) && isObject(response.error);
+}
+
+/** Preserve unexpected parsed bodies without inventing output or consuming them. */
+function endNonStreamResponseSpan(span: Span, response: unknown): void {
+  if (hasResponseError(response)) {
+    const error = new Error(typeof response.error.message === "string"
+      ? response.error.message : "Provider returned an error");
+    // Use the same exception.type event attribute as SDK exceptions.
+    if (typeof response.error.type === "string") error.name = response.error.type;
+    endSpanWithError(span, error);
+  } else {
+    span.end();
+  }
+}
+
 function isResponseCreateResponse(
-  response: Stream<ResponseStreamEvent> | ResponseType,
+  response: unknown,
 ): response is ResponseType {
-  return "object" in response && response.object === "response";
+  return isObject(response) && response.object === "response";
 }
 
 /**
  * type-guard that checks if the response is a chat completion response
  */
 function isChatCompletionResponse(
-  response: Stream<ChatCompletionChunk> | ChatCompletion,
+  response: unknown,
 ): response is ChatCompletion {
-  return "choices" in response;
+  return isObject(response) && Array.isArray(response.choices);
 }
 
 /**
  * type-guard that checks if the response is a completion response
  */
 function isCompletionResponse(
-  response: Stream<Completion> | Completion,
+  response: unknown,
 ): response is Completion {
-  return "choices" in response;
+  return isObject(response) && Array.isArray(response.choices);
 }
 
 /**
@@ -959,7 +1062,9 @@ function getUsageAttributes(
       [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING]:
         completion.usage.completion_tokens_details?.reasoning_tokens,
     };
-    return usageAttributes;
+    // Absence is not a string or a zero-valued usage detail. Remove it before
+    // any shared privacy coercion or native SDK count admission.
+    return Object.fromEntries(Object.entries(usageAttributes).filter(([, value]) => value !== undefined));
   }
   return {};
 }
@@ -1071,6 +1176,7 @@ function getEmbeddingTextAttributes(
 function getEmbeddingEmbeddingsAttributes(
   response: CreateEmbeddingResponse,
 ): Attributes {
+  if (!Array.isArray(response?.data)) return {};
   return response.data.reduce((acc, embedding, index) => {
     const indexPrefix = `${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.`;
     acc[`${indexPrefix}${SemanticConventions.EMBEDDING_VECTOR}`] =
@@ -1142,12 +1248,15 @@ async function consumeChatCompletionStreamChunks(
   if (functionName) outputMessage.function_call_name = functionName;
   if (functionArguments) outputMessage.function_call_arguments = functionArguments;
 
-  span.setAttributes({
+  const responseAttributes = {
     ...getStreamMetadataAttributes(allChunks),
     [SemanticConventions.OUTPUT_VALUE]: streamResponse,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
     [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  });
+  };
+  // Chunks stay buffered until this one export; the shared boundary joins by choice index.
+  rememberProviderResponse(span.spanContext(), { "raw.output": responseAttributes[SemanticConventions.RAW_OUTPUT] }, "openai.chat");
+  span.setAttributes(responseAttributes);
   span.setStatus({ code: SpanStatusCode.OK });
 }

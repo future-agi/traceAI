@@ -248,23 +248,13 @@ export function getAttributesFromMessage(message: Message): Attributes {
 }
 
 /**
- * Extracts clean model name from full Bedrock model ID
- * Removes vendor prefix and version suffixes to get the base model name
+ * Preserves the requested Bedrock model identifier for gen_ai.request.model.
+ * Model IDs, cross-region inference profiles, and ARNs do not share a fixed
+ * dot-separated layout; shortening them can discard the model or its version.
  *
  * @param modelId The full Bedrock model identifier
- * @returns {string} The cleaned model name (e.g., "claude-3-sonnet" from "anthropic.claude-3-sonnet-20240229-v1:0")
+ * @returns {string} The original model identifier, including region and version
  */
 export function extractModelName(modelId: string): string {
-  const parts = modelId.split(".");
-  if (parts.length > 1) {
-    const modelPart = parts[1];
-    if (modelId.includes("anthropic")) {
-      const versionIndex = modelPart.indexOf("-v");
-      if (versionIndex > 0) {
-        return modelPart.substring(0, versionIndex);
-      }
-    }
-    return modelPart;
-  }
   return modelId;
 }

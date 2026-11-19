@@ -8,7 +8,7 @@ import threading
 import uuid
 import warnings
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -30,6 +30,16 @@ from fi_instrumentation.settings import (
     get_env_project_name,
     get_env_project_version_name,
 )
+
+try:
+    from fi_instrumentation.settings import get_env_traces_endpoint
+except ImportError:
+    # An older fi_instrumentation.settings beside this module (the published-core
+    # compatibility checks import this file next to a released package).
+    def get_env_traces_endpoint() -> Optional[str]:
+        traces = (os.getenv("FI_TRACES_URL") or "").strip()
+        return traces or get_env_collector_endpoint()
+
 from jsonschema import ValidationError
 from opentelemetry import trace as trace_api
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
@@ -275,7 +285,7 @@ class TracerProvider(_TracerProvider):
     the OpenTelemetry documentation at https://opentelemetry.io/docs/specs/otel/trace/sdk/.
 
     On construction a default `SimpleSpanProcessor` is added, exporting over `transport`.
-    The collector endpoint is inferred from `transport` and the `FI_BASE_URL`/`FI_GRPC_URL`
+    The collector endpoint is inferred from `transport` and the `FI_TRACES_URL` (else `FI_BASE_URL`)/`FI_GRPC_URL`
     environment variables. The first `add_span_processor` call replaces the default; later calls
     add processors next to it. The provider `register()` returns has no such default: processors
     added to it run next to its exporter. In addition to the arguments below, all upstream
@@ -314,7 +324,7 @@ class TracerProvider(_TracerProvider):
 
 
         if transport == Transport.HTTP:
-            endpoint = get_env_collector_endpoint()
+            endpoint = get_env_traces_endpoint()
             parsed_url, endpoint = _normalized_endpoint(endpoint)
             exporter: SpanExporter = HTTPSpanExporter(endpoint=endpoint)
         elif transport == Transport.GRPC:
@@ -445,7 +455,7 @@ def _build_default_exporter(
 ) -> SpanExporter:
     """Build the default OTLP exporter for `transport` (endpoint from env)."""
     if transport == Transport.HTTP:
-        _, endpoint = _normalized_endpoint(get_env_collector_endpoint())
+        _, endpoint = _normalized_endpoint(get_env_traces_endpoint())
         return HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=timeout)
     if transport == Transport.GRPC:
         endpoint = get_env_grpc_collector_endpoint()
@@ -463,7 +473,7 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
     Args:
         span_exporter (SpanExporter, optional): The `SpanExporter` to which ended spans will be
             passed. If not provided, a default OTLP exporter is created for `transport`; its
-            collector endpoint is taken from the `FI_BASE_URL`/`FI_GRPC_URL` environment
+            collector endpoint is taken from the `FI_TRACES_URL` (else `FI_BASE_URL`)/`FI_GRPC_URL` environment
             variables.
         headers (dict, optional): Optional headers to include in the request to the collector.
             If not provided, the `FI_API_KEY` and `FI_SECRET_KEY`
@@ -547,7 +557,7 @@ class BatchSpanProcessor(_BatchSpanProcessor):
     Args:
         span_exporter (SpanExporter, optional): The `SpanExporter` to which ended spans will be
             passed. If not provided, a default OTLP exporter is created for `transport`; its
-            collector endpoint is taken from the `FI_BASE_URL`/`FI_GRPC_URL` environment
+            collector endpoint is taken from the `FI_TRACES_URL` (else `FI_BASE_URL`)/`FI_GRPC_URL` environment
             variables.
         headers (dict, optional): Optional headers to include in the request to the collector.
             If not provided, the `FI_API_KEY` and `FI_SECRET_KEY`
@@ -589,6 +599,44 @@ class BatchSpanProcessor(_BatchSpanProcessor):
         super().on_end(span)
 
 
+_CREDENTIAL_HEADERS = (AUTHORIZATION, "x-api-key", "x-secret-key")
+
+
+def _is_blank(value: Any) -> bool:
+    """None, or a str/bytes value that is empty after stripping whitespace."""
+    if value is None:
+        return True
+    if isinstance(value, (bytes, bytearray)):
+        return not bytes(value).strip()
+    return not str(value).strip()
+
+
+def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
+    """Lower-case explicit headers and add the FI_API_KEY/FI_SECRET_KEY pair once.
+
+    Explicit credentials win: the environment pair is added only when no
+    Authorization, X-Api-Key or X-Secret-Key header was passed. A credential
+    header with an empty value is dropped rather than treated as a credential,
+    so an empty Authorization no longer hides valid environment keys. Keys are
+    lower-cased on both sides, so the request never carries case-variant
+    duplicates such as ``x-api-key`` and ``X-Api-Key``.
+    """
+    pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
+    merged: Dict[str, Any] = {}
+    for key, value in pairs:
+        name = (key.decode() if isinstance(key, bytes) else str(key)).lower()
+        # Skip a blank credential before collapsing case variants, so an empty
+        # duplicate can never erase an explicit one and pull in the env pair.
+        if name in _CREDENTIAL_HEADERS and _is_blank(value):
+            continue
+        merged[name] = value
+    if not any(name in merged for name in _CREDENTIAL_HEADERS):
+        auth_header = get_env_fi_auth_header()
+        if auth_header:
+            merged.update({k.lower(): v for k, v in auth_header.items()})
+    return merged
+
+
 class GRPCSpanExporter(_GRPCSpanExporter):
     """
     OTLP span exporter using gRPC.
@@ -604,30 +652,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
-        auth_header = get_env_fi_auth_header()
-        lower_case_auth_header = (
-            {k.lower(): v for k, v in auth_header.items()} if auth_header else None
+        bound_args.arguments["headers"] = (
+            _with_fi_auth_headers(bound_args.arguments.get("headers")) or None
         )
-
-        if not bound_args.arguments.get("headers"):
-            headers = {
-                **(lower_case_auth_header or dict()),
-            }
-            bound_args.arguments["headers"] = headers if headers else None
-        else:
-            passed_headers = bound_args.arguments["headers"]
-            if isinstance(passed_headers, dict):
-                headers = {k.lower(): v for k, v in passed_headers.items()}
-            else:
-                headers = {k.lower(): v for k, v in passed_headers}
-
-            if AUTHORIZATION not in headers:
-                bound_args.arguments["headers"] = {
-                    **headers,
-                    **(lower_case_auth_header or dict()),
-                }
-            else:
-                bound_args.arguments["headers"] = headers
 
         if bound_args.arguments.get("endpoint") is None:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
@@ -653,7 +680,8 @@ class HTTPSpanExporter(_HTTPSpanExporter):
 
     Args:
         endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
-            the endpoint is derived from `FI_BASE_URL`, defaulting to the Future AGI HTTP endpoint.
+            the endpoint is derived from `FI_TRACES_URL`, else `FI_BASE_URL`, defaulting to the
+            Future AGI HTTP endpoint.
         headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
             and `FI_SECRET_KEY` environment variables will be used.
     """
@@ -667,12 +695,7 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
-        final_headers = {k.lower(): v for k, v in (headers or {}).items()}
-        if AUTHORIZATION not in final_headers:
-            auth_header = get_env_fi_auth_header()
-            if auth_header:
-                final_headers.update(auth_header)
-        bound_args.arguments["headers"] = final_headers or None
+        bound_args.arguments["headers"] = _with_fi_auth_headers(headers) or None
 
         super().__init__(*bound_args.args, **bound_args.kwargs)
 
@@ -710,7 +733,7 @@ def _construct_http_endpoint(parsed_endpoint: ParseResult) -> ParseResult:
 
 def _normalized_endpoint(endpoint: Optional[str]) -> Tuple[ParseResult, str]:
     if endpoint is None:
-        endpoint = get_env_collector_endpoint()
+        endpoint = get_env_traces_endpoint()
 
     parsed = urlparse(endpoint)
     parsed = _construct_http_endpoint(parsed)

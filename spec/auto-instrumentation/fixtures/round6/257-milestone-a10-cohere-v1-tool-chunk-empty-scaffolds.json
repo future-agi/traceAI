@@ -1,0 +1,72 @@
+{
+  "name": "milestone-a10-cohere-v1-tool-chunk-empty-scaffolds",
+  "description": "Missing/null/empty tool deltas, an index and an empty decoded parameters object are scaffolds, not output.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v1/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "message": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "event_type": "stream-start",
+        "generation_id": "co-r6b"
+      },
+      {
+        "event_type": "tool-calls-chunk"
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "tool_call_delta": null
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "tool_call_delta": {}
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "text": "",
+        "tool_call_delta": {
+          "index": 0,
+          "name": "",
+          "parameters": {},
+          "text": ""
+        }
+      },
+      {
+        "event_type": "stream-end"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      90
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

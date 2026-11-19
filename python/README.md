@@ -60,6 +60,25 @@ finally:
 
 Open the `traceai-quickstart` project in **Observe** in [Future AGI](https://app.futureagi.com). `provider.shutdown()` flushes pending spans before exit.
 
+## Zero-code tracing
+
+To trace an existing app without changing its code, install the traceAI package for each library it uses, set the keys, and start the app through `fi-instrument`:
+
+```bash
+pip install fi-instrumentation-otel traceai-openai
+export FI_API_KEY="your-future-agi-api-key"
+export FI_SECRET_KEY="your-future-agi-secret-key"
+fi-instrument python app.py
+```
+
+Every installed traceAI integration turns on when the app first imports its library. To keep your start command, use `FI_AUTO_INSTRUMENT=true python app.py` or `FI_AUTO_INSTRUMENT=true opentelemetry-instrument python app.py`; in code, the same is one call to `fi_instrumentation.init()`. Future AGI receives only AI spans; your other OpenTelemetry exporters keep receiving every span. A library without its traceAI package is not traced: `fi-instrument doctor` shows what is covered, and `fi-instrument bootstrap --install` adds the missing packages. See the [zero-code guide](../docs/python/auto-instrumentation.md).
+
+If the app already calls `register()` and `instrument()` itself, do not also start it with `fi-instrument` or `FI_AUTO_INSTRUMENT`: the agent would register its own provider first, and your calls would have no effect. Remove those calls, or keep them and call `fi_instrumentation.init()` after them.
+
+For a provider the agent creates, `FI_SAMPLE_RATE` (or `init(sample_rate=...)` / `sample_rate` in `futureagi.toml`) wins over `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`; otherwise those standard OpenTelemetry settings choose the head sampler. The default is `ParentBased(TraceIdRatioBased(1.0))`; invalid or unsupported sampler settings use that default with one warning. An explicit `sampler=` still takes precedence. An application-owned provider always keeps its own sampler, including its parent sampled-flag behaviour.
+
+On agent-created providers, sampled spans decided locally at a ratio strictly between 0 and 1 carry the numeric `fi.sampling.ratio` keep probability and write `fi=r:<ratio>` in W3C tracestate, preserving other entries up to its 32-entry limit. Parent-based samplers copy a sampled remote or local parent's valid `fi` ratio (finite and strictly between 0 and 1), regardless of the local root rate. This includes the default configuration, `FI_SAMPLE_RATE=1`, `parentbased_always_on`, `parentbased_always_off`, and `parentbased_traceidratio` at any rate. The attribute is restored on the Future AGI export copy if SDK attribute limits evict it, without changing those limits or the application's spans; absence means `1.0` for downstream estimates. Roots decided at rate 1 add no metadata. Non-parent-based samplers never copy an upstream ratio (`traceidratio` still stamps its own fractional rate). Parent-based children with unsampled parents or missing/invalid parent metadata receive no added sampling metadata. Dropped or record-only spans, explicit custom samplers, and application-owned providers also receive no added sampling metadata.
+
 ## Shutdown on termination
 
 From `fi-instrumentation-otel` 1.2.2, `register()` leaves your SIGINT and SIGTERM handlers unchanged. Default SIGTERM does not run Python exit hooks, so call `provider.shutdown()` from your application's shutdown path to export pending spans on container stop, and allow enough termination grace time. SIGKILL cannot flush spans.
@@ -118,6 +137,14 @@ Content capture is on by default. Configure `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
 Pass your own OpenTelemetry `TracerProvider` to `OpenAIInstrumentor().instrument(tracer_provider=provider)` to use an existing exporter. The `register()` helper configures Future AGI by default. On current source, `register(span_exporter=...)` replaces that destination; older published versions may not include this option.
 
 [Provider setup](fi_instrumentation/otel.py) · [Examples](examples/)
+
+## Troubleshooting: 401 Unauthorized when exporting traces
+
+- **Check the export URL.** Set `FI_BASE_URL` to the deployment you intend to use. The default HTTP exporter sends to `/tracer/v1/traces` and replaces any path in `FI_BASE_URL`; an explicit `HTTPSpanExporter(endpoint=...)` is used unchanged. A successful health check does not validate your export credentials.
+- **Use one pair of keys.** Set `FI_API_KEY` and `FI_SECRET_KEY` from the same key, in the exporting process, before the exporter is created. Do not use a masked secret.
+- **Use one credential source.** Explicit `Authorization`, `X-Api-Key` or `X-Secret-Key` headers take precedence and the environment keys are then not added. Remove an unrelated `Authorization` header rather than mixing sources. An empty credential header is ignored.
+- **Retired or disabled keys.** If the service reports a retired key, create a personal key at `/dashboard/keys`, and confirm that its owner still has access to the organization (and workspace, when scoped).
+- **When reporting an issue**, share the sanitized URL, SDK and exporter versions, the response status, error code and request id, and the header *names* you send. Never share key values, `Authorization` values or an unredacted environment dump.
 
 ## Packages
 

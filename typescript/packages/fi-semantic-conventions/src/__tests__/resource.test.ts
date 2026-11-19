@@ -1,10 +1,24 @@
 import { describe, it, expect } from '@jest/globals';
-import { ATTR_PROJECT_NAME, ATTR_SERVICE_NAME } from '../resource/ResourceAttributes';
+import { ATTR_PROJECT_NAME, ATTR_SERVICE_NAME } from '../index';
+
+// Offline fake of OTel resourceFromAttributes: preserve the caller's keys and values.
+// No provider registration, resource overlay, or project header supplies missing keys.
+function fakeResourceFromAttributes(attributes: Record<string, string>) {
+  return { attributes: { ...attributes } };
+}
+
+function customProviderResource() {
+  return fakeResourceFromAttributes({
+    [ATTR_PROJECT_NAME]: 'demo-project',
+    [ATTR_SERVICE_NAME]: 'demo-service',
+    project_type: 'observe',
+  });
+}
 
 describe('Resource Attributes', () => {
   describe('Project Attributes', () => {
     it('should have correct project name attribute', () => {
-      expect(ATTR_PROJECT_NAME).toBe('fi.project.name');
+      expect(ATTR_PROJECT_NAME).toBe('project_name');
       expect(typeof ATTR_PROJECT_NAME).toBe('string');
     });
 
@@ -12,14 +26,19 @@ describe('Resource Attributes', () => {
       expect(ATTR_PROJECT_NAME.length).toBeGreaterThan(0);
     });
 
-    it('should follow semantic naming convention', () => {
-      expect(ATTR_PROJECT_NAME).toMatch(/^fi\./);
+    it('T6-TS-CORE-AUTO-003: supplies the collector project key without a project header', () => {
+      const resource = customProviderResource();
+
+      // The collector reads the literal project_name key, not fi.project.name.
+      expect(resource.attributes['project_name']).toBe('demo-project');
+      expect(resource.attributes['project_type']).toBe('observe');
+      expect(Object.keys(resource.attributes)).not.toContain('fi.project.name');
     });
   });
 
   describe('Service Attributes', () => {
     it('should have correct service name attribute', () => {
-      expect(ATTR_SERVICE_NAME).toBe('SERVICE_NAME');
+      expect(ATTR_SERVICE_NAME).toBe('service.name');
       expect(typeof ATTR_SERVICE_NAME).toBe('string');
     });
 
@@ -27,8 +46,11 @@ describe('Resource Attributes', () => {
       expect(ATTR_SERVICE_NAME.length).toBeGreaterThan(0);
     });
 
-    it('should be uppercase', () => {
-      expect(ATTR_SERVICE_NAME).toBe(ATTR_SERVICE_NAME.toUpperCase());
+    it('T6-TS-CORE-AUTO-003: supplies the standard OpenTelemetry service key', () => {
+      const resource = customProviderResource();
+
+      expect(resource.attributes['service.name']).toBe('demo-service');
+      expect(Object.keys(resource.attributes)).not.toContain('SERVICE_NAME');
     });
   });
 

@@ -172,6 +172,8 @@ describe("provider attribution on the OTLP wire", () => {
     ["https://proxy.example.test/v1", "openai"],
     ["http://localhost:1234/v1", "openai"],
     ["https://api.openai.com/v1", "openai"],
+    ["https://openrouter.ai/api/v1", "openrouter"],
+    ["https://openrouter.ai.evil.test/api/v1", "openai"],
     ["https://resource.openai.azure.com/openai/deployments/test", "azure"],
     ["https://api.deepseek.com/v1", "deepseek"],
     ["https://api.x.ai/v1", "xai"],

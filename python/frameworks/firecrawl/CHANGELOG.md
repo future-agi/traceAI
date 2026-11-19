@@ -2,6 +2,13 @@
 
 All notable changes to `traceAI-firecrawl` will be documented here.
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-firecrawl-v0.1.0...traceai-firecrawl-v0.1.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **firecrawl:** trace v2 extraction batch agent and browser calls ([#487](https://github.com/future-agi/traceAI/issues/487)) ([979c271](https://github.com/future-agi/traceAI/commit/979c271632004b9ac55435244c4154995c4fcdb4))
+
 ## [0.1.0] - Unreleased
 
 ### Added

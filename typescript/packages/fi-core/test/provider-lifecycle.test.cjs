@@ -26,14 +26,15 @@ afterEach(async () => {
   propagation.disable();
 });
 
-async function collector() {
+async function collector(acceptedPath) {
   const requests = [];
   const server = http.createServer((request, response) => {
     const chunks = [];
     request.on('data', chunk => chunks.push(chunk));
     request.on('end', () => {
-      requests.push({ path: request.url, body: JSON.parse(Buffer.concat(chunks).toString()) });
-      response.writeHead(200, { 'Content-Type': 'application/json' });
+      const status = !acceptedPath || request.url === acceptedPath ? 200 : 404;
+      requests.push({ path: request.url, status, body: JSON.parse(Buffer.concat(chunks).toString()) });
+      response.writeHead(status, { 'Content-Type': 'application/json' });
       response.end('{}');
     });
   });
@@ -53,6 +54,53 @@ function setup(options = {}) {
 function memoryProcessor() {
   const exporter = new InMemorySpanExporter();
   return { exporter, processor: new SimpleSpanProcessor(exporter) };
+}
+
+// Each collector accepts only the configured route, so an extra suffix loses the span.
+for (const route of ['/v1/traces', '/tracer/v1/traces']) {
+  test(`collector endpoint regression: full environment URL ${route}`, async () => {
+    const receiver = await collector(route);
+    process.env.FI_COLLECTOR_ENDPOINT = `${receiver.endpoint}${route}`;
+    try {
+      const provider = setup({ endpoint: undefined });
+      provider.getTracer('endpoint').startSpan('environment-span').end();
+      let flushError;
+      try { await provider.forceFlush(); } catch (error) { flushError = error; }
+      assert.deepEqual(receiver.requests.map(({ path, status }) => ({ path, status })),
+        [{ path: route, status: 200 }]);
+      assert.equal(flushError, undefined);
+      assert.deepEqual(receiver.spans().map(span => span.name), ['environment-span']);
+    } finally {
+      delete process.env.FI_COLLECTOR_ENDPOINT;
+    }
+  });
+}
+
+for (const item of [
+  { name: 'base origin', base: '', path: '/tracer/v1/traces' },
+  { name: 'base origin with trailing slash', base: '/', path: '/tracer/v1/traces' },
+  { name: 'base origin retains precedence', base: '', env: '/unused', path: '/tracer/v1/traces' },
+  { name: 'explicit full URL', endpoint: '/v1/traces', path: '/v1/traces' },
+  { name: 'explicit collector URL', endpoint: '/tracer/v1/traces', path: '/tracer/v1/traces' },
+  { name: 'explicit base origin', endpoint: '', path: '/tracer/v1/traces' },
+  { name: 'explicit URL overrides environment', endpoint: '/v1/traces', base: '/unused', env: '/unused', path: '/v1/traces' },
+]) {
+  test(`collector endpoint control: ${item.name}`, async () => {
+    const receiver = await collector(item.path);
+    if (item.base !== undefined) process.env.FI_BASE_URL = `${receiver.endpoint}${item.base}`;
+    if (item.env !== undefined) process.env.FI_COLLECTOR_ENDPOINT = `${receiver.endpoint}${item.env}`;
+    try {
+      const provider = setup({ endpoint: item.endpoint === undefined ? undefined : `${receiver.endpoint}${item.endpoint}` });
+      provider.getTracer('endpoint').startSpan('control-span').end();
+      await provider.forceFlush();
+      assert.deepEqual(receiver.requests.map(({ path, status }) => ({ path, status })),
+        [{ path: item.path, status: 200 }]);
+      assert.deepEqual(receiver.spans().map(span => span.name), ['control-span']);
+    } finally {
+      delete process.env.FI_BASE_URL;
+      delete process.env.FI_COLLECTOR_ENDPOINT;
+    }
+  });
 }
 
 for (const batch of [false, true]) {
@@ -241,28 +289,48 @@ test('shutdown drains the default batch even without forceFlush', async () => {
   assert.deepEqual(receiver.spans().map(span => span.name), ['last-span']);
 });
 
-test('active FITracer privacy survives async context on the OTLP wire', async () => {
-  const receiver = await collector();
-  const provider = setup({ endpoint: receiver.endpoint, batch: true });
-  const tracer = new FITracer({ tracer: provider.getTracer('privacy'), traceConfig: { hideErrorDetails: true } });
-  await context.with(setSession(context.active(), { sessionId: 'wire-session' }), async () => {
-    await tracer.startActiveSpan('private-parent', async span => {
-      await Promise.resolve();
-      trace.getActiveSpan().recordException(new Error('synthetic-secret-error'));
-      trace.getActiveSpan().setStatus({ code: 2, message: 'synthetic-secret-status' });
-      tracer.startActiveSpan('private-child', child => child.end());
-      span.end();
+for (const kind of ['ordinary', 'credential-shaped', 'unbound']) {
+  const title = 'active FITracer privacy survives async context on the OTLP wire';
+  test(kind === 'ordinary' ? title : `${title} (${kind})`, async () => {
+    const receiver = await collector();
+    const provider = setup({ endpoint: receiver.endpoint, batch: true });
+    const tracer = new FITracer({ tracer: provider.getTracer('privacy'), traceConfig: { hideErrorDetails: true } });
+    const id = kind === 'ordinary' ? 'wire-session' : kind === 'credential-shaped' ? 'sk-' + 'W'.repeat(24) : 'wire-unbound-correlation';
+    const expected = kind === 'credential-shaped' ? '<redacted>' : id;
+    // A raw attribute write is not the typed setSession -> startActiveSpan
+    // handoff, but a session id is a grouping key and still exports as set.
+    const active = kind === 'unbound' ? context.active() : setSession(context.active(), { sessionId: id });
+    await context.with(active, async () => {
+      await tracer.startActiveSpan('private-parent', async span => {
+        if (kind === 'unbound') span.setAttribute('session.id', id);
+        span.setAttribute('control.label', 'wire-public-control');
+        await Promise.resolve();
+        trace.getActiveSpan().recordException(new Error('synthetic-secret-error'));
+        trace.getActiveSpan().setStatus({ code: 2, message: 'synthetic-secret-status' });
+        tracer.startActiveSpan('private-child', child => {
+          if (kind === 'unbound') child.setAttribute('session.id', id);
+          child.setAttribute('control.label', 'wire-public-control');
+          child.end();
+        });
+        span.end();
+      });
     });
+    await provider.forceFlush();
+    const spans = receiver.spans();
+    assert.equal(spans.length, 2);
+    for (const span of spans) {
+      assert.equal(span.attributes.find(attribute => attribute.key === 'session.id')?.value.stringValue, expected);
+      assert.equal(span.attributes.find(attribute => attribute.key === 'control.label')?.value.stringValue, 'wire-public-control');
+    }
+    assert.equal(JSON.stringify(receiver.requests).includes(id), kind !== 'credential-shaped');
+    assert.equal(JSON.stringify(receiver.requests).includes('synthetic-secret'), false);
+    const parent = spans.find(span => span.name === 'private-parent');
+    const child = spans.find(span => span.name === 'private-child');
+    assert.equal(parent.status.code, 2);
+    assert.equal(child.parentSpanId, parent.spanId);
+    assert.equal(child.traceId, parent.traceId);
   });
-  await provider.forceFlush();
-  const spans = receiver.spans();
-  assert.equal(spans.length, 2);
-  for (const span of spans) {
-    assert.ok(span.attributes.some(attribute => attribute.key === 'session.id' && attribute.value.stringValue === 'wire-session'));
-  }
-  assert.equal(JSON.stringify(receiver.requests).includes('synthetic-secret'), false);
-  assert.equal(spans.find(span => span.name === 'private-parent').status.code, 2);
-});
+}
 
 test('gRPC batching uses the chosen processor and shuts down its channel', async () => {
   const grpc = load('@grpc/grpc-js');

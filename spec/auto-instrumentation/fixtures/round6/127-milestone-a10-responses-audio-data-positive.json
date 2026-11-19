@@ -1,0 +1,59 @@
+{
+  "name": "milestone-a10-responses-audio-data-positive",
+  "description": "Only the nonempty output at 30ms qualifies; later ordinary text at 70ms cannot replace it.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "input": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "response.created",
+        "response": {
+          "output": []
+        }
+      },
+      {
+        "type": "response.audio.delta",
+        "delta": ""
+      },
+      {
+        "type": "response.audio.delta",
+        "delta": "UklGRgAAAABXQVZF"
+      },
+      {
+        "type": "response.output_text.delta",
+        "delta": "Later"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

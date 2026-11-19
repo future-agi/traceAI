@@ -1,9 +1,9 @@
 import {
-    context as apiContext,
     Attributes,
     Context,
     SpanOptions,
     Tracer,
+    TracerProvider,
     diag,
     trace,
   } from "@opentelemetry/api";
@@ -13,9 +13,12 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
-  import { maskAttributes } from "./maskingRules";
+  import { activeFIContext, runInFIContext } from "./activeContext";
   import { generateTraceConfig } from "./traceConfig";
-  import { getAttributesFromContext } from "../contextAttributes";
+  import { getAttributesFromContext, getSession } from "../contextAttributes";
+  import { type PrivacyHints, rememberSessionIdentity } from "../../privacy-runtime";
+  import { privacyFilter, rememberAuthoredRedactions, rememberFITracerSpan, rememberProjectedAttributeDrops } from "../../export-privacy";
+  import { projectAttributes, tracerAttributeLimit } from "../../attribute-projection";
   
   /**
    * Formats the params for the startActiveSpan method
@@ -44,17 +47,60 @@ import {
     }
   
     opts = opts ?? {};
-    ctx = ctx ?? apiContext.active();
+    // An explicit context, the root context included, always wins.
+    ctx = ctx ?? activeFIContext();
   
     return { opts, ctx, fn };
   }
   
+  // Only tracers created by the auto-only facade select destination mode. A
+  // shared native tracer is never marked, so explicit standalone FITracer users
+  // on the same provider keep their wrapper semantics. Share identities across
+  // installed CJS/ESM core copies; this stores no telemetry or capture records.
+  const AUTO_TRACERS = Symbol.for("traceai.auto.destination.tracers.v1");
+  type AutoTracers = { version: 1; native: WeakMap<object, Tracer> };
+  function autoTracers(): AutoTracers {
+    const shared = globalThis as typeof globalThis & { [AUTO_TRACERS]?: AutoTracers };
+    const existing = shared[AUTO_TRACERS];
+    if (existing) {
+      if (existing.version !== 1 || !(existing.native instanceof WeakMap)) throw new Error("Unsupported auto destination protocol");
+      return existing;
+    }
+    const registry: AutoTracers = Object.freeze({ version: 1, native: new WeakMap<object, Tracer>() });
+    Object.defineProperty(shared, AUTO_TRACERS, { value: registry });
+    return registry;
+  }
+
   /**
    * A wrapper around the OpenTelemetry {@link Tracer} interface that masks sensitive information based on the passed in {@link TraceConfig}.
    */
   export class FITracer implements Tracer {
     private readonly tracer: Tracer;
     private readonly config: TraceConfig;
+    private readonly autoDestination: boolean;
+
+    /** @internal Pass only to auto instrumentors, never install globally.
+     * SDK pipeline/resource slots remain visible to mapping adapters. Public SDK
+     * calls are bound to their original receiver; no native object is patched. */
+    static autoProvider(provider: TracerProvider): TracerProvider {
+      const facades = new WeakMap<object, Tracer>();
+      const facade = Object.create(provider) as TracerProvider;
+      Object.defineProperty(facade, "getTracer", { value: (...args: Parameters<TracerProvider["getTracer"]>) => {
+        const native = provider.getTracer(...args);
+        let wrapped = facades.get(native);
+        if (!wrapped) {
+          wrapped = Object.create(native) as Tracer;
+          Object.defineProperties(wrapped, {
+            startSpan: { value: native.startSpan.bind(native) },
+            startActiveSpan: { value: native.startActiveSpan.bind(native) },
+          });
+          autoTracers().native.set(wrapped, native);
+          facades.set(native, wrapped);
+        }
+        return wrapped;
+      } });
+      return facade;
+    }
     /**
      *
      * @param tracer The OpenTelemetry {@link Tracer} to wrap
@@ -67,8 +113,13 @@ import {
       tracer: Tracer;
       traceConfig?: TraceConfigOptions;
     }) {
-      this.tracer = tracer;
-      this.config = generateTraceConfig(traceConfig);
+      const native = autoTracers().native.get(tracer);
+      this.autoDestination = native !== undefined;
+      this.tracer = native ?? tracer;
+      const resolved = generateTraceConfig(traceConfig);
+      // Image hiding is independent of error-detail hiding. Error values still
+      // cross the media/cap/PII admission and detached export boundaries.
+      this.config = resolved;
       // ADDED LOG
       // diag.debug(
       //   `FITracer CONSTRUCTOR: Received tracer type: ${tracer?.constructor?.name}. TraceConfig provided: ${!!traceConfig}`
@@ -108,16 +159,17 @@ import {
         opts,
         { ...contextAttributes, ...attributes },
         ctx,
+        getSession(ctx)?.sessionId,
       );
-      // Same steps as the SDK's Tracer.startActiveSpan, but the FISpan (not the raw span) becomes
-      // the active span, so code that reaches the span through the context
-      // (trace.getActiveSpan()?.recordException(...), setStatus(...)) still goes through the
-      // FISpan masking and error-detail policy.
-      return apiContext.with(
-        trace.setSpan(ctx, fiSpan),
-        fn,
-        undefined,
-        fiSpan,
+      // Auto application writes use the native handle; only the instrumentor's
+      // explicit callback handle applies FI write-time policy. Standalone keeps
+      // its existing active-wrapper contract.
+      // The span is active for fn and the work it starts, through the API's
+      // context.with and fi-core's private store, so spans nest without an
+      // application context manager; the caller's context is back after fn.
+      return runInFIContext(
+        trace.setSpan(ctx, fiSpan.getContextSpan()),
+        () => fn(fiSpan),
       ) as ReturnType<F>;
     }
 
@@ -131,7 +183,17 @@ import {
         // The global tracer can be a real one, so its span gets the masked attributes too.
         tracer = trace.getTracer("fi-noop-tracer-internal");
       }
-      return this.startFISpan(tracer, name, options, options?.attributes, context);
+      // Parent selection only: startSpan never makes its span active.
+      const ctx = context ?? activeFIContext();
+      const contextAttributes = getAttributesFromContext(ctx);
+      return this.startFISpan(
+        tracer,
+        name,
+        options,
+        { ...contextAttributes, ...options?.attributes },
+        ctx,
+        getSession(ctx)?.sessionId,
+      );
     }
 
     /**
@@ -147,24 +209,58 @@ import {
       options: SpanOptions | undefined,
       attributes: Attributes | undefined,
       context: Context | undefined,
+      sessionId?: string,
     ): FISpan {
-      const startAttributes =
-        attributes != null
-          ? maskAttributes({ config: this.config, attributes })
-          : undefined;
+      // Exact-secret/media/hide sanitization precedes SDK count/value limits.
+      // Otherwise truncation can turn a known credential into an unknown prefix.
+      let startAttributes: Attributes | undefined;
+      let startPrivacyHints: PrivacyHints = new Map(), startAdmissionFailed = false;
+      // Auto-only accounting input: the caller's non-null start view, pre-admission.
+      let authoredStart: Attributes = {};
+      try {
+        const privacy = privacyFilter(this.config);
+        if (this.autoDestination) startPrivacyHints = privacy.admissionHints(attributes);
+        if (attributes != null) authoredStart = Object.fromEntries(Object.entries(attributes).filter(([, value]) => value != null));
+        startAttributes = attributes != null ? privacy.admissionAttributes(authoredStart, undefined, this.autoDestination ? startPrivacyHints : undefined) : undefined;
+      } catch { startAttributes = {}; startAdmissionFailed = true; }
+      const attributeCountLimit = tracerAttributeLimit(tracer);
+      // In auto mode the host alone owns native count admission. This interim
+      // does not recover attributes dropped before the detached export boundary.
+      const projected = this.autoDestination
+        ? { attributes: startAttributes ?? {}, dropped: 0 }
+        : projectAttributes(startAttributes ?? {}, attributeCountLimit);
       // Link attributes are span attributes too: same masking
-      const links = options?.links?.map((link) =>
-        link.attributes != null
-          ? { ...link, attributes: maskAttributes({ config: this.config, attributes: link.attributes }) }
-          : link,
-      );
+      const links = options?.links?.map((link) => {
+        if (link.attributes == null) return link;
+        try { return { ...link, attributes: privacyFilter(this.config).admissionAttributes(link.attributes) }; }
+        catch { return { ...link, attributes: {} }; }
+      });
       const span = tracer.startSpan(
         name,
         links != null
-          ? { ...options, attributes: startAttributes, links }
-          : { ...options, attributes: startAttributes },
+          ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
+          : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
         context,
       );
-      return new FISpan({ span, config: this.config, startAttributes });
+      // Only spans made here export session and user grouping keys as set.
+      try { rememberFITracerSpan(span.spanContext()); }
+      catch { /* Without the mark the span keeps the stricter credential name rule. */ }
+      // Auto only: bind the NUMBER of start values FI withheld or changed to the
+      // export lineage. Nothing is written to, or replayed from, native storage.
+      if (this.autoDestination) {
+        try { rememberAuthoredRedactions(span.spanContext(), authoredStart, startAttributes ?? {}); }
+        catch { /* Accounting never changes application behavior. */ }
+      }
+      // Only a typed context session, unchanged by caller overrides and privacy
+      // admission, may retain its semantic identity at the FI export boundary.
+      // A truncated SDK value will not match this full-value binding at export.
+      if (typeof sessionId === "string" && startAttributes?.["session.id"] === sessionId) rememberSessionIdentity(span.spanContext(), sessionId);
+      if (projected.dropped && typeof (span as any)._droppedAttributesCount === "number") {
+        (span as any)._droppedAttributesCount += projected.dropped;
+        // Preserve standalone's combined OTel count, but authenticate the FI
+        // contribution separately so it can never become host-loss evidence.
+        rememberProjectedAttributeDrops(span, projected.dropped);
+      }
+      return new FISpan({ span, config: this.config, startAttributes, attributeCountLimit, projectedDropped: projected.dropped, autoDestination: this.autoDestination, startPrivacyHints, startAdmissionFailed });
     }
   }

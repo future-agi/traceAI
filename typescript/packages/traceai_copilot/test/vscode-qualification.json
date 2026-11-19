@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "adapter": "copilot-vscode",
+  "qualified": false,
+  "blocker": "VSCODE_GUI_AND_TRANSPORT_QUALIFICATION_REQUIRED",
+  "upstreamReferenceCommit": "c2a322b22d614bf94475efd412afea340f572eae",
+  "references": [
+    "https://github.com/microsoft/vscode/blob/c2a322b22d614bf94475efd412afea340f572eae/src/vs/platform/agentHost/OTEL.md",
+    "https://github.com/microsoft/vscode/blob/c2a322b22d614bf94475efd412afea340f572eae/extensions/copilot/docs/monitoring/agent_monitoring.md"
+  ],
+  "binaryProbe": {
+    "productVersion": "1.145.2",
+    "commit": "c4453f8ea430795f941c1b2ff6c9321135a74a02",
+    "url": "https://vscode.download.prss.microsoft.com/dbazure/download/stable/c4453f8ea430795f941c1b2ff6c9321135a74a02/code-stable-x64-1793945155.tar.gz",
+    "sha256": "3b01286639fa026fd860944b811d418f7b93bc5dc447d9e607b0cd1377cfbaa2",
+    "scope": "Version/help only, never a real-editor tracing pass"
+  },
+  "requiredEditorEvidence": [
+    "Actual native Copilot Agent Host and legacy Local qualified independently",
+    "Approved cloud GUI host and authorized account or proven loopback-only editor model route",
+    "Credentials stay in the protected shared store; absent from synced editor settings, argv and tool processes",
+    "Daemon-free lifecycle with safe bounded export and immediate persisted kill switch",
+    "Full GUI restart without shell environment; reload cannot be assumed to restart shared Agent Host",
+    "Resolved managed policy and exact settings provenance inside the selected harness",
+    "Two workspaces with distinct project routing and no CLI-plus-editor duplicate spans",
+    "Actual prompt/model/tool spans, conversation grouping, privacy/identity filtering and usage ownership",
+    "Final turn flush and exporter failures do not block the editor",
+    "Real Future AGI trace-view screenshots or GIFs, not CLI substitutes"
+  ],
+  "constraints": [
+    "No managed worker, collector, normalizer daemon or unnecessary marketplace extension",
+    "No invented chat.agentHost.otel.headers setting",
+    "Newer legacy extension sources expose github.copilot.chat.otel.headers; it is intentionally never used to persist credentials",
+    "Environment-only direct export cannot establish GUI credential safety or privacy",
+    "File exporters persist sensitive content and require a separate reviewed lifecycle; no raw transcript or JSONL persistence added",
+    "No customer install guide or package publication until the real editor gate clears"
+  ]
+}

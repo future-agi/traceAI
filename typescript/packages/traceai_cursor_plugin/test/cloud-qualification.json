@@ -1,0 +1,55 @@
+{
+  "surface": "cursor-cloud",
+  "status": "HOLD",
+  "package": "@traceai/cursor-plugin",
+  "entry": "@traceai/cursor-plugin/cloud",
+  "qualification": "Package and project-hook contracts only; not a Cursor Cloud Agent execution",
+  "sources": [
+    "https://cursor.com/docs/hooks",
+    "https://cursor.com/docs/cloud-agent/setup",
+    "https://cursor.com/help/ai-features/cloud-agents",
+    "https://cursor.com/docs/agent/third-party-hooks"
+  ],
+  "sourceConflict": "The canonical hooks and Cloud help pages include beforeSubmitPrompt/afterAgentResponse/stop. The third-party-hooks page still says these are unavailable. Verify actual hosted delivery and ordering before enabling the adapter.",
+  "proposedSetup": "npx @traceai/agents setup cursor-cloud --scope project --project coding-agents",
+  "setupLocation": "The repository root inside the selected Cloud environment, not the developer's local IDE",
+  "requiredEnvironment": ["FI_API_KEY", "FI_SECRET_KEY", "FI_CURSOR_CLOUD=true"],
+  "credentials": "Injected runtime environment only; do not read, persist or copy local credential profiles into the repository or image",
+  "projectConfig": ".cursor/futureagi-cloud.json",
+  "privacyApproval": "Secret-free project-bound 0600 settings outside the repository preserve --no-capture-content on repeated setup and prevent repository-only privacy escalation",
+  "registration": ".cursor/hooks.json",
+  "ownerActions": [
+    "Use an eligible Cursor Cloud account and authorize the repository/environment",
+    "Add environment-scoped dashboard secrets and restart any already running agent",
+    "Install the maintained distribution in the Cloud environment and include it in a successful Build",
+    "Review and deploy the generated nonsecret project config and repository hooks; setup never commits, pushes, enrolls accounts or grants trust",
+    "Run an authorized real Cloud task, verify observed event payloads and Future AGI ingestion/readback, and capture real trace media"
+  ],
+  "traceContract": {
+    "unit": "One observed turn when beforeSubmitPrompt exists, otherwise a source-generation-anchored incomplete run",
+    "session": "Source conversation_id, privacy-preserving deterministic identity",
+    "tools": "Generic preToolUse/postToolUse/postToolUseFailure only, avoiding duplicate shell/file hook families",
+    "subagents": "Nested only with exact parent_tool_use_id plus subagent_id",
+    "compaction": "Initiation-only incomplete event",
+    "modelRequests": "Unavailable; do not manufacture LLM requests from prompts or final responses",
+    "tokensAndCosts": "Unavailable",
+    "transcripts": "Never read on this unqualified hosted surface",
+    "gaps": ["EARLY_READ_ONLY_ACTIVITY_UNAVAILABLE", "MODEL_REQUESTS_UNAVAILABLE", "PROMPT_NOT_OBSERVED when the prompt hook is absent"],
+    "mcp": "Omit output when Cloud supplies redacted:true; do not claim full HTTP MCP tool results"
+  },
+  "safety": {
+    "content": "On by default; FI_AGENT_CAPTURE_CONTENT=false or setup --no-capture-content; known FI-key redaction and 20000-character field cap",
+    "state": "Bounded, encrypted, owner-only state outside the repository; separate Cloud namespace",
+    "killSwitch": "FI_AGENT_ENABLED=false and shared lifecycle disable fence both collection and export",
+    "failOpen": "No stdout or permission decisions; exit 1 (not 0/2) for the documented Cursor fail-open protocol",
+    "deadline": "Nonterminal 220ms process deadline; terminal 6s process deadline, 7s host hook timeout",
+    "delivery": "One terminal export attempt with finalized local tombstone; ambiguous delivery can lose a trace, no exactly-once guarantee"
+  },
+  "publicationGates": [
+    "Real hosted execution and event matrix qualification",
+    "Eligible account, authorized repository and dashboard environment/secrets",
+    "Public package installation and release owner approval",
+    "Real Future AGI readback and sanitized screenshot/GIF for the new docs page"
+  ],
+  "docs": "Do not publish a customer quick start for an unavailable package or use local IDE/CLI media as evidence for Cursor Cloud. The docs site supports real PNG/WebP/GIF/video assets without a framework change."
+}

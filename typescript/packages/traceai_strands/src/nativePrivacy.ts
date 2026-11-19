@@ -1,4 +1,4 @@
-import type { Attributes } from "@opentelemetry/api";
+import { diag, type Attributes } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { generateTraceConfig, maskAttributes, REDACTED_VALUE } from "@traceai/fi-core";
 
@@ -21,7 +21,10 @@ export class NativePrivacy {
 
   constructor(captureErrors: boolean) {
     this.captureErrors = captureErrors && !this.config.hideErrorDetails;
-    this.config = { ...this.config, hideErrorDetails: !this.captureErrors };
+    const cap = this.config.base64ImageMaxLength;
+    const valid = typeof cap === "number" && Number.isSafeInteger(cap) && cap >= 0;
+    if (!valid) diag.warn("Invalid base64 image cap; using 0.");
+    this.config = { ...this.config, base64ImageMaxLength: valid ? cap : 0, hideErrorDetails: !this.captureErrors };
     // Native payloads contain nested parts and tool arguments, unlike FI message
     // blobs. Hide the whole direction rather than leave an unmasked alternate copy.
     this.hideInput = this.config.hideInputs || this.config.hideInputMessages ||
@@ -65,14 +68,20 @@ export class NativePrivacy {
   private value(value: unknown, successfulTool: boolean, depth = 0): unknown {
     if (depth > 32) return REDACTED_VALUE;
     if (typeof value === "string") {
-      if (/^data:image\/[^;]+;base64,/.test(value) && value.length > this.config.base64ImageMaxLength) return REDACTED_VALUE;
-      if (/^\s*[\[{]/.test(value)) {
+      // Reuse the public core seam at zero; do not maintain a second URI grammar.
+      // PII remains a final attributes pass, after native error/content handling.
+      const retained = this.config.base64ImageMaxLength === 0
+        ? maskAttributes({ config: { ...this.config, piiRedaction: false }, attributes: { value } }).value as string
+        : value;
+      if (this.config.base64ImageMaxLength === 0 && retained === "[image-redacted]") return retained;
+      if (/^data:image\/[^;]+;base64,/.test(retained) && retained.length > this.config.base64ImageMaxLength) return REDACTED_VALUE;
+      if (/^\s*[\[{]/.test(retained)) {
         // Truncated/malformed native JSON cannot be safely inspected for errors.
-        if (value.length > 1_048_576) return REDACTED_VALUE;
-        try { return JSON.stringify(this.value(JSON.parse(value), successfulTool, depth + 1)); }
+        if (retained.length > 1_048_576) return REDACTED_VALUE;
+        try { return JSON.stringify(this.value(JSON.parse(retained), successfulTool, depth + 1)); }
         catch { return REDACTED_VALUE; }
       }
-      return value;
+      return retained;
     }
     if (Array.isArray(value)) return value.map((part) => this.value(part, successfulTool, depth + 1));
     if (value && typeof value === "object") {
@@ -97,6 +106,6 @@ export class NativePrivacy {
     if (!image.source || typeof image.source !== "object") return value;
     const source = image.source as Record<string, unknown>;
     if (typeof source.bytes !== "string" || source.bytes.length <= this.config.base64ImageMaxLength) return value;
-    return { ...image, source: { ...source, bytes: REDACTED_VALUE } };
+    return { ...image, source: { ...source, bytes: this.config.base64ImageMaxLength === 0 ? "[image-redacted]" : REDACTED_VALUE } };
   }
 }

@@ -9,7 +9,7 @@ import {
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
-const VERSION = "0.1.1"; // x-release-please-version
+const VERSION = "0.1.2"; // x-release-please-version
 const SUPPORTED_VERSIONS = [">=0.4.20 <=0.41.0"];
 const ACTIVE_QUERY = createContextKey("traceai.lancedb.query");
 

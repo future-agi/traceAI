@@ -42,7 +42,7 @@ export const DEFAULT_HIDE_INPUT_TEXT = false;
 export const DEFAULT_HIDE_OUTPUT_TEXT = false;
 
 export const DEFAULT_HIDE_EMBEDDING_VECTORS = false;
-export const DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32000;
+export const DEFAULT_BASE64_IMAGE_MAX_LENGTH = 0;
 export const DEFAULT_PII_REDACTION = false;
 
 /**

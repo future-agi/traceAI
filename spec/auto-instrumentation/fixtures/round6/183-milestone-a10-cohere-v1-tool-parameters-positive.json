@@ -1,0 +1,67 @@
+{
+  "name": "milestone-a10-cohere-v1-tool-parameters-positive",
+  "description": "Only the nonempty output at 30ms qualifies; later ordinary text at 70ms cannot replace it.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v1/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "message": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "event_type": "stream-start",
+        "generation_id": "co-r6b"
+      },
+      {
+        "event_type": "tool-calls-generation",
+        "tool_calls": [
+          {
+            "parameters": ""
+          }
+        ]
+      },
+      {
+        "event_type": "tool-calls-generation",
+        "tool_calls": [
+          {
+            "parameters": {
+              "city": "Oslo"
+            }
+          }
+        ]
+      },
+      {
+        "event_type": "text-generation",
+        "text": "Later"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

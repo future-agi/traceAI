@@ -1,0 +1,194 @@
+{
+  "name": "@traceai/agent-core",
+  "version": "0.1.0",
+  "description": "Shared secure setup, lifecycle and finalized OTLP turn tracing for coding-agent integrations",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    },
+    "./test/conformance": {
+      "types": "./test/conformance/index.d.ts",
+      "default": "./test/conformance/index.cjs"
+    },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "import": "./dist/esm/client.js",
+      "require": "./dist/src/client.js"
+    },
+    "./identity": {
+      "types": "./dist/src/identity.d.ts",
+      "import": "./dist/esm/identity.js",
+      "require": "./dist/src/identity.js"
+    },
+    "./schema": {
+      "types": "./dist/src/schema.d.ts",
+      "import": "./dist/esm/schema.js",
+      "require": "./dist/src/schema.js"
+    },
+    "./privacy": {
+      "types": "./dist/src/privacy.d.ts",
+      "import": "./dist/esm/privacy.js",
+      "require": "./dist/src/privacy.js"
+    },
+    "./usage": {
+      "types": "./dist/src/usage.d.ts",
+      "import": "./dist/esm/usage.js",
+      "require": "./dist/src/usage.js"
+    },
+    "./hook-state": {
+      "types": "./dist/src/hook-state.d.ts",
+      "import": "./dist/esm/hook-state.js",
+      "require": "./dist/src/hook-state.js"
+    },
+    "./config": {
+      "types": "./dist/src/config.d.ts",
+      "import": "./dist/esm/config.js",
+      "require": "./dist/src/config.js"
+    },
+    "./files": {
+      "types": "./dist/src/files.d.ts",
+      "import": "./dist/esm/files.js",
+      "require": "./dist/src/files.js"
+    },
+    "./collection": {
+      "types": "./dist/src/collection.d.ts",
+      "import": "./dist/esm/collection.js",
+      "require": "./dist/src/collection.js"
+    },
+    "./tracer": {
+      "types": "./dist/src/tracer.d.ts",
+      "import": "./dist/esm/tracer.js",
+      "require": "./dist/src/tracer.js"
+    },
+    "./fence": {
+      "types": "./dist/src/fence.d.ts",
+      "import": "./dist/esm/fence.js",
+      "require": "./dist/src/fence.js"
+    },
+    "./control": {
+      "types": "./dist/src/control.d.ts",
+      "import": "./dist/esm/control.js",
+      "require": "./dist/src/control.js"
+    },
+    "./setup-defaults": {
+      "types": "./dist/src/setup-defaults.d.ts",
+      "import": "./dist/esm/setup-defaults.js",
+      "require": "./dist/src/setup-defaults.js"
+    },
+    "./file-lock": {
+      "types": "./dist/src/file-lock.d.ts",
+      "import": "./dist/esm/file-lock.js",
+      "require": "./dist/src/file-lock.js"
+    },
+    "./lifecycle": {
+      "types": "./dist/src/lifecycle.d.ts",
+      "import": "./dist/esm/lifecycle.js",
+      "require": "./dist/src/lifecycle.js"
+    },
+    "./delivery": {
+      "types": "./dist/src/delivery.d.ts",
+      "import": "./dist/esm/delivery.js",
+      "require": "./dist/src/delivery.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.cjs",
+    "test": "node --test --test-concurrency=4 test/*.test.cjs test/forks/*/*.test.cjs",
+    "test:conformance": "node test/conformance/run.cjs",
+    "prepare": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "schema",
+    "profiles",
+    "test/conformance/index.cjs",
+    "test/conformance/index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "@traceai/fi-core": "workspace:^",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@opentelemetry/resources": "^2.0.1",
+    "@opentelemetry/otlp-transformer": "^0.202.0",
+    "proper-lockfile": "4.1.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29",
+    "@types/proper-lockfile": "4.1.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_agent_core"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  },
+  "typesVersions": {
+    "*": {
+      "client": [
+        "dist/src/client.d.ts"
+      ],
+      "identity": [
+        "dist/src/identity.d.ts"
+      ],
+      "schema": [
+        "dist/src/schema.d.ts"
+      ],
+      "privacy": [
+        "dist/src/privacy.d.ts"
+      ],
+      "usage": [
+        "dist/src/usage.d.ts"
+      ],
+      "hook-state": [
+        "dist/src/hook-state.d.ts"
+      ],
+      "config": [
+        "dist/src/config.d.ts"
+      ],
+      "files": [
+        "dist/src/files.d.ts"
+      ],
+      "collection": [
+        "dist/src/collection.d.ts"
+      ],
+      "tracer": [
+        "dist/src/tracer.d.ts"
+      ],
+      "fence": [
+        "dist/src/fence.d.ts"
+      ],
+      "control": [
+        "dist/src/control.d.ts"
+      ],
+      "setup-defaults": [
+        "dist/src/setup-defaults.d.ts"
+      ],
+      "file-lock": [
+        "dist/src/file-lock.d.ts"
+      ],
+      "lifecycle": [
+        "dist/src/lifecycle.d.ts"
+      ],
+      "delivery": [
+        "dist/src/delivery.d.ts"
+      ]
+    }
+  }
+}

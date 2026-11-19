@@ -1,4 +1,5 @@
 import sys
+import traceback
 from types import TracebackType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
@@ -19,6 +20,7 @@ from ._errors import (
     EXCEPTION_ESCAPED,
     EXCEPTION_EVENT_NAME,
     EXCEPTION_MESSAGE,
+    EXCEPTION_STACKTRACE,
     EXCEPTION_TYPE,
     ExceptionSummary,
     clean_error_description,
@@ -36,6 +38,38 @@ _IMPORTANT_ATTRIBUTES = [
 
 # Recorded exceptions kept for the ERROR status description cleanup.
 _MAX_EXCEPTION_SUMMARIES = 8
+_MAX_CHAINED_MESSAGES = 16
+
+
+def _with_redacted_messages(text: str, exception: BaseException, config: TraceConfig) -> str:
+    """After the stacktrace's own redaction, redact any exception message still present.
+
+    A message that is a complete document is recognized on its own, but not inside
+    the formatted prose ("ValueError: {...}"). Replacing each message that survived
+    verbatim with its redacted form keeps the stacktrace from exporting more than the
+    message does; messages the first pass already changed are left as redacted.
+    """
+    seen = set()
+    pending = [exception]
+    while pending and len(seen) < _MAX_CHAINED_MESSAGES:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        try:
+            message = str(current)
+        except Exception:
+            message = ""
+        if message:
+            redacted = config.redact_value(message)
+            if isinstance(redacted, str) and redacted != message:
+                text = text.replace(message, redacted)
+        group = getattr(current, "exceptions", None)
+        members = tuple(group) if isinstance(group, (tuple, list)) else ()
+        for linked in (current.__cause__, current.__context__, *members):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+    return text
 
 
 class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
@@ -125,15 +159,36 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         if not self._self_config.hide_error_details:
             self._self_exception_summaries.append(summarize_exception(exception))
             del self._self_exception_summaries[:-_MAX_EXCEPTION_SUMMARIES]
-            span.record_exception(
-                exception, attributes=attributes, timestamp=timestamp, escaped=escaped
+            # Materialize and redact the exact strings that will be exported.
+            # Even unchanged text cannot safely delegate to record_exception:
+            # another formatting pass can produce new, uninspected content.
+            message = str(exception)
+            stacktrace = "".join(
+                traceback.format_exception(type(exception), exception, exception.__traceback__)
             )
-            return
-        event_attributes: Dict[str, AttributeValue] = {
-            EXCEPTION_TYPE: qualified_exception_type(exception),
-            EXCEPTION_ESCAPED: str(escaped),
-        }
-        event_attributes.update(strip_error_details(attributes) or {})
+            redacted_message = self._self_config.redact_value(message)
+            redacted_stacktrace = _with_redacted_messages(
+                self._self_config.redact_value(stacktrace), exception, self._self_config
+            )
+            # Emit once with the SDK's event shape and already-masked overrides.
+            event_attributes: Dict[str, AttributeValue] = {
+                EXCEPTION_TYPE: qualified_exception_type(exception),
+                EXCEPTION_MESSAGE: redacted_message,
+                EXCEPTION_STACKTRACE: redacted_stacktrace,
+                EXCEPTION_ESCAPED: str(escaped),
+            }
+        else:
+            event_attributes = {
+                EXCEPTION_TYPE: qualified_exception_type(exception),
+                EXCEPTION_ESCAPED: str(escaped),
+            }
+            attributes = strip_error_details(attributes)
+        # Generated metadata needs the same cap-then-PII policy as caller values.
+        # Mask before merging overrides so caller exception.type stays authoritative.
+        event_attributes[EXCEPTION_TYPE] = self._self_config.redact_value(
+            event_attributes[EXCEPTION_TYPE]
+        )
+        event_attributes.update(attributes or {})
         span.add_event(
             name=EXCEPTION_EVENT_NAME, attributes=event_attributes, timestamp=timestamp
         )
@@ -215,6 +270,9 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
                 status_description,
                 (in_flight, *reversed(self._self_exception_summaries)),
             )
+            if isinstance(status_description, str):
+                # The same value-level redaction as attributes (image cap, PII)
+                status_description = cast(str, self._self_config.redact_value(status_description))
         span.set_status(Status(StatusCode.ERROR, status_description))
 
     def _ended_with_error(self) -> bool:

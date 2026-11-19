@@ -8,6 +8,7 @@ First run from java/:
 No network requests, signing, or deployment are performed by this checker.
 """
 import argparse
+import json
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
@@ -15,6 +16,27 @@ import zipfile
 
 NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_CONFIG = ROOT.parent / ".github/release/config.json"
+
+
+def held_artifact_ids(config=RELEASE_CONFIG):
+    """artifactIds of the com.futureagi modules the release builds but does not deploy (hold_artifacts)."""
+    try:
+        hold = json.loads(Path(config).read_text()).get("hold_artifacts", {})
+    except FileNotFoundError:
+        return set()
+    return {name.split(":", 1)[1] for name in hold if name.startswith("com.futureagi:")}
+
+
+def bom_errors(bom_artifacts, expected, hold=None):
+    """The BOM names every SDK module that is deployed, and none that is held, because a released
+    BOM must not name an artifact that Central does not serve. `hold` is the hold_artifacts map."""
+    if hold is None:
+        hold = {}
+    held = {name.split(":", 1)[1] for name in hold if name.startswith("com.futureagi:")}
+    wanted = set(expected) - {"traceai-java-parent", "traceai-bom"} - held
+    return [] if set(bom_artifacts) == wanted else ["BOM does not cover exactly the SDK modules"
+                                                    + (f" (held from Central: {sorted(held)})" if held else "")]
 
 
 def text(element, path):
@@ -87,8 +109,11 @@ def main():
     # The BOM must align every instrumentation module, not just a hand-picked subset.
     bom = ET.parse(ROOT / "traceai-bom/pom.xml").getroot()
     bom_artifacts = {text(d, "artifactId") for d in bom.findall("m:dependencyManagement/m:dependencies/m:dependency", NS)}
-    if bom_artifacts != set(expected) - {"traceai-java-parent", "traceai-bom"}:
-        errors.append("BOM does not cover exactly the SDK modules")
+    # A module in hold_artifacts is built but not deployed, so the BOM leaves it out until the hold is lifted.
+    hold = {}
+    if RELEASE_CONFIG.is_file():
+        hold = json.loads(RELEASE_CONFIG.read_text()).get("hold_artifacts", {})
+    errors.extend(bom_errors(bom_artifacts, expected, hold))
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

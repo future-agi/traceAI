@@ -11,7 +11,7 @@
 
     <groupId>com.futureagi.examples</groupId>
     <artifactId>arconia-example</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
     <name>TraceAI Arconia Example</name>
     <description>Native Arconia tracing with shared TraceAI error-detail privacy.</description>
 

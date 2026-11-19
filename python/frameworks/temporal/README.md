@@ -7,7 +7,7 @@ Send Temporal's native workflow and activity spans to Future AGI, with model and
 Use Python 3.10–3.13 and Temporal Python SDK 1.34 or 1.35.
 
 ```bash
-pip install "traceAI-temporal==0.1.0"
+pip install "traceAI-temporal==0.1.1"
 ```
 
 Temporal marks its OpenTelemetry plugin and replay-safe provider as experimental. This package restricts the SDK range to the supported minor versions.

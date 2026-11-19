@@ -33,7 +33,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Build and pack with published shared dependencies
+      - name: Build and pack candidate shared dependencies
+        working-directory: typescript
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.30.1
+          pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @traceai/fi-semantic-conventions run build
+          pnpm --filter @traceai/fi-core run build
+          pnpm --dir packages/fi-semantic-conventions pack --out "$RUNNER_TEMP/semconv.tgz"
+          pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
+      - name: Build adapter against published shared dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -50,8 +61,12 @@ jobs:
           mkdir "$RUNNER_TEMP/consumer"
           cd "$RUNNER_TEMP/consumer"
           npm init -y
+          # Exercise this PR's core fix, including the legacy coexistence adapter,
+          # rather than silently resolving the already-published broken core.
+          npm pkg set 'overrides.@traceai/fi-core=$@traceai/fi-core' 'overrides.@traceai/fi-semantic-conventions=$@traceai/fi-semantic-conventions'
           tarball=$(find "$RUNNER_TEMP" -maxdepth 1 -name 'traceai-google-genai-sdk-*.tgz' -print)
-          npm install --ignore-scripts "$tarball" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
+          npm install --ignore-scripts "$tarball" "$RUNNER_TEMP/core.tgz" "$RUNNER_TEMP/semconv.tgz" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
+          npm ls @traceai/fi-core @traceai/fi-semantic-conventions
       - name: Real SDK, OTLP, privacy and exact customer snippet without internet
         shell: bash
         env:

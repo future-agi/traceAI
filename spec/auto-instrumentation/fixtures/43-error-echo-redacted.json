@@ -1,0 +1,40 @@
+{
+  "name": "error-echo-redacted",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json",
+      "authorization": "Bearer sk-live-SECRET-ABCDEFGH"
+    },
+    "json": {
+      "model": "gpt-4o",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "error": {
+        "message": "Incorrect API key provided: sk-live-SECRET-ABCDEFGH."
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o",
+    "status": "ERROR",
+    "status_description": "Incorrect API key provided: <redacted>.",
+    "attributes": {
+      "error.type": "401"
+    }
+  }
+}

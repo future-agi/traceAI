@@ -267,8 +267,8 @@ describe('Anthropic Response Attributes', () => {
       const parsed = JSON.parse(attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
       expect(parsed).toHaveLength(1);
       expect(parsed[0].role).toBe('assistant');
-      // The implementation keeps the *last* text content
-      expect(parsed[0].content).toBe('Let me get that information.');
+      // retain text on both sides of the tool call.
+      expect(parsed[0].content).toBe('I\'ll check the weather for you.Let me get that information.');
       expect(parsed[0].tool_calls).toHaveLength(1);
       expect(parsed[0].tool_calls[0].function.name).toBe('get_weather');
       expect(parsed[0].tool_calls[0].function.arguments).toBe('{"location":"New York"}');

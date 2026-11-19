@@ -9,7 +9,7 @@ import httpx
 import openai
 import pytest
 
-from .test_privacy_and_raw_streams import configured_tracing
+from .test_privacy_and_raw_streams import DEFAULT_CAP_IS_ZERO, configured_tracing
 from .test_sdk_lifecycle import BASE_URL, MODEL, TOKEN
 
 PROMPT = "SYNTHETIC-PRIVATE-PROMPT"
@@ -150,24 +150,31 @@ def test_visible_output_and_usage(asynchronous, mode):
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("mode", ["normal", "stream", "raw", "raw_stream"])
 @pytest.mark.parametrize("environment", [False, True])
-@pytest.mark.parametrize("policy,hidden", [
-    ("hide_inputs", [PROMPT, IMAGE, STOP]),
-    ("hide_input_messages", [PROMPT, IMAGE]),
-    ("hide_input_text", [PROMPT]),
-    ("hide_input_images", [IMAGE]),
-    ("hide_llm_invocation_parameters", [STOP]),
-    ("hide_outputs", [ANSWER]),
-    ("hide_output_messages", [ANSWER]),
-    ("hide_output_text", [ANSWER]),
-    ("base64_image_max_length", [IMAGE]),
+@pytest.mark.parametrize("policy,hidden,cap", [
+    pytest.param("hide_inputs", [PROMPT, IMAGE, STOP], None, id="hide-inputs"),
+    pytest.param("hide_input_messages", [PROMPT, IMAGE], None, id="hide-input-messages"),
+    pytest.param("hide_input_text", [PROMPT], None, id="hide-input-text"),
+    pytest.param("hide_input_images", [IMAGE], None, id="hide-input-images"),
+    pytest.param("hide_llm_invocation_parameters", [STOP], None, id="hide-invocation-parameters"),
+    pytest.param("hide_outputs", [ANSWER], None, id="hide-outputs-default-cap-0"),
+    pytest.param("hide_outputs", [ANSWER], 32_000, id="hide-outputs-explicit-cap-32000"),
+    pytest.param("hide_output_messages", [ANSWER], None, id="hide-output-messages-default-cap-0"),
+    pytest.param("hide_output_messages", [ANSWER], 32_000, id="hide-output-messages-explicit-cap-32000"),
+    pytest.param("hide_output_text", [ANSWER], None, id="hide-output-text-default-cap-0"),
+    pytest.param("hide_output_text", [ANSWER], 32_000, id="hide-output-text-explicit-cap-32000"),
+    pytest.param("base64_image_max_length", [IMAGE], None, id="image-cap-1"),
 ])
 def test_individual_privacy_flags_all_exported_copies(
-    monkeypatch, asynchronous, mode, environment, policy, hidden,
+    monkeypatch, asynchronous, mode, environment, policy, hidden, cap,
 ):
+    monkeypatch.delenv("FI_BASE64_IMAGE_MAX_LENGTH", raising=False)
     value = 1 if policy == "base64_image_max_length" else True
     config = {policy: value}
+    if cap is not None:
+        config["base64_image_max_length"] = cap
     if environment:
-        monkeypatch.setenv("FI_" + policy.upper(), str(value).lower())
+        for key, option in config.items():
+            monkeypatch.setenv("FI_" + key.upper(), str(option).lower())
         config = {}
     requests = []
     messages = copy.deepcopy(MESSAGES)
@@ -179,7 +186,12 @@ def test_individual_privacy_flags_all_exported_copies(
             assert sentinel not in everything
         if policy.startswith("hide_output"):
             assert PROMPT in attrs["input.value"]
-            assert IMAGE in attrs["input.value"]
+            if cap is None and DEFAULT_CAP_IS_ZERO:
+                assert IMAGE not in everything
+                content = json.loads(attrs["input.value"])["messages"][0]["content"]
+                assert content[1]["image_url"]["url"] == "[image-redacted]"
+            else:
+                assert IMAGE in attrs["input.value"]
             assert STOP in attrs["input.value"]
         else:
             assert ANSWER in attrs["output.value"]

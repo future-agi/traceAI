@@ -1,0 +1,86 @@
+{
+  "name": "milestone-a10-cohere-text-start-positive",
+  "description": "Nonempty thinking/list content or model-generated hosted-tool output at 30ms wins over ordinary text at 70ms.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "message-start",
+        "delta": {
+          "message": {
+            "role": "assistant"
+          }
+        }
+      },
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        }
+      },
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "text",
+              "text": "Hi"
+            }
+          }
+        }
+      },
+      {
+        "type": "content-delta",
+        "delta": {
+          "message": {
+            "content": {
+              "text": "Later"
+            }
+          }
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}
