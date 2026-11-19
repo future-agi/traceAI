@@ -1,3 +1,8 @@
+## [0.4.1] - 2026-11-19
+
+### Changed
+- Depends on `@traceai/fi-core` 1.4.1, whose `hideInputs` / `hideOutputs` masking matches the Python SDK's `TraceConfig`.
+
 ## [0.4.0] - 2026-11-19
 
 ### Added
