@@ -10,6 +10,7 @@ import {
     Link,
     diag,
   } from "@opentelemetry/api";
+  import { AGENT_NAME, AGENT_VIEW, agentView, writer } from "./agentIdentity";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
@@ -84,6 +85,9 @@ import {
     /** @internal Native application context in auto mode; explicit standalone
      * callers keep the wrapper. Instrumentors continue writing through `this`. */
     getContextSpan(): Span { return this.autoDestination ? this.span : this; }
+
+    /** @internal Narrow SDK view of the identity the host actually admitted. */
+    [AGENT_VIEW](mark?: true) { return agentView(this.span, mark); }
 
     constructor({
       span,
@@ -220,7 +224,12 @@ import {
         // every projected key look new against a permanently full old count.
         const count = Object.getOwnPropertyDescriptor(this.span, "_attributesCount");
         if (count && "value" in count && count.writable && typeof count.value === "number") Object.defineProperty(this.span, "_attributesCount", { ...count, value: 0 });
+        // The standalone projector can replay an onStart name when only a
+        // different attribute changed. Replay is not a framework name write.
+        const origin = writer(this.span);
+        const replay = origin?.automatic && !Object.prototype.hasOwnProperty.call(attributes, AGENT_NAME);
         this.span.setAttributes(projected.attributes);
+        if (origin && replay) origin.automatic = true;
         // A custom/native setter can still incur genuine SDK drops here. Keep
         // that delta instead of replacing it with FI's projection contribution.
         const after = Object.getOwnPropertyDescriptor(this.span, "_droppedAttributesCount");
