@@ -460,3 +460,129 @@ def test_a_failure_starting_the_span_never_breaks_the_user_call(spans, monkeypat
 
     assert f(1) == 2
     assert finished(spans) == ()
+
+
+# --- Prompty and native content written by any code path ----------------------------------------
+
+from conftest import TEMPLATE_MARKER  # noqa: E402
+
+PROMPT_ATTRIBUTES = ("prompt.template", "prompt.variables")
+
+
+def native_content_in(span):
+    keys = [k for k in attrs(span) if k in NATIVE_CONTENT or k.startswith("prompt.")]
+    keys += [e.name for e in span.events if e.name.startswith("promptflow.")]
+    return keys
+
+
+def test_prompty_template_and_variables_are_hidden_with_inputs(instrument, prompty):
+    from promptflow.core import Prompty
+
+    spans = instrument(config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    assert Prompty.load(prompty)(question=SECRET_INPUT) == "Tokyo"
+    out = finished(spans)
+    assert [s.name for s in out if s.name == "Prompty"]
+    for span in out:
+        assert SECRET_INPUT not in blob(span), span.name
+        assert TEMPLATE_MARKER not in blob(span), span.name
+        assert not native_content_in(span), (span.name, native_content_in(span))
+
+
+def test_prompty_native_prompt_content_is_never_exported(spans, prompty):
+    from promptflow.core import Prompty
+
+    Prompty.load(prompty)(question="What is the capital of Japan?")
+    for span in finished(spans):
+        assert not native_content_in(span), (span.name, native_content_in(span))
+
+
+def test_prompty_async_template_and_variables_are_hidden(instrument, prompty):
+    from promptflow.core import AsyncPrompty
+
+    spans = instrument(config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    assert asyncio.run(AsyncPrompty.load(prompty)(question=SECRET_INPUT)) == "Tokyo"
+    for span in finished(spans):
+        assert SECRET_INPUT not in blob(span) and TEMPLATE_MARKER not in blob(span), span.name
+        assert not native_content_in(span)
+
+
+def test_native_content_written_by_any_path_is_masked(instrument):
+    from opentelemetry import trace as otel_trace
+    from promptflow.tracing import trace
+
+    spans = instrument(config=TraceConfig(hide_inputs=True, hide_outputs=True))
+
+    @trace
+    def leaky(x):
+        span = otel_trace.get_current_span()
+        span.set_attribute("inputs", SECRET_INPUT)
+        span.set_attributes({"output": SECRET_INPUT, "prompt.variables": SECRET_INPUT, "keep.me": "visible"})
+        span.add_event("promptflow.function.inputs", {"payload": SECRET_INPUT})
+        span.add_event("promptflow.prompt.template", {"payload": SECRET_INPUT})
+        span.record_exception(ValueError(SECRET_INPUT))
+        return 1
+
+    leaky(SECRET_INPUT)
+    span = by_name(finished(spans), "leaky")
+    assert SECRET_INPUT not in blob(span)
+    assert not native_content_in(span)
+    assert attrs(span)["keep.me"] == "visible"  # only native content is masked
+    assert attrs(span)["function"].endswith("leaky")  # structural attributes stay
+
+
+def test_missing_content_hook_warns_once_and_content_stays_off(instrument, monkeypatch, caplog):
+    from promptflow.tracing import _trace
+
+    monkeypatch.delattr(_trace, "enrich_span_with_embedding")
+    with caplog.at_level("WARNING", logger="traceai_promptflow"):
+        spans = instrument(config=TraceConfig(hide_inputs=True))
+    warnings = [r for r in caplog.records if r.levelname == "WARNING" and "enrich_span_with_embedding" in r.getMessage()]
+    assert len(warnings) == 1
+    from opentelemetry import trace as otel_trace
+    from promptflow.tracing import trace
+
+    @trace
+    def leaky():
+        otel_trace.get_current_span().set_attribute("prompt.template", TEMPLATE_MARKER)
+
+    leaky()
+    assert TEMPLATE_MARKER not in blob(by_name(finished(spans), "leaky"))
+
+
+def test_missing_span_hook_refuses_to_instrument(provider, monkeypatch, caplog):
+    from promptflow.tracing import _trace
+    from traceai_promptflow import PromptflowInstrumentor
+
+    monkeypatch.delattr(_trace, "start_as_current_span")
+    instrumentor = PromptflowInstrumentor()
+    with caplog.at_level("WARNING", logger="traceai_promptflow"):
+        instrumentor.instrument(tracer_provider=provider)
+    try:
+        assert [r for r in caplog.records if "start_as_current_span" in r.getMessage()]
+        assert os.environ.get("PF_DISABLE_TRACING") != "false"
+    finally:
+        instrumentor.uninstrument()
+
+
+# --- request model and parameters ---------------------------------------------------------------
+
+def test_llm_span_records_request_model_and_parameters(spans, injected_openai):
+    from promptflow.tracing import trace
+
+    client = make_openai_client()
+
+    @trace
+    def ask():
+        return client.chat.completions.create(
+            model="gpt-4o", messages=[{"role": "user", "content": "q"}], temperature=0.2, top_p=0.9,
+            max_tokens=16, stop=["END"],
+        )
+
+    ask()
+    llm = [s for s in finished(spans) if attrs(s).get("gen_ai.span.kind") == "LLM"]
+    assert len(llm) == 1
+    a = attrs(llm[0])
+    assert a["gen_ai.request.model"] == "gpt-4o"
+    assert a["gen_ai.request.temperature"] == 0.2 and a["gen_ai.request.top_p"] == 0.9
+    assert a["gen_ai.request.max_tokens"] == 16
+    assert list(a["gen_ai.request.stop_sequences"]) == ["END"]

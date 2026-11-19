@@ -115,3 +115,78 @@ def instrument(provider):
 @pytest.fixture
 def spans(instrument):
     return instrument()
+
+
+class _OpenAIStub:
+    """A loopback chat-completions endpoint, for the Prompty client that builds its own HTTP client."""
+
+    def __init__(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        stub = self
+        self.requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                size = int(self.headers.get("Content-Length") or 0)
+                stub.requests.append(json.loads(self.rfile.read(size) or b"{}"))
+                body = json.dumps({
+                    "id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": "gpt-served",
+                    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Tokyo"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+TEMPLATE_MARKER = "synthetic-template-DO-NOT-EXPORT"
+
+
+@pytest.fixture
+def prompty(tmp_path):
+    """A real Prompty file whose OpenAI endpoint is a loopback stub (no external network)."""
+    stub = _OpenAIStub()
+    path = tmp_path / "ask.prompty"
+    path.write_text(
+        textwrap.dedent(
+            f"""\
+            ---
+            name: ask
+            model:
+              api: chat
+              configuration:
+                type: openai
+                model: gpt-4o
+                base_url: {stub.url}
+                api_key: synthetic-openai-key-DO-NOT-EXPORT
+              parameters:
+                temperature: 0.2
+                max_tokens: 16
+            inputs:
+              question:
+                type: string
+            ---
+            system:
+            {TEMPLATE_MARKER} answer briefly.
+            user:
+            {{{{question}}}}
+            """
+        )
+    )
+    yield str(path)
+    stub.close()
