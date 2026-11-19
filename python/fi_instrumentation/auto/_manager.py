@@ -1,5 +1,6 @@
 """Turns on every installed traceAI integration and reports what each one did."""
 
+import ast
 import atexit
 import importlib
 import importlib.machinery
@@ -94,40 +95,52 @@ def module_available(dotted: str) -> bool:
     return spec is not None
 
 
-def _declared_in_source(module: str, name: str) -> bool:
-    """True when ``name`` is assigned the literal True at the top level of ``module``'s ``__init__``.
+def _declared_in_source(module: str, name: str, owner: Optional[str] = None) -> bool:
+    """True when ``name`` is assigned the literal True at the top level of ``module``, or of its class ``owner``.
 
     The package is never imported or executed: a loaded module is asked directly, an unloaded one is located
-    on the path and its source read. A package without readable source declares nothing.
+    on the path and its source parsed. Only a real assignment statement counts (text in a docstring, a comment
+    or a function body does not). A package without readable source declares nothing.
     """
     loaded = sys.modules.get(module)
     if loaded is not None:
-        value = getattr(loaded, name, None)
-        if value is None:
-            owner = getattr(loaded, "OpenAIInstrumentor", None)
-            value = getattr(owner, name, None)
-        return value is True
+        holder = getattr(loaded, owner, None) if owner else loaded
+        return getattr(holder, name, None) is True
     try:
         spec = importlib.machinery.PathFinder.find_spec(module)
         origin = getattr(spec, "origin", None)
         if not origin or not origin.endswith(".py"):
             return False
         with open(origin, encoding="utf-8") as handle:
-            text = handle.read()
-    except (ImportError, ValueError, OSError):
+            tree = ast.parse(handle.read())
+    except (ImportError, ValueError, OSError, SyntaxError):
         return False
-    return re.search(rf"^[ \t]*{re.escape(name)}\s*=\s*True\b", text, re.MULTILINE) is not None
+    body: List[Any] = tree.body
+    if owner:
+        classes = [node for node in body if isinstance(node, ast.ClassDef) and node.name == owner]
+        body = classes[0].body if classes else []
+    for node in body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        value = getattr(node, "value", None)
+        if (isinstance(value, ast.Constant) and value.value is True
+                and any(isinstance(target, ast.Name) and target.id == name for target in targets)):
+            return True
+    return False
 
 
 def provider_defers_to_shared_openai(integration: Integration) -> bool:
     """Whether the installed provider package, and the installed traceai-openai it defers to, support deferral.
 
     The core turns an OpenAI-compatible provider on by default only then; with any other version mix the
-    provider keeps its previous (off) state, so a call is never traced twice.
+    provider keeps its previous (off) state, so a call is never traced twice. Without traceai-openai there is
+    no shared instrumentor to defer to and so nothing to double-trace: the provider's marker is enough.
     """
     if not _declared_in_source(integration.module, "DEFERS_TO_SHARED_OPENAI"):
         return False
-    return all(_declared_in_source("traceai_openai", capability) for capability in integration.needs_openai)
+    if not module_available("traceai_openai"):
+        return True
+    return all(_declared_in_source("traceai_openai", capability, "OpenAIInstrumentor")
+               for capability in integration.needs_openai)
 
 
 def _effective_default(integration: Integration) -> Tuple[bool, str]:
