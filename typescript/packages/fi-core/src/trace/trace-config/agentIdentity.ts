@@ -5,6 +5,7 @@ import type { Attributes, Span } from '@opentelemetry/api';
 // callback that can operate on it. All attribute writes still use FISpan.
 export const AGENT_VIEW = Symbol.for('futureagi.runtime.agent-identity.v1');
 export const AGENT_NAME = 'gen_ai.agent.name';
+export const AGENT_ID = 'gen_ai.agent.id';
 const WRITER = Symbol.for('futureagi.runtime.context-agent.writer.v1');
 type Origin = { automatic: boolean };
 type Setter = Span['setAttribute'] & { [WRITER]?: Origin };
@@ -34,10 +35,16 @@ function markNative(span: Span): void {
   } catch { /* Frozen foreign writer: don't claim a context origin. */ }
 }
 
-export function agentView(span: Span, mark?: true): {name?: string; id?: string; automatic: boolean} {
+// Never publish the native host value directly. onStart and later native
+// writes happen outside the FITracer creation policy. Re-admit only these
+// two fields at the point they would cross into an ordinary SDK provider.
+export function agentView(span: Span, admit: (attrs: Attributes) => Attributes, mark?: true) {
   const attrs = (span as Span & {attributes?: Attributes}).attributes;
-  const name = attrs?.[AGENT_NAME], id = attrs?.['gen_ai.agent.id'];
-  if (mark && typeof name === 'string') markNative(span);
-  return {name: typeof name === 'string' ? name : undefined, id: typeof id === 'string' ? id : undefined,
-    automatic: writer(span)?.automatic === true};
+  const name = attrs?.[AGENT_NAME], id = attrs?.[AGENT_ID];
+  const admitted = admit({ ...(typeof name === 'string' && { [AGENT_NAME]: name }),
+    ...(typeof id === 'string' && { [AGENT_ID]: id }) });
+  const safeName = admitted[AGENT_NAME], safeId = admitted[AGENT_ID];
+  if (mark && typeof safeName === 'string') markNative(span);
+  return {name: typeof safeName === 'string' ? safeName : undefined,
+    id: typeof safeId === 'string' ? safeId : undefined, automatic: writer(span)?.automatic === true};
 }

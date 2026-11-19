@@ -10,7 +10,7 @@ import {
     Link,
     diag,
   } from "@opentelemetry/api";
-  import { AGENT_NAME, AGENT_VIEW, agentView, writer } from "./agentIdentity";
+  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, agentView, writer } from "./agentIdentity";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
@@ -87,7 +87,13 @@ import {
     getContextSpan(): Span { return this.autoDestination ? this.span : this; }
 
     /** @internal Narrow SDK view of the identity the host actually admitted. */
-    [AGENT_VIEW](mark?: true) { return agentView(this.span, mark); }
+    [AGENT_VIEW](mark?: true) {
+      if (!this.admissionFailed) {
+        try { return agentView(this.span, attrs => this.privacy.admissionAttributes(attrs, this.span.spanContext()), mark); }
+        catch { /* A failed identity admission exposes no host values. */ }
+      }
+      return { automatic: false };
+    }
 
     constructor({
       span,
@@ -208,7 +214,16 @@ import {
           // Our own projection marker is recomputed from the complete view; a
           // caller-supplied count stays in pendingAttributes and accumulates once.
           delete host[PROJECTION_METADATA]; delete host[LEGACY_DROPPED_COUNT]; delete host[DROPPED_CONTENT_COUNT];
-          clean = this.privacy.admissionAttributes({ ...host, ...this.pendingAttributes, ...attributes }, this.span.spanContext());
+          // Native identity is the last committed write (including an onStart
+          // or a same-string public setter). Pending owns only unadmitted keys;
+          // an explicit wrapper write in this call is newer than both. Never
+          // infer a writer from string equality. With no readable native slot,
+          // only forward identity written by this call, never cached identity.
+          const pending = { ...this.pendingAttributes };
+          for (const key of [AGENT_NAME, AGENT_ID]) {
+            if (!native || !slot || !("value" in slot) || Object.prototype.hasOwnProperty.call(host, key)) delete pending[key];
+          }
+          clean = this.privacy.admissionAttributes({ ...host, ...pending, ...attributes }, this.span.spanContext());
           for (const key of this.admittedKeys) if (!Object.prototype.hasOwnProperty.call(clean, key)) this.admittedKeys.delete(key);
           for (const key of Object.keys(attributes)) if (Object.prototype.hasOwnProperty.call(clean, key)) this.admittedKeys.add(key);
         } catch { this.admissionFailed = true; this.admittedKeys.clear(); }
