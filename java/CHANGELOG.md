@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0 (2026-11-19)
+
+### Features
+
+* **javaagent:** join the caller's W3C trace on servlet requests. While `HttpServlet#service` (or an override; `jakarta.servlet` and `javax.servlet`, which includes Spring MVC) handles a request, its `traceparent` and `tracestate` headers are the parent of the AI calls made on that request's thread, so a sampled caller gets the AI spans in its own trace with its `fi=r:` ratio inherited, and an unsampled caller gets nothing exported under the default parent-based sampler. No SERVER span is created, your own active span still takes precedence, and `FI_DISABLED_INSTRUMENTATIONS=servlet` turns it off. Like the rest of the agent, it stays off when the OpenTelemetry Java agent is also running ([#724](https://github.com/future-agi/traceAI/pull/724)).
+
+### Bug Fixes
+
+* **java-core:** a partial ratio decision always puts the `fi` tracestate entry at the left of the W3C tracestate, including when it replaces an existing `fi` entry, and adding `fi` to a full (32-member) tracestate evicts the right-most member ([#719](https://github.com/future-agi/traceAI/pull/719)).
+
 ## 1.3.0 (2026-11-18)
 
 ### Features
