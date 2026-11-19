@@ -7,6 +7,7 @@
 - Content on by default, like every traceAI instrumentor; the standard `FI_HIDE_INPUTS` /
   `FI_HIDE_OUTPUTS` (and the `*_MESSAGES` / `*_TEXT` variants) or `TraceConfig(...)` drop it,
   and `FI_PII_REDACTION` works as elsewhere. No package-specific privacy switch.
+- A content key is masked by key whatever the type of its value (number, boolean or text), including `input.value`, `gen_ai.input.images` and `gen_ai.request.parameters`.
 - Never exported in any mode: resource attributes outside an allowlist (no host, process or
   OS details), environment and identity span attributes, stack traces, and emails, local
   paths and private host names in metadata and error text.

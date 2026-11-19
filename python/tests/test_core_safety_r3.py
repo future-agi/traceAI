@@ -19,6 +19,8 @@ SAFE = [A.GEN_AI_TOOL_NAME, A.GEN_AI_TOOL_CALL_ID, A.GEN_AI_REQUEST_MODEL, A.GEN
 def test_content_metadata_contract(key, direction, hi, ho):
     c = TraceConfig(hide_inputs=hi, hide_outputs=ho)
     expected = '__REDACTED__' if (hi and direction in ('input','mixed')) or (ho and direction in ('output','mixed')) else 'secret'
+    if key in (A.RAW_INPUT, A.RAW_OUTPUT) and (hi or ho):
+        expected = None  # raw payloads are not recorded while any hide setting is on
     assert c.mask(key, 'secret') == expected
     # The serialized aggregate tool call is not a prefix: its safe ID is separate.
     if key != A.GEN_AI_TOOL_CALL and direction != 'safe':

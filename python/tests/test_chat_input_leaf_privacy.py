@@ -24,7 +24,10 @@ def test_pii_leaves_are_scanned_before_escaping(separator, structured, key):
         [{"type": "text", "text": "<SSN>"}] if structured else "<SSN>"
     )
     assert projection["stop"] == ["<SSN>"] and projection["user"] == "<SSN>"
-    assert json.loads(config.mask(key, ChatInput(payload))) == projection
+    if key == "raw.input":  # raw payloads are not recorded while any hide setting is on
+        assert config.mask(key, ChatInput(payload)) is None
+    else:
+        assert json.loads(config.mask(key, ChatInput(payload))) == projection
     assert payload == original
 
 

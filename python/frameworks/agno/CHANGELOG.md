@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+### Changed
+- With any input hide setting, a run or workflow response is not written as `output.value`, because the response object carries the run input.
+
 ## [0.2.2] - 2026-11-08
 ### Fix
 - For supplied configs whose cap equals OpenInference's dataclass-declared default, an unset, blank, `-1`, or non-integer `OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH` no longer bypasses the FI ceiling: the cap is the smaller of that default and the FI cap (0 when FI is unset). This includes explicitly supplying the default value; the reference default is read without constructing another environment-dependent config.

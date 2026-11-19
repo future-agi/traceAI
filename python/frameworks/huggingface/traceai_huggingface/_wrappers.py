@@ -20,7 +20,7 @@ from traceai_huggingface._response_attributes_extractor import (
     _FeatureExtractionResponseAttributesExtractor,
     _TextGenerationResponseAttributesExtractor,
 )
-from traceai_huggingface._utils import _finish_tracing, _to_dict
+from traceai_huggingface._utils import _finish_tracing, _response_view, _to_dict
 from traceai_huggingface._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -115,9 +115,9 @@ class _TextGenerationWrapper(_WithTracer):
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
-                    attributes=self._response_extractor.get_attributes(response),
+                    attributes=self._response_extractor.get_attributes(_response_view(response, self._tracer)),
                     extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                        _response_view(response, self._tracer), request_parameters
                     ),
                 )
             except Exception:
@@ -223,9 +223,9 @@ class _AsyncTextGenerationWrapper(_WithTracer):
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
-                    attributes=self._response_extractor.get_attributes(response),
+                    attributes=self._response_extractor.get_attributes(_response_view(response, self._tracer)),
                     extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                        _response_view(response, self._tracer), request_parameters
                     ),
                 )
             except Exception:
@@ -286,9 +286,9 @@ class _ChatCompletionWrapper(_WithTracer):
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
-                    attributes=self._response_extractor.get_attributes(response),
+                    attributes=self._response_extractor.get_attributes(_response_view(response, self._tracer)),
                     extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                        _response_view(response, self._tracer), request_parameters
                     ),
                 )
             except Exception:
@@ -402,9 +402,9 @@ class _AsyncChatCompletionWrapper(_WithTracer):
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
-                    attributes=self._response_extractor.get_attributes(response),
+                    attributes=self._response_extractor.get_attributes(_response_view(response, self._tracer)),
                     extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                        _response_view(response, self._tracer), request_parameters
                     ),
                 )
             except Exception:

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- With `hide_inputs`, `hide_input_messages`, `hide_input_text` or `hide_input_images`, the whole-response `output.value` is built from response-side fields (id, model, choices text/message, finish reason, usage) while any input hide setting is on, so a request echo such as `prompt` is not recorded.
+- The 3.x resource classes (`CompletionsResource`, `EmbeddingsResource` and their async versions) are instrumented alongside the 1.x ones. Streamed calls return a proxy that keeps the SDK stream's iteration, context-manager and close behaviour and its attributes, and ends the span once on exhaustion, error, close or early break (marked `together.stream.incomplete`).
+
 ## [0.1.2] - 2026-11-12
 
 ### Changed

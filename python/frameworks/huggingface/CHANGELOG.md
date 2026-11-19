@@ -1,3 +1,8 @@
+## Unreleased
+
+- With `hide_inputs`, `hide_input_messages`, `hide_input_text` or `hide_input_images`, the whole-response `output.value` is built from response-side fields (generated text, finish reason, token counts, choices, usage) while any input hide setting is on, so `details.prefill` is not recorded.
+- Input token counts are kept under the input hide settings; the prefill tokens themselves are not.
+
 ## [0.1.1] - 2026-11-12
 
 ### Changed

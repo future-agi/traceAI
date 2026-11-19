@@ -1,3 +1,8 @@
+## Unreleased
+
+- With `hide_inputs`, `hide_input_messages`, `hide_input_text` or `hide_input_images`, the whole-response `output.value` is built from response-side fields (candidates, usage metadata, model version, response id) while any input hide setting is on, so `automatic_function_calling_history` is not recorded.
+- Streamed responses follow the same rule: the streamed `output.value` carries only response-side fields while an input hide setting is on.
+
 ## [0.1.4] - 2026-11-12
 
 ### Changed

@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- With any input hide setting, an in-progress LLM event records only its response as output, because the event also carries the request.
+
 ## [0.1.11](https://github.com/future-agi/traceAI/compare/traceai-llamaindex-v0.1.10...traceai-llamaindex-v0.1.11) (2026-11-05)
 
 

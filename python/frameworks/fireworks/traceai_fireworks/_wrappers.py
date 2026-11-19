@@ -21,7 +21,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
-from traceai_fireworks._privacy import _hide_raw_output, _messages_for_telemetry
+from traceai_fireworks._privacy import _hide_input, _hide_raw_output, _messages_for_telemetry, _response_side
 from traceai_fireworks._raw_response import _RawNonStreamResponse, _RawStreamResponse
 from traceai_fireworks._stream import (
     _AsyncStream,
@@ -374,7 +374,10 @@ def _get_output_attributes(
         if _hide_raw_output(config):
             attributes[SpanAttributes.OUTPUT_VALUE] = REDACTED_VALUE
         elif callable(getattr(response, "model_dump", None)):
-            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.model_dump())
+            dumped = response.model_dump()
+            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(
+                _response_side(dumped) if _hide_input(config) else dumped
+            )
     except Exception:
         pass
 

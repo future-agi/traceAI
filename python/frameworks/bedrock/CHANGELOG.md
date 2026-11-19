@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- With any input hide setting, a streamed invoke-model payload is not recorded as output, because it can repeat the request.
+
 
 
 ## [0.1.12] - 2026-11-12
