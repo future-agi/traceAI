@@ -13,7 +13,9 @@ logger.addHandler(logging.NullHandler())
 
 def _to_dict(obj: Any) -> Dict[str, Any]:
     """Convert an object to a dictionary."""
-    if obj is None:
+    if obj is None or hasattr(obj, "http_response"):
+        # with_raw_response/with_streaming_response return unparsed SDK responses;
+        # parsing them here could consume the customer's body.
         return {}
     if isinstance(obj, dict):
         return obj
