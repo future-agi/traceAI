@@ -54,7 +54,7 @@ def test_control_output_recorded_without_settings():
 
 @pytest.mark.parametrize(
     "config",
-    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}],
+    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}],
 )
 def test_rawOutputOmitsRequestPromptUnderInputSettings(config):
     assert PROMPT_SENTINEL not in _exported(**config)

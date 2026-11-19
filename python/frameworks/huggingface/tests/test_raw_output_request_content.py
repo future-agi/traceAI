@@ -55,7 +55,7 @@ def test_control_output_recorded_without_settings(monkeypatch):
 
 @pytest.mark.parametrize(
     "trace_config",
-    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}],
+    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}],
 )
 def test_rawOutputOmitsRequestTokensUnderInputSettings(trace_config, monkeypatch):
     dumped = _run_text_generation(TraceConfig(**trace_config), monkeypatch)

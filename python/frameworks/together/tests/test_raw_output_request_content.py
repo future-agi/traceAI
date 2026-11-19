@@ -14,12 +14,14 @@ def _exported(trace_config):
     from fi_instrumentation import TraceConfig
     from together import Together
 
-    # The instrumentor wraps Completions.create of the 1.x resource layout; a later SDK layout has no such class.
+    # The SDK's resource layout differs by release: 1.x has Completions / CompletionResponse, 3.x has
+    # CompletionsResource / Completion. The instrumentor wraps whichever the installed SDK has.
     try:
         from together.resources.completions import Completions
         from together.types.completions import CompletionResponse
     except ImportError:
-        pytest.skip("the wrapped Completions resource is not part of the installed together SDK")
+        from together.resources.completions import CompletionsResource as Completions
+        from together.types import Completion as CompletionResponse
 
     from traceai_together import TogetherInstrumentor
 
@@ -62,7 +64,7 @@ def test_control_output_recorded_without_settings():
 
 @pytest.mark.parametrize(
     "trace_config",
-    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}],
+    [{"hide_inputs": True}, {"hide_input_messages": True}, {"hide_input_text": True}, {"hide_input_images": True}],
 )
 def test_rawOutputOmitsRequestPromptUnderInputSettings(trace_config):
     dumped = _exported(trace_config)
