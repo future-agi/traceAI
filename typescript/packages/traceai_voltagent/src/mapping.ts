@@ -139,22 +139,35 @@ export function contentSide(key: string, value: AttributeValue | undefined): Con
   const exact = exactSide(key);
   if (exact !== undefined) return exact;
   const family = familySide(key);
-  // A member of a content family is content whatever its value type (arguments.amount=1500,
-  // suspension.data.balance=900), as in fi-core maskingRules and Python. The one exception is an
-  // explicit count: a number under a key whose last segment is count, size or length
-  // (llm.messages.count). Keys outside every family keep numbers and booleans visible.
-  if (family !== undefined) {
-    if (isCountKey(key, value)) return undefined;
-  } else if (typeof value === "number" || typeof value === "boolean") return undefined;
+  // A content key is content whatever its value type (arguments.amount=1500, suspension.data.balance=900,
+  // tool_call.function.arguments=true), as in fi-core maskingRules and Python. The one exception is the
+  // explicit list of count keys VoltAgent itself writes (COUNT_KEYS); a count-like name anywhere else
+  // (tool.parameters.count, gen_ai.tool.call.result.length) is a value the application chose.
+  if (isCountKey(key, value)) return undefined;
   const inferred = inferredSide(key);
   // A child the name rules place on the other side of its family (a `.content` under an input family) hides under both.
   if (family !== undefined && inferred !== undefined && inferred !== family) return "both";
   return family ?? inferred;
 }
 
-const COUNT_SEGMENTS = new Set<string>(["count", "size", "length"]);
+/** The count and size keys VoltAgent 2.x writes itself (a number of items, never content). */
+const COUNT_KEYS = new Set<string>([
+  "llm.messages.count",
+  "llm.tools.count",
+  "eval.messages.count",
+  "eval.scorers.count",
+  "eval.tool_calls.count",
+  "eval.tool_results.count",
+  "memory.step.count",
+  "tool.search.selection.count",
+  "workflow.step.retry.count",
+  "agent.summary.length",
+]);
 function isCountKey(key: string, value: AttributeValue | undefined): boolean {
-  return typeof value === "number" && COUNT_SEGMENTS.has(key.slice(key.lastIndexOf(".") + 1));
+  if (typeof value !== "number") return false;
+  // A moved usage or cost figure (voltagent.gen_ai.cost.input) is a number the run produced, not content.
+  const bare = key.startsWith("voltagent.") ? key.slice("voltagent.".length) : key;
+  return COUNT_KEYS.has(key) || isPromotedUsageKey(bare);
 }
 
 function exactSide(key: string): ContentSide | undefined {
