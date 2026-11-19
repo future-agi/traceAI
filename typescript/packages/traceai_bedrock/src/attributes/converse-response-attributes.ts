@@ -4,7 +4,12 @@ import {
   SemanticConventions,
   MimeType,
 } from "@traceai/fi-semantic-conventions";
-import { withSafety, safelyJSONStringify } from "@traceai/fi-core";
+import {
+  withSafety,
+  safelyJSONStringify,
+  generateTraceConfig,
+  type TraceConfigOptions,
+} from "@traceai/fi-core";
 import { setSpanAttribute, processMessages } from "./attribute-helpers";
 
 /**
@@ -14,20 +19,39 @@ import { setSpanAttribute, processMessages } from "./attribute-helpers";
  * @param params Object containing extraction parameters
  * @param params.span The OpenTelemetry span to set attributes on
  * @param params.response The ConverseResponse from the Bedrock API
+ * @param params.traceConfig The trace config in effect; with any hide setting on, only the
+ *   response-side fields (output, stop reason, usage, metrics) are written to output.value
  */
+/**
+ * True while any hide setting is on. The whole response object is not recorded then: it can hold
+ * request-side fields (guardrail assessments quote the matched request text).
+ */
+function anyHideSettingOn(traceConfig?: TraceConfigOptions): boolean {
+  const config = generateTraceConfig(traceConfig);
+  return Boolean(
+    config.hideInputs || config.hideOutputs ||
+    config.hideInputMessages || config.hideOutputMessages ||
+    config.hideInputText || config.hideOutputText ||
+    config.hideInputImages,
+  );
+}
+
 export const extractConverseResponseAttributes = withSafety({
   fn: ({
     span,
     response,
+    traceConfig,
   }: {
     span: Span;
     response: ConverseResponse;
+    traceConfig?: TraceConfigOptions;
   }): void => {
-    // Set raw output
+    const hidden = anyHideSettingOn(traceConfig);
+    const { output, stopReason, usage, metrics } = response;
     setSpanAttribute(
       span,
       SemanticConventions.OUTPUT_VALUE,
-      safelyJSONStringify(response) ?? "",
+      safelyJSONStringify(hidden ? { output, stopReason, usage, metrics } : response) ?? "",
     );
     setSpanAttribute(span, SemanticConventions.OUTPUT_MIME_TYPE, MimeType.JSON);
 
@@ -69,7 +93,7 @@ export const extractConverseResponseAttributes = withSafety({
     }
 
     // Extract response model if available
-    if (response.metrics) {
+    if (response.metrics && !hidden) {
       setSpanAttribute(
         span,
         SemanticConventions.RAW_OUTPUT,

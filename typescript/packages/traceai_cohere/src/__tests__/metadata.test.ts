@@ -157,7 +157,9 @@ describe.each(privacyModes)("citation privacy %j", config => {
         } : source),
       });
       expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].citations).toEqual(expected);
-      expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.citations).toEqual(expected);
+      // The raw response is not recorded while any hide setting is on.
+      if (inputHidden) expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+      else expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.citations).toEqual(expected);
     }
     if (inputHidden) expect(JSON.stringify(attrs)).not.toContain("private-input");
     expect(exporter.getFinishedSpans()[0].status.code).toBe(
@@ -221,7 +223,8 @@ it.each([false, true])("exports independent metadata and citation privacy over O
       expect(attrs[0][S.LLM_OUTPUT_MESSAGES]).toBeUndefined();
     } else {
       const sources = [{ type: "document", id: "doc-19" }, { type: "tool", id: "tool-19" }];
-      expect(JSON.parse(attrs[0][S.RAW_OUTPUT]).message.citations[0].sources).toEqual(sources);
+      // hideInputs is on here: the raw response is not recorded.
+      expect(attrs[0][S.RAW_OUTPUT]).toBeUndefined();
       expect(JSON.parse(attrs[0][S.LLM_OUTPUT_MESSAGES])[0].citations[0].sources).toEqual(sources);
     }
   } finally {

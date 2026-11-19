@@ -463,8 +463,10 @@ function toolModel() {
   });
 }
 const effectiveKeys = ['generationConfig', 'safetySettings', 'tools', 'toolConfig', 'cachedContent'];
-function assertEffectiveInput(attributes, wire, hideToolMetadata = false) {
-  for (const key of ['raw.input', 'input.value']) {
+function assertEffectiveInput(attributes, wire, hideToolMetadata = false, rawRecorded = true) {
+  // The raw request is not recorded while any hide setting is on.
+  if (!rawRecorded) assert.equal(attributes['raw.input'], undefined);
+  for (const key of rawRecorded ? ['raw.input', 'input.value'] : ['input.value']) {
     const captured = JSON.parse(attributes[key]);
     for (const field of effectiveKeys) assert.deepEqual(captured[field], wire[field], `${key}.${field}`);
   }
@@ -612,7 +614,7 @@ for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideI
           assert.equal(attributes['raw.output'], undefined);
           assert.equal(attributes['gen_ai.output.messages'], undefined);
           assert.deepEqual(JSON.parse(attributes['gen_ai.input.messages']), expectedHistory);
-          assertEffectiveInput(attributes, bodies[1], true);
+          assertEffectiveInput(attributes, bodies[1], true, false);
         }
       });
     } finally {

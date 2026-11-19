@@ -436,7 +436,8 @@ describe.each(["capture", "hideOutputs", "hideInputs"])("8.3.0 connector credent
       expect(JSON.stringify(spans[0].attributes)).not.toContain(connector.userAccessToken);
       expect(wire).not.toHaveLength(0);
       expect(JSON.stringify(wire)).not.toContain(connector.userAccessToken);
-      if (mode === "hideInputs") {
+      if (mode !== "capture") {
+        // The raw request is not recorded while any hide setting is on.
         expect(spans[0].attributes[S.RAW_INPUT]).toBeUndefined();
       } else {
         expect(JSON.parse(spans[0].attributes[S.RAW_INPUT] as string).connectors).toEqual([
@@ -519,6 +520,8 @@ it.each(["complete", "start-only", "cancelled", "eof"])("captures v2 content-sta
 const outputModes = ["capture", "hideInputs", "hideOutputs", "hideOutputMessages", "hideOutputText"];
 describe.each(outputModes)("generated content with %s", (mode) => {
   const hidden = mode.startsWith("hideOutput");
+  // The raw response is not recorded while any hide setting is on.
+  const rawHidden = mode !== "capture";
   async function captureOutput(action: (spans: InMemorySpanExporter) => Promise<void>) {
     instrumentation.disable();
     const captured = new InMemorySpanExporter();
@@ -584,7 +587,8 @@ describe.each(outputModes)("generated content with %s", (mode) => {
       } else {
         const expectedBlocks = ["cancelled", "start-only"].includes(ending) ? blocks.slice(0, 1) : blocks;
         expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].content).toEqual(expectedBlocks);
-        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.content).toEqual(expectedBlocks);
+        if (rawHidden) expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        else expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.content).toEqual(expectedBlocks);
         expect(attrs[S.OUTPUT_VALUE]).toBe(expectedBlocks.length === 1 ? "" : "visible-answer");
       }
     });
@@ -623,7 +627,8 @@ describe.each(outputModes)("generated content with %s", (mode) => {
         expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
         expect(JSON.stringify(attrs)).not.toContain("synthetic-generated-");
       } else {
-        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.toolPlan).toBe(plan);
+        if (rawHidden) expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        else expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.toolPlan).toBe(plan);
         expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_plan).toBe(plan);
         expect(attrs[S.OUTPUT_VALUE]).not.toContain(plan);
       }
@@ -657,7 +662,8 @@ describe.each(outputModes)("generated content with %s", (mode) => {
         expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
         expect(JSON.stringify(attrs)).not.toContain("synthetic-generated-");
       } else {
-        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.toolPlan).toBe(partial);
+        if (rawHidden) expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        else expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.toolPlan).toBe(partial);
         expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_plan).toBe(partial);
       }
     });
@@ -701,7 +707,8 @@ describe.each(outputModes)("generated content with %s", (mode) => {
           { name: "lookup", parameters: '{"synthetic-generated-key":"<redacted>"}' },
           { name: "second", parameters: '{"synthetic-generated-second":' },
         ];
-        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).toolCalls).toEqual(exportedCalls);
+        if (rawHidden) expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        else expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).toolCalls).toEqual(exportedCalls);
         expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_calls).toEqual(exportedCalls.map(call => ({
           function: { name: call.name, arguments: typeof call.parameters === "string" ? call.parameters : JSON.stringify(call.parameters) },
         })));

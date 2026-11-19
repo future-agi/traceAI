@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Under a hide setting, the indexed and dotted children of a content key (for example `ai.prompt.messages.0` and `ai.response.toolCalls.1.args`) are dropped together with the key itself.
+
 ## [0.1.5] - 2026-11-12
 
 ### Changed

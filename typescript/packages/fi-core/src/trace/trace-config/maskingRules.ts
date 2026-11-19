@@ -118,7 +118,24 @@ function hasContentPrefix(key: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}.`));
 }
 
+function anyHideSettingOn(config: TraceConfig): boolean {
+  return Boolean(
+    config.hideInputs || config.hideOutputs ||
+    config.hideInputMessages || config.hideOutputMessages ||
+    config.hideInputText || config.hideOutputText ||
+    config.hideInputImages || config.hideEmbeddingVectors
+  );
+}
+
 const maskingRules: MaskingRule[] = [
+  {
+    // The raw request and response objects are not recorded while any hide setting is on: a response
+    // object can carry the request and a request can carry the response, so neither is kept.
+    condition: ({ config, key }) =>
+      anyHideSettingOn(config) &&
+      (key === SemanticConventions.RAW_INPUT || key === SemanticConventions.RAW_OUTPUT),
+    action: () => undefined,
+  },
   {
     // Retrieved documents are outputs too, including metadata that can duplicate
     // private content. Cover both opaque payloads and flattened document fields.
@@ -158,7 +175,7 @@ const maskingRules: MaskingRule[] = [
     // JSON: separately recorded model/token metadata remains available.
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
-      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT ||
+      (key === SemanticConventions.INPUT_VALUE ||
         key === SemanticConventions.LLM_TOOLS || key === SemanticConventions.LLM_INVOCATION_PARAMETERS),
     action: () => REDACTED_VALUE as AttributeValue,
   },
@@ -184,8 +201,7 @@ const maskingRules: MaskingRule[] = [
   {
     condition: ({ config, key }) =>
       (config.hideOutputs || config.hideOutputText || config.hideOutputMessages || config.hideEmbeddingVectors) &&
-      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT ||
-        key === SemanticConventions.LLM_FUNCTION_CALL),
+      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.LLM_FUNCTION_CALL),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {

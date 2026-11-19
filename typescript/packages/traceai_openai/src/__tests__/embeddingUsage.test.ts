@@ -4,7 +4,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { privacyFilter, REDACTED_VALUE } from "@traceai/fi-core";
+import { privacyFilter } from "@traceai/fi-core";
 import { OpenAIInstrumentation } from "../instrumentation";
 
 // Use the real SDK parser with a fake transport; no network requests are made.
@@ -61,7 +61,7 @@ describe.each([false, true])("T7-TS-OPENAI-002 embedding usage (hideOutputs=%s)"
       expect(native.name).toBe("OpenAI Embeddings");
       expect(native.status.code).toBe(SpanStatusCode.OK);
       if (hideOutputs) {
-        expect(native.attributes["raw.output"]).toBe(REDACTED_VALUE);
+        expect(native.attributes["raw.output"]).toBeUndefined();
       } else {
         expect(JSON.parse(native.attributes["raw.output"] as string)).toEqual(response);
       }
@@ -74,7 +74,7 @@ describe.each([false, true])("T7-TS-OPENAI-002 embedding usage (hideOutputs=%s)"
         expect(span.attributes["gen_ai.usage.total_tokens"]).toBe(usage?.total_tokens);
         expect(span.attributes["gen_ai.usage.output_tokens"]).toBeUndefined();
         if (hideOutputs) {
-          expect(span.attributes["raw.output"]).toBe(REDACTED_VALUE);
+          expect(span.attributes["raw.output"]).toBeUndefined();
         }
       }
     } finally {
