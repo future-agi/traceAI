@@ -347,6 +347,7 @@ def test_registry_is_consistent():
 @pytest.mark.parametrize("name, target, package, module, entry", [
     ("transformers", "transformers", "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     ("openrouter", "openrouter", "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor"),
+    ("elasticsearch", "elasticsearch", "traceAI-elasticsearch", "traceai_elasticsearch", "ElasticsearchInstrumentor"),
     ("marqo", "marqo", "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor"),
     ("watsonx", "ibm_watsonx_ai", "traceAI-watsonx", "traceai_watsonx", "WatsonxInstrumentor"),
 ])

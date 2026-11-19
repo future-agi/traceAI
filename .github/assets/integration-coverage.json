@@ -7,7 +7,7 @@
     "Go",
     "C#"
   ],
-  "method": "Union of normalized framework families from 67 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
+  "method": "Union of normalized framework families from 68 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
   "normalization": {
     "ag2-classic": "ag2",
     "google-genai-live": "google-genai",
@@ -24,7 +24,7 @@
     "fi-instrumentation-vertexai": "vertexai"
   },
   "package_counts_in_matrix": {
-    "Python": 67,
+    "Python": 68,
     "TypeScript": 45,
     "Java": 23,
     "Go": 5,
@@ -1114,6 +1114,13 @@
       "name": "Elasticsearch",
       "category": "rag-vector-databases",
       "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/elasticsearch/pyproject.toml",
+            "package": "traceAI-elasticsearch",
+            "source": "python/frameworks/elasticsearch/"
+          }
+        ],
         "Java": [
           {
             "manifest": "java/traceai-java-elasticsearch/pom.xml",

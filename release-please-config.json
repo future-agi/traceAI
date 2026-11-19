@@ -1354,6 +1354,14 @@
       "component": "npm-traceai-vitest-evals",
       "package-name": "@traceai/vitest-evals"
     },
+    "python/frameworks/elasticsearch": {
+      "release-type": "python",
+      "component": "traceai-elasticsearch",
+      "package-name": "traceAI-elasticsearch",
+      "extra-files": [
+        "traceai_elasticsearch/version.py"
+      ]
+    },
     "python/frameworks/marqo": {
       "release-type": "python",
       "component": "traceai-marqo",

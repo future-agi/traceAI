@@ -150,6 +150,7 @@ Each integration reports one of these statuses:
 | `pinecone` | `pinecone` | `traceAI-pinecone` | Automatic |
 | `qdrant` | `qdrant-client` | `traceAI-qdrant` | Automatic |
 | `weaviate` | `weaviate-client` | `traceAI-weaviate` | Automatic |
+| `elasticsearch` | `elasticsearch` | `traceAI-elasticsearch` | Automatic |
 | `marqo` | `marqo` | `traceAI-marqo` | Automatic |
 | `milvus` | `pymilvus` | `traceAI-milvus` | Automatic |
 | `lancedb` | `lancedb` | `traceAI-lancedb` | Automatic |

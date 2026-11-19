@@ -194,6 +194,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-livekit` | [livekit](frameworks/livekit/) |
 | `traceAI-llamaindex` | [llama_index](frameworks/llama_index/) |
 | `traceAI-mcp` | [mcp](frameworks/mcp/) |
+| `traceAI-elasticsearch` | [elasticsearch](frameworks/elasticsearch/) |
 | `traceAI-marqo` | [marqo](frameworks/marqo/) |
 | `traceAI-mcp-use` | [mcp-use](frameworks/mcp-use/) |
 | `traceAI-milvus` | [milvus](frameworks/milvus/) |

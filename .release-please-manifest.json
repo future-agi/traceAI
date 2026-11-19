@@ -161,6 +161,7 @@
   "typescript/packages/traceai_vitest_evals": "0.1.1",
   "python/frameworks/openrouter": "0.1.0",
   "python/frameworks/sagemaker": "0.1.0",
+  "python/frameworks/elasticsearch": "0.1.0",
   "python/frameworks/marqo": "0.1.0",
   "python/frameworks/watsonx": "0.1.0",
   "python/frameworks/writer": "0.1.0",
