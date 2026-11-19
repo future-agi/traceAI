@@ -557,6 +557,10 @@ def _update_span(
     value_outputs = outputs
     if run.run_type == "chain" and _hides_input_content(config) and _echoes_input(run.inputs, outputs):
         value_outputs = None
+    # A prompt template's output is the formatted prompt: the request content itself.
+    if run.run_type == "prompt" and _hides_input_content(config):
+        value_outputs = None
+        outputs = None
 
     span.set_attributes(
         dict(
@@ -595,7 +599,7 @@ def _hides_input_content(config: Any) -> bool:
 
 _MIN_ECHO_LENGTH = 4
 _MAX_ECHO_DEPTH = 32
-_MAX_ECHO_LEAVES = 5000
+_MAX_ECHO_NODES = 20000
 
 
 class _Undecidable(Exception):
@@ -603,11 +607,12 @@ class _Undecidable(Exception):
 
 
 def _children(value: Any) -> Any:
-    """The parts of a non-scalar value: mapping values, sequence items, and the fields of model-like objects."""
+    """The parts of a non-scalar value as (key, part) pairs: mapping items, sequence items (no key), and the
+    fields of model-like objects. None when the value is not a container."""
     if isinstance(value, Mapping):
-        return list(value.values())
+        return [(k if isinstance(k, str) else None, v) for k, v in value.items()]
     if isinstance(value, (list, tuple, set, frozenset)):
-        return list(value)
+        return [(None, v) for v in value]
     for method in ("model_dump", "dict"):
         dump = getattr(value, method, None)
         if callable(dump):
@@ -616,65 +621,68 @@ def _children(value: Any) -> Any:
             except Exception:  # noqa: BLE001
                 continue
             if isinstance(dumped, Mapping):
-                return list(dumped.values())
+                return [(k if isinstance(k, str) else None, v) for k, v in dumped.items()]
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return [getattr(value, f.name, None) for f in dataclasses.fields(value)]
-    parts = []
-    for name in ("page_content", "content", "metadata"):
-        if hasattr(value, name):
-            parts.append(getattr(value, name, None))
+        return [(f.name, getattr(value, f.name, None)) for f in dataclasses.fields(value)]
+    parts = [(name, getattr(value, name, None)) for name in ("page_content", "content", "metadata") if hasattr(value, name)]
     if parts:
         return parts
     fields = getattr(value, "__dict__", None)
     if isinstance(fields, Mapping) and fields:
-        return list(fields.values())
+        return [(k if isinstance(k, str) else None, v) for k, v in fields.items()]
     return None
 
 
-def _leaves(value: Any, found: list, depth: int = 0) -> None:
-    """Every scalar leaf of ``value``, whatever its type; anything unreadable is a text leaf of its own."""
-    if depth > _MAX_ECHO_DEPTH or len(found) > _MAX_ECHO_LEAVES:
+def _leaves(value: Any, found: list, nodes: list, key: Any = None, depth: int = 0) -> None:
+    """Every scalar leaf of ``value`` as (nearest mapping key, leaf), whatever its type; anything unreadable is
+    a text leaf of its own. Every node visited counts toward the budget, not only the leaves."""
+    nodes[0] += 1
+    if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
         raise _Undecidable
     if value is None:
         return
     if isinstance(value, (str, bool, int, float)):
-        found.append(value)
+        found.append((key, value))
         return
     children = _children(value)
     if children is None:
-        found.append(str(value))
+        found.append((key, str(value)))
         return
-    for child in children:
-        _leaves(child, found, depth + 1)
+    for child_key, child in children:
+        _leaves(child, found, nodes, child_key if child_key is not None else key, depth + 1)
 
 
 def _echoes_input(inputs: Any, outputs: Any) -> bool:
-    """True when any leaf of the run's input (a string, number or boolean of any size) occurs in its output.
+    """True when the run's input shows up in its output.
 
-    Fail-safe: a comparison that cannot be completed, or any doubt, counts as an echo.
+    Strings and structures are compared fail-safe: a string leaf of four characters or more matches by
+    containment anywhere in the output, a shorter one by exact leaf equality (so "Hi" inside "Hi there" is
+    not an echo). A boolean or number matches only an equal value under the same key name (a pass-through or
+    assign shape), except that a number of four digits or more also matches by containment in the rendered
+    output. A comparison that cannot be completed, or any error, counts as an echo.
     """
     if not inputs or not outputs:
         return False
     try:
         in_leaves: list = []
         out_leaves: list = []
-        _leaves(inputs, in_leaves)
-        _leaves(outputs, out_leaves)
+        _leaves(inputs, in_leaves, [0])
+        _leaves(outputs, out_leaves, [0])
         rendered = safe_json_dumps(outputs)
-        out_strings = [leaf for leaf in out_leaves if isinstance(leaf, str)]
-        out_booleans = [leaf for leaf in out_leaves if isinstance(leaf, bool)]
-        out_numbers = [leaf for leaf in out_leaves if isinstance(leaf, (int, float)) and not isinstance(leaf, bool)]
-        for leaf in in_leaves:
-            if isinstance(leaf, bool):
-                if leaf in out_booleans:
-                    return True
-            elif isinstance(leaf, (int, float)):
-                if leaf in out_numbers or (len(str(leaf)) >= _MIN_ECHO_LENGTH and str(leaf) in rendered):
-                    return True
-            elif leaf:
+        out_strings = {leaf for _, leaf in out_leaves if isinstance(leaf, str)}
+        out_scalars = {(k, leaf) for k, leaf in out_leaves if not isinstance(leaf, str)}
+        for key, leaf in in_leaves:
+            if isinstance(leaf, str):
+                if not leaf:
+                    continue
                 if leaf in out_strings:
                     return True
                 if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
+                    return True
+            else:
+                if (key, leaf) in out_scalars:
+                    return True
+                if not isinstance(leaf, bool) and len(str(leaf)) >= _MIN_ECHO_LENGTH and str(leaf) in rendered:
                     return True
         return False
     except Exception:  # noqa: BLE001 - when the comparison cannot be made, the output is not recorded
