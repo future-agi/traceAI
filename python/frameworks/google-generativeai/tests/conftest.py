@@ -9,6 +9,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 MODEL = "models/gemini-1.5-flash"
 FinishReason = protos.Candidate.FinishReason
+# Older SDK releases have no model_version field on the response.
+HAS_MODEL_VERSION = "model_version" in protos.GenerateContentResponse.meta.fields
 
 
 def text_response(text, *, finish=FinishReason.STOP, usage=(5, 7), model_version="gemini-1.5-flash-002"):
@@ -17,12 +19,13 @@ def text_response(text, *, finish=FinishReason.STOP, usage=(5, 7), model_version
         kwargs["usage_metadata"] = protos.GenerateContentResponse.UsageMetadata(
             prompt_token_count=usage[0], candidates_token_count=usage[1], total_token_count=usage[0] + usage[1]
         )
+    if HAS_MODEL_VERSION:
+        kwargs["model_version"] = model_version
     return protos.GenerateContentResponse(
         candidates=[protos.Candidate(
             content=protos.Content(role="model", parts=[protos.Part(text=text)]),
             finish_reason=finish,
         )],
-        model_version=model_version,
         **kwargs,
     )
 

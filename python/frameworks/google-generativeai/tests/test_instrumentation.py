@@ -7,7 +7,7 @@ from google.generativeai import protos
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, attach, detach, set_value
 from opentelemetry.trace import StatusCode
 
-from conftest import MODEL, FinishReason, call_response, one, text_response
+from conftest import HAS_MODEL_VERSION, MODEL, call_response, one, text_response
 
 IN = "gen_ai.input.messages"
 OUT = "gen_ai.output.messages"
@@ -21,7 +21,8 @@ def test_generate_content_records_llm_span(spans, model, client):
     assert a["gen_ai.span.kind"] == "LLM"
     assert a["gen_ai.provider.name"] == "google"
     assert a["gen_ai.request.model"] == MODEL
-    assert a["gen_ai.response.model"] == "gemini-1.5-flash-002"
+    if HAS_MODEL_VERSION:
+        assert a["gen_ai.response.model"] == "gemini-1.5-flash-002"
     params = json.loads(a["gen_ai.request.parameters"])
     assert params["temperature"] == 0.25 and params["max_output_tokens"] == 50
     assert a["gen_ai.request.temperature"] == 0.25
