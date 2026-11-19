@@ -25,7 +25,7 @@ from typing import (
 
 import proto
 import wrapt
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     FiLLMProviderValues,
@@ -112,9 +112,9 @@ class _Wrapper:
     variable `_instrumentation_status._IS_INSTRUMENTED` to False or True, respectively.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, tracer: trace_api.Tracer, config: Optional[TraceConfig] = None) -> None:
         self._tracer = tracer
+        self._config = config if config is not None else TraceConfig()
 
     @wrapt.decorator  # type: ignore[misc]
     def __call__(
@@ -138,22 +138,28 @@ class _Wrapper:
         span.set_attribute(GEN_AI_SPAN_KIND, LLM)
 
         if isinstance(request, proto.Message):
-            input = request.__class__.to_dict(request)
-            span.set_attribute(INPUT_VALUE, safe_json_dumps(input))
-            extracted_data = _extract_image_data(input.get("contents", []))
-
-            if input_data := extracted_data.get("filtered_messages"):
-                span.set_attribute(INPUT_VALUE, safe_json_dumps(input_data))
-                span.set_attribute(INPUT_MIME_TYPE, JSON)
-                span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
-            if input_images := extracted_data.get("input_images"):
-                span.set_attribute(INPUT_IMAGES, safe_json_dumps(input_images))
-            if eval_input := extracted_data.get("eval_input"):
-                span.set_attribute(INPUT_VALUE, safe_json_dumps(eval_input))
-
-        else:
-            span.set_attribute(INPUT_VALUE, safe_json_dumps(request))
-            span.set_attribute(INPUT_VALUE, str(request))
+            try:
+                data = request.__class__.to_dict(request)
+                extracted = _extract_image_data(data.get("contents", []))
+                if extracted:
+                    if extracted.get("filtered_messages"):
+                        span.set_attribute(INPUT_MIME_TYPE, JSON)
+                        span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
+                    if images := extracted.get("input_images"):
+                        span.set_attribute(INPUT_IMAGES, safe_json_dumps(images))
+                    # Older cores do not mask the opaque value for all input flags.
+                    if not (
+                        self._config.hide_inputs
+                        or self._config.hide_input_messages
+                        or self._config.hide_input_text
+                        or self._config.hide_input_images
+                    ):
+                        # Successfully parsed non-text input keeps its existing JSON shape.
+                        value = extracted["eval_input"] or extracted["filtered_messages"] or data
+                        span.set_attribute(INPUT_VALUE, safe_json_dumps(value))
+            except Exception:
+                # Instrumentation must not replace the SDK result or export a raw fallback.
+                logger.debug("Could not extract Vertex request attributes")
         try:
             _update_span(request, span)
         except BaseException:
@@ -643,54 +649,54 @@ def _extract_image_data(messages):
         filtered_messages = []
         eval_input = []
 
-        if isinstance(messages, list):
-            for message in messages:
-                filtered_parts = []
-                content = message.get("parts", [])
+        if not isinstance(messages, list):
+            return {}
+        for message in messages:
+            filtered_parts = []
+            content = message.get("parts", [])
 
-                # Handle both string and list content
-                if isinstance(content, str):
-                    filtered_messages.append(message)
-                    eval_input.append(content)
-                    continue
+            # Handle both string and list content
+            if isinstance(content, str):
+                filtered_messages.append(message)
+                eval_input.append(content)
+                continue
 
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict):
-                            if "text" in item:
-                                filtered_parts.append(item)
-                                if item.get("text"):
-                                    eval_input.append(str(item.get("text")))
-                            if "file_data" in item:
-                                if (
-                                    item.get("file_data", {}).get("mime_type")
-                                    == "image/jpeg"
-                                ):
-                                    input_images.append(
-                                        item.get("file_data", {}).get("file_uri")
-                                    )
+            elif isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        return {}
+                    if "text" in item:
+                        filtered_parts.append(item)
+                        if item.get("text"):
+                            eval_input.append(str(item.get("text")))
+                    if "file_data" in item:
+                        if (
+                            item.get("file_data", {}).get("mime_type")
+                            == "image/jpeg"
+                        ):
+                            input_images.append(
+                                item.get("file_data", {}).get("file_uri")
+                            )
 
-                # Create new message with only parts
-                if filtered_parts:
-                    filtered_message = {
-                        "role": message.get("role"),
-                        "parts": filtered_parts,
-                    }
-                    filtered_messages.append(filtered_message)
+            else:
+                return {}
 
+            # Create new message with only parts
+            if filtered_parts:
+                filtered_message = {
+                    "role": message.get("role"),
+                    "parts": filtered_parts,
+                }
+                filtered_messages.append(filtered_message)
 
         return {
             "input_images": input_images if input_images else None,
             "filtered_messages": filtered_messages if filtered_messages else None,
             "eval_input": " | ".join(eval_input),
         }
-    except Exception as e:
-        print(f"Error in _extract_image_data: {e}")
-        return {
-            "input_images": input_images,
-            "filtered_messages": messages,
-            "eval_input": "",
-        }
+    except Exception:
+        # Do not substitute the original messages for a failed extraction.
+        return {}
 
 
 IMAGE_URL = ImageAttributes.IMAGE_URL
