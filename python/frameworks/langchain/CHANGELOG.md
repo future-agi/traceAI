@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- With an input hide setting, the echo check also looks for user data nested inside a content part under keys named like part labels (for example `json.file.name`, `meta.source.format`, `json.content[].id`), and for the undeclared (`extra="allow"`) and computed fields of a pydantic input; an output that repeats them is not recorded.
+
 ## [0.2.4] - 2026-11-19
 
 ### Changed
