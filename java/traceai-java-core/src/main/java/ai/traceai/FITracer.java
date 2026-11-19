@@ -186,6 +186,63 @@ public class FITracer {
     }
 
     /**
+     * Sets a long attribute, applying the hide settings to content keys by key like the string
+     * setter. A masked value is written as the string placeholder {@link ContentKeys#REDACTED}, or
+     * dropped when the key is omitted under the flag. Keys that are not content are set as given.
+     * @param span the span
+     * @param key the attribute key
+     * @param value the attribute value
+     */
+    public void setAttribute(Span span, String key, long value) {
+        writeTyped(span, key, value, AttributeKey.longKey(key));
+    }
+
+    /** Sets a double attribute; see {@link #setAttribute(Span, String, long)}. */
+    public void setAttribute(Span span, String key, double value) {
+        writeTyped(span, key, value, AttributeKey.doubleKey(key));
+    }
+
+    /** Sets a boolean attribute; see {@link #setAttribute(Span, String, long)}. */
+    public void setAttribute(Span span, String key, boolean value) {
+        writeTyped(span, key, value, AttributeKey.booleanKey(key));
+    }
+
+    /** Sets a long-array attribute; see {@link #setAttribute(Span, String, long)}. */
+    public void setAttribute(Span span, String key, long[] values) {
+        if (values == null) return;
+        List<Long> list = new java.util.ArrayList<>(values.length);
+        for (long v : values) list.add(v);
+        writeTyped(span, key, list, AttributeKey.longArrayKey(key));
+    }
+
+    /** Sets a double-array attribute; see {@link #setAttribute(Span, String, long)}. */
+    public void setAttribute(Span span, String key, double[] values) {
+        if (values == null) return;
+        List<Double> list = new java.util.ArrayList<>(values.length);
+        for (double v : values) list.add(v);
+        writeTyped(span, key, list, AttributeKey.doubleArrayKey(key));
+    }
+
+    /** Sets a boolean-array attribute; see {@link #setAttribute(Span, String, long)}. */
+    public void setAttribute(Span span, String key, boolean[] values) {
+        if (values == null) return;
+        List<Boolean> list = new java.util.ArrayList<>(values.length);
+        for (boolean v : values) list.add(v);
+        writeTyped(span, key, list, AttributeKey.booleanArrayKey(key));
+    }
+
+    private <T> void writeTyped(Span span, String key, T value, AttributeKey<T> typedKey) {
+        if (key == null) return;
+        Object masked = config.maskTypedAttribute(key, value);
+        if (masked == null) return;
+        if (masked == value) {
+            span.setAttribute(typedKey, value);
+        } else {
+            span.setAttribute(key, ContentKeys.REDACTED);
+        }
+    }
+
+    /**
      * Sets token count attributes on a span.
      * @param span the span
      * @param prompt the prompt token count
