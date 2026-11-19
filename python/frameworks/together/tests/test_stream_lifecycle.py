@@ -115,8 +115,14 @@ def kind(request):
     return request.param
 
 
+@pytest.fixture(params=[TraceConfig(), TraceConfig(hide_inputs=True), TraceConfig(hide_input_messages=True)],
+                ids=["default", "hide_inputs", "hide_input_messages"])
+def config(request):
+    return request.param
+
+
 @pytest.fixture
-def traced(kind):
+def traced(kind, config):
     sync_cls, async_cls = _classes(kind)
     created = {}
 
@@ -134,7 +140,7 @@ def traced(kind):
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = TogetherInstrumentor()
-    instrumentor.instrument(tracer_provider=provider, config=TraceConfig())
+    instrumentor.instrument(tracer_provider=provider, config=config)
     try:
         yield sync_cls, async_cls, created, exporter
     finally:
@@ -274,3 +280,36 @@ def test_a_failing_async_stream_marks_the_span_as_an_error_once(traced, kind):
     with pytest.raises(RuntimeError):
         asyncio.run(run())
     assert _only(exporter).status.status_code.name == "ERROR"
+
+
+def _exception_types(span):
+    return [event.attributes.get("exception.type") for event in span.events if event.name == "exception"]
+
+
+def test_an_exception_raised_inside_a_with_block_ends_the_span_with_an_error(traced, kind):
+    sync_cls, _, created, exporter = traced
+    with pytest.raises(ValueError):
+        with _call(kind, sync_cls) as stream:
+            next(iter(stream))
+            raise ValueError("synthetic caller failure")
+    assert created["stream"].closed
+    span = _only(exporter)
+    assert span.status.status_code.name == "ERROR"
+    assert _exception_types(span) == ["ValueError"]
+
+
+def test_an_exception_raised_inside_an_async_with_block_ends_the_span_with_an_error(traced, kind):
+    _, async_cls, created, exporter = traced
+
+    async def run():
+        async with await _acall(kind, async_cls) as stream:
+            async for _ in stream:
+                break
+            raise ValueError("synthetic caller failure")
+
+    with pytest.raises(ValueError):
+        asyncio.run(run())
+    assert created["stream"].closed
+    span = _only(exporter)
+    assert span.status.status_code.name == "ERROR"
+    assert _exception_types(span) == ["ValueError"]
