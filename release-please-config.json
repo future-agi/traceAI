@@ -1394,6 +1394,14 @@
         "traceai_agentspec/version.py"
       ]
     },
+    "python/frameworks/promptflow": {
+      "release-type": "python",
+      "component": "traceai-promptflow",
+      "package-name": "traceAI-promptflow",
+      "extra-files": [
+        "traceai_promptflow/version.py"
+      ]
+    },
     "go/langchaingo": {
       "release-type": "go",
       "component": "go/langchaingo",

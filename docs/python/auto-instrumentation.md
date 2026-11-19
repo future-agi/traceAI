@@ -101,6 +101,7 @@ Each integration reports one of these statuses:
 | `writer` | `writerai` | `traceAI-writer` | Automatic |
 | `alephalpha` | `aleph_alpha_client` | `traceAI-alephalpha` | Automatic |
 | `agentspec` | `pyagentspec` | `traceAI-agentspec` | Automatic |
+| `promptflow` | `promptflow` | `traceAI-promptflow` | Automatic |
 | `portkey` | `portkey-ai` | `traceAI-portkey` | Automatic |
 | `watsonx` | `ibm_watsonx_ai` | `traceAI-watsonx` | Automatic |
 | `replicate` | `replicate` | `traceAI-replicate` | Automatic |
