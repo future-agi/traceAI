@@ -433,9 +433,12 @@ class _RetrieverForwardWrapper(_WithTracer):
     decided to instrument it.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, config: TraceConfig) -> None:
+    def __init__(
+        self, tracer: trace_api.Tracer, config: Optional[TraceConfig] = None
+    ) -> None:
         super().__init__(tracer)
-        self._hides_input = _hides_input(config)
+        # Without a config, the default TraceConfig applies (it reads the FI_HIDE_* settings).
+        self._hides_input = _hides_input(config if config is not None else TraceConfig())
 
     def __call__(
         self,
