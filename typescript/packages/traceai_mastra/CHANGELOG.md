@@ -1,6 +1,6 @@
 ## Unreleased
 
-- With any input hide setting, an input processor's span output (the rewritten `messages` and `systemMessages`) is not exported.
+- With any input hide setting, a processor run span's output (the rewritten `messages` and `systemMessages`) is not exported.
 
 ## [0.2.3] - 2026-11-18
 ### Fixed
