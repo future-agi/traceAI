@@ -138,13 +138,23 @@ function inFamily(set: ReadonlySet<string>, key: string): boolean {
 export function contentSide(key: string, value: AttributeValue | undefined): ContentSide | undefined {
   const exact = exactSide(key);
   if (exact !== undefined) return exact;
-  // Counts, flags and sizes are never content, including under a family (llm.messages.count).
-  if (typeof value === "number" || typeof value === "boolean") return undefined;
   const family = familySide(key);
+  // A member of a content family is content whatever its value type (arguments.amount=1500,
+  // suspension.data.balance=900), as in fi-core maskingRules and Python. The one exception is an
+  // explicit count: a number under a key whose last segment is count, size or length
+  // (llm.messages.count). Keys outside every family keep numbers and booleans visible.
+  if (family !== undefined) {
+    if (isCountKey(key, value)) return undefined;
+  } else if (typeof value === "number" || typeof value === "boolean") return undefined;
   const inferred = inferredSide(key);
   // A child the name rules place on the other side of its family (a `.content` under an input family) hides under both.
   if (family !== undefined && inferred !== undefined && inferred !== family) return "both";
   return family ?? inferred;
+}
+
+const COUNT_SEGMENTS = new Set<string>(["count", "size", "length"]);
+function isCountKey(key: string, value: AttributeValue | undefined): boolean {
+  return typeof value === "number" && COUNT_SEGMENTS.has(key.slice(key.lastIndexOf(".") + 1));
 }
 
 function exactSide(key: string): ContentSide | undefined {
@@ -222,6 +232,10 @@ export function isSecretKey(key: string): boolean {
 }
 
 function hiddenBySide(side: ContentSide, key: string, policy: ContentPolicy): boolean {
+  // Every child of a message list follows that list's message flag (and the whole-side flag),
+  // whatever its last segment: `.content` and `.data` children are not exempt.
+  if (inFamily(INPUT_MESSAGE_KEYS, key) && (policy.hideInputs || policy.hideInputMessages)) return true;
+  if (inFamily(OUTPUT_MESSAGE_KEYS, key) && (policy.hideOutputs || policy.hideOutputMessages)) return true;
   if (side === "both") return policy.hideInputs || policy.hideOutputs;
   if (side === "input") {
     if (policy.hideInputs) return true;
