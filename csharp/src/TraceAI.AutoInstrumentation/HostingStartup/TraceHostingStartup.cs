@@ -141,13 +141,12 @@ internal static class Decorator
             return new ServiceDescriptor(descriptor.ServiceType, provider => wrapper.Wrap(factory(provider), sensitive, kind), descriptor.Lifetime);
         }
         var implementation = descriptor.ImplementationType!;
-        // The implementation is registered under a private key, with the original descriptor's lifetime, so the container still
-        // validates its constructor at build time and creates it exactly as before. The application's own registrations of the
-        // implementation type are neither used nor changed, and no public registration of it is added.
-        var key = "TraceAI.AutoInstrumentation.HostingStartup/" + Guid.NewGuid().ToString("N");
-        services.Add(new ServiceDescriptor(implementation, key, implementation, descriptor.Lifetime));
+        // Container-agnostic: no descriptor is added and no keyed service is used. The replacement keeps the original lifetime,
+        // so the container builds it once (singleton), per scope or per resolve, and owns the wrapper it creates; the wrapper
+        // disposes the inner instance, which the container never sees, so it is disposed exactly once. The application's own
+        // registrations of the implementation type are neither used nor changed, and the type does not become resolvable.
         return new ServiceDescriptor(descriptor.ServiceType,
-            provider => wrapper.Wrap(provider.GetRequiredKeyedService(implementation, key), sensitive, kind), descriptor.Lifetime);
+            provider => wrapper.Wrap(ActivatorUtilities.CreateInstance(provider, implementation), sensitive, kind), descriptor.Lifetime);
     }
 
     private static string? Classify(Type serviceType, Settings settings)
@@ -217,13 +216,21 @@ internal sealed class Wrapper
             for (var i = 1; i < parameters.Length; i++) args[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : null;
             var wrapped = _constructor.Invoke(args);
             // Content is only ever switched on when the standard variable has not said otherwise: an application that set
-            // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false keeps it off whatever the traceAI opt-in says.
-            if (sensitive && string.Equals(Environment.GetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")?.Trim(), "false", StringComparison.OrdinalIgnoreCase)) sensitive = false;
+            // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT set to anything but true keeps it off whatever the traceAI opt-in says.
+            if (sensitive && ContentVariableForbids()) sensitive = false;
             _sensitive?.SetValue(wrapped, sensitive);
             TraceHostingStartup.RecordWrapped(kind);
             return wrapped;
         }
         catch (Exception error) { TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name); return inner; }
+    }
+
+    /// <summary>The standard variable counts as "true" only as the word true, in any case; any other non-empty value
+    /// ("false", "False", "0") is the application saying no.</summary>
+    private static bool ContentVariableForbids()
+    {
+        var value = Environment.GetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")?.Trim();
+        return !string.IsNullOrEmpty(value) && !string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool AlreadyTraced(object inner)
