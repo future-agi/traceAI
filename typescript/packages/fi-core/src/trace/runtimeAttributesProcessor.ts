@@ -1,6 +1,7 @@
 import type { Context } from "@opentelemetry/api";
 import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { runtimeAttributesEnabled, runtimeProcessorInstances } from "../runtime-metadata";
+import { runtimeProcessorInstances } from "../runtime-metadata";
+import { runtimeAttributesEnabled } from "./runtimeAttributesEnabled";
 import { rememberAutoSpanSink } from "../auto-span-delivery";
 
 const CARRIER_KEY = Symbol.for("futureagi.runtime.span_attributes.v1");

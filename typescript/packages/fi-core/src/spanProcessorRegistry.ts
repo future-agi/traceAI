@@ -5,7 +5,7 @@ import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { rememberAutoSpanSink } from "./auto-span-delivery";
 import { observeBeforeHost, WATCH_NAME } from "./trace/trace-config/agentIdentity";
-import { runtimeAttributesEnabled } from "./runtime-metadata";
+import { runtimeAttributesEnabled } from "./trace/runtimeAttributesEnabled";
 
 // Compatibility defaults stay real SDK processors at the top level, so native
 // adapters can borrow the transport while shutdown still drains accepted work.
