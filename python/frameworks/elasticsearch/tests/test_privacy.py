@@ -1,4 +1,5 @@
 import pytest
+from elasticsearch import ApiError
 from fi_instrumentation import TraceConfig
 
 from traceai_elasticsearch import ElasticsearchInstrumentor
@@ -83,7 +84,7 @@ def test_the_error_message_is_not_recorded_under_any_setting(provider, exporter,
     instrumentor = ElasticsearchInstrumentor()
     instrumentor.instrument(tracer_provider=provider, config=TraceConfig(hide_inputs=True))
     try:
-        with pytest.raises(Exception):
+        with pytest.raises(ApiError):
             client.search(index="docs", query={"match": {"title": QUERY}})
     finally:
         instrumentor.uninstrument()

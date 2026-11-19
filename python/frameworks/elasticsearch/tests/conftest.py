@@ -44,6 +44,17 @@ class Server:
         return 200, {}
 
 
+def _parse(body):
+    """A request body: one JSON document, or newline-delimited JSON for bulk requests."""
+    if not body:
+        return None
+    text = body.decode() if isinstance(body, bytes) else body
+    try:
+        return json.loads(text)
+    except ValueError:
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 def _meta(config, status):
     return ApiResponseMeta(node=config, duration=0.0, http_version="1.1", status=status, headers=HttpHeaders(
         {"content-type": "application/json", "x-elastic-product": "Elasticsearch"}))
@@ -52,7 +63,7 @@ def _meta(config, status):
 def _make_nodes(server):
     class SyncNode(BaseNode):
         def perform_request(self, method, target, body=None, headers=None, request_timeout=None):
-            status, payload = server.respond(method, target, json.loads(body) if body else None)
+            status, payload = server.respond(method, target, _parse(body))
             return NodeApiResponse(_meta(self.config, status), json.dumps(payload).encode())
 
         def close(self):
@@ -60,7 +71,7 @@ def _make_nodes(server):
 
     class AsyncNode(BaseAsyncNode):
         async def perform_request(self, method, target, body=None, headers=None, request_timeout=None):
-            status, payload = server.respond(method, target, json.loads(body) if body else None)
+            status, payload = server.respond(method, target, _parse(body))
             return NodeApiResponse(_meta(self.config, status), json.dumps(payload).encode())
 
         async def close(self):

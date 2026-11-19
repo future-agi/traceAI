@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from elasticsearch import Elasticsearch
+from elasticsearch import ApiError, Elasticsearch
 from fi_instrumentation import TraceConfig
 from opentelemetry.trace import StatusCode
 
@@ -34,7 +34,7 @@ def test_search_is_a_retriever_span_with_index_query_and_documents(instrumented,
     span = _only(exporter)
     a = dict(span.attributes)
     assert span.name == "elasticsearch.search"
-    assert a["fi.span.kind"] == "RETRIEVER"
+    assert a["gen_ai.span.kind"] == "RETRIEVER"
     assert a["db.system"] == "elasticsearch"
     assert a["db.operation.name"] == "search"
     assert a["db.vector.index.name"] == "docs" and a["db.namespace"] == "docs"
@@ -59,7 +59,7 @@ def test_knn_search_records_k_candidates_field_and_dimensions_but_never_the_vect
     assert a["elasticsearch.num_candidates"] == 20
     assert a["elasticsearch.field"] == "embedding"
     assert a["elasticsearch.query_vector_dimensions"] == len(VECTOR)
-    assert a["fi.span.kind"] == "RETRIEVER"
+    assert a["gen_ai.span.kind"] == "RETRIEVER"
     dump = _everything(exporter)
     for value in VECTOR:
         assert str(value) not in dump, "embedding values must never be recorded"
@@ -98,7 +98,7 @@ def test_index_bulk_and_delete_are_vector_db_spans(instrumented, clients, export
     client.delete(index="docs", id="d1")
     spans = {s.name: dict(s.attributes) for s in exporter.get_finished_spans()}
     assert set(spans) == {"elasticsearch.index", "elasticsearch.bulk", "elasticsearch.delete"}
-    assert all(a["fi.span.kind"] == "VECTOR_DB" for a in spans.values())
+    assert all(a["gen_ai.span.kind"] == "VECTOR_DB" for a in spans.values())
     assert spans["elasticsearch.bulk"]["db.vector.upsert.count"] == 2
     assert spans["elasticsearch.bulk"]["elasticsearch.has_errors"] is False
     assert spans["elasticsearch.bulk"]["elasticsearch.indexed_count"] == 2
@@ -112,7 +112,7 @@ def test_index_bulk_and_delete_are_vector_db_spans(instrumented, clients, export
 def test_a_server_error_marks_the_span_and_records_only_the_error_type(instrumented, clients, server, exporter):
     client, _ = clients
     server.fail_with = 500
-    with pytest.raises(Exception):
+    with pytest.raises(ApiError):
         client.search(index="docs", query={"match_all": {}})
     span = _only(exporter)
     assert span.status.status_code == StatusCode.ERROR
@@ -124,7 +124,7 @@ def test_each_call_ends_exactly_one_span_even_when_it_fails(instrumented, client
     client, _ = clients
     client.search(index="docs", query={"match_all": {}})
     server.fail_with = 404
-    with pytest.raises(Exception):
+    with pytest.raises(ApiError):
         client.search(index="docs", query={"match_all": {}})
     assert len(exporter.get_finished_spans()) == 2
 
