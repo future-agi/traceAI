@@ -41,7 +41,25 @@ const patchedMessages = new Map<Anthropic.Messages, {
   generation: symbol;
   /** The hosted-client module whose loader installed this patch, if any. */
   hostedBy?: unknown;
+  /** Other modules that resolve to this Messages class and were marked as ours. */
+  sharedWith: Set<object>;
 }>();
+
+/**
+ * Marks a module whose Messages class this instrumentation already patched through another module.
+ * The automatic loader looks for a change of the module's `_fiPatched` marker to tell its own patch
+ * from an application-owned one; a second module over the same class changes nothing else.
+ */
+const SHARED_PATCH = "_fiPatched";
+function markShared(module: unknown, patch: { sharedWith: Set<object> }): void {
+  if (!module || (typeof module !== "object" && typeof module !== "function")) return;
+  try {
+    Object.defineProperty(module, SHARED_PATCH, { value: true, configurable: true, enumerable: false });
+    patch.sharedWith.add(module as object);
+  } catch {
+    // A frozen module cannot carry the marker; spans are still recorded.
+  }
+}
 
 export function isPatched() {
   return patchedMessages.size > 0;
@@ -73,13 +91,35 @@ function providerOf(messages: unknown): string {
   return LLMProvider.ANTHROPIC;
 }
 
-/** The module object of a cloud-hosted client package, and how to build a client from it without credentials. */
+/**
+ * A transport that is never used: a probe client is only built to read its Messages class, so
+ * any request it could make fails here instead of reaching the network.
+ */
+const probeFetch = async () => {
+  throw new Error("@traceai/anthropic: the probe client sends no requests");
+};
+
+/**
+ * The module object of a cloud-hosted client package, and how to build a client from it that does no
+ * I/O and reads no credentials. The Vertex client starts Google credential discovery in its
+ * constructor unless it is given an auth object, so it gets a stub whose `getClient` never rejects;
+ * the Bedrock client gets placeholder keys, so no AWS credential chain is consulted.
+ */
 function hostedClient(moduleExports: any): { className: string; probe: Record<string, unknown> } | undefined {
   if (typeof moduleExports?.AnthropicBedrock === "function") {
-    return { className: "AnthropicBedrock", probe: { awsRegion: "us-east-1" } };
+    return {
+      className: "AnthropicBedrock",
+      probe: { awsRegion: "us-east-1", awsAccessKey: "traceai-probe", awsSecretKey: "traceai-probe", maxRetries: 0, fetch: probeFetch },
+    };
   }
   if (typeof moduleExports?.AnthropicVertex === "function") {
-    return { className: "AnthropicVertex", probe: { region: "us-east5", projectId: "traceai-probe" } };
+    return {
+      className: "AnthropicVertex",
+      probe: {
+        region: "us-east5", projectId: "traceai-probe", accessToken: "traceai-probe", maxRetries: 0, fetch: probeFetch,
+        googleAuth: { getClient: async () => ({}) },
+      },
+    };
   }
   return undefined;
 }
@@ -441,14 +481,15 @@ export class AnthropicInstrumentation extends InstrumentationBase{
     return [module, hosted(BEDROCK_MODULE), hosted(VERTEX_MODULE)];
   }
 
-  /** Patches the Messages class a hosted client uses, found from a client built without credentials. */
+  /** Patches the Messages class a hosted client uses, found from a probe client that does no I/O. */
   private patchHosted(moduleExports: any, className: string, probe: Record<string, unknown>) {
     const ClientClass = moduleExports?.[className];
     // A client with native OpenTelemetry support traces itself.
     if (ClientClass.prototype && "openTelemetry" in ClientClass.prototype) return moduleExports;
     let messagesPrototype: any;
     try {
-      // Constructing a client reads the environment only: it does no I/O and needs no credentials.
+      // The probe carries placeholder credentials and a stub auth object, so construction reads no
+      // credential source and starts no discovery; its transport is never used.
       messagesPrototype = Object.getPrototypeOf(new ClientClass(probe).messages);
     } catch (error) {
       diag.warn(`@traceai/anthropic: could not find the Messages class of ${className}`, error);
@@ -496,7 +537,9 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       diag.error("Anthropic.Messages.prototype not found, cannot patch messages.create.");
       return moduleExports;
     }
-    if (patchedMessages.has(messagesPrototype) || (moduleExports as any).fiPatched) {
+    const existing = patchedMessages.get(messagesPrototype);
+    if (existing || (moduleExports as any).fiPatched) {
+      if (existing && existing.owner === this) markShared(hostedBy ?? moduleExports, existing);
       return moduleExports;
     }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -637,6 +680,7 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       create: messagesPrototype.create,
       generation,
       hostedBy,
+      sharedWith: new Set(),
     });
     try {
       (moduleExports as any).fiPatched = true;
@@ -665,6 +709,9 @@ export class AnthropicInstrumentation extends InstrumentationBase{
     if (!patch || patch.owner !== this) return;
     if (messagesPrototype.create === patch.create) this._unwrap(messagesPrototype, "create");
     patchedMessages.delete(messagesPrototype);
+    for (const shared of patch.sharedWith) {
+      try { delete (shared as any)[SHARED_PATCH]; } catch { /* nothing to clear */ }
+    }
     try {
       (patch.moduleExports as any).fiPatched = false;
     } catch (e) {
