@@ -1,4 +1,4 @@
-## Unreleased
+## [0.2.4] - 2026-11-19
 
 - With any input hide setting, a processor run span's output (the rewritten `messages` and `systemMessages`) is not exported.
 

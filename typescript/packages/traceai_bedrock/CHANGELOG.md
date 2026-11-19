@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.2.1] - 2026-11-19
 
 ### Changed
 - Raw input and raw output are not recorded while any hide setting is on. Converse `output.value` then holds only the response output, stop reason, usage and metrics.

@@ -1,6 +1,6 @@
 # @traceai/voltagent
 
-## Unreleased
+## [0.1.1] - 2026-11-19
 
 - Content keys are masked as families: a hide setting covers the key itself and every key below it (`key.<anything>`), whatever the value type. The numeric count exception applies only to the count keys VoltAgent writes, and the message flags cover every child key.
 

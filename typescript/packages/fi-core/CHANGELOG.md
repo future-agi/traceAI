@@ -1,11 +1,7 @@
-## [Unreleased]
-
-### Changed
-- Raw input and raw output are not recorded while any hide setting is on.
-
 ## [1.4.1] - 2026-11-19
 
 ### Changed
+- Raw input and raw output are not recorded while any hide setting is on.
 - Under `hideInputs` / `hideOutputs`, input, output and either-direction content keys, including `tool.parameters` and `tool.description`, are redacted with `__REDACTED__` on the exact key and on any dotted descendant (`key.<x>`) (#736). `gen_ai.tool.call` is redacted under `hideInputs` as well as `hideOutputs`. Nothing changes when no hide setting is on.
 
 ## [1.4.0] - 2026-11-18
