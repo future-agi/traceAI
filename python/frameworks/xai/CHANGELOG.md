@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.3] - 2026-11-19
 
 ### Changed
 - Defers to the shared OpenAI instrumentor (traceai-openai) while it is on, so a call yields one span, and declares `DEFERS_TO_SHARED_OPENAI`, which the core reads to turn the integration on by default (an older release without it stays off by default, so a call never yields two spans). Deferral needs a traceai-openai with the provider extensions.
