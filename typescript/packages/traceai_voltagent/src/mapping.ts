@@ -74,6 +74,16 @@ const INPUT_EXACT = new Set<string>([
   "input.value",
   "gen_ai.prompts",
   "gen_ai.system_instructions",
+  // Tool and request definitions the model was given (the same keys fi-core and Python mask).
+  "tool.description",
+  "gen_ai.tool.description",
+  "tool.parameters",
+  "gen_ai.tool.parameters",
+  "tool.json_schema",
+  "gen_ai.tool.definitions",
+  "gen_ai.tool.call.arguments",
+  "gen_ai.request.parameters",
+  "gen_ai.agent.description",
 ]);
 /** Message lists sent to the model: hidden by hideInputs or hideInputMessages; text by hideInputText. */
 const INPUT_MESSAGE_KEYS = new Set<string>(["llm.messages", "agent.messages", "agent.messages.ui", "gen_ai.input.messages"]);
@@ -88,6 +98,8 @@ const OUTPUT_EXACT = new Set<string>([
   "planagent.task.response_preview",
   // Each streamed answer chunk an output guardrail sees (guardrail.stream.process event).
   "guardrail.chunk.text",
+  // A tool's result.
+  "gen_ai.tool.call.result",
 ]);
 const OUTPUT_MESSAGE_KEYS = new Set<string>(["gen_ai.output.messages"]);
 const BOTH_EXACT = new Set<string>([
@@ -474,7 +486,7 @@ export function mapVoltAgentAttributes(source: Attributes, options: MapOptions):
   if (kind === FISpanKind.TOOL) {
     setIfAbsent(out, FIAttributes.GEN_AI_TOOL_NAME, asString(source[VA.TOOL_NAME]));
     setIfAbsent(out, FIAttributes.GEN_AI_TOOL_CALL_ID, asString(source[VA.TOOL_CALL_ID]));
-    setIfAbsent(out, FIAttributes.GEN_AI_TOOL_DESCRIPTION, asString(source[VA.TOOL_DESCRIPTION]));
+    setIfAbsent(out, FIAttributes.GEN_AI_TOOL_DESCRIPTION, asString(exportValue(VA.TOOL_DESCRIPTION, source[VA.TOOL_DESCRIPTION], options)));
   }
 
   // input.value / output.value (the collector's input and output columns), from the values kept
