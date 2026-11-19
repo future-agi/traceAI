@@ -293,7 +293,7 @@ public final class TraceAIAuto {
                     String.valueOf(capture.match.endpoint().get("operation")));
                 for (Map.Entry<String, Object> e : attrs.entrySet()) {
                     String k = e.getKey(); Object v = e.getValue();
-                    if (hidden(k, capture.match, state.config())) continue;
+                    if (hidden(k, v, capture.match, state.config())) continue;
                     // With the error details hidden, a failed call's output is withheld as well: it may be the provider's error body.
                     if (!result.ok() && state.config().masking.isHideErrorDetails() && (k.equals("output.value") || k.equals("output.mime_type"))) continue;
                     if (v instanceof String) span.setAttribute(k, (String)v);
@@ -307,7 +307,19 @@ public final class TraceAIAuto {
         } catch (Throwable ignored) { }
     }
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }
-    static boolean hidden(String key, WireCore.Match match, AutoConfig config) {
+    static boolean hidden(String key, WireCore.Match match, AutoConfig config) { return hidden(key, "", match, config); }
+    /**
+     * True when the attribute is withheld. The content keys are the core SDK's shared table (ai.traceai.ContentKeys, the
+     * same list and semantics as Python's TraceConfig). The agent's own rules below stay: audio transcripts of a wire call
+     * are direction-aware (a speech-to-text transcript is output, a text-to-speech one is input), and the rules for the
+     * wire-specific keys (cohere.preamble, message.tool_calls, error attributes, the image / text / parameter switches).
+     * A numeric or boolean value is a count or flag, never content, so it is kept under the shared table.
+     */
+    static boolean hidden(String key, Object value, WireCore.Match match, AutoConfig config) {
+        boolean wireOperation = match != null && match.endpoint() != null && !"chat".equals(String.valueOf(match.endpoint().get("operation")));
+        boolean directional = key.equals("gen_ai.audio.transcript") && wireOperation;
+        boolean scalar = value instanceof Number || value instanceof Boolean;
+        if (!directional && !scalar && !"v".equals(config.masking.maskAttribute(key, "v"))) return true;
         if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
         if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();

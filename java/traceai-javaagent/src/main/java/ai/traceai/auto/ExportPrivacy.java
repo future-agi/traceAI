@@ -18,7 +18,7 @@ final class ExportPrivacy {
         source.forEach((key, value) -> siblings.put(key.getKey(), value));
         WirePrivacy.Scope scope = privacy.scope(siblings, "", WirePrivacy.Scope.EMPTY);
         source.forEach((key, value) -> {
-            if (TraceAIAuto.hidden(key.getKey(), match, config)) return;
+            if (TraceAIAuto.hidden(key.getKey(), value, match, config)) return;
             Object clean = contextSession && WirePrivacy.SESSION_ID.equals(key.getKey()) && value instanceof String session
                 ? privacy.sessionValue(session) : privacy.clean(key.getKey(), value, scope, true);
             // Only inspect materialized sanitizer output, never an application's List implementation.
