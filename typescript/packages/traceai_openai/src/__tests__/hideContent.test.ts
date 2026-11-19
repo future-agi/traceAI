@@ -191,7 +191,7 @@ describe("OpenAI instrumentation with hidden content", () => {
       expect(exported(span)).not.toContain(PROMPT);
       expect(exported(span)).not.toContain(SYSTEM_PROMPT);
       expect(span.attributes[SemanticConventions.INPUT_VALUE]).toBe(REDACTED_VALUE);
-      expect(span.attributes[SemanticConventions.RAW_INPUT]).toBe(REDACTED_VALUE);
+      expect(span.attributes[SemanticConventions.RAW_INPUT]).toBeUndefined();
       expect(span.attributes[SemanticConventions.LLM_INPUT_MESSAGES]).toBeUndefined();
       // Not content: kept
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBeDefined();
@@ -224,7 +224,7 @@ describe("OpenAI instrumentation with hidden content", () => {
     const ok = spans.filter((span) => span.status.code !== SpanStatusCode.ERROR);
     for (const span of ok) {
       expect(span.attributes[SemanticConventions.OUTPUT_VALUE]).toBe(REDACTED_VALUE);
-      expect(span.attributes[SemanticConventions.RAW_OUTPUT]).toBe(REDACTED_VALUE);
+      expect(span.attributes[SemanticConventions.RAW_OUTPUT]).toBeUndefined();
       expect(span.attributes[SemanticConventions.LLM_OUTPUT_MESSAGES]).toBeUndefined();
     }
   });
