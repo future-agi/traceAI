@@ -203,8 +203,8 @@ class _Wrapper(BaseModel):
 
 @pytest.mark.parametrize("setting", SETTINGS)
 def test_an_input_text_with_a_newline_and_a_quote_inside_a_nested_model_is_withheld(setting):
-    secret = 'SENTINEL_LINE_ONE\nthen "quoted" text \\ and a backslash'
-    spans = _spans(_config(setting), lambda: RunnableLambda(lambda x: {"wrapped": _Wrapper(text="prefix " + secret + " suffix")}).invoke({"q": secret}))
+    marker = 'SENTINEL_LINE_ONE\nthen "quoted" text \\ and a backslash'
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda x: {"wrapped": _Wrapper(text="prefix " + marker + " suffix")}).invoke({"q": marker}))
     assert_hidden(spans, "SENTINEL_LINE_ONE", setting=setting)
 
 
@@ -280,10 +280,10 @@ class _Note(BaseModel):
 
 @pytest.mark.parametrize("setting", SETTINGS)
 def test_any_field_of_a_non_langchain_object_with_content_is_input_text(setting):
-    secret = "SENTINEL_NOTE_LABEL_8120"
+    marker = "SENTINEL_NOTE_LABEL_8120"
     spans = _spans(_config(setting), lambda: RunnableLambda(
-        lambda s: {"summary": "the label was " + s["notes"][0].label}).invoke({"notes": [_Note(content="hi", label=secret)]}))
-    assert secret not in output_side(spans), (setting, _outputs(spans))
+        lambda s: {"summary": "the label was " + s["notes"][0].label}).invoke({"notes": [_Note(content="hi", label=marker)]}))
+    assert marker not in output_side(spans), (setting, _outputs(spans))
 
 
 @pytest.mark.parametrize("setting", ALL_SETTINGS)
@@ -369,18 +369,18 @@ def test_a_new_reply_from_a_pydantic_state_graph_is_kept(setting):
 
 @pytest.mark.parametrize("setting", SETTINGS)
 def test_a_type_value_inside_nested_user_data_of_a_part_is_input_text(setting):
-    secret = "SENTINEL_NESTED_META_TYPE_3071"
-    part = HumanMessage(content=[{"type": "text", "text": "hi", "meta": {"type": secret}}])
-    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "copied " + secret}).invoke({"messages": [part]}))
-    assert secret not in output_side(spans), (setting, _outputs(spans))
+    marker = "SENTINEL_NESTED_META_TYPE_3071"
+    part = HumanMessage(content=[{"type": "text", "text": "hi", "meta": {"type": marker}}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "copied " + marker}).invoke({"messages": [part]}))
+    assert marker not in output_side(spans), (setting, _outputs(spans))
 
 
 @pytest.mark.parametrize("setting", SETTINGS)
 def test_truncated_tool_call_arguments_are_input_text(setting):
-    secret = "SENTINEL_TRUNCATED_ARG_6262"
-    prior = AIMessage(content="", invalid_tool_calls=[{"name": "f", "args": '{"q": "' + secret, "id": "1", "error": None, "type": "invalid_tool_call"}])
-    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "looked up " + secret}).invoke({"messages": [prior]}))
-    assert secret not in output_side(spans), (setting, _outputs(spans))
+    marker = "SENTINEL_TRUNCATED_ARG_6262"
+    prior = AIMessage(content="", invalid_tool_calls=[{"name": "f", "args": '{"q": "' + marker, "id": "1", "error": None, "type": "invalid_tool_call"}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "looked up " + marker}).invoke({"messages": [prior]}))
+    assert marker not in output_side(spans), (setting, _outputs(spans))
 
 
 @pytest.mark.parametrize("setting", ALL_SETTINGS)
