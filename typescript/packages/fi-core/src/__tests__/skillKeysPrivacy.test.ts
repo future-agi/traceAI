@@ -22,6 +22,7 @@ const attrs: Attributes = {
   "fi.context.binding_id": id, "fi.context.session_id": receipt, "fi.context.linked_skill_version_ids": [version],
   "gen_ai.agent.name": "refund-agent", "gen_ai.agent.id": id,
 };
+const exportedAttrs = { ...attrs, "fi.context.session_id": "<redacted>" };
 const env = { ...process.env };
 beforeEach(() => { for (const key of Object.keys(process.env)) if (/^(FI_|OTEL_)/.test(key)) delete process.env[key]; });
 afterEach(() => { process.env = { ...env }; });
@@ -44,8 +45,8 @@ test.each([false, true])("runtime identity survives admission and detached expor
     const native = exporter.getFinishedSpans()[0];
     expect(native.attributes).toEqual(attrs);
     const first = privacyFilter(options).span(native);
-    expect(first.attributes).toEqual(attrs);
-    expect(privacyFilter(options).span(first).attributes).toEqual(attrs);
+    expect(first.attributes).toEqual(exportedAttrs);
+    expect(privacyFilter(options).span(first).attributes).toEqual(exportedAttrs);
     expect(native.attributes).toEqual(attrs);
   } finally { await provider.shutdown(); }
 });
@@ -63,7 +64,7 @@ test("runtime identity is reserved ahead of content and is not arbitrary-base64 
     expect(projectAttributes(crowded, 128).attributes).toMatchObject(attrs);
     new FITracer({ tracer: provider.getTracer("runtime-test") }).startSpan("skill.load", { attributes: crowded }).end();
     const exported = privacyFilter().span(exporter.getFinishedSpans()[0]);
-    expect(exported.attributes).toMatchObject(attrs);
+    expect(exported.attributes).toMatchObject(exportedAttrs);
     expect(isProjectionMetadata("fi.skill.contents")).toBe(false);
     expect(protectedFamily("fi.context.secret")).toBeUndefined();
   } finally { await provider.shutdown(); }
@@ -93,7 +94,7 @@ test("receipt name exemption is exact and typed; credential values still redact"
 });
 
 // A UUID-shaped value alone is not proof that a foreign session is a Hub receipt.
-test("receipt export follows FI provenance without registering correlation IDs as credentials", async () => {
+test("explicit span attributes are not verified Hub session receipts", async () => {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
   try {
@@ -105,7 +106,9 @@ test("receipt export follows FI provenance without registering correlation IDs a
     const filtered = privacyFilter().span(foreign);
     expect(filtered.attributes["fi.context.session_id"]).toBe("<redacted>");
     expect(JSON.stringify(filtered)).not.toContain(foreignId);
-    expect(privacyFilter().span(authored).attributes).toEqual({ "fi.context.session_id": receipt, note: `receipt ${receipt}` });
+    const explicit = privacyFilter().span(authored);
+    expect(explicit.attributes["fi.context.session_id"]).toBe("<redacted>");
+    expect(JSON.stringify(explicit)).not.toContain(receipt);
   } finally { await provider.shutdown(); }
 });
 

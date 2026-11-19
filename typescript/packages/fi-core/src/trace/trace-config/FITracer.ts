@@ -17,7 +17,7 @@ import {
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext, getSession } from "../contextAttributes";
   import { type PrivacyHints, rememberSessionIdentity } from "../../privacy-runtime";
-  import { privacyFilter, rememberContextReceipt, rememberAuthoredRedactions, rememberFITracerSpan, rememberProjectedAttributeDrops } from "../../export-privacy";
+  import { privacyFilter, rememberAuthoredRedactions, rememberFITracerSpan, rememberProjectedAttributeDrops } from "../../export-privacy";
   import { projectAttributes, tracerAttributeLimit } from "../../attribute-projection";
   
   /**
@@ -210,13 +210,7 @@ import {
       context: Context | undefined,
       sessionId?: string,
     ): FISpan {
-      // Only an explicit data property is a start-time receipt write. Neither
-      // inherited middleware attributes nor a value produced by an accessor
-      // attest a receipt. Compare to what admission actually retained below.
-      const explicit = options?.attributes;
-      const receiptKey = "fi.context.session_id";
-      const receipt = explicit && Object.getOwnPropertyDescriptor(explicit, receiptKey);
-      const attributes = { ...contextAttributes, ...explicit };
+      const attributes = { ...contextAttributes, ...options?.attributes };
       // Exact-secret/media/hide sanitization precedes SDK count/value limits.
       // Otherwise truncation can turn a known credential into an unknown prefix.
       let startAttributes: Attributes | undefined;
@@ -251,9 +245,6 @@ import {
       // Only spans made here export session and user grouping keys as set.
       try { rememberFITracerSpan(span.spanContext()); }
       catch { /* Without the mark the span keeps the stricter credential name rule. */ }
-      if (receipt?.enumerable && "value" in receipt && receipt.value === projected.attributes[receiptKey]) {
-        rememberContextReceipt(span.spanContext(), projected.attributes);
-      }
       // Auto only: bind the NUMBER of start values FI withheld or changed to the
       // export lineage. Nothing is written to, or replayed from, native storage.
       if (this.autoDestination) {

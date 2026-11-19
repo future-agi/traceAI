@@ -14,7 +14,7 @@ for (const [author, boundary] of [[cjs, esm], [esm, cjs]]) {
     tracer.startSpan('verified', {attributes:{...clean, ...Object.fromEntries(Array.from({length:12},(_,i)=>[`input.field.${i}`, 'ordinary']))}}).end();
     const raw = exporter.getFinishedSpans()[0]; assert.ok(raw.droppedAttributesCount > 0);
     const first = boundary.privacyFilter().span(raw);
-    for (const view of [first, author.privacyFilter().span(first)]) for (const [key, value] of Object.entries(clean)) assert.equal(view.attributes[key], value, key);
+    for (const view of [first, author.privacyFilter().span(first)]) for (const [key, value] of Object.entries({...clean, "fi.context.session_id": "<redacted>"})) assert.equal(view.attributes[key], value, key);
     first.attributes['fi.skill.requested_label'] = 'unverified'; // valid slug, but not the attested value
     const changed = author.privacyFilter().span(first);
     assert.notEqual(changed.attributes['fi.skill.requested_label'], 'unverified');

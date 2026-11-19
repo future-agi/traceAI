@@ -9,7 +9,7 @@ import { capBase64Images } from "./trace/trace-config/imageCap";
 import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-config/structuredRedaction";
 import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
-import { admittedRuntime, receipts, validRuntimeValue } from "./runtime-metadata";
+import { admittedRuntime, validRuntimeValue } from "./runtime-metadata";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
@@ -17,17 +17,9 @@ import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialN
 
 // Compatibility name for integration tests/packages migrating this round; the agent never reads or propagates it.
 export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credentials");
-// A Hub receipt UUID is not an authentication session. Only this exact key and
-// canonical UUID shape participate in FI-authored grouping; foreign spans still mask
-// the name, and loss, media and registered-secret checks always apply.
-const RECEIPT = "fi.context.session_id";
-/** @internal Bind only explicit FI span writes to the exact admitted value. */
-export function rememberContextReceipt(ctx: object, attrs: Attributes | undefined): void {
-  if (!attrs || !Object.prototype.hasOwnProperty.call(attrs, RECEIPT)) return;
-  const value = attrs[RECEIPT];
-  if (typeof value === "string" && validRuntimeValue(RECEIPT, value)) receipts.set(ctx, value);
-  else receipts.delete(ctx);
-}
+// Hub session receipts are emitted by the Python session-snapshot consumer.
+// The JS SDK has no verified Hub session producer. Raw span writes, including
+// attributes copied by an FI instrumentor, retain ordinary credential policy.
 const HOST_TRUNCATED = "<unknown: host-truncated>";
 const HOST_DATA_UNKNOWN = "traceai.capture.host_data_unknown";
 // The image cap's whole-value fallback marker (module-private WHOLE_MARKER in
@@ -525,8 +517,6 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   // span() turns the grouping-key name exemption off for spans not made by an FI
   // tracer. Discovery reads grouping values without their names on every span.
   let identityExemption = true;
-  const attestedReceipt = (key: string, value: unknown, ctx?: object) => identityExemption && key === RECEIPT
-    && typeof value === "string" && ctx !== undefined && receipts.get(ctx) === value;
   const groupingKey = (key: string): boolean => identityExemption && identityKey(key);
   const attributes = (attrs: unknown, requestSecrets?: readonly string[], operation?: unknown, capsuleDepth = 0, admission = false, incomplete = false, valueLimit = Infinity, unattestedCopy = false, spanType?: unknown, responseContext?: object, outputResponseContext?: object, withholdContent = false, authoredHints?: PrivacyHints): Attributes => {
     if (capsuleDepth > 16) throw new Error("Privacy capsule budget");
@@ -593,7 +583,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       const lostContext = incomplete && !admitted;
       const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !runtimeMatch && !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
-      const grouping = groupingKey(key) || (!capsuleDepth && attestedReceipt(key, item, responseContext));
+      const grouping = groupingKey(key);
       if (!admission && !grouping && isCredentialName(key)) return credentialAttributeSentinel;
       if (tc.hideEmbeddingVectors && /(?:^|\.)(?:embedding|embeddings|vector|vectors)(?:\.|$)/i.test(key) && !/(?:count|dimension|text)/i.test(key)) return REDACTED_VALUE;
       if (typeof item === "number" || typeof item === "boolean") {
@@ -758,9 +748,6 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       } else {
         clean[name] = value(item, key);
         if (key === METADATA_KEY && typeof item === "string") clean[name] = metadataGrouping(item, clean[name]);
-        if (!capsuleDepth && outputResponseContext && attestedReceipt(key, item, responseContext) && clean[name] === item) {
-          receipts.set(outputResponseContext, item as string);
-        }
         if (key === "session.id" && outputResponseContext && isSessionIdentity(responseContext, item) && typeof clean[name] === "string") {
           rememberSessionIdentity(outputResponseContext, clean[name] as string);
         }
@@ -838,7 +825,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
-        } else if (identityKey(key) || !depth && attestedReceipt(key, item, responseContext)) {
+        } else if (identityKey(key)) {
           // Same single debit; the value is discovered without its name, on every
           // span, so a session or user id never becomes a registered secret.
           requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
@@ -876,7 +863,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         // the export masking of their names depends on the span's provenance.
         const metadataParts = key === METADATA_KEY && typeof item === "string"
           ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
-        if (identityKey(key) || !depth && attestedReceipt(key, item, responseContext)) {
+        if (identityKey(key)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
         } else if (metadataParts) {

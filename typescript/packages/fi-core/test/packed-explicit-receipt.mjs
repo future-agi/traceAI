@@ -31,9 +31,11 @@ for (const [author, boundary] of [[esm, cjs], [cjs, esm]]) {
           assert.equal(clean.attributes[key], '<redacted>');
           assert.ok(!JSON.stringify(clean).includes(generic));
           assert.equal(clean.attributes.ordinary, 'keep');
-        } else assert.equal(clean.attributes[key], receipt);
+        } else {
+          assert.equal(clean.attributes[key], '<redacted>');
+          assert.ok(!JSON.stringify(clean).includes(receipt));
+        }
       }
-      if (i === 2) assert.equal(view.attributes.note, receipt);
     }
     assert.ok(!JSON.stringify(boundary.privacyFilter({}, [secret]).span(spans[4])).includes(secret));
   } finally { await provider.shutdown(); }

@@ -31,7 +31,6 @@ export const validRuntimeValue = (key: string, value: unknown) => schema.get(key
 // Module-private to fi-core's package (no public subpath). The ESM build refers
 // to the CJS instance so an ESM exporter can check an FI-authored CJS value,
 // and vice versa. Never publish evidence on span attributes or process globals.
-export const receipts = new WeakMap<object, string>();
 export const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
 
 // Constructor identity only. Membership grants no receipt or span provenance.

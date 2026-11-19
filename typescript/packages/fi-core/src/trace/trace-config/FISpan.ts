@@ -13,7 +13,7 @@ import {
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
-  import { privacyFilter, rememberContextReceipt, rememberAuthoredRedactions, rememberMediaAdmission, rememberProjectedAttributeDrops, rememberSpanPrivacyFailure } from "../../export-privacy";
+  import { privacyFilter, rememberAuthoredRedactions, rememberMediaAdmission, rememberProjectedAttributeDrops, rememberSpanPrivacyFailure } from "../../export-privacy";
   import { type PrivacyHints, providerResponseBinding } from "../../privacy-runtime";
   import { DROPPED_CONTENT_COUNT, LEGACY_DROPPED_COUNT, PROJECTION_METADATA, projectAttributes } from "../../attribute-projection";
   import {
@@ -180,7 +180,6 @@ import {
      * updated; custom span implementations retain their normal public API path.
      */
     private admit(attributes: Attributes, singleKey?: string, original: Attributes = attributes): void {
-      if (Object.prototype.hasOwnProperty.call(attributes, "fi.context.session_id")) rememberContextReceipt(this.span.spanContext(), attributes);
       if (this.autoDestination) {
         // Never read/merge/replay foreign attributes. Host processors and active
         // application code may have written to the same native span since our
