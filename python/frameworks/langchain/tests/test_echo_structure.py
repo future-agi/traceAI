@@ -290,3 +290,20 @@ def test_any_field_of_a_non_langchain_object_with_content_is_input_text(setting)
 def test_a_boolean_input_is_not_matched_by_an_equal_number_in_the_output(setting):
     spans = _spans(_config(setting), lambda: RunnableLambda(lambda _: {"count": 1}).invoke(True))
     assert any('"count": 1' in str(out) for out in _outputs(spans)), (setting, _outputs(spans))
+
+
+ORDER = "SENTINEL_ORDER_ID_55821"
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_nested_id_or_type_value_inside_a_content_part_is_input_text(setting):
+    part = HumanMessage(content=[{"type": "json", "json": {"id": ORDER, "meta": {"type": ORDER + "_T"}}}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "order " + ORDER + " and " + ORDER + "_T"}).invoke({"messages": [part]}))
+    assert ORDER not in output_side(spans), (setting, _outputs(spans))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_invalid_tool_call_arguments_are_input_text(setting):
+    prior = AIMessage(content="", invalid_tool_calls=[{"name": "f", "args": '{"q": "' + ORDER + '"', "id": "1", "error": None, "type": "invalid_tool_call"}])
+    spans = _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "looked up " + ORDER}).invoke({"messages": [prior]}))
+    assert ORDER not in output_side(spans), (setting, _outputs(spans))
