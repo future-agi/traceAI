@@ -40,15 +40,44 @@ _CONFIG_ATTRIBUTES = {
 _OMIT_DEFAULTS: Dict[str, Any] = {"always_print_fields_with_no_presence": False}
 
 
+def _is_option_error(error: TypeError, option: str) -> bool:
+    return "unexpected keyword argument" in str(error) and option in str(error)
+
+
 def to_dict(message: Any) -> Dict[str, Any]:
     """A proto-plus message as a plain dict, enums by name, unset fields left out."""
     global _OMIT_DEFAULTS
     options = dict(use_integers_for_enums=False, preserving_proto_field_name=True)
     try:
         return type(message).to_dict(message, **options, **_OMIT_DEFAULTS)  # type: ignore[no-any-return]
-    except TypeError:
-        _OMIT_DEFAULTS = {"including_default_value_fields": False}
-        return type(message).to_dict(message, **options, **_OMIT_DEFAULTS)  # type: ignore[no-any-return]
+    except TypeError as error:
+        # Only the keyword rename is retried; any other TypeError is the caller's to see.
+        (option,) = _OMIT_DEFAULTS
+        if not _is_option_error(error, option):
+            raise
+        fallback = {"including_default_value_fields": False}
+        result = type(message).to_dict(message, **options, **fallback)  # type: ignore[no-any-return]
+        _OMIT_DEFAULTS = fallback
+        return result
+
+
+def _scrub_blobs(value: Any) -> Any:
+    """A copy of a request/response dict with every inline_data blob replaced by its type and size note."""
+    if isinstance(value, Mapping):
+        # Under its own key: the core's image policy blanks any value found under an image-payload key.
+        return {
+            ("blob_note" if key == "inline_data" and isinstance(item, Mapping) else key):
+            _blob_note("inline_data", item or {}) if key == "inline_data" and isinstance(item, Mapping) else _scrub_blobs(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_scrub_blobs(item) for item in value]
+    return value
+
+
+def _one_shot(value: Any) -> bool:
+    """An iterator (a generator, say) can be read once: tracing must never be the one to read it."""
+    return not isinstance(value, (str, bytes, Mapping)) and iter(value) is value if hasattr(value, "__iter__") else False
 
 
 def bind(wrapped: Any, args: Tuple[Any, ...], kwargs: Mapping[str, Any]) -> Dict[str, Any]:
@@ -108,6 +137,8 @@ def message_attributes(content: Mapping[str, Any], default_role: str = "user") -
 
 def prepare_request(instance: Any, arguments: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """The request the SDK will send, as a dict, built by the SDK's own request preparation."""
+    if any(_one_shot(arguments.get(key)) for key in ("contents", "content", "tools", "safety_settings")):
+        return None
     try:
         request = instance._prepare_request(
             contents=arguments.get("contents", arguments.get("content")),
@@ -162,7 +193,7 @@ def request_attributes(instance: Any, arguments: Mapping[str, Any]) -> Dict[str,
             ] = safe_json_dumps(declaration)
             tool_index += 1
     attributes[SpanAttributes.INPUT_VALUE] = safe_json_dumps(
-        {"contents": contents, **({"system_instruction": system} if system else {})}
+        _scrub_blobs({"contents": contents, **({"system_instruction": system} if system else {})})
     )
     attributes[SpanAttributes.INPUT_MIME_TYPE] = "application/json"
     return attributes
@@ -198,7 +229,7 @@ def response_attributes(response: Any) -> Dict[str, Any]:
     block = (data.get("prompt_feedback") or {}).get("block_reason")
     if block:
         attributes["gen_ai.response.block_reason"] = str(block)
-    attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(data)
+    attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(_scrub_blobs(data))
     attributes[SpanAttributes.OUTPUT_MIME_TYPE] = "application/json"
     return attributes
 
@@ -226,11 +257,14 @@ def embedding_request_attributes(arguments: Mapping[str, Any]) -> Dict[str, Any]
         attributes[SpanAttributes.EMBEDDING_MODEL_NAME] = model
     parameters = {
         key: str(arguments[key]) if key == "task_type" else arguments[key]
-        for key in ("task_type", "title", "output_dimensionality")
+        for key in ("task_type", "output_dimensionality")
         if arguments.get(key) is not None
     }
     if parameters:
         attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = json.dumps(parameters, default=str)
+    if arguments.get("title") is not None:
+        # The title is input text: it sits under an embedding-text key so it is masked with the embedded text.
+        attributes[f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.title.embedding.text"] = str(arguments["title"])
     for index, text in enumerate(_texts_of(arguments.get("content"))):
         attributes[f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.embedding.text"] = text
     return attributes

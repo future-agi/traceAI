@@ -28,7 +28,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
 google-generativeai = ">=0.8.0"
-fi-instrumentation-otel = ">=1.0.0"
+fi-instrumentation-otel = ">=1.3.0,<2"
 wrapt = ">=1.15.0"
 
 [tool.poetry.group.dev.dependencies]

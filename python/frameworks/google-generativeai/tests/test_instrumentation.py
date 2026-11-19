@@ -238,21 +238,21 @@ def _everywhere(attributes):
 
 def test_inline_data_in_the_request_is_never_copied_into_any_attribute(spans, model, client):
     client.responses.append(text_response("ok"))
-    model.generate_content([{"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": BLOB}}, "describe"]}])
+    model.generate_content([{"role": "user", "parts": [{"inline_data": {"mime_type": "application/pdf", "data": BLOB}}, "describe"]}])
     _, a = one(spans)
     assert not _everywhere(a)
-    assert "image/png" in a["input.value"] and f"{len(BLOB)} bytes" in a["input.value"]
+    assert "application/pdf" in a["input.value"] and f"{len(BLOB)} bytes" in a["input.value"]
     assert "describe" in a["input.value"]
 
 
 def test_inline_data_in_the_response_is_never_copied_into_any_attribute(spans, model, client):
     client.responses.append(protos.GenerateContentResponse(candidates=[protos.Candidate(
-        content=protos.Content(role="model", parts=[protos.Part(inline_data=protos.Blob(mime_type="image/png", data=BLOB))]),
+        content=protos.Content(role="model", parts=[protos.Part(inline_data=protos.Blob(mime_type="application/pdf", data=BLOB))]),
         finish_reason=protos.Candidate.FinishReason.STOP)]))
     model.generate_content("draw")
     _, a = one(spans)
     assert not _everywhere(a)
-    assert "image/png" in a["output.value"] and f"{len(BLOB)} bytes" in a["output.value"]
+    assert "application/pdf" in a["output.value"] and f"{len(BLOB)} bytes" in a["output.value"]
 
 
 def test_generator_contents_reach_the_real_call_unconsumed(spans, model, client):
