@@ -111,7 +111,7 @@ class CohereContentKeysHideFlagsTest {
     }
 
     /** Attribute keys (and event names) whose exported value contains the sentinel. */
-    private List<String> leakedKeys(String sentinel) {
+    private List<String> exportedKeys(String sentinel) {
         List<String> keys = new ArrayList<>();
         for (SpanData span : exporter.getFinishedSpanItems()) {
             span.getAttributes().forEach((k, v) -> { if (String.valueOf(v).contains(sentinel)) keys.add(k.getKey()); });
@@ -127,13 +127,13 @@ class CohereContentKeysHideFlagsTest {
     void inputFlagsKeepPromptContentOutOfEverySpan(String flag) {
         run(flag);
         for (String s : List.of(IN_MESSAGE, IN_PREAMBLE, IN_HISTORY, IN_TOOL_RESULT, IN_EMBED_TEXT, IN_QUERY, IN_DOCUMENT)) {
-            List<String> leaked = leakedKeys(s);
+            List<String> exported = exportedKeys(s);
             // gen_ai.reranker.query is on Python's hide_inputs list only, so hideInputMessages keeps it by design
-            if (flag.equals("hideInputMessages")) leaked.remove("gen_ai.reranker.query");
-            assertThat(leaked).as("%s leaked under %s", s, flag).isEmpty();
+            if (flag.equals("hideInputMessages")) exported.remove("gen_ai.reranker.query");
+            assertThat(exported).as("%s exported under %s", s, flag).isEmpty();
         }
         // the other direction is not hidden: guards against asserting on an empty export
-        assertThat(leakedKeys(OUT_TEXT)).isNotEmpty();
+        assertThat(exportedKeys(OUT_TEXT)).isNotEmpty();
     }
 
     @ParameterizedTest
@@ -141,8 +141,28 @@ class CohereContentKeysHideFlagsTest {
     void outputFlagsKeepResponseContentOutOfEverySpan(String flag) {
         run(flag);
         for (String s : List.of(OUT_TEXT, OUT_TOOL_ARGS)) {
-            assertThat(leakedKeys(s)).as("%s leaked under %s", s, flag).isEmpty();
+            assertThat(exportedKeys(s)).as("%s exported under %s", s, flag).isEmpty();
         }
-        assertThat(leakedKeys(IN_MESSAGE)).isNotEmpty();
+        assertThat(exportedKeys(IN_MESSAGE)).isNotEmpty();
+    }
+
+    /**
+     * tool_call.function.arguments is on Python's input-side list and Java masks it, wherever it is nested, under
+     * every one of the four flags (ContentKeys javadoc). Only the nested argument attributes are inspected:
+     * raw.output legitimately carries the whole response unless an output flag hides it.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hideInputs", "hideOutputs", "hideInputMessages", "hideOutputMessages"})
+    void toolCallArgumentAttributesAreMaskedUnderEveryFlag(String flag) {
+        run(flag);
+        List<String> exported = new ArrayList<>();
+        for (SpanData span : exporter.getFinishedSpanItems()) {
+            span.getAttributes().forEach((k, v) -> {
+                if (k.getKey().contains("tool_call.function.arguments") && String.valueOf(v).contains(OUT_TOOL_ARGS)) {
+                    exported.add(k.getKey());
+                }
+            });
+        }
+        assertThat(exported).as("tool-call arguments under %s", flag).isEmpty();
     }
 }

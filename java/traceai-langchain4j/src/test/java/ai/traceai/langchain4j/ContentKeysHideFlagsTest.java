@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * Offline check that every content path the LangChain4j wrappers write (chat input and output messages,
- * tool-call arguments, embedding text, AI-service result) stays off exported spans under
+ * tool-call arguments, embedding text, AI-service parameters and result) stays off exported spans under
  * the hide flags. The SDK models are stubbed; nothing touches the network.
  */
 class ContentKeysHideFlagsTest {
@@ -129,7 +129,7 @@ class ContentKeysHideFlagsTest {
         }
     }
 
-    // ---- AI services (result) ----
+    // ---- AI services (method parameters and result) ----
 
     public interface Assistant {
         String chat(String question);
@@ -145,6 +145,14 @@ class ContentKeysHideFlagsTest {
     void aiServiceContentIsExportedWhenNothingIsHidden() {
         aiService(TraceConfig.builder().build());
         assertThat(everything()).contains(IN, OUT);
+    }
+
+    @Test
+    void aiServiceInputIsHiddenByInputFlags() {
+        for (TraceConfig config : hideInputSide()) {
+            aiService(config);
+            assertThat(everything()).doesNotContain(IN);
+        }
     }
 
     @Test
