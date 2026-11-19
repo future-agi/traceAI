@@ -9,7 +9,6 @@ import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.exporter.logging.LoggingSpanExporter;
 import io.opentelemetry.semconv.ResourceAttributes;
 import org.slf4j.Logger;
@@ -133,7 +132,7 @@ public final class TraceAI {
             // Add console exporter if enabled
             if (config.isEnableConsoleExporter()) {
                 providerBuilder.addSpanProcessor(
-                    SimpleSpanProcessor.create(LoggingSpanExporter.create())
+                    new SnapshotSpanProcessor(LoggingSpanExporter.create())
                 );
                 logger.info("TraceAI console exporter enabled");
             }
