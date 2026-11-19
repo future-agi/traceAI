@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.1.3] - 2026-11-19
 
 - The legacy hooks write no raw input or output while any hide setting is on; while an input hide setting is on, `output.value` holds response-side text only, never the whole result object.
 
