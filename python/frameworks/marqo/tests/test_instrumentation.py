@@ -252,3 +252,46 @@ def test_uninstrument_restores_originals_and_stops_tracing(server):
     assert Index.search is before
     marqo.Client(url=URL).index("idx").search("q")
     assert exporter.get_finished_spans() == ()
+
+
+def test_large_add_documents_batch_bounds_capture(spans, index, monkeypatch):
+    import traceai_marqo
+
+    scrubbed = []
+    real = traceai_marqo._scrub
+
+    def spy(value, *rest):
+        if isinstance(value, dict) and "_id" in value:  # a document, wherever it is reached from
+            scrubbed.append(value)
+        return real(value, *rest)
+
+    monkeypatch.setattr(traceai_marqo, "_scrub", spy)
+    docs = [{"_id": f"d{i}", "title": "t" * 50} for i in range(10000)]
+    index.add_documents(docs, tensor_fields=["title"])
+    _, a = one(spans)
+    assert len(scrubbed) <= traceai_marqo._MAX_DOCUMENTS  # never the whole batch
+    assert len(a["input.value"]) <= traceai_marqo._LIMIT
+    assert a["db.vector.upsert.count"] == 10000
+
+
+def test_add_documents_capture_stops_at_limit(spans, index):
+    import traceai_marqo
+
+    docs = [{"_id": f"d{i}", "title": "x" * 100000} for i in range(5)]
+    index.add_documents(docs, tensor_fields=["title"])
+    _, a = one(spans)
+    assert len(a["input.value"]) <= traceai_marqo._LIMIT
+    assert a["db.vector.upsert.count"] == 5
+
+
+def test_start_failure_does_not_break_the_call(spans, index, monkeypatch):
+    import traceai_marqo
+
+    def broken(*a, **k):
+        raise RuntimeError("tracing exploded")
+
+    monkeypatch.setattr(traceai_marqo, "_start", broken)
+    result = index.add_documents([{"_id": "d1", "title": "t"}], tensor_fields=["title"])
+    assert result["items"][0]["_id"] == "d1"
+    assert index.search("q")["hits"][0]["_id"] == "d1"
+    assert spans.get_finished_spans() == ()
