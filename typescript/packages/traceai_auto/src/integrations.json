@@ -489,6 +489,17 @@
     ]
   },
   {
+    "name": "typesafe",
+    "package": "@traceai/typesafe",
+    "targets": [
+      "@typesafe-ai/sdk"
+    ],
+    "className": "TypeSafeInstrumentation",
+    "modules": [
+      "@typesafe-ai/sdk"
+    ]
+  },
+  {
     "name": "vercel",
     "package": "@traceai/vercel",
     "targets": [

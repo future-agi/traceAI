@@ -936,6 +936,14 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/traceai_typesafe": {
+      "release-type": "node",
+      "component": "npm-traceai-typesafe",
+      "package-name": "@traceai/typesafe",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "typescript/packages/traceai_vercel": {
       "release-type": "node",
       "component": "npm-traceai-vercel",

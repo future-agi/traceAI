@@ -116,6 +116,7 @@ Content is captured by default. The core's `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, 
 | `@traceai/redis` | [traceai_redis](packages/traceai_redis/) |
 | `@traceai/strands` | [traceai_strands](packages/traceai_strands/) |
 | `@traceai/together` | [traceai_together](packages/traceai_together/) |
+| `@traceai/typesafe` | [traceai_typesafe](packages/traceai_typesafe/) |
 | `@traceai/vercel` | [traceai_vercel](packages/traceai_vercel/) |
 | `@traceai/fi-instrumentation-vertexai` | [traceai_vertexai](packages/traceai_vertexai/) |
 | `@traceai/vllm` | [traceai_vllm](packages/traceai_vllm/) |
