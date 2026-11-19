@@ -415,3 +415,13 @@ def test_an_integration_without_an_export_adapter_gives_its_setup_line():
     integration = _registry.find("strands")
     assert "StrandsSpanExporter" in integration.note
     assert "strands" not in _registry.SETUPS
+
+
+def test_registry_enables_agentspec_on_the_pyagentspec_import():
+    integration = _registry.find("agentspec")
+    assert integration is not None
+    assert integration.kind == _registry.INSTRUMENTOR
+    assert integration.targets == ("pyagentspec",)
+    assert (integration.package, integration.module, integration.entry) == (
+        "traceAI-agentspec", "traceai_agentspec", "AgentSpecInstrumentor")
+    assert integration.default
