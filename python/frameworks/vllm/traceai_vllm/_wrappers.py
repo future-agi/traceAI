@@ -178,7 +178,42 @@ def _get_input_attributes(
     return attributes
 
 
-def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
+# Response-side fields that may be recorded while input settings are on. Request echoes (prompt text and token ids,
+# prompt fragments) are left out rather than stripped by name.
+_RESPONSE_FIELDS = ("id", "object", "created", "model", "usage", "system_fingerprint", "service_tier")
+_CHOICE_FIELDS = ("index", "finish_reason", "text")
+_MESSAGE_FIELDS = ("role", "content", "tool_calls", "function_call", "refusal", "reasoning_content")
+
+
+def _input_hidden(config: Any) -> bool:
+    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text))
+
+
+def _response_side(dumped: Any) -> Any:
+    """The response fields that carry generated content, usage and identity only."""
+    if not isinstance(dumped, Mapping):
+        return dumped
+    out = {k: dumped[k] for k in _RESPONSE_FIELDS if k in dumped}
+    choices = dumped.get("choices")
+    if isinstance(choices, list):
+        kept = []
+        for choice in choices:
+            if not isinstance(choice, Mapping):
+                continue
+            item = {k: choice[k] for k in _CHOICE_FIELDS if k in choice}
+            for part in ("message", "delta"):
+                value = choice.get(part)
+                if isinstance(value, Mapping):
+                    item[part] = {k: value[k] for k in _MESSAGE_FIELDS if k in value}
+            raw = choice.get("raw_output")
+            if isinstance(raw, Mapping) and "completion" in raw:
+                item["raw_output"] = {"completion": raw["completion"]}
+            kept.append(item)
+        out["choices"] = kept
+    return out
+
+
+def _get_output_attributes(response: Any, hide_input: bool = False) -> Dict[str, AttributeValue]:
     """Extract output attributes from response."""
     attributes: Dict[str, AttributeValue] = {}
 
@@ -205,9 +240,11 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
     # Add raw output
     try:
         if hasattr(response, "model_dump"):
-            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.model_dump())
+            dumped = response.model_dump()
+            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(_response_side(dumped) if hide_input else dumped)
         elif hasattr(response, "__dict__"):
-            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.__dict__)
+            dumped = response.__dict__
+            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(_response_side(dumped) if hide_input else dumped)
     except Exception:
         pass
 
@@ -217,6 +254,7 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
 def _get_stream_output_attributes(
     chunks: list,
     full_content: str,
+    hide_input: bool = False,
 ) -> Dict[str, AttributeValue]:
     """Extract output attributes from streaming response chunks."""
     attributes: Dict[str, AttributeValue] = {
@@ -236,7 +274,8 @@ def _get_stream_output_attributes(
     # Add raw output
     try:
         attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps([
-            c.model_dump() if hasattr(c, "model_dump") else str(c) for c in chunks
+            (_response_side(c.model_dump()) if hide_input else c.model_dump()) if hasattr(c, "model_dump") else str(c)
+            for c in chunks
         ])
     except Exception:
         pass
@@ -275,7 +314,7 @@ class _CompletionsWrapper(_WithTracer):
                     return _Stream(response, span)
 
                 # Non-streaming response
-                output_attrs = _get_output_attributes(response)
+                output_attrs = _get_output_attributes(response, _input_hidden(getattr(span, "_self_config", None)))
                 span.set_attributes(output_attrs)
                 span.set_status(Status(StatusCode.OK))
                 span.end()
@@ -319,7 +358,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
                     return _AsyncStream(response, span)
 
                 # Non-streaming response
-                output_attrs = _get_output_attributes(response)
+                output_attrs = _get_output_attributes(response, _input_hidden(getattr(span, "_self_config", None)))
                 span.set_attributes(output_attrs)
                 span.set_status(Status(StatusCode.OK))
                 span.end()
@@ -359,7 +398,8 @@ class _StreamState(ObjectProxy):
         span = self._self_span
         try:
             span.set_attributes(_get_stream_output_attributes(
-                self._self_chunks, "".join(self._self_content)
+                self._self_chunks, "".join(self._self_content),
+                _input_hidden(getattr(span, "_self_config", None)),
             ))
             if error is not None:
                 # FITracer applies error-detail privacy to both surfaces.
