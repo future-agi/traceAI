@@ -393,3 +393,89 @@ def test_a_number_input_is_not_matched_by_an_equal_boolean_output(setting):
 def test_a_boolean_passthrough_is_withheld(setting):
     spans = _spans(_config(setting), lambda: RunnableLambda(lambda x: x).invoke(True))
     assert all(out is None for out in _outputs(spans)), (setting, _outputs(spans))
+
+
+# --- user data nested in a content part keeps every key; pydantic extra and computed fields are input text -------
+
+from pydantic import ConfigDict, computed_field  # noqa: E402
+
+NESTED = "SENTINEL_NESTED_PART_DATA_7316"
+
+
+def _nested_part(shape):
+    if shape == "json.file.name":
+        return {"type": "json", "json": {"file": {"name": NESTED}}}
+    if shape == "meta.source.format":
+        return {"type": "text", "text": "hi", "meta": {"source": {"format": NESTED}}}
+    return {"type": "json", "json": {"content": [{"type": "note", "id": NESTED}]}}
+
+
+NESTED_SHAPES = ["json.file.name", "meta.source.format", "json.content[].id"]
+
+
+def _copy_nested(setting, shape):
+    message = HumanMessage(content=[_nested_part(shape)])
+    return _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "copied " + NESTED}).invoke({"messages": [message]}))
+
+
+@pytest.mark.parametrize("shape", NESTED_SHAPES)
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_label_named_value_in_nested_user_data_of_a_part_is_input_text(setting, shape):
+    spans = _copy_nested(setting, shape)
+    assert NESTED not in output_side(spans), (setting, shape, _outputs(spans))
+
+
+@pytest.mark.parametrize("shape", NESTED_SHAPES)
+def test_a_label_named_value_in_nested_user_data_of_a_part_is_recorded_with_no_setting(shape):
+    assert any(NESTED in str(out) for out in _outputs(_copy_nested(None, shape)))
+
+
+class _OpenState(BaseModel):
+    """A state model that keeps undeclared fields (model_extra)."""
+    model_config = ConfigDict(extra="allow")
+    messages: list = []
+
+
+EXTRA = "SENTINEL_EXTRA_FIELD_4087"
+
+
+def _copy_extra(setting):
+    state = _OpenState(messages=[HumanMessage(content=HUMAN)], note=EXTRA)
+    return _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "the note was " + s.note}).invoke(state))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_an_extra_field_of_a_pydantic_state_is_input_text(setting):
+    spans = _copy_extra(setting)
+    assert EXTRA not in output_side(spans), (setting, _outputs(spans))
+
+
+def test_an_extra_field_of_a_pydantic_state_is_recorded_with_no_setting():
+    assert any(EXTRA in str(out) for out in _outputs(_copy_extra(None)))
+
+
+class _Ticket(BaseModel):
+    code: str
+
+    @computed_field
+    @property
+    def label(self) -> str:
+        return self.code.upper()
+
+
+COMPUTED = "SENTINEL_COMPUTED_FIELD_9154"
+
+
+def _copy_computed(setting):
+    ticket = _Ticket(code=COMPUTED.lower())
+    return _spans(_config(setting), lambda: RunnableLambda(lambda s: {"out": "ticket " + s.label}).invoke(ticket))
+
+
+@pytest.mark.parametrize("setting", SETTINGS)
+def test_a_computed_field_of_a_pydantic_input_is_input_text(setting):
+    spans = _copy_computed(setting)
+    assert COMPUTED not in output_side(spans), (setting, _outputs(spans))
+
+
+def test_a_computed_field_of_a_pydantic_input_is_recorded_with_no_setting():
+    assert any(COMPUTED in str(out) for out in _outputs(_copy_computed(None)))
