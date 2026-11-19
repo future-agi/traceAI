@@ -221,14 +221,31 @@ def test_minimax_needs_the_shared_minimax_labels(monkeypatch):
     assert "xai" in _enabled_by_default(["openai", "xai"])
 
 
-@pytest.mark.parametrize("name,flag", [("xai", "_supports_deepseek_extensions"), ("minimax", "_supports_minimax_provider")])
-def test_runtime_deferral_requires_the_same_capabilities(name, flag, monkeypatch, run, exporter):
-    """If the shared instrumentor lacks a capability at call time, the provider traces its own call."""
-    run(_enabled_by_default(["openai", name]))
+@pytest.mark.parametrize("name,flag,scope", [
+    ("xai", "_supports_deepseek_extensions", "traceai_xai"),
+    ("minimax", "_supports_minimax_provider", "traceai_minimax"),
+])
+def test_runtime_deferral_requires_the_same_capabilities(name, flag, scope, monkeypatch, run, exporter):
+    """Both integrations listed, but the shared instrumentor lacks a capability: the provider does not defer.
+
+    The exact outcome is two spans, one from the shared OpenAI instrumentor and one from the provider's own
+    integration. A guard that ignored the capability would defer and leave only the shared span.
+    """
+    run(["openai", name])
     openai_module = importlib.import_module("traceai_openai")
     monkeypatch.setattr(openai_module.OpenAIInstrumentor, flag, False)
     _client(BASE_URLS[name]).chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}])
-    assert len(exporter.get_finished_spans()) >= 1
+    spans = exporter.get_finished_spans()
+    assert sorted(span.instrumentation_scope.name for span in spans) == sorted(["traceai_openai", scope])
+    assert {span.attributes["gen_ai.provider.name"] for span in spans} == {name}
+
+
+@pytest.mark.parametrize("name", ["xai", "minimax"])
+def test_runtime_deferral_with_the_capabilities_gives_only_the_shared_span(name, run, exporter):
+    run(["openai", name])
+    _client(BASE_URLS[name]).chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}])
+    (span,) = exporter.get_finished_spans()
+    assert span.instrumentation_scope.name == "traceai_openai"
 
 
 # --- streaming -----------------------------------------------------------------------------------
@@ -268,7 +285,7 @@ def test_cleanups_run_in_reverse_order():
     assert calls == ["c", "b", "a"]
 
 
-def test_shutdown_order_leaves_no_wrapper_and_a_later_instrument_gives_one_span(exporter):
+def test_shutdown_leaves_no_wrapper_and_a_later_instrument_gives_one_span(exporter, monkeypatch):
     chat = importlib.import_module("openai.resources.chat")
     targets = [(openai.OpenAI, "request"), (openai.AsyncOpenAI, "request"), (chat.Completions, "create"), (chat.AsyncCompletions, "create")]
     originals = [getattr(owner, attribute) for owner, attribute in targets]
@@ -276,7 +293,11 @@ def test_shutdown_order_leaves_no_wrapper_and_a_later_instrument_gives_one_span(
     cleanups = {}
     for instrumentor, name in zip(_instrument(names, exporter.provider), names):
         cleanups[name] = instrumentor.uninstrument
-    _manager._run_cleanups(cleanups)
+    state = _manager._State()
+    state.cleanups = cleanups
+    monkeypatch.setattr(_manager, "_state", state)
+    _manager.shutdown(timeout_millis=5000)
+    assert state.stopped and state.cleanups == {}
     for (owner, attribute), original in zip(targets, originals):
         assert getattr(owner, attribute) is original, f"{owner.__name__}.{attribute} still wrapped"
     started = _instrument(["openai", "xai"], exporter.provider)
@@ -286,3 +307,58 @@ def test_shutdown_order_leaves_no_wrapper_and_a_later_instrument_gives_one_span(
     finally:
         for instrumentor in reversed(started):
             instrumentor.uninstrument()
+
+
+# --- traceai-openai absent -----------------------------------------------------------------------
+
+
+def _without_traceai_openai(monkeypatch):
+    """traceai-openai is neither loaded nor findable on the path."""
+    import importlib.machinery
+
+    monkeypatch.delitem(sys.modules, "traceai_openai", raising=False)
+    real = importlib.machinery.PathFinder.find_spec.__func__
+
+    def find_spec(cls, fullname, path=None, target=None):
+        return None if fullname == "traceai_openai" else real(cls, fullname, path, target)
+
+    monkeypatch.setattr(importlib.machinery.PathFinder, "find_spec", classmethod(find_spec))
+
+
+@pytest.mark.parametrize("name", ["deepseek", "xai", "minimax"])
+def test_provider_is_on_by_default_when_traceai_openai_is_not_installed(name, monkeypatch, run, exporter):
+    _without_traceai_openai(monkeypatch)
+    assert name in _enabled_by_default([name])
+    status = next(s for s in _manager.plan(AutoConfig()) if s.name == name)
+    assert "already traces" not in status.detail
+    assert status.status != _manager.DISABLED
+    run([name])
+    _client(BASE_URLS[name]).chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}])
+    (span,) = exporter.get_finished_spans()
+    assert span.instrumentation_scope.name == f"traceai_{name}"
+
+
+def test_unmarked_provider_stays_off_even_without_traceai_openai(monkeypatch):
+    _without_traceai_openai(monkeypatch)
+    monkeypatch.setattr(_manager, "_declared_in_source", lambda module, name, owner=None: False)
+    assert "xai" not in _enabled_by_default(["xai"])
+
+
+# --- the marker is a top-level assignment --------------------------------------------------------
+
+
+@pytest.mark.parametrize("source", [
+    '"""Docs.\n\n    DEFERS_TO_SHARED_OPENAI = True\n"""\n',
+    '"""Docs.\nDEFERS_TO_SHARED_OPENAI = True\n"""\n',
+    "def f():\n    DEFERS_TO_SHARED_OPENAI = True\n",
+    "class C:\n    DEFERS_TO_SHARED_OPENAI = True\n",
+    'text = "DEFERS_TO_SHARED_OPENAI = True"\n',
+])
+def test_marker_only_counts_as_a_top_level_assignment(tmp_path, monkeypatch, source):
+    integration = _package(tmp_path, monkeypatch, "defers_probe_c", source)
+    assert _manager.provider_defers_to_shared_openai(integration) is False
+
+
+def test_top_level_marker_after_a_docstring_reads_true(tmp_path, monkeypatch):
+    integration = _package(tmp_path, monkeypatch, "defers_probe_d", '"""Docs."""\n\nDEFERS_TO_SHARED_OPENAI = True\n')
+    assert _manager.provider_defers_to_shared_openai(integration) is True
