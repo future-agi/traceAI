@@ -60,8 +60,8 @@ const NONE = { policy: SHOW_ALL };
 /** An indexed child and a dotted child whose last segment is not itself a content segment. */
 const children = (key: string) => [`${key}.0.zz_field`, `${key}.zz_group.zz_field`];
 
-function exported(key: string, options: Parameters<typeof mapVoltAgentAttributes>[1]): boolean {
-  return key in mapVoltAgentAttributes({ [key]: "SYNTH_VALUE" }, options).attributes;
+function exported(key: string, options: Parameters<typeof mapVoltAgentAttributes>[1], value: string | number = "SYNTH_VALUE"): boolean {
+  return key in mapVoltAgentAttributes({ [key]: value }, options).attributes;
 }
 
 describe("content key families", () => {
@@ -94,11 +94,14 @@ describe("content key families", () => {
     expect(exported(key, NONE)).toBe(true);
   });
 
-  it.each(["tool.name", "tool.call.id", "gen_ai.tool.name", "gen_ai.tool.call.id", "tool.count", "gen_ai.tool.definitions.count"])(
-    "%s stays visible under every hide flag",
+  const ALL = { policy: { ...SHOW_ALL, hideInputs: true, hideOutputs: true, hideInputMessages: true, hideOutputMessages: true } };
+  it.each(["tool.name", "tool.call.id", "gen_ai.tool.name", "gen_ai.tool.call.id"])("%s stays visible under every hide flag", (key) => {
+    expect(exported(key, ALL)).toBe(true);
+  });
+  it.each(["gen_ai.tool.definitions.count", "llm.messages.count", "gen_ai.prompts.count", "tool.parameters.count"])(
+    "numeric %s stays visible under every hide flag",
     (key) => {
-      const all = { policy: { ...SHOW_ALL, hideInputs: true, hideOutputs: true, hideInputMessages: true, hideOutputMessages: true } };
-      expect(exported(key, all)).toBe(true);
+      expect(exported(key, ALL, 2)).toBe(true);
     },
   );
 });

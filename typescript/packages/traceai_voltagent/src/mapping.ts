@@ -125,13 +125,43 @@ const BOTH_LAST_SEGMENTS = new Set<string>(["data", "checkpoint", "content"]);
 
 export type ContentSide = "input" | "output" | "both";
 
+/** True when `key` is `entry` or a dotted/indexed child of it (`entry.` + anything), like fi-core maskingRules. */
+function inFamily(set: ReadonlySet<string>, key: string): boolean {
+  if (set.has(key)) return true;
+  for (let dot = key.indexOf("."); dot !== -1; dot = key.indexOf(".", dot + 1)) {
+    if (set.has(key.slice(0, dot))) return true;
+  }
+  return false;
+}
+
 /** Which side of the run a key's value comes from, or undefined when it is not content. */
 export function contentSide(key: string, value: AttributeValue | undefined): ContentSide | undefined {
+  const exact = exactSide(key);
+  if (exact !== undefined) return exact;
+  // Counts, flags and sizes are never content, including under a family (llm.messages.count).
+  if (typeof value === "number" || typeof value === "boolean") return undefined;
+  const family = familySide(key);
+  const inferred = inferredSide(key);
+  // A child the name rules place on the other side of its family (a `.content` under an input family) hides under both.
+  if (family !== undefined && inferred !== undefined && inferred !== family) return "both";
+  return family ?? inferred;
+}
+
+function exactSide(key: string): ContentSide | undefined {
   if (INPUT_EXACT.has(key) || INPUT_MESSAGE_KEYS.has(key)) return "input";
   if (OUTPUT_EXACT.has(key) || OUTPUT_MESSAGE_KEYS.has(key)) return "output";
   if (BOTH_EXACT.has(key)) return "both";
-  // Counts, flags and sizes are never content.
-  if (typeof value === "number" || typeof value === "boolean") return undefined;
+  return undefined;
+}
+
+function familySide(key: string): ContentSide | undefined {
+  if (inFamily(INPUT_EXACT, key) || inFamily(INPUT_MESSAGE_KEYS, key)) return "input";
+  if (inFamily(OUTPUT_EXACT, key) || inFamily(OUTPUT_MESSAGE_KEYS, key)) return "output";
+  if (inFamily(BOTH_EXACT, key)) return "both";
+  return undefined;
+}
+
+function inferredSide(key: string): ContentSide | undefined {
   const segments = key.split(".");
   // Any dotted segment input/output marks content (middleware.input.original, eval.output, ...).
   const isInput = segments.includes("input");
@@ -195,10 +225,10 @@ function hiddenBySide(side: ContentSide, key: string, policy: ContentPolicy): bo
   if (side === "both") return policy.hideInputs || policy.hideOutputs;
   if (side === "input") {
     if (policy.hideInputs) return true;
-    return INPUT_MESSAGE_KEYS.has(key) && policy.hideInputMessages;
+    return inFamily(INPUT_MESSAGE_KEYS, key) && policy.hideInputMessages;
   }
   if (policy.hideOutputs) return true;
-  return OUTPUT_MESSAGE_KEYS.has(key) && policy.hideOutputMessages;
+  return inFamily(OUTPUT_MESSAGE_KEYS, key) && policy.hideOutputMessages;
 }
 
 /**
@@ -219,7 +249,7 @@ export function exportValue(key: string, value: AttributeValue | undefined, opti
   let out: AttributeValue = value;
   if (
     typeof out === "string" &&
-    ((INPUT_MESSAGE_KEYS.has(key) && policy.hideInputText) || (OUTPUT_MESSAGE_KEYS.has(key) && policy.hideOutputText))
+    ((inFamily(INPUT_MESSAGE_KEYS, key) && policy.hideInputText) || (inFamily(OUTPUT_MESSAGE_KEYS, key) && policy.hideOutputText))
   ) {
     const redacted = redactMessageText(out);
     if (redacted === undefined) return undefined;
