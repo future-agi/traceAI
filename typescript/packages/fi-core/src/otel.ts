@@ -519,6 +519,9 @@ class FITracerProvider extends BasicTracerProvider {
         ? (config.spanProcessors ?? []).filter(processor => !runtimeProcessorInstances.has(processor))
         : config.spanProcessors ?? [],
       () => defaultProcessor?.disable(),
+      // A user-supplied runtime processor is moved ahead of the registry. It
+      // may already have distributed setters; do not attest early observation.
+      !runtimeProcessor || !config.spanProcessors?.includes(runtimeProcessor),
     );
     // Keep the actual SDK default at the top level for native adapters that borrow
     // its exporter, and for SDK-owned flush/shutdown of its accepted batch queue.

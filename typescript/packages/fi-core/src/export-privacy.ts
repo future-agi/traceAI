@@ -485,6 +485,21 @@ export function rememberMediaAdmission(span: object, complete: Attributes): void
 }
 export type PrivacyOptions = TraceConfigOptions & { hideLLMInvocationParameters?: boolean };
 
+/** Read-back is an export, not a complete caller write. Require this
+ * native source's own limit (never an unrelated global provider's), then
+ * use the same loss, discovery and masking decision as the FI exporter. */
+export function exportedAgentIdentity(span: object, privacy: Pick<ReturnType<typeof privacyFilter>, "span">): { name?: string; id?: string } {
+  const limit = data(span, "_attributeValueLengthLimit") ?? data(data(span, "_spanLimits"), "attributeValueLengthLimit");
+  if (typeof limit !== "number" || !(limit >= 0)) return {};
+  const raw = data(span, "attributes");
+  const hasName = typeof data(raw, AGENT_NAME) === "string", hasId = typeof data(raw, AGENT_ID) === "string";
+  if (!hasName && !hasId) return {};
+  const clean = privacy.span(span as ReadableSpan).attributes;
+  const name = clean[AGENT_NAME], id = clean[AGENT_ID];
+  return { name: hasName && typeof name === "string" ? name : undefined,
+    id: hasId && typeof id === "string" ? id : undefined };
+}
+
 /** The sole FI export boundary. No original span, resource or context is reachable from its snapshot. */
 export function privacyFilter(options: PrivacyOptions = {}, configured: readonly string[] = [],
   credentialAttributeSentinel: "<redacted>" | typeof REDACTED_VALUE = "<redacted>") {
@@ -908,20 +923,6 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   };
   return {
     attributes,
-    /** Read-back is an export, not a complete caller write. Require this
-     * native source's own limit (never an unrelated global provider's), then
-     * use the same loss, discovery and masking decision as the FI exporter. */
-    exportedAgentIdentity(span: object): { name?: string; id?: string } {
-      const limit = data(span, "_attributeValueLengthLimit") ?? data(data(span, "_spanLimits"), "attributeValueLengthLimit");
-      if (typeof limit !== "number" || !(limit >= 0)) return {};
-      const raw = data(span, "attributes");
-      const hasName = typeof data(raw, AGENT_NAME) === "string", hasId = typeof data(raw, AGENT_ID) === "string";
-      if (!hasName && !hasId) return {};
-      const clean = this.span(span as ReadableSpan).attributes;
-      const name = clean[AGENT_NAME], id = clean[AGENT_ID];
-      return { name: hasName && typeof name === "string" ? name : undefined,
-        id: hasId && typeof id === "string" ? id : undefined };
-    },
     /** @internal Retain only tightening MIME/type/modality bits from FI-authored writes.
      * No values, native storage, completeness grants or safe-MIME evidence. */
     admissionHints: (attrs: unknown, previous: PrivacyHints = new Map()): PrivacyHints => {

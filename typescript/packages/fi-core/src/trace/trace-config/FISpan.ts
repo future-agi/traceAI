@@ -10,11 +10,11 @@ import {
     Link,
     diag,
   } from "@opentelemetry/api";
-  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, SET_CONTEXT_NAME, writer } from "./agentIdentity";
+  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, SET_CONTEXT_NAME, observedWriter, writer } from "./agentIdentity";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
-  import { privacyFilter, rememberAuthoredRedactions, rememberMediaAdmission, rememberProjectedAttributeDrops, rememberSpanPrivacyFailure } from "../../export-privacy";
+  import { exportedAgentIdentity, privacyFilter, rememberAuthoredRedactions, rememberMediaAdmission, rememberProjectedAttributeDrops, rememberSpanPrivacyFailure } from "../../export-privacy";
   import { type PrivacyHints, providerResponseBinding } from "../../privacy-runtime";
   import { DROPPED_CONTENT_COUNT, LEGACY_DROPPED_COUNT, PROJECTION_METADATA, projectAttributes } from "../../attribute-projection";
   import {
@@ -93,15 +93,14 @@ import {
     [AGENT_VIEW](mark?: true) {
       if (!this.admissionFailed) {
         try {
-          const identity = this.privacy.exportedAgentIdentity(this.span);
-          const origin = writer(this.span);
+          const identity = exportedAgentIdentity(this.span, this.privacy);
+          const origin = observedWriter(this.span);
           // A foreign provider may have handed an unobserved, bound setter to
           // a host before constructing this wrapper. Do not plant a derived
           // name there: a subsequent same-string write would be unknowable.
-          const observed = origin?.beforeHost === true;
-          if (observed && mark && identity.name !== undefined) origin.automatic = true;
-          if (observed && origin.automatic && this.lastContextName !== undefined && identity.name !== this.lastContextName) origin.automatic = false;
-          return { ...identity, automatic: observed && origin.automatic };
+          if (origin && mark && identity.name !== undefined) origin.automatic = true;
+          if (origin?.automatic && this.lastContextName !== undefined && identity.name !== this.lastContextName) origin.automatic = false;
+          return { ...identity, automatic: origin?.automatic === true };
         } catch { /* A failed identity export exposes no host values. */ }
       }
       return { automatic: false };
@@ -112,9 +111,9 @@ import {
      * a host setter (even the same string) then leaves a real, distinct write. */
     [SET_CONTEXT_NAME](name: string): void {
       if (this.isEnded || this.admissionFailed || typeof name !== 'string' || name.length > 64) return;
-      const origin = writer(this.span);
+      const origin = observedWriter(this.span);
       this.lastContextName = name;
-      if (!origin?.beforeHost) return;
+      if (!origin) return;
       this.setAttribute(AGENT_NAME, name);
       origin.automatic = true; // Next view validates the actual committed name.
     }
@@ -408,7 +407,7 @@ import {
           // Commit a deferred default only into a demonstrably empty name slot.
           // An opaque map, preexisting name or late framework write wins.
           let fallback: Attributes = {};
-          if (this.lastContextName !== undefined && !writer(this.span)?.beforeHost) {
+          if (this.lastContextName !== undefined && !observedWriter(this.span)) {
             const slot = Object.getOwnPropertyDescriptor(this.span, "attributes");
             const native = Object.getOwnPropertyDescriptor(this.span, "_droppedAttributesCount");
             if (native && "value" in native && typeof native.value === "number" && slot && "value" in slot && slot.writable &&

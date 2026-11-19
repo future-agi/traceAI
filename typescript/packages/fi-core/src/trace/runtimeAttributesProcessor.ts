@@ -1,28 +1,12 @@
 import type { Context } from "@opentelemetry/api";
 import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { runtimeProcessorInstances } from "../runtime-metadata";
+import { runtimeAttributesEnabled, runtimeProcessorInstances } from "../runtime-metadata";
 import { rememberAutoSpanSink } from "../auto-span-delivery";
 
 const CARRIER_KEY = Symbol.for("futureagi.runtime.span_attributes.v1");
 const REGISTRY_KEY = Symbol.for("futureagi.runtime.skills.v1");
 const AGENT_SOURCES = Symbol.for("futureagi.runtime.context-agent.sources.v1");
 const PROCESSOR_KEY = Symbol.for("futureagi.runtime.skills.processor.v1");
-// Optional SDK configuration bridge. Without the SDK, environment controls work.
-// The SDK owns publishing this reader; fi-core never creates SDK state.
-const CONFIG_KEY = Symbol.for("futureagi.runtime.skills.config.v1");
-interface ConfigurationReader {
-  v: 1;
-  mode(): "on" | "off" | "load_only";
-}
-
-/** Shared with the owned pre-host observer; off/load_only install no writer. */
-export function runtimeAttributesEnabled(useEnvironment = true): boolean {
-  const config = (globalThis as unknown as Record<symbol, ConfigurationReader | undefined>)[CONFIG_KEY];
-  if (config?.v === 1 && typeof config.mode === "function") return config.mode() === "on";
-  const mode = process.env.FI_SKILLS_TRACING;
-  return useEnvironment && mode !== "off" && mode !== "load_only";
-}
-
 type RuntimeAttributes = Record<string, string | number | boolean | string[]>;
 interface RegistryReader {
   v: number;
