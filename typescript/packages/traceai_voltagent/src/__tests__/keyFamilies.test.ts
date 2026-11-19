@@ -98,8 +98,8 @@ describe("content key families", () => {
   it.each(["tool.name", "tool.call.id", "gen_ai.tool.name", "gen_ai.tool.call.id"])("%s stays visible under every hide flag", (key) => {
     expect(exported(key, ALL)).toBe(true);
   });
-  it.each(["gen_ai.tool.definitions.count", "llm.messages.count", "gen_ai.prompts.count", "tool.parameters.count"])(
-    "numeric %s stays visible under every hide flag",
+  it.each(["llm.messages.count", "llm.tools.count"])(
+    "numeric %s (a count VoltAgent writes) stays visible under every hide flag",
     (key) => {
       expect(exported(key, ALL, 2)).toBe(true);
     },

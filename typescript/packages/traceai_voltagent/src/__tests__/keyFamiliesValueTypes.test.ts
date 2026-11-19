@@ -33,15 +33,33 @@ describe("a content family member is content whatever its value type", () => {
   });
 });
 
-describe("counts stay visible", () => {
-  it.each(["llm.messages.count", "agent.messages.size", "gen_ai.tool.definitions.length", "gen_ai.prompts.count", "tool.parameters.count"])(
-    "numeric %s under every flag",
-    (key) => {
-      expect(exported(key, ALL, 3)).toBe(true);
-    },
-  );
+/** The count keys VoltAgent itself writes: visible under every hide flag. */
+const COUNT_KEYS = [
+  "llm.messages.count", "llm.tools.count", "eval.messages.count", "eval.scorers.count", "eval.tool_calls.count",
+  "eval.tool_results.count", "memory.step.count", "tool.search.selection.count", "workflow.step.retry.count", "agent.summary.length",
+];
+
+describe("counts stay visible only by allowlist", () => {
+  it.each(COUNT_KEYS)("numeric %s under every flag", (key) => {
+    expect(exported(key, ALL, 3)).toBe(true);
+  });
   it("a non-numeric value under a count key is still content", () => {
     expect(exported("llm.messages.count", ALL, "SYNTH")).toBe(false);
+  });
+  it.each([
+    ["tool.parameters.count", "hideInputs"],
+    ["gen_ai.tool.call.arguments.size", "hideInputs"],
+    ["gen_ai.tool.call.result.length", "hideOutputs"],
+    ["suspension.data.count", "hideInputs"],
+    ["suspension.data.count", "hideOutputs"],
+    ["eval.expected.length", "hideInputs"],
+    ["eval.expected.length", "hideOutputs"],
+    ["gen_ai.tool.definitions.length", "hideInputs"],
+    ["gen_ai.prompts.count", "hideInputs"],
+    ["agent.messages.size", "hideInputMessages"],
+  ])("numeric %s (a count-like name inside a content family) hides under %s", (key, flag) => {
+    expect(exported(key, withFlag(flag), 3)).toBe(false);
+    expect(exported(key, NONE, 3)).toBe(true);
   });
 });
 
