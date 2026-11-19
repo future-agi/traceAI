@@ -20,9 +20,11 @@ for (const [author, boundary] of [[esm, cjs], [cjs, esm]]) {
     tracer.startSpan('explicit', {attributes: {[key]: receipt, note: receipt}}, inherited).end();
     const late = tracer.startSpan('late', {}, inherited);
     late.setAttribute(key, receipt); late.end();
+    const secret = '99999999-3333-4333-8333-333333333333';
+    tracer.startSpan('sensitive', {attributes: {[key]: secret, note: secret}}).end();
     const spans = exporter.getFinishedSpans();
-    assert.equal(spans.length, 4);
-    for (const [i, raw] of spans.entries()) {
+    assert.equal(spans.length, 5);
+    for (const [i, raw] of spans.slice(0, 4).entries()) {
       const view = boundary.privacyFilter().span(raw);
       for (const clean of [view, author.privacyFilter().span(view)]) {
         if (i < 2) {
@@ -33,5 +35,6 @@ for (const [author, boundary] of [[esm, cjs], [cjs, esm]]) {
       }
       if (i === 2) assert.equal(view.attributes.note, receipt);
     }
+    assert.ok(!JSON.stringify(boundary.privacyFilter({}, [secret]).span(spans[4])).includes(secret));
   } finally { await provider.shutdown(); }
 }

@@ -35,4 +35,4 @@ export const receipts = new WeakMap<object, string>();
 export const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
 
 // Constructor identity only. Membership grants no receipt or span provenance.
-export const runtimeProcessors = new WeakSet<object>();
+export const runtimeProcessorInstances = new WeakSet<object>();
