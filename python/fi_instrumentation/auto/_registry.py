@@ -56,6 +56,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("google_genai_live", ("google.genai",), "traceAI-google-genai-live", "traceai_google_genai_live", "GoogleGenAILiveInstrumentor", category="voice"),
     Integration("vertexai", ("vertexai",), "traceAI-vertexai", "traceai_vertexai", "VertexAIInstrumentor"),
     Integration("bedrock", ("boto3",), "traceAI-bedrock", "traceai_bedrock", "BedrockInstrumentor"),
+    Integration("sagemaker", ("boto3",), "traceAI-sagemaker", "traceai_sagemaker", "SageMakerInstrumentor"),
     Integration("mistralai", ("mistralai",), "traceAI-mistralai", "traceai_mistralai", "MistralAIInstrumentor",
                 scopes=("mistralai",)),
     Integration("cohere", ("cohere",), "traceAI-cohere", "traceai_cohere", "CohereInstrumentor"),

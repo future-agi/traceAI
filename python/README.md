@@ -210,6 +210,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-qdrant` | [qdrant](frameworks/qdrant/) |
 | `traceAI-redis` | [redis-vector](frameworks/redis-vector/) |
 | `traceAI-replicate` | [replicate](frameworks/replicate/) |
+| `traceAI-sagemaker` | [sagemaker](frameworks/sagemaker/) |
 | `traceAI-semantic-kernel` | [semantic-kernel](frameworks/semantic-kernel/) |
 | `traceAI-smolagents` | [smolagents](frameworks/smolagents/) |
 | `traceai-strands` | [strands](frameworks/strands/) |

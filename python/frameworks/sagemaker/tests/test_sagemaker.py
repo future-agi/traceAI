@@ -42,7 +42,7 @@ def test_generic_json_round_trip_records_llm_span(spans):
 
     # The caller still gets an unread, complete body and the SDK got the unchanged request.
     assert json.loads(response["Body"].read()) == response_body
-    assert seen[0]["body"] == json.dumps(request)
+    assert seen[0]["body"] == json.dumps(request).encode()
     span = one(spans)
     a = attrs(span)
     assert span.name == "sagemaker.invoke_endpoint"
@@ -152,7 +152,7 @@ def test_inference_component_and_target_variant(spans):
 
 def test_text_content_type_is_captured_as_text(spans):
     client = make_client()
-    respond(client, "InvokeEndpoint", ok("label,score\nA,1\n", content_type="text/csv; charset=utf-8"))
+    respond(client, "InvokeEndpoint", ok(b"label,score\nA,1\n", content_type="text/csv; charset=utf-8"))
     invoke(client, "a,b\n1,2\n", content_type="text/csv")
     a = attrs(one(spans))
     assert a["input.value"] == "a,b\n1,2\n"
@@ -246,7 +246,8 @@ def test_client_error_is_reraised_unchanged_with_error_status(spans):
     assert raised.value.response["Error"]["Code"] == "ModelError"
     span = one(spans)
     assert span.status.status_code == StatusCode.ERROR
-    assert attrs(span)["error.type"] == "ClientError"
+    # botocore raises a ClientError subclass named after the AWS error code.
+    assert attrs(span)["error.type"] == "ModelError"
     assert "boom-secret-detail" not in blob(span)
     assert span.end_time is not None
 
@@ -348,7 +349,7 @@ def test_async_invoke_client_error(spans):
         client.invoke_endpoint_async(EndpointName=ENDPOINT, InputLocation="s3://b/k")
     span = one(spans)
     assert span.status.status_code == StatusCode.ERROR
-    assert attrs(span)["error.type"] == "ClientError"
+    assert attrs(span)["error.type"] == "ValidationError"
 
 
 # --- invoke_endpoint_with_response_stream ------------------------------------------------------
@@ -486,7 +487,7 @@ def test_stream_open_client_error(spans):
         start_stream(client)
     span = one(spans)
     assert span.status.status_code == StatusCode.ERROR
-    assert attrs(span)["error.type"] == "ClientError"
+    assert attrs(span)["error.type"] == "ValidationError"
 
 
 def test_stream_hidden_output(instrument):
