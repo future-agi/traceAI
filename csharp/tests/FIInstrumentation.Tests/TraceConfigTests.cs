@@ -86,25 +86,25 @@ public class TraceConfigTests
     }
 
     [Fact]
-    public void Mask_ReturnsRedacted_ForInputMessages_WhenHideInputMessagesSet()
+    public void Mask_DropsInputMessages_WhenHideInputMessagesSet()
     {
         var config = TraceConfig.Builder()
             .HideInputMessages()
             .Build();
 
         var result = config.Mask(SemanticConventions.GenAiInputMessages, "[{\"role\":\"user\"}]");
-        Assert.Equal(TraceConfig.RedactedValue, result);
+        Assert.Null(result); // Python returns None for message keys under these flags
     }
 
     [Fact]
-    public void Mask_ReturnsRedacted_ForInputMessages_WhenHideInputsSet()
+    public void Mask_DropsInputMessages_WhenHideInputsSet()
     {
         var config = TraceConfig.Builder()
             .HideInputs()
             .Build();
 
         var result = config.Mask(SemanticConventions.GenAiInputMessages, "[{\"role\":\"user\"}]");
-        Assert.Equal(TraceConfig.RedactedValue, result);
+        Assert.Null(result); // Python returns None for message keys under these flags
     }
 
     [Fact]

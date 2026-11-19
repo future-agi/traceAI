@@ -111,7 +111,7 @@ public class FITracer {
      */
     public void setInputValue(Span span, String value) {
         if (!config.isHideInputs() && value != null) {
-            span.setAttribute(SemanticConventions.INPUT_VALUE, truncateIfNeeded(value));
+            setAttribute(span, SemanticConventions.INPUT_VALUE, value); // the message flags redact it too
         }
     }
 
@@ -122,7 +122,7 @@ public class FITracer {
      */
     public void setOutputValue(Span span, String value) {
         if (!config.isHideOutputs() && value != null) {
-            span.setAttribute(SemanticConventions.OUTPUT_VALUE, truncateIfNeeded(value));
+            setAttribute(span, SemanticConventions.OUTPUT_VALUE, value); // the message flags redact it too
         }
     }
 
@@ -133,8 +133,7 @@ public class FITracer {
      */
     public void setRawInput(Span span, Object value) {
         if (!config.isHideInputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_INPUT, truncateIfNeeded(json));
+            setAttribute(span, SemanticConventions.RAW_INPUT, toJson(value)); // the message flags redact it too
         }
     }
 
@@ -145,8 +144,44 @@ public class FITracer {
      */
     public void setRawOutput(Span span, Object value) {
         if (!config.isHideOutputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_OUTPUT, truncateIfNeeded(json));
+            setAttribute(span, SemanticConventions.RAW_OUTPUT, toJson(value)); // the message flags redact it too
+        }
+    }
+
+    /**
+     * Sets a string attribute on a span, applying the hide settings to content keys (see
+     * {@link ContentKeys}). Use this for any attribute that may carry prompt, response or tool
+     * content; keys that are not content are set as given.
+     * @param span the span
+     * @param key the attribute key
+     * @param value the attribute value
+     */
+    public void setAttribute(Span span, String key, String value) {
+        String masked = config.maskAttribute(key, value);
+        if (masked != null) {
+            span.setAttribute(key, truncateIfNeeded(masked));
+        }
+    }
+
+    /**
+     * Sets a string-array attribute on a span, applying the hide settings to content keys. A masked
+     * array is replaced by the single redaction placeholder, as Python does.
+     * @param span the span
+     * @param key the attribute key
+     * @param values the attribute values
+     */
+    public void setAttribute(Span span, String key, List<String> values) {
+        if (key == null || values == null) {
+            return;
+        }
+        switch (ContentKeys.actionFor(key, config)) {
+            case OMIT:
+                return;
+            case REDACT:
+                span.setAttribute(key, ContentKeys.REDACTED);
+                return;
+            default:
+                span.setAttribute(AttributeKey.stringArrayKey(key), values);
         }
     }
 
