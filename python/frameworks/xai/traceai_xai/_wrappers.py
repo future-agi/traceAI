@@ -1,6 +1,7 @@
 """Wrapper classes for xAI (Grok) instrumentation."""
 
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Tuple
@@ -44,6 +45,17 @@ class _WithTracer(ABC):
             set_status_on_exception=False,
         ) as span:
             yield span
+
+
+def _shared_instrumentor_enabled() -> bool:
+    """Let the request-level instrumentor own spans when both routes are enabled.
+
+    Inspect live state on each call (do not import the optional package), so
+    either enable/disable order works and OpenAI 1.0 users are unaffected.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
 def _is_xai_client(instance: Any) -> bool:
@@ -204,7 +216,7 @@ class _CompletionsWrapper(_WithTracer):
         kwargs: Dict[str, Any],
     ) -> Any:
         # Check if this is an xAI client
-        if not _is_xai_client(instance):
+        if _shared_instrumentor_enabled() or not _is_xai_client(instance):
             return wrapped(*args, **kwargs)
 
         # Extract parameters
@@ -275,7 +287,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
         kwargs: Dict[str, Any],
     ) -> Any:
         # Check if this is an xAI client
-        if not _is_xai_client(instance):
+        if _shared_instrumentor_enabled() or not _is_xai_client(instance):
             return await wrapped(*args, **kwargs)
 
         # Extract parameters

@@ -39,14 +39,6 @@ class Integration:
     scopes: Tuple[str, ...] = ()
 
 
-def _covered_by_openai(provider: str) -> str:
-    return (
-        f"Wraps the OpenAI SDK for {provider}, so the openai integration already traces these calls "
-        f"and it is off by default. To use it instead, list the integrations you want in FI_INSTRUMENTATIONS "
-        f"and leave openai out."
-    )
-
-
 INTEGRATIONS: Tuple[Integration, ...] = (
     # Model providers
     Integration("openai", ("openai",), "traceAI-openai", "traceai_openai", "OpenAIInstrumentor"),
@@ -79,11 +71,11 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("voyage", ("voyageai",), "traceAI-voyage", "traceai_voyage", "VoyageInstrumentor"),
     Integration("discoveryengine", ("google.cloud.discoveryengine",), "traceAI-discoveryengine", "traceai_discoveryengine", "DiscoveryEngineInstrumentor", category="retrieval"),
     Integration("typesafe", ("typesafe_sdk",), "traceAI-typesafe", "traceai_typesafe", "TypeSafeInstrumentor", category="guardrail"),
-    Integration("deepseek", ("openai",), "traceAI-deepseek", "traceai_deepseek", "DeepSeekInstrumentor", default=False, note=_covered_by_openai("DeepSeek")),
-    Integration("fireworks", ("openai",), "traceAI-fireworks", "traceai_fireworks", "FireworksInstrumentor", default=False, note=_covered_by_openai("Fireworks")),
-    Integration("xai", ("openai",), "traceAI-xai", "traceai_xai", "XAIInstrumentor", default=False, note=_covered_by_openai("xAI")),
-    Integration("minimax", ("openai",), "traceAI-minimax", "traceai_minimax", "MiniMaxInstrumentor", default=False, note=_covered_by_openai("MiniMax")),
-    Integration("vllm", ("openai",), "traceAI-vllm", "traceai_vllm", "VLLMInstrumentor", default=False, note=_covered_by_openai("vLLM servers")),
+    Integration("deepseek", ("openai",), "traceAI-deepseek", "traceai_deepseek", "DeepSeekInstrumentor"),
+    Integration("fireworks", ("openai",), "traceAI-fireworks", "traceai_fireworks", "FireworksInstrumentor"),
+    Integration("xai", ("openai",), "traceAI-xai", "traceai_xai", "XAIInstrumentor"),
+    Integration("minimax", ("openai",), "traceAI-minimax", "traceai_minimax", "MiniMaxInstrumentor"),
+    Integration("vllm", ("openai",), "traceAI-vllm", "traceai_vllm", "VLLMInstrumentor"),
     # Agent and orchestration frameworks
     Integration("langchain", ("langchain_core",), "traceAI-langchain", "traceai_langchain", "LangChainInstrumentor", category="framework"),
     Integration("langgraph", ("langgraph",), "traceAI-langchain", "traceai_langchain", "LangGraphInstrumentor", category="framework"),

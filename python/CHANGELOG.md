@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- Zero-code auto-instrumentation turns on the `deepseek`, `fireworks`, `xai`, `minimax` and `vllm` integrations by default, and every model call through an OpenAI-compatible client yields exactly one span: the xAI and MiniMax integrations now defer to the `openai` integration while it is on (as the other three already did), and MiniMax hosts are labelled `minimax` on the shared spans.
+
 ## [1.5.0] - 2026-11-18
 
 ### Added
