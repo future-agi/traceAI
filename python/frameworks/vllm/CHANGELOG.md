@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- With `hide_inputs`, `hide_input_messages` or `hide_input_text`, the whole-response `output.value`, including streamed chunks, is built from response-side fields (choices, usage, ids) while any input hide setting is on, so `prompt_text` and `prompt_token_ids` are not recorded.
+- With `hide_inputs`, `hide_input_messages`, `hide_input_text` or `hide_input_images`, the whole-response `output.value`, including streamed chunks, is built from response-side fields (choices, usage, ids) while any input hide setting is on, so `prompt_text` and `prompt_token_ids` are not recorded.
 
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-vllm-v0.1.0...traceai-vllm-v0.1.1) (2026-11-05)
 

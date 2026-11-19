@@ -1,7 +1,7 @@
 ## [Unreleased]
 
 ### Changed
-- Raw input and raw output (`raw.input`, `raw.output`) are not recorded while any hide setting is on.
+- Raw input and raw output (`raw.input`, `raw.output`, and their children) are not recorded while any of `hide_inputs`, `hide_outputs`, `hide_input_messages`, `hide_output_messages`, `hide_input_text`, `hide_output_text`, `hide_input_images`, `hide_embedding_vectors` or `hide_llm_invocation_parameters` is on.
 
 ## [1.5.0] - 2026-11-18
 

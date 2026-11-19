@@ -2,6 +2,7 @@
 
 ### Changed
 - With any input hide setting, a chain whose output echoes its input does not record that output as `output.value`. The comparison covers every input leaf of any type and size, and a comparison that cannot be completed counts as an echo.
+- A boolean or number in a chain's input counts as echoed only when an equal value appears under the same key name in the output (a pass-through or assign), or, for a number of four digits or more, anywhere in the rendered output; a string shorter than four characters counts only as an exact leaf. A prompt-template run does not export its formatted prompt as output while an input hide setting is on.
 
 ## [0.2.3] - 2026-11-12
 
