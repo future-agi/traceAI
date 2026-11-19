@@ -9,6 +9,8 @@ OpenTelemetry instrumentation for AWS Bedrock. Part of traceAI, Future AGI's Ope
 ```sh
 npm install @traceai/bedrock @traceai/fi-core @opentelemetry/instrumentation @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
 npm install @aws-sdk/client-bedrock-runtime@"^3.0.0"
+# Bedrock Agents (optional)
+npm install @aws-sdk/client-bedrock-agent-runtime@"^3.0.0"
 ```
 
 Install the AWS SDK in the application that makes Bedrock requests. Configure
@@ -44,6 +46,20 @@ Run your application's SDK calls after this setup. Call
 `await tracerProvider.shutdown()` when the application finishes to flush pending
 spans. For ESM, follow the documentation for your OpenTelemetry loader and SDK
 instead of assuming import order alone enables automatic patching.
+
+## Bedrock Agents
+
+`InvokeAgentCommand` and `InvokeInlineAgentCommand` sent with
+`BedrockAgentRuntimeClient` are traced when `@aws-sdk/client-bedrock-agent-runtime` is
+installed. Each call produces one AGENT span (`invoke_agent <agentId>/<aliasId>`) that
+covers the whole streamed `completion`. It ends when your code has read the stream to the
+end, the stream fails, or you stop reading. Your code receives the original events.
+
+Set `enableTrace: true` on the command to also get child spans built from the stream's trace
+events: model invocations (LLM spans with model, prompt, output and token usage), action
+group calls (TOOL spans `execute_tool <name>`) and knowledge base lookups (RETRIEVER spans
+with the retrieved documents). Prompts, answers, tool arguments and document text follow the
+same hide settings as the other Bedrock spans. With `@traceai/auto`, this needs no code.
 
 ## Compatibility and privacy
 
