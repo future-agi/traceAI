@@ -13,6 +13,7 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
+  import { WATCH_NAME } from "./agentIdentity";
   import { activeFIContext, runInFIContext } from "./activeContext";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext, getSession } from "../contextAttributes";
@@ -240,7 +241,7 @@ import {
         links != null
           ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
           : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
-        context,
+        this.autoDestination ? context : context?.setValue(WATCH_NAME, true),
       );
       // Only spans made here export session and user grouping keys as set.
       try { rememberFITracerSpan(span.spanContext()); }

@@ -10,7 +10,7 @@ import {
     Link,
     diag,
   } from "@opentelemetry/api";
-  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, agentView, writer } from "./agentIdentity";
+  import { AGENT_ID, AGENT_NAME, AGENT_VIEW, writer } from "./agentIdentity";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
@@ -89,10 +89,18 @@ import {
     /** @internal Narrow SDK view of the identity the host actually admitted. */
     [AGENT_VIEW](mark?: true) {
       if (!this.admissionFailed) {
-        try { return agentView(this.span, attrs => this.privacy.admissionAttributes(attrs, this.span.spanContext()), mark); }
-        catch { /* A failed identity admission exposes no host values. */ }
+        try {
+          const identity = this.privacy.exportedAgentIdentity(this.span);
+          const origin = writer(this.span);
+          // A foreign provider may have handed an unobserved, bound setter to
+          // a host before constructing this wrapper. Do not plant a derived
+          // name there: a subsequent same-string write would be unknowable.
+          const canStampName = origin?.beforeHost === true;
+          if (canStampName && mark && identity.name !== undefined) origin.automatic = true;
+          return { ...identity, automatic: canStampName && origin.automatic, canStampName };
+        } catch { /* A failed identity export exposes no host values. */ }
       }
-      return { automatic: false };
+      return { automatic: false, canStampName: false };
     }
 
     constructor({

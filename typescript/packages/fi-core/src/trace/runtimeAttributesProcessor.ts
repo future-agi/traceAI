@@ -15,6 +15,14 @@ interface ConfigurationReader {
   mode(): "on" | "off" | "load_only";
 }
 
+/** Shared with the owned pre-host observer; off/load_only install no writer. */
+export function runtimeAttributesEnabled(): boolean {
+  const config = (globalThis as unknown as Record<symbol, ConfigurationReader | undefined>)[CONFIG_KEY];
+  if (config?.v === 1 && typeof config.mode === "function") return config.mode() === "on";
+  const mode = process.env.FI_SKILLS_TRACING;
+  return mode !== "off" && mode !== "load_only";
+}
+
 type RuntimeAttributes = Record<string, string | number | boolean | string[]>;
 interface RegistryReader {
   v: number;
@@ -53,14 +61,7 @@ export class FutureAGIRuntimeAttributesSpanProcessor implements SpanProcessor {
   onStart(span: Span, parentContext: Context): void {
     try {
       const globals = globalThis as unknown as Record<symbol, unknown>;
-      const configuration = globals[CONFIG_KEY] as ConfigurationReader | undefined;
-      if (configuration?.v === 1 && typeof configuration.mode === "function") {
-        // A live SDK reader is authoritative; an invalid answer cannot enable stamping.
-        if (configuration.mode() !== "on") return;
-      } else {
-        const mode = process.env.FI_SKILLS_TRACING;
-        if (mode === "off" || mode === "load_only") return;
-      }
+      if (!runtimeAttributesEnabled()) return;
       const traceId = span.spanContext().traceId;
       // The SDK status helper uses only this last-seen trace id, never a span.
       globals[PROCESSOR_KEY] = traceId;

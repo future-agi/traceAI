@@ -10,6 +10,7 @@ import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-conf
 import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
 import { admittedRuntime, validRuntimeValue } from "./runtime-metadata";
+import { AGENT_NAME, AGENT_ID } from "./trace/trace-config/agentIdentity";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
@@ -907,6 +908,20 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   };
   return {
     attributes,
+    /** Read-back is an export, not a complete caller write. Require this
+     * native source's own limit (never an unrelated global provider's), then
+     * use the same loss, discovery and masking decision as the FI exporter. */
+    exportedAgentIdentity(span: object): { name?: string; id?: string } {
+      const limit = data(span, "_attributeValueLengthLimit") ?? data(data(span, "_spanLimits"), "attributeValueLengthLimit");
+      if (typeof limit !== "number" || !(limit >= 0)) return {};
+      const raw = data(span, "attributes");
+      const hasName = typeof data(raw, AGENT_NAME) === "string", hasId = typeof data(raw, AGENT_ID) === "string";
+      if (!hasName && !hasId) return {};
+      const clean = this.span(span as ReadableSpan).attributes;
+      const name = clean[AGENT_NAME], id = clean[AGENT_ID];
+      return { name: hasName && typeof name === "string" ? name : undefined,
+        id: hasId && typeof id === "string" ? id : undefined };
+    },
     /** @internal Retain only tightening MIME/type/modality bits from FI-authored writes.
      * No values, native storage, completeness grants or safe-MIME evidence. */
     admissionHints: (attrs: unknown, previous: PrivacyHints = new Map()): PrivacyHints => {

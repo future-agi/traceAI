@@ -4,6 +4,8 @@ import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { rememberAutoSpanSink } from "./auto-span-delivery";
+import { observeBeforeHost, WATCH_NAME } from "./trace/trace-config/agentIdentity";
+import { runtimeAttributesEnabled } from "./trace/runtimeAttributesProcessor";
 
 // Compatibility defaults stay real SDK processors at the top level, so native
 // adapters can borrow the transport while shutdown still drains accepted work.
@@ -49,6 +51,9 @@ export class SpanProcessorRegistry implements SpanProcessor {
 
   onStart(span: Span, parentContext: Context): void {
     if (this.shutdownPromise) return;
+    try {
+      if (parentContext.getValue(WATCH_NAME) === true && runtimeAttributesEnabled()) observeBeforeHost(span);
+    } catch { /* Optional observation cannot skip host onStart. */ }
     for (const processor of this.processors) {
       try {
         processor.onStart(span, parentContext);
