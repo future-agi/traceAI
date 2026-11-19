@@ -372,6 +372,16 @@ def test_registry_enables_sagemaker_on_boto3_next_to_bedrock():
     assert bedrock.targets == sagemaker.targets
 
 
+def test_registry_enables_writer_on_the_writerai_import():
+    integration = _registry.find("writer")
+    assert integration is not None
+    assert integration.kind == _registry.INSTRUMENTOR
+    assert integration.targets == ("writerai",)
+    assert (integration.package, integration.module, integration.entry) == (
+        "traceAI-writer", "traceai_writer", "WriterInstrumentor")
+    assert integration.default
+
+
 @pytest.mark.parametrize("name, target, package", [
     ("agentscope", "agentscope", "traceAI-agentscope"),
     ("temporal", "temporalio", "traceAI-temporal"),
