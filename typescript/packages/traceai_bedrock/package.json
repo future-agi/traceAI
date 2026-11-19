@@ -58,7 +58,7 @@
     "ts-jest": "^29.1.4",
     "rimraf": "^6.0.1",
     "tsc-alias": "^1.8.16",
-    "@aws-sdk/client-bedrock-agent-runtime": "^3.693.0"
+    "@aws-sdk/client-bedrock-agent-runtime": "3.1127.0"
   },
   "keywords": [
     "opentelemetry",
