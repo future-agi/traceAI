@@ -53,7 +53,7 @@ jobs:
             packages=(python/frameworks/elasticsearch/dist/*.tar.gz)
           fi
           .elasticsearch-test-venv/bin/pip install "${packages[@]}" \
-            "elasticsearch==$ELASTICSEARCH_VERSION" pytest pytest-asyncio
+            "elasticsearch==$ELASTICSEARCH_VERSION" pytest pytest-asyncio numpy
       - name: Run SDK tests without external traffic
         shell: bash
         run: |
