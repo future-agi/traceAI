@@ -124,11 +124,11 @@ internal static class Decorator
             if (wrapper == null) continue;
             var index = services.IndexOf(descriptor);
             if (index < 0) continue;
-            services[index] = Replace(services, descriptor, kind, wrapper, settings.Sensitive);
+            services[index] = Replace(descriptor, kind, wrapper, settings.Sensitive);
         }
     }
 
-    private static ServiceDescriptor Replace(IServiceCollection services, ServiceDescriptor descriptor, string kind, Wrapper wrapper, bool sensitive)
+    private static ServiceDescriptor Replace(ServiceDescriptor descriptor, string kind, Wrapper wrapper, bool sensitive)
     {
         // An instance the application registered stays the application's to dispose, as before: the wrapper is built
         // now and registered as an instance too, which the container never disposes.
@@ -141,12 +141,29 @@ internal static class Decorator
             return new ServiceDescriptor(descriptor.ServiceType, provider => wrapper.Wrap(factory(provider), sensitive, kind), descriptor.Lifetime);
         }
         var implementation = descriptor.ImplementationType!;
+        var serviceType = descriptor.ServiceType;
         // Container-agnostic: no descriptor is added and no keyed service is used. The replacement keeps the original lifetime,
-        // so the container builds it once (singleton), per scope or per resolve, and owns the wrapper it creates; the wrapper
-        // disposes the inner instance, which the container never sees, so it is disposed exactly once. The application's own
-        // registrations of the implementation type are neither used nor changed, and the type does not become resolvable.
-        return new ServiceDescriptor(descriptor.ServiceType,
-            provider => wrapper.Wrap(ActivatorUtilities.CreateInstance(provider, implementation), sensitive, kind), descriptor.Lifetime);
+        // so the container builds it once (singleton), per scope or per resolve. The container owns only what the factory returns,
+        // so that is a small object that releases the wrapper and the implementation exactly once, with DisposeAsync when the
+        // implementation is IAsyncDisposable and the container is disposed asynchronously. The application's own registrations
+        // of the implementation type are neither used nor changed, and the type does not become resolvable.
+        return new ServiceDescriptor(serviceType, provider =>
+        {
+            var created = ActivatorUtilities.CreateInstance(provider, implementation);
+            try
+            {
+                // Stops the library's wrapper from disposing what it wraps (chat and embedding), so the release below is the only one.
+                var guarded = Ownership.Shield(kind, serviceType, created);
+                if (guarded == null) { TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
+                var wrapped = wrapper.Wrap(guarded, sensitive, kind, record: false);
+                if (ReferenceEquals(wrapped, guarded)) return created; // already traced by the application, or could not be wrapped
+                var owner = Ownership.Owner(kind, serviceType, wrapped, new Release(wrapped, created));
+                if (owner == null) { TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
+                TraceHostingStartup.RecordWrapped(kind);
+                return owner;
+            }
+            catch (Exception error) { TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name); return created; }
+        }, descriptor.Lifetime);
     }
 
     private static string? Classify(Type serviceType, Settings settings)
@@ -204,7 +221,7 @@ internal sealed class Wrapper
     }
 
     /// <summary>The wrapped instance, or the original when it already carries the wrapper.</summary>
-    internal object Wrap(object inner, bool sensitive, string kind)
+    internal object Wrap(object inner, bool sensitive, string kind, bool record = true)
     {
         try
         {
@@ -219,7 +236,7 @@ internal sealed class Wrapper
             // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT set to anything but true keeps it off whatever the traceAI opt-in says.
             if (sensitive && ContentVariableForbids()) sensitive = false;
             _sensitive?.SetValue(wrapped, sensitive);
-            TraceHostingStartup.RecordWrapped(kind);
+            if (record) TraceHostingStartup.RecordWrapped(kind);
             return wrapped;
         }
         catch (Exception error) { TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name); return inner; }
