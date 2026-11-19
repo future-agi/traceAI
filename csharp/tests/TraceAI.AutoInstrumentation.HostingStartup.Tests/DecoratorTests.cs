@@ -170,6 +170,65 @@ public class DecoratorTests
         Assert.Throws<AggregateException>(() => services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true }));
     }
 
+    private static ServiceProviderOptions Strict => new() { ValidateScopes = true, ValidateOnBuild = true };
+
+    [Fact]
+    public void AScopedImplementationBehindASingletonServiceKeepsItsOwnLifetime()
+    {
+        // The application's own scoped registration of the implementation must not be what the singleton resolves:
+        // that would throw under scope validation, which development hosts turn on.
+        var services = new ServiceCollection();
+        services.AddScoped<StubChat>();
+        services.AddSingleton<IChatClient, StubChat>();
+        Decorator.Apply(services, Everything);
+        using var provider = services.BuildServiceProvider(Strict);
+        Assert.NotNull(provider.GetRequiredService<IChatClient>().GetService<OpenTelemetryChatClient>());
+    }
+
+    [Fact]
+    public void ASingletonTheApplicationRegisteredIsNotSharedWithOrDisposedByAScopedService()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<StubChat>();
+        services.AddScoped<IChatClient, StubChat>();
+        Decorator.Apply(services, Everything);
+        using var provider = services.BuildServiceProvider(Strict);
+        var applications = provider.GetRequiredService<StubChat>();
+        using (var scope = provider.CreateScope()) scope.ServiceProvider.GetRequiredService<IChatClient>();
+        Assert.False(applications.Disposed);
+    }
+
+    [Fact]
+    public void ATypeRegistrationDoesNotMakeItsImplementationResolvable()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IChatClient, StubChat>();
+        Decorator.Apply(services, Everything);
+        Assert.DoesNotContain(services, d => !d.IsKeyedService && d.ServiceType == typeof(StubChat));
+        using var provider = services.BuildServiceProvider(Strict);
+        Assert.Null(provider.GetService<StubChat>());
+        Assert.Empty(provider.GetServices<StubChat>());
+    }
+
+    [Fact]
+    public async Task TheStandardContentVariableSetToFalseIsNotOverriddenToTrue()
+    {
+        var (spans, listener) = Listen();
+        using var _ = listener;
+        var previous = Environment.GetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT");
+        try
+        {
+            Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false");
+            var services = new ServiceCollection(); services.AddChatClient(new StubChat());
+            Decorator.Apply(services, Everything with { Sensitive = true });
+            using var provider = services.BuildServiceProvider();
+            await provider.GetRequiredService<IChatClient>().GetResponseAsync("PROMPT-CANARY");
+        }
+        finally { Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", previous); }
+        var span = Assert.Single(spans, s => s.Source.Name == ChatSource);
+        Assert.DoesNotContain("PROMPT-CANARY", string.Join(" ", span.TagObjects.Select(t => t.Key + "=" + t.Value)));
+    }
+
     [Fact]
     public void KeyedAndUnrelatedRegistrationsAreLeftAlone()
     {
