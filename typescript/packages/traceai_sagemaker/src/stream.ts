@@ -161,6 +161,11 @@ export function wrapEventStream(
     [Symbol.asyncIterator]() {
       const iterator = source[Symbol.asyncIterator]();
       return {
+        // A consumer may keep only the iterator (`Body[Symbol.asyncIterator]()`, `Readable.from(Body)`). The
+        // finalizer is registered on the iterable, so each iterator holds it: the span ends only once the
+        // consumer has dropped both. `this`, not the `iterable` binding: a captured binding would live in the
+        // scope the finalizer's own closure keeps alive, and the iterable could then never be collected.
+        owner: this,
         async next(...args: [] | [undefined]) {
           try {
             const step = await iterator.next(...args);

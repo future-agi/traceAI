@@ -117,7 +117,7 @@ export class SageMakerInstrumentation extends InstrumentationBase {
   protected init() {
     return new InstrumentationNodeModuleDefinition(
       MODULE_NAME,
-      [">=3.0.0 <4.0.0"],
+      [">=3.693.0 <4.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
@@ -329,9 +329,10 @@ export class SageMakerInstrumentation extends InstrumentationBase {
     if (generated) {
       span.setAttribute(S.OUTPUT_VALUE, payload.clip(generated));
       span.setAttribute(S.OUTPUT_MIME_TYPE, "text/plain");
-    } else if (!settings.anyHidden || captured.parsed === undefined) {
+    } else if (!settings.anyHidden || (captured.parsed === undefined && payload.classify(contentType) !== "json")) {
       // The whole body is written only when no hide setting is on, or when it is plain text rather
-      // than a response object that could carry request-side fields.
+      // than a JSON document that could carry request-side fields. A JSON response that did not parse
+      // (jsonlines, malformed, over the parse limit) is not plain text: it is left out.
       span.setAttribute(S.OUTPUT_VALUE, captured.value);
       span.setAttribute(S.OUTPUT_MIME_TYPE, captured.mimeType);
     }

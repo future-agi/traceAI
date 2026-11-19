@@ -55,10 +55,12 @@ describe("stream lifetime while only the iterator is referenced", () => {
 
   it("still ends an abandoned stream once, marked incomplete", async () => {
     const ctx = instrument(lib);
-    const gate = new Promise<void>(() => undefined);
-    let iterator: AsyncIterator<unknown> | undefined = await open(ctx, gate);
-    await iterator.next();
-    iterator = undefined;
+    const gate = Promise.resolve();
+    // The iterator lives only inside this call, so nothing references it afterwards.
+    await (async () => {
+      const iterator = await open(ctx, gate);
+      await iterator.next();
+    })();
     for (let i = 0; i < 10 && ctx.spans().length === 0; i++) await settle();
     const spans = ctx.spans();
     expect(spans).toHaveLength(1);
