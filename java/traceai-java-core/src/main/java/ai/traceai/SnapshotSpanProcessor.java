@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * A synchronous span processor, like the SDK's {@code SimpleSpanProcessor}, whose flush cannot hang.
@@ -24,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * one does, but flushes a snapshot of the pending exports, which cannot change under the countdown.
  */
 final class SnapshotSpanProcessor implements SpanProcessor {
+    private static final Logger LOGGER = Logger.getLogger(SnapshotSpanProcessor.class.getName());
+
     private final SpanExporter exporter;
     private final Set<CompletableResultCode> pending = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final AtomicBoolean shutdown = new AtomicBoolean();
@@ -55,9 +59,15 @@ final class SnapshotSpanProcessor implements SpanProcessor {
         try {
             CompletableResultCode result = exporter.export(Collections.singletonList(span.toSpanData()));
             pending.add(result);
-            result.whenComplete(() -> pending.remove(result));
+            result.whenComplete(() -> {
+                pending.remove(result);
+                if (!result.isSuccess()) {
+                    LOGGER.log(Level.FINE, "Exporter failed");
+                }
+            });
         } catch (RuntimeException e) {
             // An exporter failure must never reach the traced application.
+            LOGGER.log(Level.WARNING, "Exporter threw an Exception", e);
         }
     }
 
@@ -85,10 +95,5 @@ final class SnapshotSpanProcessor implements SpanProcessor {
             });
         });
         return result;
-    }
-
-    @Override
-    public void close() {
-        shutdown().join(10, java.util.concurrent.TimeUnit.SECONDS);
     }
 }

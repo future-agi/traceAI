@@ -10,6 +10,7 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -41,6 +42,7 @@ class ConsoleExporterShutdownTest {
     }
 
     @Test
+    @Timeout(60)
     void shutdownDoesNotStallWhileSpansEndConcurrently() throws Exception {
         TraceConfig config = TraceConfig.builder().projectName("console-shutdown").enableConsoleExporter(true).build();
         int threads = Math.max(8, Runtime.getRuntime().availableProcessors());
@@ -73,6 +75,7 @@ class ConsoleExporterShutdownTest {
             worst = Math.max(worst, elapsed);
             if (elapsed > STALL_NANOS) {
                 stalled++;
+                break;
             }
         }
         assertThat(stalled)
