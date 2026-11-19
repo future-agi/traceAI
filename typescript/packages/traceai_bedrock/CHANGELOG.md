@@ -1,8 +1,13 @@
-## [0.1.4] - 2026-11-12
+## [0.2.0] - 2026-11-19
 
 ### Added
-- Amazon Bedrock Agents: `InvokeAgentCommand` and `InvokeInlineAgentCommand` sent through `@aws-sdk/client-bedrock-agent-runtime` are traced. One AGENT span `invoke_agent <agentId>/<aliasId>` (`invoke_agent inline` for inline agents) covers the call and the whole `completion` stream and ends when the stream is consumed, fails or is abandoned. With `enableTrace`, the stream's trace events become child spans: model invocations as LLM spans (model, prompt, output, token usage), action group calls as TOOL spans `execute_tool <name>`, and knowledge base lookups as RETRIEVER spans (documents, count). Output text is assembled from the chunk events and follows the hide settings. `@traceai/auto` activates it when only `@aws-sdk/client-bedrock-agent-runtime` is installed.
-- `@aws-sdk/client-bedrock-agent-runtime` `^3.693.0` is an optional peer dependency; `@aws-sdk/client-bedrock-runtime` is now optional too, so an application using only one of the two SDKs loads this package.
+- Amazon Bedrock Agents: `InvokeAgentCommand` and `InvokeInlineAgentCommand` sent through `@aws-sdk/client-bedrock-agent-runtime` are traced. One AGENT span `invoke_agent <agentId>/<aliasId>` (`invoke_agent inline` for inline agents) covers the call and the whole `completion` stream and ends when the stream is consumed, fails or is abandoned. With `enableTrace`, the stream's trace events become child spans: model invocations as LLM spans (model, prompt, output, token usage), action group calls as TOOL spans `execute_tool <name>`, and knowledge base lookups as RETRIEVER spans (documents, count). Output text is assembled from the chunk events and follows the hide settings; tool arguments are recorded only in `input.value`, so the hide settings apply to them. `@traceai/auto` activates it when only `@aws-sdk/client-bedrock-agent-runtime` is installed (#727).
+- `@aws-sdk/client-bedrock-agent-runtime` `^3.693.0` is an optional peer dependency, and `@aws-sdk/client-bedrock-runtime` is now optional too (#727).
+
+### Fixed
+- An application that installs only `@aws-sdk/client-bedrock-agent-runtime` loads this package: the Bedrock Runtime SDK types it re-exports are now type-only, so loading it no longer requires `@aws-sdk/client-bedrock-runtime` (#727).
+
+## [0.1.4] - 2026-11-12
 
 ### Fixed
 - Traced send() keeps its options and callbacks, response streams are read only as your code reads them, the requested model id is recorded in full, and streamed tool arguments from Anthropic models are recorded, with a placeholder when the argument JSON is incomplete or malformed.

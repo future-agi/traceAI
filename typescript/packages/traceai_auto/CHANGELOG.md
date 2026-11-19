@@ -1,3 +1,8 @@
+## [0.4.0] - 2026-11-19
+
+### Added
+- Amazon Bedrock Agents are traced zero-code: the `bedrock` integration also activates `@traceai/bedrock` when `@aws-sdk/client-bedrock-agent-runtime` is installed, including when it is the only Bedrock SDK in the app, so `InvokeAgent` and `InvokeInlineAgent` calls are traced (#727). This needs `@traceai/bedrock` 0.2.0 or later.
+
 ## [0.3.0] - 2026-11-18
 
 ### If you upgrade from 0.2.x
