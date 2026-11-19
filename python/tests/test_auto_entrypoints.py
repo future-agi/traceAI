@@ -357,6 +357,19 @@ def test_registry_enables_transformers_and_openrouter(name, target, package, mod
     assert integration.default
 
 
+def test_registry_enables_sagemaker_on_boto3_next_to_bedrock():
+    sagemaker = _registry.find("sagemaker")
+    bedrock = _registry.find("bedrock")
+    assert sagemaker is not None
+    assert sagemaker.kind == _registry.INSTRUMENTOR
+    assert sagemaker.targets == ("boto3",)
+    assert (sagemaker.package, sagemaker.module, sagemaker.entry) == (
+        "traceAI-sagemaker", "traceai_sagemaker", "SageMakerInstrumentor")
+    assert sagemaker.default
+    # Both hook botocore client creation, so both must be enabled by the same module.
+    assert bedrock.targets == sagemaker.targets
+
+
 @pytest.mark.parametrize("name, target, package", [
     ("agentscope", "agentscope", "traceAI-agentscope"),
     ("temporal", "temporalio", "traceAI-temporal"),

@@ -87,6 +87,7 @@ Each integration reports one of these statuses:
 | `google_genai_live` | `google-genai` (Live) | `traceAI-google-genai-live` | Automatic |
 | `vertexai` | `vertexai` | `traceAI-vertexai` | Automatic |
 | `bedrock` | `boto3` | `traceAI-bedrock` | Automatic |
+| `sagemaker` | `boto3` | `traceAI-sagemaker` | Automatic |
 | `mistralai` | `mistralai` | `traceAI-mistralai` | Automatic |
 | `cohere` | `cohere` | `traceAI-cohere` | Automatic |
 | `groq` | `groq` | `traceAI-groq` | Automatic |
