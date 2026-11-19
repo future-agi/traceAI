@@ -112,6 +112,7 @@
   "typescript/packages/traceai_portkey": "0.1.2",
   "typescript/packages/traceai_qdrant": "0.1.1",
   "typescript/packages/traceai_redis": "0.1.3",
+  "typescript/packages/traceai_sagemaker": "0.1.0",
   "typescript/packages/traceai_strands": "0.1.3",
   "typescript/packages/traceai_together": "0.1.1",
   "typescript/packages/traceai_typesafe": "0.1.0",

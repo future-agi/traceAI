@@ -11,6 +11,7 @@ Framework-specific instrumentation packages for TypeScript.
 | `@traceai/langchain` | LangChain | ^0.1.0, ^0.2.0, ^0.3.0 |
 | `@traceai/llamaindex` | LlamaIndex | - |
 | `@traceai/bedrock` | AWS Bedrock | - |
+| `@traceai/sagemaker` | Amazon SageMaker Runtime | `@aws-sdk/client-sagemaker-runtime` ^3.693.0 |
 | `@traceai/vercel` | Vercel AI SDK | - |
 | `@traceai/mastra` | Mastra | - |
 | `@traceai/mcp` | Model Context Protocol | - |
