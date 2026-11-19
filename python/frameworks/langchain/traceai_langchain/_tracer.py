@@ -639,13 +639,15 @@ def _is_message_like(value: Any) -> bool:
     return isinstance(value, (BaseMessage, Document))
 
 
-def _part_leaves(part: Any) -> Any:
-    """A content part with its ``type`` and ``id`` keys left out, at every level (``image_url.url``,
-    ``source.data`` and a tool result's nested ``content`` stay)."""
+def _part_leaves(part: Any, top: bool = True) -> Any:
+    """A content part with its own ``type`` and ``id`` keys left out (and those of the parts nested in it, which
+    carry a ``type``); any other value, nested data included, stays (``image_url.url``, ``source.data``, a tool
+    result's ``content``)."""
     if isinstance(part, Mapping):
-        return {k: _part_leaves(v) for k, v in part.items() if k not in ("type", "id")}
+        schema = top or "type" in part
+        return {k: _part_leaves(v, False) for k, v in part.items() if not (schema and k in ("type", "id"))}
     if isinstance(part, (list, tuple)):
-        return [_part_leaves(item) for item in part]
+        return [_part_leaves(item, False) for item in part]
     return part
 
 
@@ -662,12 +664,20 @@ def _message_parts(value: Any) -> list:
     page_content = getattr(value, "page_content", None)
     if isinstance(page_content, str):
         parts.append(page_content)
-    tool_calls = getattr(value, "tool_calls", None)
-    if isinstance(tool_calls, (list, tuple)):
-        for call in tool_calls:
-            args = call.get("args") if isinstance(call, Mapping) else getattr(call, "args", None)
-            if args is not None:
-                parts.append(args)
+    for field in ("tool_calls", "invalid_tool_calls", "tool_call_chunks"):
+        calls = getattr(value, field, None)
+        if isinstance(calls, (list, tuple)):
+            for call in calls:
+                args = call.get("args") if isinstance(call, Mapping) else getattr(call, "args", None)
+                if isinstance(args, str):
+                    # Streamed or malformed calls carry their arguments as (possibly partial) JSON text.
+                    try:
+                        parts.append(json.loads(args))
+                    except ValueError:
+                        parts.append(args)
+                        parts.extend(re.findall(r'"((?:[^"\\]|\\.)*)"', args))
+                elif args is not None:
+                    parts.append(args)
     return parts
 
 
