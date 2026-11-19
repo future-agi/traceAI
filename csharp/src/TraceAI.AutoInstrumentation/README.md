@@ -413,11 +413,11 @@ The agent does not enable libraries' sensitive-content diagnostics automatically
 | Integration name | Sources / behavior |
 | --- | --- |
 | `openai` | `OpenAI.*`; enables `OpenAI.Experimental.EnableOpenTelemetry`. |
-| `extensions_ai` | `Experimental.Microsoft.Extensions.AI*`, `Microsoft.Extensions.AI*`; the app must use `OpenTelemetryChatClient`/`UseOpenTelemetry()`. |
+| `extensions_ai` | `Experimental.Microsoft.Extensions.AI*`, `Microsoft.Extensions.AI*`. ASP.NET Core hosts: registered `IChatClient` and `IEmbeddingGenerator<,>` services are wrapped automatically (see [Web hosts](#web-hosts-chat-clients-and-agents-without-code)). Other apps: use `OpenTelemetryChatClient`/`UseOpenTelemetry()`. |
 | `semantic_kernel` | `Microsoft.SemanticKernel*`; enables `Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics`, not the sensitive-content switch. |
 | `azure_inference` | `Azure.AI.Inference*`; enables `Azure.Experimental.EnableActivitySource`. |
 | `azure_openai` | `Azure.AI.OpenAI*`; modern clients also emit `OpenAI.*` (enable `openai` too). |
-| `agents` | `Experimental.Microsoft.Agents.AI*`, `Microsoft.Agents.AI*`; the framework must opt in to its OpenTelemetry wrapper. |
+| `agents` | `Experimental.Microsoft.Agents.AI*`, `Microsoft.Agents.AI*`. ASP.NET Core hosts: registered `AIAgent` services are wrapped automatically. Other apps: use the framework's OpenTelemetry wrapper. |
 | `aspnetcore` | The exact `Microsoft.AspNetCore` source (not other framework sources under it); incoming SERVER activities, preserving remote parents. A request span is sent only when an AI span of the same trace was captured, so health checks, static files and other plain routes are not sent. |
 | `wire` | `HttpHandlerDiagnosticListener` request, response and exception events. |
 
@@ -446,6 +446,22 @@ Sources/defaults were checked against these upstream references:
 - [Azure AI Inference diagnostics](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/ai/Azure.AI.Inference/README.md)
 - [Microsoft framework source defaults](https://github.com/microsoft/opentelemetry-distro-dotnet/blob/main/docs/azure-monitor-getting-started.md)
 - [Agent framework telemetry wrapper](https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/OpenTelemetryAgent.cs)
+
+## Web hosts: chat clients and agents without code
+
+`Microsoft.Extensions.AI` and `Microsoft.Agents.AI` emit spans only through their own OpenTelemetry wrappers
+(`OpenTelemetryChatClient`, `OpenTelemetryEmbeddingGenerator<,>`, `OpenTelemetryAgent`), which an application adds with
+`UseOpenTelemetry()`. In an ASP.NET Core host the startup hook adds the companion assembly
+`TraceAI.AutoInstrumentation.HostingStartup` to `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` (appended to any existing value, never
+replacing it). Just before the host builds its container, that assembly wraps every registered `IChatClient`,
+`IEmbeddingGenerator<,>` and `AIAgent` in the library's own wrapper, so the application needs no tracing code.
+
+- A registration whose instance already carries the wrapper (the application called `UseOpenTelemetry()`) is left as it is, so each call produces one span.
+- It is off when the agent is not running (`OTEL_SDK_DISABLED`, missing credentials) and per kind when `extensions_ai` or `agents` is disabled (`FI_DISABLED_INSTRUMENTATIONS`, or left out of `FI_INSTRUMENTATIONS`).
+- The library's sensitive-content capture follows the traceAI hide settings, not the library default: content is captured unless any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES` is on. The agent's own privacy rules still apply to what is exported.
+- The integration status reads `instrumented` with `auto (web host)` when a registration was wrapped, and `manual` otherwise.
+- Not covered: applications that are not ASP.NET Core hosts, clients built directly (`new ChatClientBuilder(...).Build()`) and keyed registrations. They call `UseOpenTelemetry()` as before.
+- The agent loads next to `System.Diagnostics.DiagnosticSource` 8 through 11 (`Microsoft.Extensions.AI` 11 ships version 11).
 
 ## Wire behavior and coverage limits
 

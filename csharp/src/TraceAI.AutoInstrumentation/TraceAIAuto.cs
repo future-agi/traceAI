@@ -106,6 +106,23 @@ public static class TraceAIAuto
         }
         catch { return "{\"enabled\":false,\"error\":\"diagnostics unavailable\"}"; }
     }
+    /// <summary>The settings the ASP.NET Core hosting startup needs, or null when it must stay off: the agent
+    /// is not running, or neither the extensions_ai nor the agents integration is enabled. Sensitive content
+    /// follows the traceAI hide settings: any hide setting turns the library's capture off.</summary>
+    public static string? HostingStartupPlan()
+    {
+        try
+        {
+            var agent=s_agent; var config=s_config;
+            if(agent==null || config==null) return null;
+            bool chat=config.Enabled("extensions_ai"),agents=config.Enabled("agents");
+            if(!chat && !agents) return null;
+            var mask=config.Options.TraceConfig??AutoProcessor.FromHideSwitches(config);
+            bool hidden=mask.HideInputs||mask.HideOutputs||mask.HideInputMessages||mask.HideOutputMessages||mask.HideInputText||mask.HideOutputText||mask.HideInputImages;
+            return $"chat={(chat?1:0)};agent={(agents?1:0)};sensitive={(hidden?0:1)}";
+        }
+        catch { return null; }
+    }
     public static IReadOnlyList<IntegrationStatus> GetStatus()
     {
         try { return Agent.Integrations.Select(i=>s_agent?.Status(i)??new IntegrationStatus(i.Name,s_failed?"failed":"disabled",s_failed?"agent initialization failed":s_config?.Disabled==true?"OTEL_SDK_DISABLED":"agent inactive")).ToArray(); }
@@ -247,7 +264,14 @@ internal sealed class Agent : IDisposable
         if(i.Name=="wire") return new(i.Name,"instrumented","HttpClient DiagnosticListener with bounded response tee");
         bool loaded=AppDomain.CurrentDomain.GetAssemblies().Any(a=>i.Assemblies.Any(p=>a.GetName().Name?.StartsWith(p,StringComparison.Ordinal)==true));
         bool installed=loaded||_installed.Any(a=>i.Assemblies.Any(p=>a.StartsWith(p,StringComparison.Ordinal)));
-        if(i.Manual) return new(i.Name,installed?"manual":"not_installed", "Listener ready; library must opt in with UseOpenTelemetry()/OpenTelemetryChatClient; custom source names are not detected");
+        if(i.Manual)
+        {
+            // The hosting startup records what it wrapped; a web host with a registered client or agent is traced automatically.
+            var wrapped=(AppContext.GetData("TraceAI.AutoInstrumentation.HostingStartup.Decorated") as string)?.Split(',')??[];
+            bool auto=i.Name=="extensions_ai"?wrapped.Contains("chat")||wrapped.Contains("embedding"):wrapped.Contains("agent");
+            if(auto) return new(i.Name,"instrumented","auto (web host): registered services are wrapped with the library's OpenTelemetry wrapper; other apps call UseOpenTelemetry()");
+            return new(i.Name,installed?"manual":"not_installed", "manual: web hosts are traced automatically for registered services; other apps call UseOpenTelemetry()/OpenTelemetryChatClient; custom source names are not detected");
+        }
         if(_seen.ContainsKey(i.Name)) return new(i.Name,"instrumented","built-in ActivitySource listener attached");
         if(loaded) return new(i.Name,"pending","assembly loaded; waiting for a supported ActivitySource");
         return new(i.Name,installed?"pending":"not_installed",installed?"built-in listener ready for late load":"library absent from loaded assemblies and app dependency manifest");
@@ -559,7 +583,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         // unrecognised value reported, only when they decide what is hidden.
         _mask=config.Options.TraceConfig??FromHideSwitches(config);
     }
-    private static TraceConfig FromHideSwitches(AutoConfig config)
+    internal static TraceConfig FromHideSwitches(AutoConfig config)
     {
         bool Hidden(string key)=>config.Hide(key)==true;
         bool inputs=Hidden("HIDE_INPUTS"),outputs=Hidden("HIDE_OUTPUTS"),

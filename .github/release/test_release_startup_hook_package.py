@@ -137,7 +137,7 @@ class HookPackageSmokeTests(unittest.TestCase):
         self.assertIn('TraceAI.AutoInstrumentation.*.nupkg', self.helper)
 
     def test_helper_checks_the_payload_and_that_the_package_is_not_a_library(self):
-        for name in ('TraceAI.AutoInstrumentation.dll', 'TraceAI.AutoInstrumentation.Runtime.dll', 'FIInstrumentation.dll',
+        for name in ('TraceAI.AutoInstrumentation.dll', 'TraceAI.AutoInstrumentation.Runtime.dll', 'TraceAI.AutoInstrumentation.HostingStartup.dll', 'FIInstrumentation.dll',
                      'OpenTelemetry.dll', 'OpenTelemetry.Api.dll', 'OpenTelemetry.Exporter.OpenTelemetryProtocol.dll'):
             self.assertIn(PAYLOAD + name, self.helper)
         self.assertIn("'^lib/'", self.helper)
