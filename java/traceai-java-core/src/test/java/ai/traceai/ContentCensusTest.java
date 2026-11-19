@@ -130,6 +130,14 @@ class ContentCensusTest {
         return result;
     }
 
+    /** True when the value expression is plainly a long, double, boolean or array of them. */
+    private static boolean nonString(String value) {
+        return value.matches("\\((long|int|double|float|short)\\).*") || value.matches("(true|false)|\\(Boolean\\).*")
+            || value.matches("-?\\d+(\\.\\d+)?[LlDdFf]?") || value.matches(".*\\.(longValue|doubleValue|intValue)\\(\\)")
+            || value.matches(".*\\.size\\(\\)") || value.startsWith("newlong[") || value.startsWith("newdouble[")
+            || value.startsWith("newboolean[");
+    }
+
     private static boolean isContent(String key) {
         TraceConfig everything = TraceConfig.builder().hideInputs(true).hideOutputs(true)
             .hideInputMessages(true).hideOutputMessages(true).build();
@@ -154,7 +162,13 @@ class ContentCensusTest {
                 Set<String> candidates = keys(args.get(0), constants);
                 int line = (int) source.substring(0, call.start()).chars().filter(c -> c == '\n').count() + 1;
                 if (candidates.isEmpty()) { unresolvedFiles.add(module(file)); continue; }
-                if (candidates.stream().anyMatch(ContentCensusTest::isContent)) {
+                // Only non-String values are in scope here: strings written directly are guarded by their own
+                // hide checks and covered by the string-path tests. A document count (`(long) x.size()`) on a
+                // retrieval/reranker key is an operational attribute (a number of items, never an item),
+                // and the Cohere privacy test pins it as visible under every hide flag.
+                String value = args.get(1).replaceAll("\\s+", "");
+                boolean sizeCount = value.matches("\\(long\\)[\\w.()]+\\.size\\(\\)");
+                if (!sizeCount && nonString(value) && candidates.stream().anyMatch(ContentCensusTest::isContent)) {
                     bypasses.add(module(file) + ":" + line + " " + args.get(0).replaceAll("\\s+", " ") + " <- " + args.get(1).replaceAll("\\s+", " "));
                 }
             }
