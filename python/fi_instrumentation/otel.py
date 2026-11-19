@@ -7,7 +7,9 @@ import sys
 import threading
 import uuid
 import warnings
+import weakref
 from enum import Enum
+from itertools import count
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
@@ -102,6 +104,65 @@ class SemanticConvention(str, Enum):
 SEMANTIC_CONVENTION = "semantic_convention"
 
 
+# Neither membership nor registration order keeps a provider alive. WeakSet
+# iteration is unordered, so retain a weak sequence index for SDK selection.
+_registered_tracer_providers: weakref.WeakSet[_TracerProvider] = weakref.WeakSet()
+_provider_registration_order: weakref.WeakKeyDictionary[_TracerProvider, int] = (
+    weakref.WeakKeyDictionary()
+)
+_provider_registration_sequence = count()
+_provider_registry_lock = threading.RLock()
+_skills_processor_lock = threading.RLock()
+_skills_processor_failure_logged = False
+
+
+def get_registered_tracer_providers() -> Tuple[_TracerProvider, ...]:
+    """Snapshot providers returned by register(), oldest to newest (latest last).
+
+    This includes non-global providers. The registry itself holds only weak
+    references; callers should not retain this snapshot longer than necessary.
+    Providers constructed directly, without register(), are not discoverable here.
+    """
+    with _provider_registry_lock:
+        return tuple(sorted(
+            _registered_tracer_providers,
+            key=lambda provider: _provider_registration_order[provider],
+        ))
+
+
+def _install_skills_processor(provider: _TracerProvider) -> None:
+    """Optionally use the SDK's processor, without making it a dependency.
+
+    The marker is shared with fi.telemetry's lazy self-installation. Install only
+    after register() has replaced the default exporter processor.
+    """
+    global _skills_processor_failure_logged
+    with _skills_processor_lock:
+        if getattr(provider, "_futureagi_skills_processor", None):
+            return
+        try:
+            from fi.telemetry._otel import mode
+            from fi.telemetry.processor import (
+                INSTALL_LOCK,
+                FutureAGISkillsSpanProcessor,
+            )
+
+            # Share the SDK's lock as well as its marker, including when its
+            # lazy installer races this explicit opt-in. Programmatic mode wins
+            # over the environment; load_only/off must not install a processor.
+            with INSTALL_LOCK:
+                if mode() == "on" and not getattr(provider, "_futureagi_skills_processor", None):
+                    processor = FutureAGISkillsSpanProcessor()
+                    provider.add_span_processor(processor)
+                    provider._futureagi_skills_processor = processor
+        except Exception:
+            # Older or absent SDKs, and bridge failures, must not break tracing.
+            # Do not log exception text: it may contain application data.
+            if not _skills_processor_failure_logged:
+                logger.debug("Optional Future AGI skills processor unavailable")
+                _skills_processor_failure_logged = True
+
+
 def register(
     *,
     project_name: Optional[str] = None,
@@ -123,6 +184,7 @@ def register(
     timeout: Optional[float] = None,
     sampler: Optional[Sampler] = None,
     span_limits: Optional[SpanLimits] = None,
+    skills_processor: bool = False,
 ) -> _TracerProvider:
     """Configure and return a Future AGI `TracerProvider`.
 
@@ -159,6 +221,12 @@ def register(
         Provider tuning:
         sampler (Sampler): Head sampler (e.g. `TraceIdRatioBased`) to shed volume.
         span_limits (SpanLimits): Caps on attributes/events/links per span.
+        skills_processor (bool): Opt in to installing fi.telemetry's runtime
+            attribute processor when the optional Future AGI SDK is available.
+            Defaults to False; never replaces the exporter or sets service.name.
+
+    The returned provider is discoverable through get_registered_tracer_providers()
+    even when it is not global. That registry does not keep providers alive.
     """
 
     eval_tags = eval_tags or []
@@ -274,6 +342,12 @@ def register(
     details = tracer_provider._tracing_details()
     if verbose:
         print(f"{details}" f"{global_provider_msg}")
+
+    if skills_processor:
+        _install_skills_processor(tracer_provider)
+    with _provider_registry_lock:
+        _provider_registration_order[tracer_provider] = next(_provider_registration_sequence)
+        _registered_tracer_providers.add(tracer_provider)
     return tracer_provider
 
 

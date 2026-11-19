@@ -12,7 +12,9 @@ export const SAMPLING_RATIO = "fi.sampling.ratio";
 export const isSamplingRatio = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1;
 // Bounded, canonical telemetry that is exempt from the arbitrary-base64 heuristic at export.
 // Deliberately narrower than the A7 protected set: widening it would weaken S6.
-export const isProjectionMetadata = (key: string) => /^(?:gen_ai\.(?:span\.kind|operation\.name|provider\.name|request\.model|response\.(?:model|id|finish_reasons)|usage\.[a-z0-9_.]+)|fi\.span\.kind|error\.type|traceai\.(?:capture\.(?:layer|dropped_content_count)|wire\.(?:incomplete|truncated|body_unavailable|undecoded_encoding|timing_incomplete)|attribute_projection\.dropped_count))$/.test(key);
+// Closed runtime identity keys, not a blanket exemption for arbitrary fi.* data.
+const isRuntimeMetadata = (key: string) => /^(?:fi\.(?:skill\.(?:id|name|version_id|version|digest|requested_label|requested_version|load\.(?:via|evidence|cached|root_file)|files|bytes|via_context\.version_id)|skills\.(?:version_ids|ids|refs|count|truncated)|context\.(?:id|version_id|digest|name|version|requested_label|binding_id|session_id|linked_skill_version_ids))|gen_ai\.agent\.(?:name|id))$/.test(key);
+export const isProjectionMetadata = (key: string) => isRuntimeMetadata(key) || /^(?:gen_ai\.(?:span\.kind|operation\.name|provider\.name|request\.model|response\.(?:model|id|finish_reasons)|usage\.[a-z0-9_.]+)|fi\.span\.kind|error\.type|traceai\.(?:capture\.(?:layer|dropped_content_count)|wire\.(?:incomplete|truncated|body_unavailable|undecoded_encoding|timing_incomplete)|attribute_projection\.dropped_count))$/.test(key);
 
 /** A7 protected families, in the order retained when even they exceed a host limit (rule 4):
  * degradation markers, identity, outcome, provider/model/operation, usage, TIMING, provenance.
@@ -36,7 +38,7 @@ const USAGE_FAMILY = 4;
 // load privacy.json: its ESM build re-exports the CommonJS build), not a pattern over arbitrary usage keys.
 // String zero and unknown/nonzero details retain their ordinary protected-family treatment.
 export function protectedFamily(key: string): number | undefined {
-  return FAMILY.get(key) ?? (key.startsWith("gen_ai.usage.") || key.startsWith("llm.token_count.") ? USAGE_FAMILY : undefined);
+  return FAMILY.get(key) ?? (isRuntimeMetadata(key) ? 1 : key.startsWith("gen_ai.usage.") || key.startsWith("llm.token_count.") ? USAGE_FAMILY : undefined);
 }
 
 // Retention is not a privacy exemption: only an already-present numeric ratio

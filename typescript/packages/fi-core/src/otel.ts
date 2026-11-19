@@ -31,6 +31,7 @@ import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { FutureAGIRuntimeAttributesSpanProcessor } from "./trace/runtimeAttributesProcessor";
 
 const privacyDestinations = new WeakSet<SpanExporter>();
 /** @internal True only for constructors in this core copy, never based on user properties. */
@@ -466,6 +467,8 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
   transport?: Transport; // Transport type
   sampler?: Sampler;
   spanProcessors?: SpanProcessor[];
+  /** Stamp skill/context scope attributes before exporter processors (default true). */
+  runtimeAttributes?: boolean;
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -507,14 +510,23 @@ class FITracerProvider extends BasicTracerProvider {
         ? new DefaultBatchSpanProcessor(exporter)
         : new DefaultSimpleSpanProcessor(exporter);
     }
+    const runtimeProcessor = config.runtimeAttributes === false ? undefined
+      : config.spanProcessors?.find(processor => processor instanceof FutureAGIRuntimeAttributesSpanProcessor)
+        ?? new FutureAGIRuntimeAttributesSpanProcessor();
     const processorRegistry = new SpanProcessorRegistry(
-      config.spanProcessors ?? [],
+      runtimeProcessor
+        ? (config.spanProcessors ?? []).filter(processor => !(processor instanceof FutureAGIRuntimeAttributesSpanProcessor))
+        : config.spanProcessors ?? [],
       () => defaultProcessor?.disable(),
     );
     // Keep the actual SDK default at the top level for native adapters that borrow
     // its exporter, and for SDK-owned flush/shutdown of its accepted batch queue.
+    // Keep scope stamping separate from the replaceable default destination.
+    // An explicit [] still creates no exporter; legacy processor replacement
+    // cannot remove the runtime processor. Never install via addSpanProcessor.
+    const runtimeProcessors = runtimeProcessor ? [runtimeProcessor] : [];
     super({ resource: applicationResource(config.resource), idGenerator, sampler: config.sampler,
-      spanProcessors: defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry] });
+      spanProcessors: [...runtimeProcessors, ...(defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry])] });
     this.processorRegistry = processorRegistry;
     this.defaultProcessorAttached = config.spanProcessors === undefined;
     this.batch = config.batch ?? false;
@@ -632,6 +644,8 @@ export interface RegisterOptions extends ExportPrivacyOptions {
   sampler?: Sampler;
   /** When provided, use these processors instead of constructing the default exporter. */
   spanProcessors?: SpanProcessor[];
+  /** Stamp skill/context scope attributes before exporter processors (default true). */
+  runtimeAttributes?: boolean;
 }
 
 function register(options: RegisterOptions = {}): FITracerProvider {
@@ -738,6 +752,7 @@ if (!projectName) {
     sampler: options.sampler,
     batch: options.batch ?? false,
     spanProcessors: options.spanProcessors,
+    runtimeAttributes: options.runtimeAttributes,
     traceConfig: options.traceConfig,
     resourceAttributes: options.resourceAttributes,
   });

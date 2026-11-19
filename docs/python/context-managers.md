@@ -141,6 +141,113 @@ with using_prompt_template(
     )
 ```
 
+## Skills and agent contexts
+
+A runtime **load** means verified skill bytes were given to application code
+inside a trace. It does not mean a model followed the skill. Fetched, linked,
+installed and loaded are different facts; no loads recorded does not mean unused.
+
+### With the Future AGI SDK
+
+For SDK versions that provide `fi.telemetry`, high-level skill/context snapshot
+reads emit `skill.load` / `context.load`. The first read of any skill file records
+the load; a context `read_all()` records only the context, not its linked skills.
+The SDK records evidence (`delivered`, `agent_read` or `declared`) separately.
+
+```python
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from fi.telemetry import agent_scope
+
+provider = register(project_name="support", project_type=ProjectType.OBSERVE,
+                    skills_processor=True)
+tracer = provider.get_tracer(__name__)
+try:
+    # ctx_snapshot is a previously resolved, verified agent-context snapshot.
+    with agent_scope(agent="refund-agent", context=ctx_snapshot):
+        with tracer.start_as_current_span("request"):
+            run_agent()
+finally:
+    provider.shutdown()
+```
+
+`skills_processor=True` is an **opt-in** to early installation of the SDK's
+processor, not a new exporter. Without it, the SDK can self-install when a load
+occurs. Both installers share a lock and the `_futureagi_skills_processor` marker.
+`register()` defaults to non-global as before; the SDK discovers it through
+`fi_instrumentation.otel.get_registered_tracer_providers()`. That function returns
+an immutable snapshot ordered oldest to newest (most recently registered last).
+The registry uses weak references. Existing provider exit hooks still apply.
+
+traceAI does not require the SDK: absent or older SDKs leave ordinary tracing
+unchanged even if early installation was requested. traceAI ships no Python
+skills processor of its own. `register()` still does **not** set `service.name`.
+Name each agent with `agent_scope(agent=...)`; a service name must come from the
+application's resource configuration. With neither, several agents in one project
+may appear as one unnamed agent.
+
+The SDK's `FI_SKILLS_TRACING=off` disables loads and stamping; `load_only` records
+load spans without stamping. `fi.telemetry.configure(skills_tracing=...)` takes
+precedence over that environment variable. The optional early installer honors
+both controls.
+
+### Low-level carrier, without the SDK
+
+```python
+from fi_instrumentation.instrumentation.runtime_attributes import (
+    RUNTIME_ATTRIBUTES_CONTEXT_KEY,
+    using_runtime_attributes,
+)
+from opentelemetry.context import get_value
+
+# tracer comes from your existing provider. No SDK import is needed here.
+with using_runtime_attributes({"gen_ai.agent.name": "refund-agent"}):
+    with tracer.start_as_current_span("request") as span:
+        # Explicit copying for a provider without a compatible processor.
+        span.set_attributes(get_value(RUNTIME_ATTRIBUTES_CONTEXT_KEY)["attrs"])
+```
+
+The helper attaches an immutable carrier under the **literal** OTel Context key
+`futureagi.runtime.span_attributes.v1`, with shape
+`{v: 1, attrs: {...}, reset_skills: bool}`. A compatible span processor can read it
+from `parent_context` and copy attributes only when the span has no explicit
+value. The helper itself emits **no spans**, installs nothing and does not prove
+that a skill was loaded. Without a compatible processor, subsequent spans need
+explicit attribute copying as in the example.
+
+Only `fi.skills.*`, `fi.context.*` and `gen_ai.agent.*` keys are accepted. Scalar
+`fi.skill.*` identities belong only on `skill.load`, and
+`fi.context.linked_skill_version_ids` only on `context.load`; neither propagates
+through this helper. Never put contents, local paths, credentials or personal
+data in these values. Use canonical lowercase UUIDs and `sha256:<64 hex>` digests.
+The helper copies flat values, drops invalid or over-256-byte strings rather than
+rewriting identities, caps skill lists at 32 (setting count/truncation), and
+keeps at most 64 attributes.
+
+Ordinary nested blocks inherit attributes; supplied keys replace their values.
+This is a snapshot interface: supply **complete**, de-duplicated, first-load-order
+parallel lists (`fi.skills.version_ids`, `fi.skills.ids`, `fi.skills.refs`), not
+list deltas. The SDK's higher-level scope helper accumulates loads for you.
+Supplying a new context replaces all inherited context and skill keys;
+`reset_skills=True` explicitly clears just the skill keys. Exiting the block
+restores the previous OTel context, including on an exception or cancellation.
+Use a fresh `with` block inside async functions and generator bodies. Thread-pool
+handoffs require `contextvars.copy_context().run(...)`; subprocesses require
+explicit propagation and cannot inherit this in-process carrier.
+
+### What later-span stamping cannot cover
+
+- Already-started ancestor spans cannot be retroactively changed. Put the explicit
+  scope **outside** root span creation if the root needs attribution.
+- Head-sampled-out spans and providers without the processor are not stamped.
+- In automatic mode, interleaved agents share a trace's skill list. Use explicit
+  SDK agent scopes for separation; a nested context starts a fresh list.
+- Explicit span attributes, including a framework's `gen_ai.agent.name`, win.
+- Trace-level load queries use `skill.load` evidence, not root attributes.
+
+Java, C#, Go and Ruby: **manual — set attributes on your spans**. Automatic SDK
+load attribution and the carrier above are not implemented for those languages.
+
 ## suppress_tracing()
 
 Temporarily disable tracing:

@@ -16,6 +16,11 @@ import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialN
 
 // Compatibility name for integration tests/packages migrating this round; the agent never reads or propagates it.
 export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credentials");
+// A Hub receipt UUID is not an authentication session. Only this exact key and
+// canonical UUID shape participate in FI-authored grouping; foreign spans still mask
+// the name, and loss, media and registered-secret checks always apply.
+const isContextReceipt = (key: string, value: unknown): boolean => key === "fi.context.session_id"
+  && typeof value === "string" && value.length === 36 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const HOST_TRUNCATED = "<unknown: host-truncated>";
 const HOST_DATA_UNKNOWN = "traceai.capture.host_data_unknown";
 // The image cap's whole-value fallback marker (module-private WHOLE_MARKER in
@@ -567,13 +572,16 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       const lostContext = incomplete && !admitted;
       const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
-      const grouping = groupingKey(key);
+      const grouping = groupingKey(key) || (identityExemption && isContextReceipt(key, item));
       if (!admission && !grouping && isCredentialName(key)) return credentialAttributeSentinel;
       if (tc.hideEmbeddingVectors && /(?:^|\.)(?:embedding|embeddings|vector|vectors)(?:\.|$)/i.test(key) && !/(?:count|dimension|text)/i.test(key)) return REDACTED_VALUE;
       if (typeof item === "number" || typeof item === "boolean") {
         // Numeric registered secrets outrank even media ancestry and metric roles.
         if (secrets.includes(String(item))) return "<redacted>";
-        const media = mediaValue(item); if (media !== undefined) return media;
+        // This exact numeric field is a byte count, not a projected media
+        // payload. Do not exempt strings, arrays, or other *.bytes paths.
+        const skillByteCount = key === "fi.skill.bytes" && typeof item === "number" && Number.isSafeInteger(item) && item >= 0;
+        const media = skillByteCount ? undefined : mediaValue(item); if (media !== undefined) return media;
         const raw = String(item), clean = string(raw);
         if (clean !== raw) return clean;
         return typeof item === "number" && !Number.isFinite(item) ? raw : item;
@@ -805,7 +813,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
-        } else if (identityKey(key)) {
+        } else if (identityKey(key) || isContextReceipt(key, item)) {
           // Same single debit; the value is discovered without its name, on every
           // span, so a session or user id never becomes a registered secret.
           requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
@@ -843,7 +851,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         // the export masking of their names depends on the span's provenance.
         const metadataParts = key === METADATA_KEY && typeof item === "string"
           ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
-        if (identityKey(key)) {
+        if (identityKey(key) || isContextReceipt(key, item)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
         } else if (metadataParts) {

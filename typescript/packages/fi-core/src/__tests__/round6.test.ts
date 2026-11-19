@@ -38,7 +38,10 @@ test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "regist
   else exporter = new GRPCSpanExporter(options);
   if (provider) {
     const processors = (provider as any)._activeSpanProcessor._spanProcessors;
-    expect(processors[0]).toBeInstanceOf(route === "register-batch" ? SDKBatchSpanProcessor : SimpleSpanProcessor);
+    expect(processors).toHaveLength(3);
+    expect(processors[0]).toBeInstanceOf(require("../trace/runtimeAttributesProcessor").FutureAGIRuntimeAttributesSpanProcessor);
+    expect(processors[1]).toBeInstanceOf(route === "register-batch" ? SDKBatchSpanProcessor : SimpleSpanProcessor);
+    expect(processors[2]).toBeInstanceOf(require("../spanProcessorRegistry").SpanProcessorRegistry);
     const span = provider.getTracer("manual").startSpan("manual", { attributes: original.attributes });
     span.setStatus({ code: SpanStatusCode.ERROR, message: "registered-manual-private" }); span.addEvent("registered-manual-private"); span.end();
     if (route === "register-batch") expect(delivered).toHaveLength(0);
