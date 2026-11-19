@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Google ADK legacy hooks write no raw input or output while any hide setting is on, and under the input hide settings build `output.value` from response-side text only, so a result object that echoes the request no longer reaches the span (including when they attach on `@google/adk` 2.x).
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
 ### Coming Soon
