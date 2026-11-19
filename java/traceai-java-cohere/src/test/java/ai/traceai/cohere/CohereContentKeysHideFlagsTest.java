@@ -66,7 +66,11 @@ class CohereContentKeysHideFlagsTest {
 
         @Override
         public NonStreamedChatResponse chat(ChatRequest request) {
+            // the v1 chat response echoes the conversation, including the user message
             return NonStreamedChatResponse.builder().text(OUT_TEXT)
+                .chatHistory(List.of(
+                    Message.user(ChatMessage.builder().message(IN_MESSAGE).build()),
+                    Message.user(ChatMessage.builder().message(IN_HISTORY).build())))
                 .toolCalls(List.of(ToolCall.builder().name("lookup").parameters(Map.of("q", OUT_TOOL_ARGS)).build()))
                 .build();
         }
@@ -164,5 +168,16 @@ class CohereContentKeysHideFlagsTest {
             });
         }
         assertThat(exported).as("tool-call arguments under %s", flag).isEmpty();
+    }
+
+    /** Control: with no hide flag the echoed history is part of the raw output. */
+    @org.junit.jupiter.api.Test
+    void withNoFlagTheEchoedHistoryIsInTheRawOutput() {
+        TracedCohereClient client = new TracedCohereClient(new StubCohere(), new FITracer(provider.get("cohere-hide-test"),
+            TraceConfig.builder().apiKey("offline").secretKey("offline").projectName("offline")
+                .hideInputs(false).hideOutputs(false).hideInputMessages(false).hideOutputMessages(false).build()));
+        client.chat(ChatRequest.builder().message(IN_MESSAGE).model("command-r").build());
+        assertThat(exportedKeys(IN_HISTORY)).contains("fi.raw_output");
+        assertThat(exportedKeys(OUT_TEXT)).contains("fi.raw_output");
     }
 }
