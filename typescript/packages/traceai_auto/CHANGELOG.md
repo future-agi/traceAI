@@ -1,4 +1,9 @@
-## [0.3.0] - pending release
+## [0.4.0] - 2026-11-19
+
+### Added
+- Amazon Bedrock Agents are traced zero-code: the `bedrock` integration also activates `@traceai/bedrock` when `@aws-sdk/client-bedrock-agent-runtime` is installed, including when it is the only Bedrock SDK in the app, so `InvokeAgent` and `InvokeInlineAgent` calls are traced (#727). This needs `@traceai/bedrock` 0.2.0 or later.
+
+## [0.3.0] - 2026-11-18
 
 ### If you upgrade from 0.2.x
 - **Without an explicit sample rate, the agent's own provider follows `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`** (#711). When no `sampleRate`, `FI_SAMPLE_RATE` or file `sample_rate` is set, the default is `ParentBased(TraceIdRatio(1))`, so AI spans under an unsampled parent are now dropped with it. To keep 0.2.0's behaviour, set `FI_SAMPLE_RATE` (for example `1`). Invalid sampler names or ratio arguments produce one agent warning and use the default. Application-owned samplers and explicit-rate record-only flags are unchanged.
@@ -12,7 +17,7 @@
 ### Fixed
 - An AI call made while your app handles an incoming request that its sampler dropped (a non-recording server span under an unsampled remote parent) keeps that request's trace ID and parent, so it no longer starts a separate orphan trace (#715). Once the request's span ends, later work goes back to the parent that was active before it.
 
-## [0.2.0] - pending release
+## [0.2.0] - 2026-11-17
 
 ### If you upgrade from 0.1.x
 - **The agent no longer takes over your app's OpenTelemetry.** It registers no global tracer provider, context manager or propagator, and an OpenTelemetry SDK your app starts registers normally. If your code created spans through OpenTelemetry's global API without starting an SDK of its own, those spans now go nowhere: start an SDK (for example `NodeSDK`) in your app.
@@ -47,7 +52,7 @@
   These are duplicate-span limitations, not lost calls.
 - LangChain is not traced by the agent yet. Its model requests are still recorded: by the provider SDK's integration when one is on, otherwise as wire spans.
 
-## [0.1.4] - pending release
+## [0.1.4] - 2026-11-12
 
 ### Added
 - Registry entries for `@traceai/n8n` (import hook on `n8n-core`), `@traceai/openrouter` and `@traceai/vitest-evals` (both manual setup), so `traceai-auto` reports them and the coverage table lists them.
@@ -56,7 +61,7 @@
 - OpenAI-compatible Chat Completions and Responses calls captured from the global fetch, including streamed response.failed events, mark the span as an error when the provider returns a failure inside a successful HTTP response, with the provider's message when one is given. Calls made with the OpenAI SDK are traced by the OpenAI instrumentation instead.
 - Gemini capture records every generated candidate, not only the first.
 
-## [0.1.3] - pending release
+## [0.1.3] - 2026-11-09
 
 ### Added
 - Experimental W3C trace-context propagation for outgoing `node:http` / `node:https` requests only. The adapter is off by default and requires explicit `propagateOutgoingAdapters: true` or `TRACEAI_PROPAGATE_OUTGOING_ADAPTERS=true`; destination policy alone does not enable it. No HTTP CLIENT spans are created.

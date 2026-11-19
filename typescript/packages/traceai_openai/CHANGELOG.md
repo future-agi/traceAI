@@ -1,10 +1,10 @@
-## [0.1.18] - pending release
+## [0.1.18] - 2026-11-12
 
 ### Fixed
 - For non-streaming chat completion, completion, Responses and embedding calls, a provider error returned with HTTP 200 comes back to your code unchanged and is recorded as an error span, instead of the call throwing a TypeError.
 - Token usage for embedding requests is recorded.
 
-## [0.1.17] - pending release
+## [0.1.17] - 2026-11-07
 ### Feature
 - Embeddings now also set `gen_ai.request.model` from the request and `gen_ai.response.model` from the response when present, while retaining `embedding.model_name`.
 - Streaming chat completions, completions and Responses record `gen_ai.response.time_to_first_token` (seconds from the request start to the first generated content: text, reasoning, refusals, tool calls or audio). Timing reads only the events the SDK already delivers and keeps no content.

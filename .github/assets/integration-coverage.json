@@ -123,6 +123,7 @@
         "haystack",
         "lancedb",
         "llamaindex",
+        "marqo",
         "milvus",
         "mongodb",
         "pgvector",
@@ -452,6 +453,13 @@
       "name": "IBM watsonx",
       "category": "model-providers",
       "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/watsonx/pyproject.toml",
+            "package": "traceAI-watsonx",
+            "source": "python/frameworks/watsonx/"
+          }
+        ],
         "Java": [
           {
             "manifest": "java/traceai-java-watsonx/pom.xml",
@@ -1209,6 +1217,20 @@
             "manifest": "java/traceai-java-milvus/pom.xml",
             "package": "traceai-java-milvus",
             "source": "java/traceai-java-milvus/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "marqo",
+      "name": "Marqo",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/marqo/pyproject.toml",
+            "package": "traceAI-marqo",
+            "source": "python/frameworks/marqo/"
           }
         ]
       }

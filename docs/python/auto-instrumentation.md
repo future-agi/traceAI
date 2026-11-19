@@ -87,6 +87,7 @@ Each integration reports one of these statuses:
 | `google_genai_live` | `google-genai` (Live) | `traceAI-google-genai-live` | Automatic |
 | `vertexai` | `vertexai` | `traceAI-vertexai` | Automatic |
 | `bedrock` | `boto3` | `traceAI-bedrock` | Automatic |
+| `sagemaker` | `boto3` | `traceAI-sagemaker` | Automatic |
 | `mistralai` | `mistralai` | `traceAI-mistralai` | Automatic |
 | `cohere` | `cohere` | `traceAI-cohere` | Automatic |
 | `groq` | `groq` | `traceAI-groq` | Automatic |
@@ -97,7 +98,9 @@ Each integration reports one of these statuses:
 | `transformers` | `transformers` | `traceAI-transformers` | Automatic |
 | `litellm` | `litellm` | `traceAI-litellm` | Automatic |
 | `openrouter` | `openrouter` | `traceAI-openrouter` | Automatic |
+| `writer` | `writerai` | `traceAI-writer` | Automatic |
 | `portkey` | `portkey-ai` | `traceAI-portkey` | Automatic |
+| `watsonx` | `ibm_watsonx_ai` | `traceAI-watsonx` | Automatic |
 | `replicate` | `replicate` | `traceAI-replicate` | Automatic |
 | `voyage` | `voyageai` | `traceAI-voyage` | Automatic |
 | `discoveryengine` | `google-cloud-discoveryengine` | `traceAI-discoveryengine` | Automatic |
@@ -143,6 +146,7 @@ Each integration reports one of these statuses:
 | `pinecone` | `pinecone` | `traceAI-pinecone` | Automatic |
 | `qdrant` | `qdrant-client` | `traceAI-qdrant` | Automatic |
 | `weaviate` | `weaviate-client` | `traceAI-weaviate` | Automatic |
+| `marqo` | `marqo` | `traceAI-marqo` | Automatic |
 | `milvus` | `pymilvus` | `traceAI-milvus` | Automatic |
 | `lancedb` | `lancedb` | `traceAI-lancedb` | Automatic |
 | `mongodb` | `pymongo` | `traceAI-mongodb` | Automatic |

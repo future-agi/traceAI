@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.1] - pending release
+## [0.1.1] - 2026-11-12
 
 ### Fixed
 - Eval traces reach Future AGI: the reporter names the Observe project (the projectName option, else FI_PROJECT_NAME, else vitest-evals), which the backend requires.

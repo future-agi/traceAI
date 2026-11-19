@@ -12,7 +12,7 @@ The application's own OpenTelemetry setup is left alone. The agent does not regi
 1. Get the agent jar (JDK 17+). It is on Maven Central as `com.futureagi:traceai-javaagent`, released with the Java SDK at the same version:
 
    ```sh
-   VERSION=1.3.0
+   VERSION=1.4.0
    curl -fLO "https://repo1.maven.org/maven2/com/futureagi/traceai-javaagent/$VERSION/traceai-javaagent-$VERSION.jar"
    ```
 
@@ -61,6 +61,7 @@ If the agent started with `-javaagent` but without keys, a later `init(Map.of("a
 ## What gets traced
 
 * **Spans:** one CLIENT span per provider call, created when the response completes, with the parent taken from the request's context. HTTP and transport errors are `ERROR` spans. Messages, tool calls, token usage, model, finish reasons and streaming timing (`gen_ai.response.time_to_first_chunk`, `gen_ai.response.time_to_first_text`) follow the shared traceAI conventions. Context from `ContextAttributes` (session, user, metadata, tags) is attached, subject to the privacy rules below.
+* **Incoming requests join the caller's trace:** while a servlet request is handled (`HttpServlet#service` and its overrides, `jakarta.servlet` and `javax.servlet`, which includes Spring MVC, Jersey and CXF servlets on Tomcat, Jetty and Undertow; tested with embedded Tomcat 10.1 and `javax.servlet` 4.0), the request's W3C `traceparent` and `tracestate` headers are the parent of the AI calls made on that request's thread. A sampled caller gets the AI spans in its own trace, under its span, with its `fi=r:` sampling ratio inherited; an unsampled caller (flags `00`) gets nothing exported under the default parent-based sampler. No, or an invalid, `traceparent` starts a new trace as before. No SERVER span is created or sent, and your own active span still takes precedence. The previous context is restored when `service` returns or throws, also when the request goes asynchronous; work the application hands to other threads, and calls made in a servlet filter before the servlet runs, do not see the incoming context. `FI_DISABLED_INSTRUMENTATIONS=servlet` turns this off.
 * **Only the agent's spans:** Future AGI receives the agent's own spans and nothing else. A call made under one of your spans gets that span as its parent, but your span itself is not sent.
 * **Formats:** every format in the shared wire catalog (`spec/auto-instrumentation/wire-protocols.json`), recognized by protocol rather than client brand, so OpenAI-compatible gateways work too.
 * **Audio:** binary and multipart bodies are counted, never buffered; only file name, type, size and bounded text fields are kept.
@@ -105,7 +106,7 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes for the agent's own spans; an application-supplied resource takes precedence. |
 | `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` / `OTEL_ATTRIBUTE_COUNT_LIMIT` | Span limit, then general limit, then 128. A smaller limit configured in the application SDK is respected. |
 | `FI_INSTRUMENTATIONS` | All. Comma-separated allowlist; include `wire` to allow HTTP tracing. |
-| `FI_DISABLED_INSTRUMENTATIONS` | None. Denylist wins. `wire` turns HTTP tracing off; `okhttp` or `java.net.http` turns off one client. |
+| `FI_DISABLED_INSTRUMENTATIONS` | None. Denylist wins. `wire` turns HTTP tracing off; `okhttp` or `java.net.http` turns off one client; `servlet` stops joining incoming W3C trace context. |
 | `FI_WIRE_CAPTURE` | `true`. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304`; per-direction body buffering bound. |
 | `FI_SAMPLE_RATE` | When set, `ParentBased(TraceIdRatio(rate))`; `0` drops roots but retains children of sampled parents. Without a rate or OTel sampler setting, defaults to `ParentBased(TraceIdRatio(1.0))`. |
@@ -169,7 +170,7 @@ In code, `TraceAIAuto.doctor()` returns the same report. Integration statuses ar
 * This release traces AI calls made through the JDK HttpClient and OkHttp. Apache HttpClient, Reactor Netty (Spring WebClient), the AWS SDK v2 clients and gRPC clients are not covered yet, nor are WebSockets and native clients.
 * OkHttp is tested with three versions: 3.14.9; 4.12.0 (with Okio 3.6.0 and Kotlin 1.8.21); and 5.0.0 (the `okhttp-jvm` artifact, with Okio 3.15.0 and Kotlin 2.2.0). On each, the tests send a chat call, a streamed call and an asynchronous streamed call through an `OkHttpClient` built by the application. Other OkHttp versions are not verified. OkHttp older than 3.14 is not traced; the application runs unchanged (tested with 3.8.1).
 * OkHttp is traced when it is loaded by the system class loader, as with `java -cp` or a plain `-jar` application. When OkHttp sits in a nested or child class loader (Spring Boot executable jars with `BOOT-INF/lib`, WAR files in an application server, Quarkus), OkHttp calls may not be traced; the JDK HttpClient is unaffected. This has not been tested yet.
-* No server spans for servlet or Spring MVC yet, and no automatic wrapping of SDK clients.
+* Incoming W3C trace context is joined for servlet requests only (`HttpServlet#service`, see [What gets traced](#what-gets-traced)); reactive servers (Spring WebFlux, Netty, Vert.x) and gRPC servers are not covered. The agent creates no SERVER spans, and there is no automatic wrapping of SDK clients.
 * The agent needs FI keys to start. It does not yet export to an application-owned OpenTelemetry destination without them.
 * Export is OTLP/HTTP JSON in bounded batches, without disk spooling. It has been tested against a local mock collector only.
 * Binary Bedrock event streams record request information and status only.

@@ -33,21 +33,25 @@ import { extractInvokeModelResponseAttributes } from "./attributes/invoke-model-
 import { extractConverseRequestAttributes } from "./attributes/converse-request-attributes";
 import { extractConverseResponseAttributes } from "./attributes/converse-response-attributes";
 import { observeBedrockStream } from "./attributes/invoke-model-streaming-response-attributes";
+import { agentRequest, observeAgentCompletion } from "./agent-runtime";
 import {
   getSystemFromModelId,
   setBasicSpanAttributes,
 } from "./attributes/attribute-helpers";
 
 const MODULE_NAME = "@aws-sdk/client-bedrock-runtime";
+const AGENT_RUNTIME_MODULE_NAME = "@aws-sdk/client-bedrock-agent-runtime";
 const INSTRUMENTATION_NAME = "@traceai/bedrock";
-const INSTRUMENTATION_VERSION = "0.1.4"; // x-release-please-version
+const INSTRUMENTATION_VERSION = "0.2.0"; // x-release-please-version
 
 /**
  * AWS SDK module interface for proper typing
  * Defines the structure of the @aws-sdk/client-bedrock-runtime module exports
  */
 interface BedrockModuleExports {
-  BedrockRuntimeClient: typeof BedrockRuntimeClient;
+  BedrockRuntimeClient?: typeof BedrockRuntimeClient;
+  /** From @aws-sdk/client-bedrock-agent-runtime. */
+  BedrockAgentRuntimeClient?: { prototype: { send: unknown } };
 }
 
 /**
@@ -137,7 +141,8 @@ export class BedrockInstrumentation extends InstrumentationBase {
    */
   public manuallyInstrument(module: BedrockModuleExports) {
     diag.debug(`Manually instrumenting ${MODULE_NAME}`);
-    this.patch(module);
+    if (module?.BedrockRuntimeClient) this.patch(module);
+    if (module?.BedrockAgentRuntimeClient) this.patchAgentRuntime(module);
   }
 
   /**
@@ -152,7 +157,14 @@ export class BedrockInstrumentation extends InstrumentationBase {
         this.patch.bind(this),
         this.unpatch.bind(this),
       );
-    return [module];
+    const agentRuntime =
+      new InstrumentationNodeModuleDefinition(
+        AGENT_RUNTIME_MODULE_NAME,
+        ["^3.0.0"],
+        this.patchAgentRuntime.bind(this),
+        this.unpatchAgentRuntime.bind(this),
+      );
+    return [module, agentRuntime];
   }
 
   get tracer(): Tracer {
@@ -238,6 +250,56 @@ export class BedrockInstrumentation extends InstrumentationBase {
     }
 
     return moduleExports;
+  }
+
+  /**
+   * Patches BedrockAgentRuntimeClient.send to trace InvokeAgent and InvokeInlineAgent.
+   * Every other agent-runtime command passes through untouched.
+   */
+  private patchAgentRuntime(
+    moduleExports: BedrockModuleExports,
+    moduleVersion?: string,
+  ): BedrockModuleExports {
+    diag.debug(`Applying patch for ${AGENT_RUNTIME_MODULE_NAME}@${moduleVersion}`);
+    if (moduleExports?.BedrockAgentRuntimeClient) {
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
+      const instrumentation = this;
+      this._wrap(
+        moduleExports.BedrockAgentRuntimeClient.prototype,
+        "send",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (original: any) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return function patchedSend(this: unknown, ...args: any[]) {
+            const commandName = args[0]?.constructor?.name;
+            if (
+              commandName === "InvokeAgentCommand" ||
+              commandName === "InvokeInlineAgentCommand"
+            ) {
+              return instrumentation.handleInvokeAgentCommand(
+                commandName,
+                args[0],
+                original,
+                this,
+                args,
+              );
+            }
+            return original.apply(this, args);
+          };
+        },
+      );
+    }
+    return moduleExports;
+  }
+
+  private unpatchAgentRuntime(
+    moduleExports: BedrockModuleExports,
+    moduleVersion?: string,
+  ): void {
+    diag.debug(`Removing patch for ${AGENT_RUNTIME_MODULE_NAME}@${moduleVersion}`);
+    if (moduleExports?.BedrockAgentRuntimeClient) {
+      this._unwrap(moduleExports.BedrockAgentRuntimeClient.prototype, "send");
+    }
   }
 
   /**
@@ -483,6 +545,64 @@ export class BedrockInstrumentation extends InstrumentationBase {
         span.setStatus({ code: SpanStatusCode.OK });
         span.end();
         return response;
+      },
+    );
+  }
+
+  /**
+   * Handles InvokeAgent / InvokeInlineAgent. One AGENT span covers the call and the whole
+   * `completion` stream: it ends when the stream is consumed, fails or is abandoned.
+   * With `enableTrace`, the trace events become LLM / TOOL / RETRIEVER child spans.
+   */
+  private handleInvokeAgentCommand(
+    commandName: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    command: any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    original: any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    args: unknown[],
+  ) {
+    const request = agentRequest(commandName, command.input);
+    const span = this.fiTracer.startSpan(request.name, {
+      kind: SpanKind.INTERNAL,
+    });
+    span.setAttributes(request.attributes);
+    span.setAttributes(getAttributesFromContext(context.active()));
+
+    return this.sendWithResponse(
+      original,
+      client,
+      args,
+      span,
+      (response: { completion?: AsyncIterable<unknown> }) => {
+        if (!response?.completion) {
+          span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
+          return response;
+        }
+        const completion = observeAgentCompletion({
+          stream: response.completion,
+          span,
+          tracer: this.fiTracer,
+          onDone: (cancelled) => {
+            try {
+              if (cancelled) span.addEvent("stream.cancelled");
+              else span.setStatus({ code: SpanStatusCode.OK });
+            } finally {
+              span.end();
+            }
+          },
+          onError: (error) => {
+            try {
+              recordBedrockError(span, error);
+            } finally {
+              span.end();
+            }
+          },
+        });
+        return { ...response, completion };
       },
     );
   }

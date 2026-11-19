@@ -27,7 +27,11 @@
     "traceAI-typesafe",
     "traceAI-voyage",
     "traceAI-transformers",
-    "traceAI-openrouter"
+    "traceAI-openrouter",
+    "traceAI-sagemaker",
+    "traceAI-marqo",
+    "traceAI-watsonx",
+    "traceAI-writer"
   ],
   "_hold_artifacts_comment": "Reactor modules that the Java release builds and tests but does not deploy, with the reason. A held module's release profile sets skipPublishing, and the release plan leaves it out of the Central check, so the rest of the reactor still releases. To publish one, remove its entry here and its skipPublishing setting.",
   "hold_artifacts": {}

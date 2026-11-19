@@ -18,6 +18,7 @@ public final class TraceAIAgent {
         catch (Throwable ignored) { TraceAIAuto.warn("Agent startup failed; application runs without auto-instrumentation"); }
     }
     static void install(Instrumentation instrumentation) {
+        IncomingRequests.install(instrumentation);
         // Shade relocates this property along with ByteBuddy: it cannot alter an application's copy.
         if (Runtime.version().feature() > 24) System.setProperty("net.bytebuddy.experimental", "true");
         new AgentBuilder.Default().disableClassFormatChanges()

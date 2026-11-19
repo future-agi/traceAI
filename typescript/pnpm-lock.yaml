@@ -474,6 +474,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: 0.27.3
         version: 0.27.3
+      '@aws-sdk/client-bedrock-agent-runtime':
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@cursor/sdk':
         specifier: 1.0.38
         version: 1.0.38(zod@4.3.6)
@@ -486,6 +489,9 @@ importers:
       '@opentelemetry/instrumentation-http':
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.1)
+      '@traceai/bedrock':
+        specifier: workspace:^
+        version: link:../traceai_bedrock
       '@traceai/genkit':
         specifier: workspace:^
         version: link:../traceai_genkit
@@ -562,6 +568,9 @@ importers:
         specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
+      '@aws-sdk/client-bedrock-agent-runtime':
+        specifier: 3.1127.0
+        version: 3.1127.0
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.693.0
         version: 3.975.0
@@ -3649,6 +3658,10 @@ packages:
 
   '@aws-crypto/util@5.2.0':
     resolution: {integrity: sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ==}
+
+  '@aws-sdk/client-bedrock-agent-runtime@3.1127.0':
+    resolution: {integrity: sha512-AUSbdHmXd2NH1px1/Qr9LKZeNWve76Kqk8/ySe/KScQcs2jlr8TMbHspUmkRVxH8SGieMaOSnWaFAkTd9fYrgA==}
+    engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-bedrock-runtime@3.1127.0':
     resolution: {integrity: sha512-IDl/lrPb90aH+pZFHGNDmgH9nAUQj5PlZH1sJ3w7RikctyjHSnY3oNjZhrLoaBoQn/rNK0zsP6OHEqEhj2tdLA==}
@@ -16482,6 +16495,17 @@ snapshots:
     dependencies:
       '@aws-sdk/types': 3.973.0
       '@smithy/util-utf8': 2.3.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-bedrock-agent-runtime@3.1127.0':
+    dependencies:
+      '@aws-sdk/core': 3.980.1
+      '@aws-sdk/credential-provider-node': 3.972.94
+      '@aws-sdk/types': 3.975.0
+      '@smithy/core': 3.39.0
+      '@smithy/fetch-http-handler': 5.8.1
+      '@smithy/node-http-handler': 4.14.2
+      '@smithy/types': 4.20.0
       tslib: 2.8.1
 
   '@aws-sdk/client-bedrock-runtime@3.1127.0':

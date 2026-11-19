@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.2] - pending release
+## [0.1.2] - 2026-11-12
 
 ### Fixed
 - Integer (int8 and uint8) embedding vectors are recorded.

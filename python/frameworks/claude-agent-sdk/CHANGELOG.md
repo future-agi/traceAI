@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.2] - pending release
+## [0.1.2] - 2026-11-12
 
 ### Changed
 - traceai-claude-agent-sdk now requires fi-instrumentation-otel 0.1.11 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.

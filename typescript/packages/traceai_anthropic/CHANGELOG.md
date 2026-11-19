@@ -1,4 +1,4 @@
-## [0.1.6] - pending release
+## [0.1.6] - 2026-11-12
 
 ### Fixed
 - Manually configured tracing stops when disabled and resumes when re-enabled, separate copies of the Anthropic SDK loaded in one process can each be traced, and non-streamed output messages keep the text around tool calls.
