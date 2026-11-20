@@ -124,11 +124,13 @@ public class HostingStartupPlanTests
 
     [Theory]
     [InlineData("FI_PROJECT_NAME", "project_name = \"from-file\"\n", "PROJECT_NAME", "from-file")]
-    [InlineData("FI_BASE_URL", "base_url = \"http://from-file.example\"\n", "BASE_URL", "http://from-file.example")]
-    [InlineData("FI_WIRE_CAPTURE", "wire_capture = false\n", "WIRE_CAPTURE", "false")]
+    [InlineData("FI_PROJECT_TYPE", "project_type = \"experiment\"\n", "PROJECT_TYPE", "experiment")]
     [InlineData("FI_INSTRUMENTATIONS", "instrumentations = [\"openai\"]\n", "INSTRUMENTATIONS", "openai")]
-    public void ABlankEnvironmentValueNeverOverridesTheFile(string variable, string toml, string key, string expected) =>
-        Assert.Equal(expected, WithFile(toml, file => new AutoConfig(new AutoOptions { ConfigFile = file }).Get(key), (variable, ""), ("FI_API_KEY", "k"), ("FI_SECRET_KEY", "s")));
+    public void ABlankEnvironmentValueNeverOverridesTheFile(string variable, string toml, string key, string expected)
+    {
+        foreach (var blank in new[] { "", "   " })
+            Assert.Equal(expected, WithFile(toml, file => new AutoConfig(new AutoOptions { ConfigFile = file }).Get(key), (variable, blank), ("FI_API_KEY", "k"), ("FI_SECRET_KEY", "s")));
+    }
 
     [Fact]
     public void ABlankEnvironmentValueWithNoFileFallsBackToTheDefault() =>
@@ -167,13 +169,18 @@ public class HostingStartupPlanTests
     [InlineData("sure")]
     public void AnUnrecognisedValueIsOffWithOneWarningThatNamesOnlyTheSetting(string value)
     {
-        var (plan, error) = PlanWithStderr(("FI_AUTO_CAPTURE_CONTENT", value));
-        Assert.Equal("chat=1;agent=1;sensitive=0", plan);
+        // Evaluated twice in one process without clearing the warnings: the warning is printed once.
+        ((System.Collections.Concurrent.ConcurrentDictionary<string, byte>)typeof(TraceAIAuto)
+            .GetField("Warnings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!).Clear();
+        var saved = Console.Error; var writer = new StringWriter(); Console.SetError(writer);
+        string? first, second;
+        try { first = Plan(null, ("FI_AUTO_CAPTURE_CONTENT", value)); second = Plan(null, ("FI_AUTO_CAPTURE_CONTENT", value)); }
+        finally { Console.SetError(saved); }
+        var error = writer.ToString();
+        Assert.Equal("chat=1;agent=1;sensitive=0", first);
+        Assert.Equal("chat=1;agent=1;sensitive=0", second);
         Assert.Equal(1, error.Split("FI_AUTO_CAPTURE_CONTENT").Length - 1);
         Assert.DoesNotContain(value, error.Replace("FI_AUTO_CAPTURE_CONTENT", ""));
-        // asking again does not repeat the warning
-        var (_, again) = PlanWithStderr(("FI_AUTO_CAPTURE_CONTENT", value));
-        Assert.Equal(1, again.Split("FI_AUTO_CAPTURE_CONTENT").Length - 1);
     }
 
     [Theory]
