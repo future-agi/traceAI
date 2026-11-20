@@ -114,6 +114,9 @@ internal sealed class AutoConfig
     /// <summary>Switches other than the hide switches (FI_WIRE_CAPTURE, FI_AUTO_DEBUG): true,
     /// 1 or yes is on, trimmed and case-insensitive; anything else is off.</summary>
     internal bool Bool(string key) => Get(key).Trim().ToLowerInvariant() is "true" or "1" or "yes";
+    /// <summary>FI_AUTO_CAPTURE_CONTENT: on when unset or blank, and for true, 1, yes or on; off for false, 0, no or off.
+    /// Any other value is off, the cautious reading of a switch someone set.</summary>
+    internal bool CaptureContent => Get("AUTO_CAPTURE_CONTENT").Trim().ToLowerInvariant() is "" or "true" or "1" or "yes" or "on";
     /// <summary>A hide switch, from FI_HIDE_* or its file setting, trimmed and case-insensitive:
     /// true, 1, yes or on hides; false, 0, no or off shows. Null when it is not set or blank, so
     /// the caller's default applies. Any other value hides, because a hide switch someone set

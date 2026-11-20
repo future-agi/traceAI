@@ -83,6 +83,20 @@ public sealed class TraceHostingStartup : IHostingStartup
         catch { }
     }
 
+    private static int s_contentNoted;
+
+    /// <summary>One value-free line per process, through the agent's warning path (standard error, "[traceAI auto]" prefix): the
+    /// libraries' switch is on, so other listeners and exporters in the application receive content unscrubbed. Names only the setting.</summary>
+    internal static void NoteContentOn()
+    {
+        try
+        {
+            if (Interlocked.Exchange(ref s_contentNoted, 1) == 1) return;
+            Console.Error.WriteLine("[traceAI auto] Prompt and response content capture is on, so other OpenTelemetry listeners and exporters in this application receive that content unscrubbed. Set FI_AUTO_CAPTURE_CONTENT=false to turn it off.");
+        }
+        catch { }
+    }
+
     internal static void Report(string message)
     {
         try { if (Environment.GetEnvironmentVariable("FI_AUTO_DEBUG") == "true") Console.Error.WriteLine("[traceAI auto] hosting startup " + message); }
@@ -251,6 +265,7 @@ internal sealed class Wrapper
             // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT set to anything but true keeps it off whatever the traceAI opt-in says.
             if (sensitive && ContentVariableForbids()) sensitive = false;
             _sensitive?.SetValue(wrapped, sensitive);
+            if (sensitive && _sensitive != null) TraceHostingStartup.NoteContentOn();
             if (record) TraceHostingStartup.RecordWrapped(kind);
             return wrapped;
         }

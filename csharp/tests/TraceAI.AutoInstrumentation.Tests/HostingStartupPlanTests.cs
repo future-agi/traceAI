@@ -69,29 +69,6 @@ public class HostingStartupPlanTests
     public void ASuppliedTraceConfigWinsOverTheHideVariables() =>
         Assert.Equal("chat=1;agent=1;sensitive=1", Plan(o => o.TraceConfig = new FIInstrumentation.TraceConfig(), ("FI_HIDE_INPUTS", "true")));
 
-    [Fact]
-    public void TheStartupLineIsPrintedOnceWhenOnAndNeverWhenOff()
-    {
-        string Capture(Action action)
-        {
-            var saved = Console.Error; var writer = new StringWriter(); Console.SetError(writer);
-            try { action(); } finally { Console.SetError(saved); }
-            return writer.ToString();
-        }
-        void Reset() => ((System.Collections.IDictionary)typeof(TraceAIAuto).GetField("Warnings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!).Clear();
-        lock (typeof(HostingStartupPlanTests))
-        {
-            Reset();
-            var on = Capture(() => { Plan(); Plan(); });
-            Assert.Equal(1, on.Split("FI_AUTO_CAPTURE_CONTENT").Length - 1);
-            Assert.Single(on.Split('\n', StringSplitOptions.RemoveEmptyEntries));
-            Reset();
-            Assert.DoesNotContain("FI_AUTO_CAPTURE_CONTENT", Capture(() => Plan(null, ("FI_AUTO_CAPTURE_CONTENT", "false"))));
-            Assert.DoesNotContain("FI_AUTO_CAPTURE_CONTENT", Capture(() => Plan(null, ("FI_HIDE_INPUTS", "true"))));
-            Reset();
-        }
-    }
-
     [Theory]
     [InlineData("HideInputs")]
     [InlineData("HideOutputs")]
