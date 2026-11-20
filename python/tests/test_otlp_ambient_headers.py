@@ -8,14 +8,15 @@ import http.server
 import os
 import threading
 from concurrent import futures
+from typing import ClassVar
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 from fi_instrumentation import otel
-from fi_instrumentation.auto._config import AutoConfig
 from fi_instrumentation.auto import _manager
+from fi_instrumentation.auto._config import AutoConfig
 
 AMBIENT = "Authorization=Bearer fake-ambient,x-ambient=1"
 ENV_CASES = {
@@ -31,9 +32,9 @@ AMBIENT_NAMES = ("authorization", "x-ambient")
 
 
 class _HttpSink(http.server.BaseHTTPRequestHandler):
-    seen = []
+    seen: ClassVar[list] = []
 
-    def do_POST(self):  # noqa: N802 - http.server API
+    def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
         type(self).seen.append({k.lower(): v for k, v in self.headers.items()})
         self.send_response(200)

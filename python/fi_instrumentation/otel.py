@@ -640,7 +640,7 @@ def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
 _AMBIENT_HEADER_ENV_VARS = ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")
 
 
-def _ambient_headers() -> Dict[str, str]:
+def _ambient_headers() -> dict[str, str]:
     """Headers named by the OTLP environment variables, keyed by lower-case name.
 
     Upstream OpenTelemetry exporters read these when they are built (and, from
@@ -649,7 +649,7 @@ def _ambient_headers() -> Dict[str, str]:
     """
     from opentelemetry.util.re import parse_env_headers
 
-    found: Dict[str, str] = {}
+    found: dict[str, str] = {}
     for var in reversed(_AMBIENT_HEADER_ENV_VARS):
         raw = os.environ.get(var)
         if raw:
@@ -657,7 +657,7 @@ def _ambient_headers() -> Dict[str, str]:
     return found
 
 
-def _is_future_agi_endpoint(endpoint: Optional[str]) -> bool:
+def _is_future_agi_endpoint(endpoint: str | None) -> bool:
     """True when the exporter sends to Future AGI.
 
     No endpoint means the default derived from FI_TRACES_URL / FI_BASE_URL (HTTP)
@@ -669,7 +669,7 @@ def _is_future_agi_endpoint(endpoint: Optional[str]) -> bool:
     if endpoint is None:
         return True
 
-    def _origin(url: Optional[str]) -> Optional[Tuple[str, Optional[int]]]:
+    def _origin(url: str | None) -> tuple[str, int | None] | None:
         if not url:
             return None
         parsed = urlparse(url if "://" in url else f"//{url}")
