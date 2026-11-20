@@ -19,6 +19,11 @@ public final class AnnotatedApp {
     public static void main(String[] args) throws Exception {
         String scenario = args[0];
         if (scenario.equals("init_first")) { Class.forName("ai.traceai.auto.TraceAIAuto").getMethod("init").invoke(null); scenario = "sync"; }
+        if (scenario.equals("init_enabled")) {
+            // A copy of the engine whose own settings switch annotations on, whatever another copy in the JVM was told.
+            Class.forName("ai.traceai.auto.TraceAIAuto").getMethod("init", java.util.Map.class).invoke(null, java.util.Map.of("FI_DISABLED_INSTRUMENTATIONS", ""));
+            scenario = "sync";
+        }
         if (scenario.equals("init_twice")) {
             Class<?> auto = Class.forName("ai.traceai.auto.TraceAIAuto");
             auto.getMethod("init").invoke(null); auto.getMethod("init").invoke(null); scenario = "sync";
@@ -43,6 +48,16 @@ public final class AnnotatedApp {
             }
             case "mono" -> System.out.println("RESULT=" + service.mono("m").block(java.time.Duration.ofSeconds(10)));
             case "flux" -> System.out.println("RESULT=" + service.flux(3).collectList().block(java.time.Duration.ofSeconds(10)));
+            case "credential_text" -> System.out.println("RESULT=" + service.audit(new Account(), new KeyHolder(), new Csv(), new Wrapped(), new Quoted()));
+            case "straddle" -> {
+                String secret = System.getenv("FI_API_KEY");
+                String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJTWU5USEVUSUMifQ.SYNTHSIGNATUREAAAAAAAAAAAAAA";
+                String payload = secret + "-b-" + secret + " " + jwt + " sk-SYNTHKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA Bearer SYNTHBEARERTOKENAAAAAAAAAAAAAAAA tail tail tail";
+                int count = 0;
+                for (int k = 0; k <= payload.length() + 6; k++) { service.sink("a".repeat(Math.max(1, 196 - k)) + payload); count++; }
+                System.out.println("RESULT=" + count);
+            }
+            case "mono_subtype" -> System.out.println("RESULT=" + service.subtype().block(java.time.Duration.ofSeconds(10)));
             case "async_cancel" -> { var pending = service.neverCompletes("q"); pending.cancel(true); System.out.println("RESULT=cancelled=" + pending.isCancelled()); }
             case "nested_own_span" -> System.out.println("RESULT=" + service.outerWithOwnSpan(args[1]));
             case "own_span" -> System.out.println("RESULT=" + service.withOwnSpan(args[1]));
@@ -129,6 +144,18 @@ public final class AnnotatedApp {
             return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
         }
 
+        @Chain(name = "audit")
+        public String audit(Object a, Object b, Object c, Object d, Object e) { return "ok"; }
+
+        @Chain(name = "sink")
+        public String sink(String text) { return "ok"; }
+
+        public static final class GreetingMono extends Mono<String> {
+            @Override public void subscribe(reactor.core.CoreSubscriber<? super String> actual) { Mono.just("g").subscribe(actual); }
+        }
+        @Chain(name = "subtype_mono")
+        public GreetingMono subtype() { return new GreetingMono(); }
+
         @Chain(name = "never_completes")
         public java.util.concurrent.CompletableFuture<String> neverCompletes(String q) { return new java.util.concurrent.CompletableFuture<>(); }
 
@@ -201,4 +228,11 @@ public final class AnnotatedApp {
     }
     public static final class Greeter implements Hello { }
     private AnnotatedApp() { }
+
+    /** Application objects whose declared toString() carries a credential in a shape a naive reader would cut short. */
+    public static final class Account { @Override public String toString() { return "Account(user=bob, password=[S, Y, N, T, H, 7], id=7)"; } }
+    public static final class KeyHolder { @Override public String toString() { return "KeyHolder(privateKey=-----BEGIN PRIVATE KEY-----\nMIISYNTHPEMBODY0123\nSYNTHSECONDLINE\n-----END PRIVATE KEY-----, id=1)"; } }
+    public static final class Csv { @Override public String toString() { return "Csv(secret=SYNTHA,SYNTHB,SYNTHC, id=2)"; } }
+    public static final class Wrapped { @Override public String toString() { return "Wrapped(apiKey=Inner(value=SYNTHX, other=SYNTHY), id=3)"; } }
+    public static final class Quoted { @Override public String toString() { return "Quoted(token=\"SYNTHA,SYNTHB\", id=4)"; } }
 }

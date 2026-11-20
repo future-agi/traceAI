@@ -306,4 +306,51 @@ class AnnotationsE2ETest {
         assertEquals("true", String.valueOf(attrs(pending).get("traceai.cancelled")));
         assertNotEquals(2, ((Number)WireCore.map(pending.get("status")).get("code")).intValue(), "a cancel is not an error");
     }
+
+    /** Every assertion below is on the span bytes the collector received: no byte of a synthetic credential reaches the exporter. */
+    String exported() { return spans.toString(); }
+
+    @Test void aCredentialInADeclaredToStringNeverReachesTheExporterWhateverItsShape() throws Exception {
+        String log = run("agent", "credential_text", Map.of());
+        assertTrue(log.contains("RESULT=ok"), log);
+        String bytes = exported();
+        assertFalse(spans.isEmpty());
+        for (String marker : List.of("S, Y, N, T, H", "Y, N", "SYNTH", "MIISYNTHPEMBODY", "BEGIN PRIVATE KEY", "END PRIVATE KEY", ",SYNTHB", "SYNTHX", "SYNTHY"))
+            assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
+        assertTrue(bytes.contains("id=7") && bytes.contains("id=4"), "the ordinary pairs stay visible: " + bytes);
+    }
+
+    /** A known secret twice, a JWT, an sk- key and a Bearer token, with the cut sweeping across all of them one character at a time. */
+    @Test void secretsAndShapedCredentialsStraddlingTheCutNeverReachTheExporter() throws Exception {
+        String secret = "SYNTH-TWICE-SECRET-0042-XYZ";
+        String log = run("agent", "straddle", Map.of("FI_API_KEY", secret, "FI_WIRE_MAX_BODY_BYTES", "400"));
+        assertTrue(log.contains("RESULT="), log);
+        assertTrue(spans.size() > 100, "one span per cut position: " + spans.size());
+        long cut = spans.stream().filter(s -> String.valueOf(s).contains("truncated")).count();
+        assertTrue(cut > 100, "the cut really moved across the credentials: " + cut);
+        for (Map<String, Object> span : spans) {
+            String bytes = String.valueOf(span);
+            for (String marker : List.of("SYNTH", "eyJ", "sk-S", "Bearer SY"))
+                assertFalse(bytes.contains(marker), marker + " reached the exporter in " + attrs(span).get("input.value"));
+        }
+    }
+
+    @Test void aCopyWithAnnotationsDisabledDoesNotBlockAnotherCopyThatHasThemEnabled() throws Exception {
+        String log = run("agent_isolated", "init_enabled", Map.of("FI_DISABLED_INSTRUMENTATIONS", "annotations"));
+        assertTrue(log.contains("RESULT=docs1|The answer is 4|"), log);
+        assertEquals(List.of("calculator", "count", "fetch_docs", "generate", "noArguments", "planner"), names(spans), "the second copy traces");
+    }
+
+    @Test void aMethodDeclaredToReturnAMonoSubtypeStillEndsItsSpan() throws Exception {
+        String log = run("agent", "mono_subtype", Map.of());
+        assertTrue(log.contains("RESULT=g"), log);
+        assertEquals("subtype_mono", String.valueOf(span("subtype_mono").get("name")), "the span ended and was exported");
+    }
+
+    /** Observed, not changed: with an agent flag plus a separate-loader copy, a provider call is exactly one wire span. */
+    @Test void aProviderCallWithTwoEngineCopiesIsOneWireSpan() throws Exception {
+        run("agent_isolated", "wire", Map.of(), List.of("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions"));
+        List<Map<String, Object>> wire = spans.stream().filter(s -> !"ask_model".equals(s.get("name"))).toList();
+        assertEquals(1, wire.size(), "double wire span? " + names(spans));
+    }
 }

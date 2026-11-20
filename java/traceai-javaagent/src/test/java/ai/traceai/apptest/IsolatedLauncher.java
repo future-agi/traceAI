@@ -19,7 +19,9 @@ public final class IsolatedLauncher {
             Thread.currentThread().setContextClassLoader(loader);
             Class<?> app = loader.loadClass("ai.traceai.apptest.AnnotatedApp");
             try { ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto"); System.out.println("AGENT_ON_SYSTEM_CLASS_PATH"); } catch (ClassNotFoundException expected) { }
-            app.getMethod("main", String[].class).invoke(null, (Object) new String[] {args[0]});
+            List<String> forwarded = new ArrayList<>(); forwarded.add(args[0]);
+            for (int i = 2; i < args.length; i++) forwarded.add(args[i]);
+            app.getMethod("main", String[].class).invoke(null, (Object) forwarded.toArray(new String[0]));
         }
     }
     private IsolatedLauncher() { }

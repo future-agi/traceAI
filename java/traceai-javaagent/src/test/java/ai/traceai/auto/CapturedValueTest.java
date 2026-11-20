@@ -114,14 +114,16 @@ class CapturedValueTest {
     record Metered(String value) { public String value() { Accessors.CALLS.incrementAndGet(); return value; } }
 
     /** A declared toString() and record accessors run at most once per capture, however many times the text is cut again. */
+    /** Control characters take six characters each as JSON, so the text is cut again and again: render() must retry at least twice. */
+    static final class Escapy { static final AtomicInteger CALLS = new AtomicInteger(); @Override public String toString() { CALLS.incrementAndGet(); return "\u0001".repeat(5000); } }
+    record EscapyRecord(String value) { public String value() { Accessors.CALLS.incrementAndGet(); return "\u0002".repeat(5000); } }
     @Test void toStringAndAccessorsRunOnceAcrossTheRenderRetries() {
-        Counting.CALLS.set(0); Accessors.CALLS.set(0);
-        String json = AnnotationTracing.render(Map.of("arg", new Counting()), 300);
-        assertTrue(json.length() <= 300, "length " + json.length());
-        assertDoesNotThrow(() -> com.google.gson.JsonParser.parseString(json));
-        assertEquals(1, Counting.CALLS.get(), "toString() once");
-        String record = AnnotationTracing.render(new Metered("m".repeat(5000)), 300);
-        assertTrue(record.length() <= 300, "length " + record.length());
+        Escapy.CALLS.set(0); Accessors.CALLS.set(0);
+        String json = AnnotationTracing.render(new Escapy(), 100);
+        assertEquals("\"" + CapturedValue.CUT + "\"", json, "every budget was tried and the last one fell back: " + json);
+        assertEquals(1, Escapy.CALLS.get(), "toString() once, though the text was cut at three budgets");
+        String record = AnnotationTracing.render(new EscapyRecord("x"), 100);
+        assertDoesNotThrow(() -> com.google.gson.JsonParser.parseString(record));
         assertEquals(1, Accessors.CALLS.get(), "the accessor once");
     }
 
@@ -181,5 +183,60 @@ class CapturedValueTest {
         System.getProperties().remove(TraceAIAgent.TRANSFORMER_CLAIM);
         assertTrue(TraceAIAgent.claimAnnotationTransformer());
         System.getProperties().remove(TraceAIAgent.TRANSFORMER_CLAIM);
+    }
+
+    /** The value of a credential-named pair is redacted whole: through its matching close, its pair boundary, its PEM END line. */
+    static final class Fixed { final String text; Fixed(String text) { this.text = text; } @Override public String toString() { return text; } }
+    @Test void aCredentialValueIsRedactedWholeWhateverItsShape() {
+        Map<String, String[]> cases = new LinkedHashMap<>();
+        cases.put("Account(user=bob, password=[h, u, n, t, e, r], id=7)", new String[] {"h, u", "n, t", "e, r", "]"});
+        cases.put("Cfg(secret=a,b,c, id=7)", new String[] {",b", "b,c"});
+        cases.put("Cfg(apiKey=Inner(value=x, other=y), id=7)", new String[] {"value=x", "other=y"});
+        cases.put("K(privateKey=-----BEGIN PRIVATE KEY-----\nMIIsynthetic\nline2\n-----END PRIVATE KEY-----, id=7)", new String[] {"MIIsynthetic", "line2", "BEGIN", "END PRIVATE"});
+        cases.put("Q(token=\"a,b\", id=7)", new String[] {"a,b", "\\\"a"});
+        cases.put("Esc(secret=\"a\\\"b,c\", id=7)", new String[] {"b,c"});
+        cases.put("Brace(credentials={k=v, k2=v2}, id=7)", new String[] {"k=v", "k2"});
+        cases.put("Unclosed(password=[h, u, n, id=7", new String[] {"h, u", "id=7"});
+        cases.forEach((text, leaked) -> {
+            String captured = text(new Fixed(text));
+            for (String fragment : leaked) assertFalse(captured.contains(fragment), "'" + fragment + "' left in " + captured);
+            assertTrue(captured.contains("<redacted>"), captured);
+            if (!text.startsWith("Unclosed")) assertTrue(captured.contains("id=7"), "ordinary pairs stay: " + captured);
+        });
+    }
+
+    /** A registered secret that appears twice around the cut leaves no fragment, at every cut position. */
+    @Test void aKnownSecretTwiceAroundTheCutLeavesNoFragment() {
+        String secret = "TWICE-SYNTH-SECRET-VALUE-0042";
+        KnownSecrets.PROCESS.register(secret);
+        String value = "a".repeat(30) + secret + "-b-" + secret + "c".repeat(200);
+        for (int budget = 16; budget < 30 + 2 * secret.length() + 10; budget++) {
+            String captured = new com.google.gson.GsonBuilder().disableHtmlEscaping().create().toJson(CapturedValue.of(value, budget));
+            assertFalse(captured.contains("TWICE"), "budget " + budget + ": " + captured);
+            assertFalse(captured.contains("-SYNTH"), "budget " + budget + ": " + captured);
+            assertFalse(captured.contains("SYNTH-S"), "budget " + budget + ": " + captured);
+        }
+    }
+
+    /** Shaped credentials (a JWT, an sk- key, a Bearer token) cut short would no longer match: they are replaced before the cut. */
+    @Test void shapedCredentialsStraddlingTheCutLeaveNoPrefix() {
+        String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJTWU5USEVUSUMifQ.SYNTHSIGNATUREAAAAAAAAAAAAAA";
+        String sk = "sk-SYNTHKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        String bearer = "Bearer SYNTHBEARERTOKENAAAAAAAAAAAAAAAA";
+        for (String credential : List.of(jwt, sk, bearer)) {
+            String value = "a".repeat(40) + credential + "c".repeat(300);
+            for (int budget = 16; budget < 40 + credential.length() + 6; budget++) {
+                String captured = new com.google.gson.GsonBuilder().disableHtmlEscaping().create().toJson(CapturedValue.of(value, budget));
+                assertFalse(captured.contains("eyJ"), "budget " + budget + ": " + captured);
+                assertFalse(captured.contains("sk-S"), "budget " + budget + ": " + captured);
+                assertFalse(captured.contains("SYNTH"), "budget " + budget + ": " + captured);
+            }
+        }
+    }
+
+    @Test void aUriShowsNeitherUserInfoNorQueryValues() {
+        String captured = text(java.net.URI.create("https://user:pw-synthetic@example.com:8443/path/x?token=abc-synthetic&x=1#frag-synthetic"));
+        for (String leaked : List.of("user", "pw-synthetic", "abc-synthetic", "frag-synthetic", "x=1")) assertFalse(captured.contains(leaked), leaked + " in " + captured);
+        assertTrue(captured.contains("example.com") && captured.contains("/path/x") && captured.contains("token"), captured);
     }
 }
