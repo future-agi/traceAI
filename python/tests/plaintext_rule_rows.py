@@ -62,13 +62,6 @@ GRPC_PROXIES = {
 }
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy",
                    "grpc_proxy", "GRPC_PROXY", "no_grpc_proxy", "NO_GRPC_PROXY")
-# Proxy settings that route a plain request whatever the host is, per transport.
-ALWAYS_ROUTED = {
-    "http": ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "caller-proxies"),
-    "eval-config": ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "caller-proxies"),
-    "grpc": ("grpc_proxy", "https_proxy-lower", "http_proxy-lower", "no_proxy-port-does-not-bypass", "no_proxy-star-does-not-bypass",
-             "NO_PROXY-upper-ignored", "no_grpc_proxy-over-no_proxy", "no_grpc_proxy-empty-shadows-no_proxy", "no_proxy-cidr"),
-}
 OPT_INS = {"unset": None, "1": "1", "true": "true"}
 GRPC_SOURCES = {
     "scheme-or-none": ({}, {}),
@@ -231,6 +224,7 @@ def run_row(spec):
             return {"result": {"exists": False}}
 
     patch(requests, "post", lambda url, headers=None, **k: (posts.append((url, headers or {})), Reply())[1])
+    patch(requests.Session, "post", lambda self, url, headers=None, **k: (posts.append((url, headers or {})), Reply())[1])
     otel._PLAIN_TEXT_WARNED.clear()
     try:
         with _environment(env):
@@ -291,8 +285,8 @@ def check_invariants(spec, outcome):
         loopback = group == "literal-loopback"
         if not loopback and not (opt_in == "1" and group in ("self-hosted", "written-not-loopback")):
             problems.append("keys on a plain channel without a literal loopback host or the opt-in")
-        if not loopback and spec["proxy"] in ALWAYS_ROUTED[spec["transport"]]:
-            problems.append("keys on a plain channel that a proxy setting routes")
+        if not loopback and spec["proxy"] == "caller-proxies":
+            problems.append("keys on a plain channel with a session of the caller's that has a proxy")
     if opt_in in (None, "true") and group in ("self-hosted", "written-not-loopback") and outcome["tls"] == "plain" and outcome["keys"]:
         problems.append("keys on a plain channel without the exact opt-in")
     return problems

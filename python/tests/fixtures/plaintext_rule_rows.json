@@ -369,10 +369,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -386,10 +386,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -420,10 +420,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -505,10 +505,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -760,10 +760,10 @@
    "proxy": "caller-proxies",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "localhost:4318",
-    "tls": "plain",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -981,10 +981,10 @@
    "proxy": "caller-proxies",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "127.0.0.1:4318",
-    "tls": "plain",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -997,11 +997,11 @@
    "opt_in": null,
    "proxy": "none",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1014,11 +1014,11 @@
    "opt_in": "1",
    "proxy": "none",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1031,11 +1031,11 @@
    "opt_in": "true",
    "proxy": "none",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1048,11 +1048,11 @@
    "opt_in": "1",
    "proxy": "HTTP_PROXY",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1065,11 +1065,11 @@
    "opt_in": "1",
    "proxy": "http_proxy",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1082,11 +1082,11 @@
    "opt_in": "1",
    "proxy": "HTTPS_PROXY-alone",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1099,11 +1099,11 @@
    "opt_in": "1",
    "proxy": "ALL_PROXY",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1116,11 +1116,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-exact",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1133,11 +1133,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-suffix",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1150,11 +1150,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-port",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1167,11 +1167,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-star",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1184,11 +1184,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-cidr",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -1201,10 +1201,10 @@
    "opt_in": "1",
    "proxy": "caller-proxies",
    "expect": {
-    "decision": "other",
-    "error": null,
-    "dialed": "[::1]:4318",
-    "tls": "plain",
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
     "keys": false
    }
   },
@@ -1270,10 +1270,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1287,10 +1287,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1321,10 +1321,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1338,10 +1338,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1355,10 +1355,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1372,10 +1372,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1406,10 +1406,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1491,10 +1491,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1508,10 +1508,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1542,10 +1542,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1559,10 +1559,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1576,10 +1576,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1593,10 +1593,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1627,10 +1627,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1712,10 +1712,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1729,10 +1729,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1763,10 +1763,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1780,10 +1780,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1797,10 +1797,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1814,10 +1814,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1848,10 +1848,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1933,10 +1933,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1950,10 +1950,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -1984,10 +1984,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2001,10 +2001,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2018,10 +2018,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2035,10 +2035,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2069,10 +2069,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2154,10 +2154,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2171,10 +2171,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2205,10 +2205,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2222,10 +2222,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2239,10 +2239,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2256,10 +2256,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2290,10 +2290,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2375,10 +2375,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2392,10 +2392,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2426,10 +2426,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2443,10 +2443,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2460,10 +2460,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2477,10 +2477,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -2511,10 +2511,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -3361,10 +3361,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3378,10 +3378,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3395,10 +3395,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3412,10 +3412,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3429,10 +3429,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3446,10 +3446,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3514,10 +3514,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
    }
   },
   {
@@ -3531,10 +3531,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
    }
   },
   {
@@ -3548,10 +3548,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
    }
   },
   {
@@ -3769,10 +3769,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3786,10 +3786,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3803,10 +3803,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3820,10 +3820,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3837,10 +3837,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3854,10 +3854,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.:443",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3871,10 +3871,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3888,10 +3888,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3905,10 +3905,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3973,10 +3973,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -3990,10 +3990,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4007,10 +4007,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4024,10 +4024,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4041,10 +4041,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4058,10 +4058,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com.",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4075,10 +4075,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4092,10 +4092,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4109,10 +4109,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4177,10 +4177,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4194,10 +4194,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4211,10 +4211,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4228,10 +4228,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4245,10 +4245,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4262,10 +4262,10 @@
    "proxy": "none",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4279,10 +4279,10 @@
    "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4296,10 +4296,10 @@
    "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4313,10 +4313,10 @@
    "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4330,10 +4330,10 @@
    "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4347,10 +4347,10 @@
    "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4364,10 +4364,10 @@
    "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4381,10 +4381,10 @@
    "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4398,10 +4398,10 @@
    "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4415,10 +4415,10 @@
    "proxy": "no_proxy-suffix",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4432,10 +4432,10 @@
    "proxy": "no_proxy-port-does-not-bypass",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4449,10 +4449,10 @@
    "proxy": "no_proxy-star-does-not-bypass",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4466,10 +4466,10 @@
    "proxy": "no_proxy-cidr",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4483,10 +4483,10 @@
    "proxy": "NO_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4500,10 +4500,10 @@
    "proxy": "no_grpc_proxy-exact",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4517,10 +4517,10 @@
    "proxy": "no_grpc_proxy-over-no_proxy",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -4534,10 +4534,10 @@
    "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
-    "error": null,
-    "dialed": "grpc.futureagi.com",
-    "tls": "tls",
-    "keys": true
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
    }
   },
   {
@@ -5231,10 +5231,10 @@
    "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5248,10 +5248,10 @@
    "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5265,10 +5265,10 @@
    "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5384,10 +5384,10 @@
    "proxy": "no_proxy-port-does-not-bypass",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5401,10 +5401,10 @@
    "proxy": "no_proxy-star-does-not-bypass",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5418,10 +5418,10 @@
    "proxy": "no_proxy-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5435,10 +5435,10 @@
    "proxy": "NO_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5469,10 +5469,10 @@
    "proxy": "no_grpc_proxy-over-no_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -5486,10 +5486,10 @@
    "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8563,10 +8563,10 @@
    "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8580,10 +8580,10 @@
    "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8597,10 +8597,10 @@
    "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8682,10 +8682,10 @@
    "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8699,10 +8699,10 @@
    "proxy": "no_proxy-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8716,10 +8716,10 @@
    "proxy": "no_proxy-port-does-not-bypass",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8733,10 +8733,10 @@
    "proxy": "no_proxy-star-does-not-bypass",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8750,10 +8750,10 @@
    "proxy": "no_proxy-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8767,10 +8767,10 @@
    "proxy": "NO_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8784,10 +8784,10 @@
    "proxy": "no_grpc_proxy-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8801,10 +8801,10 @@
    "proxy": "no_grpc_proxy-over-no_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -8818,10 +8818,10 @@
    "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -12201,10 +12201,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -12218,10 +12218,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -12252,10 +12252,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -12337,10 +12337,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "collector.internal:8080",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -12778,11 +12778,11 @@
    "opt_in": null,
    "proxy": "none",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12795,11 +12795,11 @@
    "opt_in": "1",
    "proxy": "none",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12812,11 +12812,11 @@
    "opt_in": "true",
    "proxy": "none",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12829,11 +12829,11 @@
    "opt_in": "1",
    "proxy": "HTTP_PROXY",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12846,11 +12846,11 @@
    "opt_in": "1",
    "proxy": "http_proxy",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12863,11 +12863,11 @@
    "opt_in": "1",
    "proxy": "HTTPS_PROXY-alone",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12880,11 +12880,11 @@
    "opt_in": "1",
    "proxy": "ALL_PROXY",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12897,11 +12897,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-exact",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12914,11 +12914,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-suffix",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12931,11 +12931,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-port",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12948,11 +12948,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-star",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -12965,11 +12965,11 @@
    "opt_in": "1",
    "proxy": "NO_PROXY-cidr",
    "expect": {
-    "decision": "other",
+    "decision": "fi",
     "error": null,
     "dialed": "[::1]:4318",
     "tls": "plain",
-    "keys": false
+    "keys": true
    }
   },
   {
@@ -13034,10 +13034,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13051,10 +13051,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13085,10 +13085,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13102,10 +13102,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13119,10 +13119,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13136,10 +13136,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13170,10 +13170,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.0.0.1.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13238,10 +13238,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13255,10 +13255,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13289,10 +13289,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13306,10 +13306,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13323,10 +13323,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13340,10 +13340,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13374,10 +13374,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "127.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13442,10 +13442,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13459,10 +13459,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13493,10 +13493,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13510,10 +13510,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13527,10 +13527,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13544,10 +13544,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13578,10 +13578,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "0x7f.0.0.1:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13646,10 +13646,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13663,10 +13663,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13697,10 +13697,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13714,10 +13714,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13731,10 +13731,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13748,10 +13748,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13782,10 +13782,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "2130706433:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13850,10 +13850,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13867,10 +13867,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13901,10 +13901,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13918,10 +13918,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13935,10 +13935,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13952,10 +13952,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -13986,10 +13986,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "localhost.:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14054,10 +14054,10 @@
    "proxy": "HTTP_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14071,10 +14071,10 @@
    "proxy": "http_proxy",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14105,10 +14105,10 @@
    "proxy": "ALL_PROXY",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14122,10 +14122,10 @@
    "proxy": "NO_PROXY-exact",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14139,10 +14139,10 @@
    "proxy": "NO_PROXY-suffix",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14156,10 +14156,10 @@
    "proxy": "NO_PROXY-port",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {
@@ -14190,10 +14190,10 @@
    "proxy": "NO_PROXY-cidr",
    "expect": {
     "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
+    "error": null,
+    "dialed": "app.localhost:4318",
+    "tls": "plain",
+    "keys": true
    }
   },
   {

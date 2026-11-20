@@ -59,13 +59,24 @@ class _Reply:
 
 @pytest.fixture
 def sent(monkeypatch):
-    calls = []
+    class Calls(list):
+        sessions = None
+
+    calls = Calls()
 
     def post(url, headers=None, **kwargs):
         calls.append((url, {k.lower(): v for k, v in (headers or {}).items()}))
         return _Reply()
 
+    def session_post(self, url, headers=None, **kwargs):
+        calls.append((url, {k.lower(): v for k, v in (headers or {}).items()}))
+        calls_sessions.append((self.trust_env, dict(self.proxies)))
+        return _Reply()
+
+    calls_sessions = []
+    calls.sessions = calls_sessions
     monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(requests.Session, "post", session_post)
     return calls
 
 
@@ -156,22 +167,33 @@ def test_the_opt_in_never_applies_to_a_future_agi_host(site, base, monkeypatch, 
 
 @pytest.mark.parametrize("variable", ["HTTP_PROXY", "http_proxy", "ALL_PROXY"])
 @pytest.mark.parametrize("site", list(HTTP_SITES))
-def test_the_opt_in_is_refused_when_the_request_would_go_through_a_proxy(site, variable, monkeypatch, sent):
+def test_a_plain_request_this_package_builds_reads_no_proxy_from_the_environment(site, variable, monkeypatch, sent):
+    _set_base(monkeypatch, "http://collector.internal:8080")
+    monkeypatch.setenv(OPT_IN, "1")
+    monkeypatch.setenv(variable, "http://proxy.internal:3128")
+    HTTP_SITES[site]()
+    if site != "exporter":
+        assert len(sent) == 1 and sent.sessions == [(False, {})]
+
+
+@pytest.mark.parametrize("variable", ["HTTP_PROXY", "http_proxy", "ALL_PROXY"])
+def test_a_session_the_caller_passes_that_the_environment_routes_through_a_proxy_is_refused(variable, monkeypatch, sent):
     _set_base(monkeypatch, "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv(variable, "http://proxy.internal:3128")
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
-        HTTP_SITES[site]()
+        _http(None, session=requests.Session())
+    assert raised.value.code == "proxied"
     assert "proxy.internal" not in str(raised.value) and FI_KEY not in str(raised.value)
     assert sent == []
 
 
-def test_a_proxy_that_the_no_proxy_list_skips_does_not_block_the_opt_in(monkeypatch, sent):
+def test_a_proxy_that_the_no_proxy_list_skips_does_not_block_a_session_the_caller_passes(monkeypatch, sent):
     _set_base(monkeypatch, "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:3128")
     monkeypatch.setenv("no_proxy", "collector.internal")
-    _http(None)
+    _http(None, session=requests.Session())
 
 
 def test_the_opt_in_is_refused_when_the_callers_session_names_a_proxy(monkeypatch, sent):
@@ -298,12 +320,18 @@ def test_the_opt_in_never_makes_a_future_agi_grpc_host_plaintext(name, monkeypat
     assert kinds == []
 
 
-def test_the_opt_in_is_refused_for_grpc_through_a_proxy(monkeypatch):
+def test_a_plain_grpc_channel_this_package_builds_has_the_proxy_turned_off(monkeypatch):
     monkeypatch.setenv("FI_GRPC_URL", "http://collector.internal:50051")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv("http_proxy", "http://proxy.internal:3128")
-    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
-        _grpc()
+    options = []
+    import opentelemetry.exporter.otlp.proto.grpc.exporter as base
+
+    real = grpc.insecure_channel
+    for module in (grpc, base):
+        monkeypatch.setattr(module, "insecure_channel", lambda target, *a, **k: (options.append(k.get("options")), real(target, *a, **k))[1])
+    _grpc()
+    assert options and ("grpc.enable_http_proxy", 0) in (options[-1] or ())
 
 
 @needs_non_loopback
@@ -366,13 +394,12 @@ def test_a_written_host_that_is_not_literal_loopback_is_self_hosted_with_the_opt
 
 
 @pytest.mark.parametrize("host", WRITTEN_HOSTS)
-@pytest.mark.parametrize("site", list(HTTP_SITES))
-def test_a_written_host_that_is_not_literal_loopback_is_refused_through_a_proxy_even_with_the_opt_in(site, host, monkeypatch, sent):
+def test_a_written_host_that_is_not_literal_loopback_is_refused_for_a_session_with_a_proxy_even_with_the_opt_in(host, monkeypatch, sent):
     _set_base(monkeypatch, f"http://{host}:4318")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:3128")
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
-        HTTP_SITES[site]()
+        _http(None, session=requests.Session())
     assert sent == []
 
 
@@ -385,5 +412,4 @@ def test_a_written_host_that_is_not_literal_loopback_follows_the_same_grpc_cells
     monkeypatch.setenv(OPT_IN, "1")
     _grpc()
     monkeypatch.setenv("http_proxy", "http://proxy.internal:3128")
-    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
-        _grpc()
+    _grpc()

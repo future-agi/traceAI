@@ -1,4 +1,4 @@
-"""A Future AGI gRPC exporter uses TLS whichever setting asks for plain text."""
+"""A Future AGI gRPC exporter uses TLS, or is refused when a setting asks for plain text."""
 import contextlib
 import socket
 import threading
@@ -141,7 +141,7 @@ SOURCES = [
 
 
 @pytest.mark.parametrize("source", SOURCES, ids=[s[0] for s in SOURCES])
-def test_every_insecure_source_gives_tls_or_a_refusal_and_no_key_bytes(source, recorder, monkeypatch):
+def test_every_insecure_source_is_refused_and_no_key_bytes_reach_the_listener(source, recorder, monkeypatch):
     _, endpoint, insecure, env = source
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -150,17 +150,11 @@ def test_every_insecure_source_gives_tls_or_a_refusal_and_no_key_bytes(source, r
         kwargs["endpoint"] = endpoint
     if insecure is not None:
         kwargs["insecure"] = insecure
-    try:
-        exporter = otel.GRPCSpanExporter(**kwargs)
-    except otel.UnsupportedFutureAGIEndpointError as refusal:
-        assert "http-scheme" not in source[0], "an http scheme on a Future AGI target gets TLS and is not refused"
-        assert FI_KEY not in str(refusal) and FI_SECRET not in str(refusal)
-        return
-    with contextlib.suppress(Exception):
-        _export_one_span(exporter)
-    assert recorder.kinds in ([], ["secure"]), recorder.kinds
-    if recorder.first_byte is not None:
-        assert recorder.first_byte == 0x16, hex(recorder.first_byte)
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as refusal:
+        otel.GRPCSpanExporter(**kwargs)
+    assert refusal.value.code == "insecure_futureagi_grpc"
+    assert FI_KEY not in str(refusal.value) and FI_SECRET not in str(refusal.value)
+    assert recorder.kinds == []
     assert FI_KEY.encode() not in bytes(recorder.received)
     assert FI_SECRET.encode() not in bytes(recorder.received)
 
@@ -178,10 +172,17 @@ def test_a_false_insecure_argument_builds_a_tls_exporter(recorder):
     assert recorder.kinds == ["secure"]
 
 
-def test_the_environment_setting_is_ignored_for_future_agi(recorder, monkeypatch):
+def test_an_environment_setting_that_asks_for_a_plain_channel_is_refused_for_future_agi(recorder, monkeypatch):
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
-    exporter = otel.GRPCSpanExporter(endpoint=TARGET, timeout=2)
-    exporter.shutdown()
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        otel.GRPCSpanExporter(endpoint=TARGET, timeout=2)
+    assert raised.value.code == "insecure_futureagi_grpc"
+    assert recorder.kinds == []
+
+
+def test_an_environment_setting_that_asks_for_tls_is_kept_for_future_agi(recorder, monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_INSECURE", "false")
+    otel.GRPCSpanExporter(endpoint=TARGET, timeout=2).shutdown()
     assert recorder.kinds == ["secure"]
 
 
@@ -189,12 +190,19 @@ def test_a_future_agi_target_on_loopback_keeps_the_configured_channel(recorder, 
     monkeypatch.setenv("FI_GRPC_URL", "http://127.0.0.1:50051")
     exporter = otel.GRPCSpanExporter(timeout=2)
     exporter.shutdown()
-    assert recorder.kinds == ["insecure"]
+    # A release whose constructor takes no channel options opens its own channel first, then one with the proxy turned off.
+    assert recorder.kinds and set(recorder.kinds) == {"insecure"}
 
 
-def test_an_http_scheme_on_a_future_agi_target_is_not_refused(recorder):
-    exporter = otel.GRPCSpanExporter(endpoint="http://grpc.futureagi.com", timeout=2)
-    exporter.shutdown()
+def test_an_http_scheme_on_a_future_agi_target_is_refused(recorder):
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        otel.GRPCSpanExporter(endpoint="http://grpc.futureagi.com", timeout=2)
+    assert raised.value.code == "insecure_futureagi_grpc"
+    assert recorder.kinds == []
+
+
+def test_an_https_scheme_on_a_future_agi_target_gets_tls(recorder):
+    otel.GRPCSpanExporter(endpoint="https://grpc.futureagi.com", timeout=2).shutdown()
     assert recorder.kinds == ["secure"]
 
 

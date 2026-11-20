@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import requests
 from fi_instrumentation import otel
 
 
@@ -23,6 +24,7 @@ def _emulate_parent(exporter, captured):
     headers = {str(k).lower(): v for k, v in (given.items() if hasattr(given, "items") else given)}
     exporter._endpoint = captured.get("endpoint")
     exporter._client = SimpleNamespace(_headers=dict(headers))
+    exporter._session = requests.Session()
     exporter._headers = tuple(headers.items()) or None
 
 

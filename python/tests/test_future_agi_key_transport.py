@@ -44,6 +44,7 @@ class _Reply:
 def sent(monkeypatch):
     calls = []
     monkeypatch.setattr(requests, "post", lambda url, headers=None, **kw: (calls.append((url, headers)), _Reply())[1])
+    monkeypatch.setattr(requests.Session, "post", lambda self, url, headers=None, **kw: (calls.append((url, headers)), _Reply())[1])
     return calls
 
 
@@ -79,32 +80,42 @@ def test_an_https_proxy_alone_does_not_route_an_http_request(site, monkeypatch, 
 
 @pytest.mark.parametrize("variable", ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"])
 @pytest.mark.parametrize("site", list(HTTP_SITES))
-def test_an_http_or_all_proxy_routes_an_http_request(site, variable, monkeypatch, sent):
+def test_an_http_or_all_proxy_does_not_route_a_plain_request_this_package_builds(site, variable, monkeypatch, sent):
     monkeypatch.setenv("FI_BASE_URL", "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv(variable, "http://proxy.internal:3128")
-    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
-        HTTP_SITES[site]()
+    HTTP_SITES[site]()
+
+
+@pytest.mark.parametrize("variable", ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"])
+def test_an_http_or_all_proxy_routes_a_plain_request_of_a_session_the_caller_passes(variable, monkeypatch, sent):
+    monkeypatch.setenv("FI_BASE_URL", "http://collector.internal:8080")
+    monkeypatch.setenv(OPT_IN, "1")
+    monkeypatch.setenv(variable, "http://proxy.internal:3128")
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        otel.HTTPSpanExporter(timeout=2, session=requests.Session())
+    assert raised.value.code == "proxied"
     assert sent == []
 
 
 @pytest.mark.parametrize("no_proxy", ["collector.internal", ".internal", "*", "collector.internal:8080", "other.example, collector.internal", "internal"])
-def test_a_no_proxy_entry_bypasses_the_proxy_like_the_standard_library(no_proxy, monkeypatch, sent):
+def test_a_no_proxy_entry_bypasses_the_proxy_for_a_session_the_caller_passes(no_proxy, monkeypatch, sent):
     monkeypatch.setenv("FI_BASE_URL", "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:3128")
     monkeypatch.setenv("NO_PROXY", no_proxy)
-    _http()
+    otel.HTTPSpanExporter(timeout=2, session=requests.Session()).shutdown()
 
 
 @pytest.mark.parametrize("no_proxy", ["collector.internal:9999", "10.0.0.0/8", "other.example"])
-def test_a_no_proxy_entry_that_does_not_match_leaves_the_proxy_in_force(no_proxy, monkeypatch, sent):
+def test_a_no_proxy_entry_that_does_not_match_leaves_the_proxy_in_force_for_a_session_the_caller_passes(no_proxy, monkeypatch, sent):
     monkeypatch.setenv("FI_BASE_URL", "http://10.0.0.5:8080" if "/" in no_proxy else "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:3128")
     monkeypatch.setenv("NO_PROXY", no_proxy)
+    # A network range is read by requests and not by the standard library; either one that routes the request refuses it.
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
-        _http()
+        otel.HTTPSpanExporter(timeout=2, session=requests.Session())
 
 
 def test_a_callers_session_with_its_own_proxies_keeps_the_refusal(monkeypatch):
@@ -122,8 +133,7 @@ def test_an_https_proxy_alone_does_not_route_plain_grpc(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
     _grpc()
     monkeypatch.setenv("http_proxy", "http://proxy.internal:3128")
-    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
-        _grpc()
+    _grpc()
 
 
 # ---- raw listeners --------------------------------------------------------------------------------------------
@@ -254,9 +264,22 @@ def test_keys_in_the_environment_headers_count_when_the_endpoint_names_future_ag
         otel.HTTPSpanExporter(endpoint="http://api.futureagi.com/tracer/v1/traces", timeout=2)
 
 
-def test_keys_in_the_environment_headers_do_not_count_when_the_caller_passes_other_headers(monkeypatch):
+def test_key_header_names_in_the_environment_are_refused_for_an_exporter_that_does_not_send_to_future_agi(monkeypatch):
     pytest.importorskip("grpc")
     for name in ("FI_API_KEY", "FI_SECRET_KEY"):
         monkeypatch.delenv(name)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=synthetic-ambient-key")
-    otel.GRPCSpanExporter(endpoint="collector.example:4317", headers={"x-trace": "1"}, timeout=2).shutdown()
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        otel.GRPCSpanExporter(endpoint="collector.example:4317", headers={"x-trace": "1"}, timeout=2)
+    assert raised.value.code == "key_header_in_environment" and "synthetic-ambient-key" not in str(raised.value)
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
+        otel.HTTPSpanExporter(endpoint="https://collector.example/v1/traces", timeout=2)
+
+
+def test_other_header_names_in_the_environment_are_left_to_the_collector_the_exporter_sends_to(monkeypatch):
+    pytest.importorskip("grpc")
+    for name in ("FI_API_KEY", "FI_SECRET_KEY"):
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-collector-token=synthetic-token")
+    otel.GRPCSpanExporter(endpoint="collector.example:4317", timeout=2).shutdown()
+    otel.HTTPSpanExporter(endpoint="https://collector.example/v1/traces", timeout=2).shutdown()

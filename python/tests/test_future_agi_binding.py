@@ -224,7 +224,11 @@ def test_a_form_that_is_not_future_agi_is_built_without_keys(form, monkeypatch):
     exporter.shutdown()
 
 
-@pytest.mark.parametrize("form", [f for f in FORMS if f[3] == "fi"], ids=[f[0] for f in FORMS if f[3] == "fi"])
+# An http scheme on a gRPC Future AGI target is a Future AGI target whose plain channel is refused (see test_future_agi_grpc_tls).
+_BUILT_FI_FORMS = [f for f in FORMS if f[3] == "fi" and f[0] != "grpc-plain-http-scheme"]
+
+
+@pytest.mark.parametrize("form", _BUILT_FI_FORMS, ids=[f[0] for f in _BUILT_FI_FORMS])
 def test_a_future_agi_form_is_built_and_bound(form):
     _, transport, template, _ = form
     exporter = _cls(transport)(endpoint=template, timeout=2)
