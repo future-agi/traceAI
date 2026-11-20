@@ -340,7 +340,11 @@ public class AdversarialTests : InitIsolation
         for(int i=0;i<2;i++)
         {
             using var agent=new Agent(Config(exporter)); using(var span=TraceAIAuto.Source.StartActivity("custom-otlp")) Assert.NotNull(span);
-            Assert.True(agent.Flush(1000));
+            // The first export in a process pays for JIT, HttpClient and protobuf start-up, which
+            // can exceed a 1 s deadline on a starved runner (always iteration 0; later exports take
+            // ~30 ms). Flush returns as soon as the export completes, so this is only a ceiling:
+            // the test asserts delivery after retirement, not flush latency (the deadline tests do).
+            Assert.True(agent.Flush(30000));
         }
         Assert.Equal(2,server.Exports.SelectMany(Otlp.Spans).Count());
     }
