@@ -32,8 +32,12 @@ describe("a Future AGI bound gRPC exporter uses TLS", () => {
     process.env.OTEL_EXPORTER_OTLP_INSECURE = "true";
     expect(channel(grpcExporter({ endpoint: "http://grpc.futureagi.com:4317" })).secure).toBe(true);
   });
-  test("an FI target selected by the environment uses TLS whatever the scheme there says", () => {
+  test("an http:// target selected by the environment is a plaintext request: the same plaintext rule applies, as for any other target", () => {
     process.env.FI_GRPC_COLLECTOR_ENDPOINT = "http://collector.internal.example:4317";
+    expect(() => grpcExporter({})).toThrow(/FI_ALLOW_INSECURE_HTTP/);
+    process.env.FI_GRPC_COLLECTOR_ENDPOINT = "http://grpc.futureagi.com:4317";
+    expect(channel(grpcExporter({})).secure).toBe(true);
+    process.env.FI_GRPC_COLLECTOR_ENDPOINT = "collector.internal.example:4317";
     expect(channel(grpcExporter({})).secure).toBe(true);
   });
   test("loopback FI bound targets keep the plaintext channel", () => {

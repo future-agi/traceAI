@@ -13,7 +13,7 @@ import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
  */
 const KEYS = { "x-api-key": "synthetic-fi-key-0001", "x-secret-key": "synthetic-fi-secret-0001" };
 const NAMES = ["OTEL_EXPORTER_OTLP_INSECURE", "OTEL_EXPORTER_OTLP_TRACES_INSECURE", "FI_API_KEY", "FI_SECRET_KEY", "FI_GRPC_COLLECTOR_ENDPOINT", "FI_GRPC_URL", "FI_BASE_URL", "FI_TRACES_URL", "FI_COLLECTOR_ENDPOINT",
-  "FI_ALLOW_INSECURE_HTTP", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "GRPC_PROXY", "grpc_proxy"];
+  "FI_ALLOW_INSECURE_HTTP", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "GRPC_PROXY", "grpc_proxy", "no_grpc_proxy"];
 let saved: Record<string, string | undefined> = {};
 let fetchSpy: jest.SpyInstance;
 beforeEach(() => {
@@ -145,11 +145,18 @@ describe("the opt-in allows plaintext to a host that is not Future AGI, with one
 });
 
 describe("the opt-in does not apply when the request would go through a proxy", () => {
-  test.each(["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"])("%s refuses HTTP and gRPC", name => {
+  test.each(["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"])("%s refuses HTTP", name => {
     process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
     expect(refused(() => http("http://collector.example:4318"))).not.toBe("");
-    expect(refused(() => rpc("http://collector.example:4317"))).not.toBe("");
     expect(refused(() => http("http://collector.example:4318", { allowInsecureHttp: true }))).not.toBe("");
+  });
+  test.each(["http_proxy", "https_proxy", "grpc_proxy"])("%s refuses gRPC (the names the gRPC channel itself reads)", name => {
+    process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
+    expect(refused(() => rpc("http://collector.example:4317"))).not.toBe("");
+  });
+  test.each(["HTTPS_PROXY", "https_proxy"])("%s alone does not route an http:// request", name => {
+    process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
+    expect(refused(() => http("http://collector.example:4318"))).toBe("");
   });
   test("NO_PROXY for the host (or a parent domain, or *) lifts the refusal; loopback never needed it", () => {
     process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
@@ -195,7 +202,7 @@ describe("the custom eval checks follow the same rules", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
   test("through a proxy the opt-in does not apply", async () => {
-    process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTPS_PROXY = "http://proxy.internal.example:3128";
+    process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
     await checkCustomEvalConfigExists("p", [tag()]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -235,7 +242,7 @@ describe("only a literal loopback host is loopback", () => {
     expect(warnings.filter(w => /FI_ALLOW_INSECURE_HTTP/.test(w))).toHaveLength(1);
   });
   test.each(WRITTEN)("(b) %s: still refused through a proxy", host => {
-    process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
+    process.env.HTTP_PROXY = "http://proxy.internal.example:3128"; process.env.http_proxy = "http://proxy.internal.example:3128";
     expect(refused(() => http(`http://${host}:4318`, { allowInsecureHttp: true }))).not.toBe("");
     expect(refused(() => rpc(`http://${host}:4317`, { allowInsecureHttp: true }))).not.toBe("");
   });
