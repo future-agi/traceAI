@@ -50,6 +50,18 @@ internal static class KnownSecrets
         try { lock(State[0]) Add(value); }
         catch { FailClosed(); }
     }
+    // Secrets the application registered through RegisterSecret, kept apart from the environment-seeded and wire-observed values: only these
+    // (with the Future AGI key values) decide whether another collector may be given ambient OTLP headers.
+    private static readonly HashSet<string> Explicit=new(StringComparer.Ordinal);
+    /// <summary>Registers a secret the application named through <c>TraceAIAuto.RegisterSecret</c>: redacted like any known secret, and screened for in ambient exporter headers.</summary>
+    internal static void RegisterExplicit(string? value)
+    {
+        if(value==null || value.Length<8) return;
+        Register(value);
+        lock(State[0]) { if(Explicit.Count<Capacity && value.Length<=MaxLength) Explicit.Add(value); }
+    }
+    /// <summary>The secrets registered through <c>TraceAIAuto.RegisterSecret</c>.</summary>
+    internal static string[] Registered() { lock(State[0]) return Explicit.ToArray(); }
     private static void Add(string value)
     {
         if(value.Length<8) return;

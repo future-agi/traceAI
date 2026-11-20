@@ -90,7 +90,7 @@ public static class TraceAIAuto
     }
     /// <summary>Registers an additional credential for process-wide export redaction.
     /// Values shorter than eight characters are ignored. Never logs credential values.</summary>
-    public static void RegisterSecret(string? value) => KnownSecrets.Register(value);
+    public static void RegisterSecret(string? value) => KnownSecrets.RegisterExplicit(value);
 
     /// <summary>No network unless testExport is explicitly true. Secrets are never printed.</summary>
     public static string Doctor(bool testExport = false)
@@ -222,8 +222,9 @@ internal sealed class Agent : IDisposable
         {
             // A collector of the caller's own: the OTLP exporter it may be built on merges OTEL_EXPORTER_OTLP_(TRACES_)HEADERS, so those must carry no
             // Future AGI key header and no known secret.
-            string[] known; try { known=KnownSecrets.Snapshot(); } catch { known=[]; }
-            FiKeyTransport.AssertNoFiKeysInAmbientHeaders(known.Concat(config.CredentialValues));
+            // "Known" here is a Future AGI key value (environment, options, config file) and a secret registered through RegisterSecret: another
+            // vendor's credential in the environment, or a value the wire layer observed, must not disable the agent for that vendor's collector.
+            FiKeyTransport.AssertNoFiKeysInAmbientHeaders(config.CredentialValues.Concat(KnownSecrets.Registered()));
             exporter=new BorrowedExporter(config.Options.Exporter,privacy,_completion);
         }
         else if(_ownsProvider) exporter=_otlp=new TrackingOtlpExporter(FiRouteOptions(config),privacy,_completion);
@@ -279,7 +280,7 @@ internal sealed class Agent : IDisposable
         return new OtlpExporterOptions {
             Endpoint=new Uri(decision.Endpoint), Protocol=OtlpExportProtocol.HttpProtobuf,
             Headers="X-Api-Key="+Uri.EscapeDataString(config.Get("API_KEY"))+",X-Secret-Key="+Uri.EscapeDataString(config.Get("SECRET_KEY"))+",fi-project-name="+Uri.EscapeDataString(config.Get("PROJECT_NAME")),
-            TimeoutMilliseconds=2000, HttpClientFactory=FiKeyTransport.HttpClientFactory(decision)
+            TimeoutMilliseconds=2000, HttpClientFactory=FiKeyTransport.HttpClientFactory(decision,2000)
         };
     }
     internal static Integration? IntegrationForSource(string source) => Integrations.FirstOrDefault(i=>i.Sources.Any(p=>i.Exact?source==p:source.StartsWith(p,StringComparison.Ordinal)));

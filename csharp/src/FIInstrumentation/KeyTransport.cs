@@ -13,8 +13,7 @@ public sealed class FiKeyRefusedException : InvalidOperationException
 /// <summary>What <see cref="FiKeyTransport.Decide"/> decided for one request.</summary>
 /// <param name="Keys">The request carries Future AGI keys.</param>
 /// <param name="Tls">The request is encrypted.</param>
-/// <param name="PlaintextOptIn">A plaintext request that carries keys was allowed by FI_ALLOW_INSECURE_HTTP or the option: the
-/// transport is built with proxies off.</param>
+/// <param name="PlaintextOptIn">A plaintext request that carries keys to a non-loopback host was allowed by FI_ALLOW_INSECURE_HTTP or the option.</param>
 /// <param name="Endpoint">The endpoint to use: the target, with the scheme made https for a Future AGI gRPC host.</param>
 public sealed record FiKeyDecision(bool Keys, bool Tls, bool PlaintextOptIn, bool FiHost, string Endpoint, string Origin);
 
@@ -26,7 +25,7 @@ public sealed record FiKeyDecision(bool Keys, bool Tls, bool PlaintextOptIn, boo
 /// <item>a Future AGI host (*.futureagi.com, one trailing dot allowed) always uses TLS: gRPC is made https, plaintext HTTP is refused;</item>
 /// <item>a target whose written and parsed host disagree (a backslash before an @, %5C, an @ after the authority, an empty authority) is refused;</item>
 /// <item>any other host over plaintext is refused unless FI_ALLOW_INSECURE_HTTP is exactly 1 or the option is set, with one warning per process;</item>
-/// <item>a plaintext request sent under that opt-in is built with proxies off, and no key-carrying request follows a redirect (see <see cref="CreateHttpClient"/>).</item>
+/// <item>a plaintext request that carries keys is sent with proxies off (loopback or opted in), and no key-carrying request follows a redirect (see <see cref="CreateHttpClient"/>).</item>
 /// </list>
 /// </summary>
 public static class FiKeyTransport
@@ -102,14 +101,18 @@ public static class FiKeyTransport
     {
         if (!keys) return new FiKeyDecision(false, target.TrimStart().StartsWith("https:", StringComparison.OrdinalIgnoreCase), false, false, target, "");
         var parts = WrittenParts(target);
-        if (parts == null || !Uri.TryCreate(target.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            throw new FiKeyRefusedException("FI_TARGET_UNREADABLE", UnreadableMessage);
+        if (parts == null) throw new FiKeyRefusedException("FI_TARGET_UNREADABLE", UnreadableMessage);
+        // The written form decides first: an empty authority and a host a second parser reads differently are named for what they are,
+        // whether or not .NET happens to parse the same text.
         if (parts.Authority.Length == 0) throw new FiKeyRefusedException("FI_EMPTY_AUTHORITY", EmptyAuthorityMessage);
-        var written = WrittenHost(target);
         var ambiguous = Regex.IsMatch(parts.RawAuthority, @"\\|%5c", RegexOptions.IgnoreCase) || parts.Rest.Contains('@');
+        if (ambiguous) throw new FiKeyRefusedException("FI_HOST_MISMATCH", MismatchMessage);
+        if (!Uri.TryCreate(target.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new FiKeyRefusedException("FI_TARGET_UNREADABLE", UnreadableMessage);
+        var written = WrittenHost(target);
         var fiParsed = IsFiHostName(uri.Host);
         var fiWritten = written != null && IsFiHostName(written);
-        if (ambiguous || fiParsed != fiWritten || written == null) throw new FiKeyRefusedException("FI_HOST_MISMATCH", MismatchMessage);
+        if (fiParsed != fiWritten || written == null) throw new FiKeyRefusedException("FI_HOST_MISMATCH", MismatchMessage);
         var origin = $"{uri.Scheme}://{Comparable(uri.Host)}:{uri.Port}";
         var tls = uri.Scheme == Uri.UriSchemeHttps;
         var endpoint = target;
@@ -143,11 +146,12 @@ public static class FiKeyTransport
     /// </summary>
     public static HttpClient CreateHttpClient(FiKeyDecision decision) => new(CreateHandler(decision), disposeHandler: true);
 
-    /// <summary>The handler behind <see cref="CreateHttpClient"/>: no redirect, and no proxy for a plaintext request sent under the opt-in. An https request keeps the normal proxy behaviour.</summary>
+    /// <summary>The handler behind <see cref="CreateHttpClient"/>: no redirect, and no proxy for any plaintext request that carries keys. An https request keeps the normal proxy behaviour.</summary>
     internal static SocketsHttpHandler CreateHandler(FiKeyDecision decision)
     {
         var handler = new SocketsHttpHandler { AllowAutoRedirect = false };
-        if (decision.PlaintextOptIn) handler.UseProxy = false;
+        // No plaintext request that carries keys goes through a proxy, loopback or not, with or without the opt-in.
+        if (decision.Keys && !decision.Tls) handler.UseProxy = false;
         return handler;
     }
 
@@ -155,7 +159,12 @@ public static class FiKeyTransport
     public static Func<HttpClient> HttpClientFactory(FiKeyDecision decision) => () => CreateHttpClient(decision);
 
     /// <summary>The same factory with the exporter's timeout applied to each client (the exporter's own default factory sets it; a custom one must).</summary>
-    public static Func<HttpClient> HttpClientFactory(FiKeyDecision decision, int timeoutMilliseconds) => HttpClientFactory(decision);
+    public static Func<HttpClient> HttpClientFactory(FiKeyDecision decision, int timeoutMilliseconds) => () =>
+    {
+        var client = CreateHttpClient(decision);
+        client.Timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds);
+        return client;
+    };
 
     /// <summary>
     /// An exporter for a collector that is not Future AGI would merge OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS into what

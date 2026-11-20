@@ -134,7 +134,6 @@ public static class TraceAI
             {
                 exporterOptions.Endpoint = new Uri(endpoint);
                 exporterOptions.Protocol = OtlpExportProtocol.Grpc;
-                exporterOptions.HttpClientFactory = FiKeyTransport.HttpClientFactory(decision);
                 if (headers.Count > 0)
                     exporterOptions.Headers = string.Join(",", headers.Select(h => $"{h.Key}={h.Value}"));
                 if (options.Batch)
@@ -150,6 +149,8 @@ public static class TraceAI
                 {
                     exporterOptions.ExportProcessorType = ExportProcessorType.Simple;
                 }
+                // Last, so the client carries the exporter's own timeout (a custom factory replaces the default one that sets it).
+                exporterOptions.HttpClientFactory = FiKeyTransport.HttpClientFactory(decision, exporterOptions.TimeoutMilliseconds);
             });
         }
         else
@@ -159,7 +160,6 @@ public static class TraceAI
             {
                 exporterOptions.Endpoint = new Uri(endpoint.TrimEnd('/') + "/tracer/v1/traces");
                 exporterOptions.Protocol = OtlpExportProtocol.HttpProtobuf;
-                exporterOptions.HttpClientFactory = FiKeyTransport.HttpClientFactory(decision);
                 if (headers.Count > 0)
                     exporterOptions.Headers = string.Join(",", headers.Select(h => $"{h.Key}={h.Value}"));
                 if (options.Batch)
@@ -175,6 +175,8 @@ public static class TraceAI
                 {
                     exporterOptions.ExportProcessorType = ExportProcessorType.Simple;
                 }
+                // Last, so the client carries the exporter's own timeout (a custom factory replaces the default one that sets it).
+                exporterOptions.HttpClientFactory = FiKeyTransport.HttpClientFactory(decision, exporterOptions.TimeoutMilliseconds);
             });
         }
 
