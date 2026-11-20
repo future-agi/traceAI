@@ -1,6 +1,5 @@
 package ai.traceai.auto;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.*;
@@ -116,8 +115,8 @@ public final class TraceAIAuto {
                 .setResource(resource)
                 .addSpanProcessor(new WireResourceProcessor(processor)).build();
             OpenTelemetrySdk sdk = OpenTelemetrySdk.builder().setTracerProvider(provider).build();
-            try { GlobalOpenTelemetry.set(sdk); } catch (IllegalStateException ignored) { }
-            // Only this agent's own spans are exported. Application providers, processors and spans are left alone.
+            // The SDK stays private: it is never registered globally. Only this agent's own spans are exported;
+            // application providers, processors and spans are left alone.
             RUNTIME.set(new RuntimeState(config, provider, sdk.getTracer(SCOPE, "1.0.0"), exporter, processor, resource));
             if (instrumentation == null) instrumentation = ByteBuddyAgent.install();
             STATUS.put("java.net.http", transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");

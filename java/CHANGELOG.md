@@ -98,3 +98,7 @@
 - Install self-contained POMs only for JitPack so commit-pinned modules and the BOM do not refer to an unavailable remapped parent.
 - Keep reactor test scopes on actual dependencies rather than leaking them through the public BOM.
 - Clarify that Spring Boot's starter is additional to the direct OpenAI instrumentation; compile external README, Spring Boot, and BOM consumers in CI.
+
+### Changed
+
+- The Java agent does not register a global OpenTelemetry; application code that uses `GlobalOpenTelemetry` keeps its own provider (or the no-op default).
