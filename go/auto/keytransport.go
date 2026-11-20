@@ -28,6 +28,9 @@ import (
 //  6. A 3xx answer to a key-carrying send is refused.
 var insecureWarning sync.Once
 
+// dialResolver is the resolver the exporter dials with; nil means the system resolver. Tests replace it.
+var dialResolver *net.Resolver
+
 var errKeyTransport = errors.New("traceai auto: refusing to send Future AGI keys over this transport")
 
 func refuse(why string) error { return fmt.Errorf("%w (%s)", errKeyTransport, why) }

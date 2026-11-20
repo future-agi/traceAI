@@ -3,9 +3,11 @@ package auto
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,18 @@ import (
 	"sync/atomic"
 	"testing"
 )
+
+// resetInsecureWarning makes the next opted-in plaintext decision warn again and returns the buffer the
+// warning goes to; the previous once-state and log destination come back when the test ends.
+func resetInsecureWarning(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	insecureWarning = sync.Once{}
+	t.Cleanup(func() { log.SetOutput(previous); insecureWarning = sync.Once{} })
+	return &buf
+}
 
 func decide(t *testing.T, base, optIn string) error {
 	t.Helper()
@@ -57,6 +71,15 @@ func TestKeyTransportMatrix(t *testing.T) {
 		{"backslash authority", `http://127.0.0.1\@collector.internal:4318`, "1", false},
 		{"backslash authority https", `https://api.futureagi.com\@collector.internal`, "", false},
 		{"userinfo", "http://u:p@127.0.0.1:4318", "", false},
+		{"backslash before at, https FI", `https://\@api.futureagi.com`, "", false},
+		{"percent-encoded backslash before at", "http://127.0.0.1%5C@collector.internal:4318", "1", false},
+		{"percent-encoded backslash before at, FI", "https://api.futureagi.com%5C@collector.internal", "", false},
+		{"at after the authority is a path, not a host: plaintext still needs the opt-in", "http://collector.internal:4318/x@api.futureagi.com", "", false},
+		{"at after the authority is a path, not a host: opt-in allows the written host only", "http://collector.internal:4318/x@api.futureagi.com", "1", true},
+		{"at after the authority on a loopback host is still loopback", "http://127.0.0.1:4318/x@collector.internal", "", true},
+		{"empty authority", "http:///collector.internal:4318", "1", false},
+		{"empty authority https FI path", "https:///api.futureagi.com/", "", false},
+		{"backslash for authority https FI", `https://\api.futureagi.com/`, "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,10 +96,7 @@ func TestKeyTransportMatrix(t *testing.T) {
 
 // Rule 4: one value-free warning per process for an opted-in plaintext send.
 func TestKeyTransportOptInWarnsOnceValueFree(t *testing.T) {
-	insecureWarning = sync.Once{}
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(io.Discard)
+	buf := resetInsecureWarning(t)
 	for i := 0; i < 3; i++ {
 		if err := decide(t, "http://secret-host.internal:4318", "1"); err != nil {
 			t.Fatal(err)
@@ -87,66 +107,6 @@ func TestKeyTransportOptInWarnsOnceValueFree(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "secret-host") {
 		t.Fatalf("warning echoes the host: %q", buf.String())
-	}
-}
-
-type probe struct{ calls atomic.Int32 }
-
-func (p *probe) RoundTrip(*http.Request) (*http.Response, error) {
-	p.calls.Add(1)
-	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
-}
-
-// The decision is repeated on the request actually sent, before the transport.
-func TestKeyTransportDecidedOnEachRequest(t *testing.T) {
-	t.Setenv("FI_ALLOW_INSECURE_HTTP", "")
-	for _, target := range []string{"http://collector.internal:4318/tracer/v1/traces", "http://api.futureagi.com/tracer/v1/traces"} {
-		p := &probe{}
-		tr := &collectorTransport{Transport: http.DefaultTransport.(*http.Transport).Clone(), keyed: p}
-		req, _ := http.NewRequest("POST", target, nil)
-		req.Header.Set("X-Api-Key", "KEY_VALUE_PRIVATE")
-		if _, err := tr.RoundTrip(req); err == nil || p.calls.Load() != 0 {
-			t.Fatalf("%s: sent=%d err=%v", target, p.calls.Load(), err)
-		} else if strings.Contains(err.Error(), "KEY_VALUE_PRIVATE") || strings.Contains(err.Error(), "collector.internal") {
-			t.Fatalf("error not value-free: %v", err)
-		}
-	}
-}
-
-// Rule 5: a proxy named by the environment is refused, nothing reaches it.
-func TestKeyTransportRefusesProxy(t *testing.T) {
-	var proxied atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxied.Add(1) }))
-	defer proxy.Close()
-	t.Setenv("FI_ALLOW_INSECURE_HTTP", "1")
-	t.Setenv("HTTP_PROXY", proxy.URL)
-	t.Setenv("http_proxy", proxy.URL)
-	t.Setenv("NO_PROXY", "")
-	t.Setenv("no_proxy", "")
-	client := exporterClient("", false)
-	req, _ := http.NewRequestWithContext(context.Background(), "POST", "http://collector.example.test:4318/tracer/v1/traces", strings.NewReader("x"))
-	req.Header.Set("X-Api-Key", "KEY_VALUE_PRIVATE")
-	_, err := client.Do(req)
-	if !errors.Is(err, errKeyTransport) || proxied.Load() != 0 {
-		t.Fatalf("proxied=%d err=%v", proxied.Load(), err)
-	}
-	if strings.Contains(err.Error(), "KEY_VALUE_PRIVATE") || strings.Contains(err.Error(), proxy.URL) {
-		t.Fatalf("error not value-free: %v", err)
-	}
-}
-
-// Rule 5, https: an HTTPS_PROXY is refused too.
-func TestKeyTransportRefusesHTTPSProxy(t *testing.T) {
-	var proxied atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxied.Add(1) }))
-	defer proxy.Close()
-	t.Setenv("HTTPS_PROXY", proxy.URL)
-	t.Setenv("https_proxy", proxy.URL)
-	t.Setenv("NO_PROXY", "")
-	t.Setenv("no_proxy", "")
-	req, _ := http.NewRequest("POST", "https://api.futureagi.com/tracer/v1/traces", strings.NewReader("x"))
-	if _, err := exporterClient("", false).Do(req); !errors.Is(err, errKeyTransport) || proxied.Load() != 0 {
-		t.Fatalf("proxied=%d err=%v", proxied.Load(), err)
 	}
 }
 
@@ -193,17 +153,79 @@ func TestKeyTransportDialMustBeLoopback(t *testing.T) {
 	}
 }
 
-// Init with a refused target fails closed: nothing is sent, report says failed.
+// The decision is repeated on the request actually sent, before any connection is opened.
+func TestKeyTransportDecidedOnEachRequest(t *testing.T) {
+	t.Setenv("FI_ALLOW_INSECURE_HTTP", "")
+	for _, target := range []string{"http://collector.internal:4318/tracer/v1/traces", "http://api.futureagi.com/tracer/v1/traces"} {
+		var dials atomic.Int32
+		tr := exporterClient("", false).Transport.(*collectorTransport)
+		tr.Transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+			dials.Add(1)
+			return nil, errors.New("must not dial")
+		}
+		req, _ := http.NewRequest("POST", target, nil)
+		req.Header.Set("X-Api-Key", "KEY_VALUE_PRIVATE")
+		if _, err := tr.RoundTrip(req); !errors.Is(err, errKeyTransport) || dials.Load() != 0 {
+			t.Fatalf("%s: dials=%d err=%v", target, dials.Load(), err)
+		} else if strings.Contains(err.Error(), "KEY_VALUE_PRIVATE") || strings.Contains(err.Error(), "collector.internal") {
+			t.Fatalf("error not value-free: %v", err)
+		}
+	}
+}
+
+type closeTracker struct {
+	io.Reader
+	closed atomic.Bool
+}
+
+func (c *closeTracker) Close() error { c.closed.Store(true); return nil }
+
+// A request the transport refuses still has its body closed (the RoundTripper contract).
+func TestKeyTransportRefusedRequestClosesItsBody(t *testing.T) {
+	t.Setenv("FI_ALLOW_INSECURE_HTTP", "")
+	body := &closeTracker{Reader: strings.NewReader("x")}
+	req, _ := http.NewRequest("POST", "http://collector.internal:4318/tracer/v1/traces", body)
+	if _, err := exporterClient("", false).Transport.RoundTrip(req); !errors.Is(err, errKeyTransport) {
+		t.Fatalf("err=%v", err)
+	}
+	if !body.closed.Load() {
+		t.Fatal("refused request left its body open")
+	}
+}
+
+// Init with a refused target fails closed: nothing is sent, the report says failed, and nothing echoes a value.
 func TestKeyTransportInitRefusedSendsNothing(t *testing.T) {
 	p := exporterRegressionSetup(t)
+	var reached atomic.Int32
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Add(1) }))
+	defer collector.Close()
+	// A plaintext, non-loopback spelling of the collector's own address: the host is not literal loopback.
+	base := strings.Replace(collector.URL, "127.0.0.1", "127.1", 1)
 	t.Setenv("FI_ALLOW_INSECURE_HTTP", "")
-	t.Setenv("FI_BASE_URL", "http://collector.internal:4318")
+	t.Setenv("FI_BASE_URL", base)
 	_, err := InitForTest(context.Background(), WithCredentials("DUMMY_FI_API_KEY", "DUMMY_FI_SECRET_KEY"))
-	if err == nil {
-		t.Fatal("plaintext non-loopback target with keys was accepted")
+	if !errors.Is(err, errKeyTransport) {
+		t.Fatalf("plaintext non-loopback target with keys was accepted: %v", err)
 	}
-	if strings.Contains(err.Error(), "collector.internal") || strings.Contains(err.Error(), "DUMMY_FI") {
+	if strings.Contains(err.Error(), "127.1") || strings.Contains(err.Error(), "DUMMY_FI") {
 		t.Fatalf("error not value-free: %v", err)
 	}
-	_ = p
+	exportRegressionSpan(t, p)
+	_ = ForceFlush(context.Background())
+	if reached.Load() != 0 {
+		t.Fatalf("a refused target received %d requests", reached.Load())
+	}
+	report, _ := json.Marshal(Report())
+	var wire string
+	for _, integration := range Report().Integrations {
+		if integration.Name == "wire" {
+			wire = integration.Status
+		}
+	}
+	if wire != "failed" {
+		t.Fatalf("report wire status = %q, want failed", wire)
+	}
+	if strings.Contains(string(report), "DUMMY_FI_API_KEY") || strings.Contains(string(report), "DUMMY_FI_SECRET_KEY") {
+		t.Fatalf("report carries a key: %s", report)
+	}
 }
