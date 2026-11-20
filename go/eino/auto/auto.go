@@ -18,8 +18,11 @@
 //   - FI_INSTRUMENTATIONS without "eino" (or with eino in
 //     FI_DISABLED_INSTRUMENTATIONS) records nothing;
 //   - OTEL_SDK_DISABLED=true records nothing;
-//   - the FI_HIDE_* switches and the known-secret replacement apply exactly
-//     as to the agent's wire spans;
+//   - the FI_HIDE_* switches apply exactly as to the agent's wire spans, to
+//     the copy Future AGI receives and the copy the application's own
+//     provider exports (error.message becomes the redaction marker rather
+//     than being dropped); known secrets are replaced in both, in the
+//     application's copy as each span ends and in Future AGI's at export;
 //   - a run that an application handler (traceaieino.NewHandler(), registered
 //     globally or given to one run with compose.WithCallbacks or
 //     adk.WithCallbacks) handles gets its spans from that handler only; every

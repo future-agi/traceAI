@@ -35,6 +35,10 @@ type spanRecord struct {
 	// from ContextWithSessionID, if any. Only that value keeps its value at
 	// export.
 	session *string
+	// raw holds the values a dedicated module wrote on its span before known-secret replacement, and
+	// rawName its name; the export to Future AGI starts from them (see rawSpan).
+	raw     map[attribute.Key]attribute.Value
+	rawName *string
 }
 
 // Live dedup ancestry is process-local and removed at OnEnd. Credentials are
@@ -114,19 +118,74 @@ func (p *processorRegistration) wroteSession(span trace.SpanContext, value strin
 	}
 }
 
+// rememberRaw keeps, in the span's record until it ends, the attributes (and name, when not nil) a dedicated
+// module wrote before the agent replaced known secrets in the copy the span's own provider exports.
+func (p *processorRegistration) rememberRaw(span trace.SpanContext, kvs []attribute.KeyValue, name *string) {
+	store := p.privacy
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	r := store.spans[identity(span)]
+	if r == nil {
+		return
+	}
+	if r.raw == nil {
+		r.raw = map[attribute.Key]attribute.Value{}
+	}
+	for _, kv := range kvs {
+		r.raw[kv.Key] = kv.Value
+	}
+	if name != nil {
+		r.rawName = name
+	}
+}
+
 // endPrivacy removes the span's record and returns the session.id value the
-// agent wrote on it, if any.
-func (p *processorRegistration) endPrivacy(span sdktrace.ReadOnlySpan) *string {
+// agent wrote on it, if any, and the raw values a dedicated module wrote.
+func (p *processorRegistration) endPrivacy(span sdktrace.ReadOnlySpan) (*string, *rawSpan) {
 	store := p.privacy
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	key := identity(span.SpanContext())
 	var session *string
+	var raw *rawSpan
 	if r := store.spans[key]; r != nil {
 		session = r.session
+		if r.raw != nil || r.rawName != nil {
+			raw = &rawSpan{attrs: r.raw, name: r.rawName}
+		}
 	}
 	delete(store.spans, key)
-	return session
+	return session, raw
+}
+
+// rawSpan restores, for the export to Future AGI, what a dedicated module wrote before the agent replaced known
+// secrets in the span the application's own provider exports: the export boundary replaces them with the snapshot
+// taken at export, so a secret learned after the value was written still matches as a whole.
+type rawSpan struct {
+	sdktrace.ReadOnlySpan
+	attrs map[attribute.Key]attribute.Value
+	name  *string
+}
+
+func (s rawSpan) with(span sdktrace.ReadOnlySpan) rawSpan { s.ReadOnlySpan = span; return s }
+
+func (s rawSpan) Attributes() []attribute.KeyValue {
+	src := s.ReadOnlySpan.Attributes()
+	out := make([]attribute.KeyValue, len(src))
+	for i, kv := range src {
+		if v, ok := s.attrs[kv.Key]; ok {
+			kv.Value = v
+		}
+		out[i] = kv
+	}
+	return out
+}
+
+func (s rawSpan) Name() string {
+	if s.name != nil {
+		return *s.name
+	}
+	return s.ReadOnlySpan.Name()
 }
 
 // sessionSpan is one of the agent's wire spans on its way to the export

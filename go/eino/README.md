@@ -53,7 +53,7 @@ Spans leave through the agent's route: your global SDK tracer provider if you in
 get them too), else the agent's private provider. `FI_INSTRUMENTATIONS` without `eino` and
 `OTEL_SDK_DISABLED=true` record nothing. `FI_HIDE_*` applies to both copies of a span, the one Future AGI
 receives and the one your own provider exports, exactly as for the agent's wire spans; known-secret
-replacement applies to both copies as well, so a credential the agent knows is replaced in your own provider's exporters too.
+replacement applies to both copies as well: a credential the agent knows is replaced in your own provider's exporters as the span ends, and in the copy sent to Future AGI at export, so a longer secret learned after a shorter overlapping one is still replaced as a whole there.
 If you also use `traceaieino.NewHandler()` yourself, registered globally or given to one run, each run it
 handles gets its spans from your handler only, and every other run is still traced by the import. A handler
 that is built and never used changes nothing. Call `auto.Shutdown(ctx)` before `main` returns. Only programs
@@ -161,7 +161,8 @@ covers the whole run. An ADK `ChatModelAgent` also shows Eino's internal ReAct g
   `OnEnd` for the same run is a no-op; concurrent `OnEnd` and `OnError` end it once.
 - `error.message` is the first line of the error with URLs, email addresses, file paths, IP addresses,
   `host:port` pairs, and this machine's host name, user name and home directory replaced. It is dropped when
-  inputs or outputs are hidden. No exception event and no stack trace are ever recorded.
+  inputs or outputs are hidden; with `go/eino/auto` it is replaced by `__REDACTED__` under every content switch, as on
+  the agent's wire spans. The handler records no exception event and no stack trace.
 - A stream that fails part-way ends its span ERROR. An agent whose event stream carries an error ends ERROR.
 - A component that reports `OnError` without an `OnStart` (it failed while building its request) gets one ERROR
   span of its own. An `OnEnd` that does not belong to a run the handler started is ignored; it never ends

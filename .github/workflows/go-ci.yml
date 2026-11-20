@@ -137,7 +137,8 @@ jobs:
         run: go mod tidy -diff
       - name: The releasable module needs no Eino extension package
         run: |
-          if go list -deps ./... | grep -q 'cloudwego/eino-ext'; then echo "go/eino/auto needs an Eino extension package"; exit 1; fi
+          deps="$(go list -deps ./...)"
+          if printf '%s\n' "$deps" | grep -q 'cloudwego/eino-ext'; then echo "go/eino/auto needs an Eino extension package"; exit 1; fi
           if grep -q 'cloudwego/eino-ext' go.mod; then echo "go.mod requires an Eino extension package"; exit 1; fi
       - name: Vet and race tests through the blank import
         run: |
@@ -160,7 +161,8 @@ jobs:
           go mod init example.com/auto-only
           go mod edit -require=github.com/future-agi/traceAI/go/auto@v0.0.0 -replace=github.com/future-agi/traceAI/go/auto="$GITHUB_WORKSPACE/go/auto"
           go mod tidy
-          if go list -m all | grep -qi cloudwego; then echo "go/auto requires cloudwego"; exit 1; fi
+          modules="$(go list -m all)"
+          if printf '%s\n' "$modules" | grep -qi cloudwego; then echo "go/auto requires cloudwego"; exit 1; fi
           if grep -qi cloudwego go.sum; then echo "go.sum names cloudwego"; exit 1; fi
 
   auto-opentelemetry-latest:
