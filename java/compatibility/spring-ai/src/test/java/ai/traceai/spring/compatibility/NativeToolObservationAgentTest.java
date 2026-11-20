@@ -74,12 +74,20 @@ class NativeToolObservationAgentTest {
         Run run = run(handler);
         assertTrue(run.toolSpans().isEmpty(), "the agent added an execute_tool span beside Spring AI's own: " + run.toolSpans());
         // Spring AI's tool observation produced (named tool_call, framework or execute_tool by the Spring AI version) the application's one tool span, and the agent was active (it exported its other spans).
+        assertAgentActive(run);
         assertEquals(1, run.appSpans().stream().filter(s -> s.matches("APP_SPAN=(tool_call|execute_tool|framework) weather\\|.*")).count(), run.log());
     }
 
-    @ParameterizedTest @ValueSource(strings = {"none"})
-    void withoutAnObservationTheAgentTracesTheToolOnce(String handler) throws Exception {
+    /** The agent ran in the child JVM: it exported spans (the model call, at least) to the collector. */
+    static void assertAgentActive(Run run) {
+        assertFalse(run.agentSpans().isEmpty(), "the agent exported nothing, so it was not active: " + run.log());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"none", "meter"})
+    void withoutATracingSpanOnTheToolObservationTheAgentTracesTheToolOnce(String handler) throws Exception {
         Run run = run(handler);
+        assertAgentActive(run);
+        assertTrue(run.appSpans().stream().noneMatch(s -> s.matches("APP_SPAN=(tool_call|execute_tool|framework) weather\\|.*")), "no application tool span exists: " + run.log());
         assertEquals(1, run.toolSpans().size(), run.agentSpans().toString());
         assertEquals("execute_tool weather", run.toolSpans().get(0).path("name").asText());
     }

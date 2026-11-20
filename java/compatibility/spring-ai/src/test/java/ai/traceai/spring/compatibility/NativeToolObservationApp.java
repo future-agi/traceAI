@@ -3,6 +3,8 @@ package ai.traceai.spring.compatibility;
 import ai.traceai.spring.SpringAIObservationFilter;
 import ai.traceai.spring.SpringAITracingObservationHandler;
 import com.sun.net.httpserver.HttpServer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.core.instrument.observation.DefaultMeterObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
 import io.micrometer.tracing.otel.bridge.OtelCurrentTraceContext;
@@ -25,7 +27,7 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
  * The application of NativeToolObservationAgentTest, run in a child JVM with the zero-code agent attached. It makes a real Spring AI
  * tool-calling chat call (DefaultToolCallingManager, OpenAiChatModel against a loopback model) whose tool executes inside Spring AI's own
  * tool_call observation, traced by a real Micrometer tracing handler bridged to the application's OpenTelemetry SDK. Argument one picks the
- * tracing handler: spring (the traceai Spring AI handler), default (Micrometer's DefaultTracingObservationHandler) or none (no observation).
+ * tracing handler: spring (the traceai Spring AI handler), default (Micrometer's DefaultTracingObservationHandler) meter (a real registry with only a metrics handler, no tracing handler) or none (no observation, the no-op registry).
  */
 public final class NativeToolObservationApp {
     public record ToolInput(String city) {}
@@ -56,7 +58,8 @@ public final class NativeToolObservationApp {
         AtomicInteger toolCalls = new AtomicInteger();
         try (SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(printer)).build()) {
             ObservationRegistry registry = handler.equals("none") ? ObservationRegistry.NOOP : ObservationRegistry.create();
-            if (!handler.equals("none")) {
+            if (handler.equals("meter")) registry.observationConfig().observationHandler(new DefaultMeterObservationHandler(new SimpleMeterRegistry()));
+            if (!handler.equals("none") && !handler.equals("meter")) {
                 var tracer = new OtelTracer(provider.get("spring-native"), new OtelCurrentTraceContext(), event -> {});
                 registry.observationConfig().observationHandler(handler.equals("spring")
                     ? new SpringAITracingObservationHandler(tracer) : new DefaultTracingObservationHandler(tracer));
