@@ -706,8 +706,10 @@ def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
     current = getattr(client, "_headers", None)
     if isinstance(current, dict):
         pinned = dict(defaults)
-        if "content-encoding" in current and "content-encoding" not in ambient:
-            pinned["content-encoding"] = current["content-encoding"]
+        # The client adds Content-Encoding for the compression in use; it is not an environment header.
+        for key, value in current.items():
+            if key.lower() == "content-encoding" and "content-encoding" not in ambient:
+                pinned["content-encoding"] = value
         pinned.update(sdk)
         current.clear()
         current.update(pinned)

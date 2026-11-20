@@ -238,3 +238,16 @@ def test_a_collector_the_user_chose_keeps_environment_headers(monkeypatch, http_
     assert len(seen) == 1
     assert seen[0]["x-ambient"] == "1"
     assert seen[0]["authorization"] == "Bearer fake-ambient"
+
+
+@pytest.mark.parametrize("compression", ["gzip", "deflate"])
+def test_compressed_export_still_names_its_encoding(monkeypatch, http_sink, compression):
+    url, seen = http_sink
+    _point_at(monkeypatch, "http", url)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", compression)
+    _set_env(monkeypatch, "both")
+
+    _export_one_span(_build("direct", "http"))
+
+    assert seen[0]["content-encoding"] == compression
+    assert "x-ambient" not in seen[0]
