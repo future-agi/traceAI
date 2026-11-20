@@ -1,6 +1,7 @@
 ## [0.2.4] - 2026-11-19
 
 ### Changed
+- With an input hide setting, the echo check also looks for user data nested inside a content part under keys named like part labels (for example `json.file.name`, `meta.source.format`, `json.content[].id`), and for the undeclared (`extra="allow"`) and computed fields of a pydantic input; an output that repeats them is not recorded.
 - With any input hide setting, a chain's output is not recorded as `output.value` when it echoes the input. An output counts as an echo when it, or any part of it, equals the input after unwrapping, when it is a mapping that keeps every input key with an equal value, when any input text of four or more characters appears anywhere in it, or when the check cannot finish. Input text includes the values of a message's content parts (text, image, file, tool-use and tool-result parts) and its tool-call arguments; a content part's type, id, name, status, call ids and media or format labels are not used as text to look for, nor are the input's message type, id and metadata fields, and a boolean input is not matched by an equal number. A prompt-template run does not export its formatted prompt as output while an input hide setting is on.
 - The package requires `fi-instrumentation-otel>=1.3.0`, the first core release that masks `input.value` under the message and text hide settings.
 
