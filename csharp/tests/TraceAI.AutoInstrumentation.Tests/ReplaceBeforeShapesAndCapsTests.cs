@@ -106,8 +106,47 @@ public class ReplaceBeforeShapesAndCapsTests : InitIsolation
         var others = Enumerable.Range(0, 1100).Select(i => "filler-secret-value-" + i.ToString("D5")).ToArray();
         var copies = await Run(null, "{\"error\":{\"message\":\"bad " + SecretKey + " and " + Key + "\"}}", 401, "application/json", Chat("remember " + SecretKey + " " + Key),
             registered: others, user: "user-" + SecretKey);
-        AssertNoFragment(copies, SecretKey, Key, "0001");
+        AssertNoFragment(copies, SecretKey, Key, "synthetic-secret", "synthetic-api");
         Assert.Contains("remember", copies.Application);
+    }
+
+    [Fact]
+    public async Task FiKeysAreReplacedAfterMoreThanThreeHundredPinnedValuesAndElevenHundredOtherRegistrations()
+    {
+        // Pinned values (FI keys, credential values) are never bounded and never fall back to the LRU: 300 of them come first,
+        // then this configuration's keys, then 1100 other registrations.
+        var pin = typeof(KnownSecrets).GetMethod("Pin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        pin.Invoke(null, [Enumerable.Range(0, 300).Select(i => "pinned-credential-value-" + i.ToString("D4")).ToArray()]);
+        var others = Enumerable.Range(0, 1100).Select(i => "filler-secret-value-" + i.ToString("D5")).ToArray();
+        var copies = await Run(null, "{\"error\":{\"message\":\"bad " + SecretKey + " and " + Key + "\"}}", 401, "application/json", Chat("remember " + SecretKey + " " + Key),
+            registered: others, user: "user-" + SecretKey);
+        AssertNoFragment(copies, SecretKey, Key, "synthetic-secret", "synthetic-api");
+        Assert.Contains("remember", copies.Application);
+        Assert.Contains("<redacted>", copies.Application.Split('|')[1]); // the status description
+    }
+
+    [Fact]
+    public async Task NoUnreplacedSecretIsReachableFromTheActivityWhenItStarts()
+    {
+        const string secret = "REACHABLE-AT-START-5519";
+        var seen = new List<string>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == TraceAIAuto.Source.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                seen.Add(activity.DisplayName); seen.Add(activity.OperationName); seen.Add(activity.StatusDescription ?? "");
+                foreach (var tag in activity.TagObjects) { seen.Add(tag.Key); seen.Add(tag.Value is Array array ? string.Join(",", array.Cast<object?>()) : tag.Value?.ToString() ?? ""); }
+                seen.AddRange(Reach(activity));
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        var copies = await Run(null, "{\"error\":{\"message\":\"bad " + secret + "\"}}", 401, "application/json", Chat("remember " + secret, "m-" + secret), registered: [secret], user: "user-" + secret);
+        Assert.DoesNotContain("REACHABLE-AT-START", copies.Application);
+        Assert.NotEmpty(seen);
+        var found = seen.Where(text => text.Contains("REACHABLE-AT-START")).ToArray();
+        Assert.True(found.Length == 0, "unreplaced text at start: " + string.Join(" | ", found.Select(f => f[..Math.Min(60, f.Length)])));
     }
 
     [Theory]
