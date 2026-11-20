@@ -47,6 +47,10 @@
 
 * **javaagent:** first release of `com.futureagi:traceai-javaagent`, the zero-code Java agent. Add `-javaagent:traceai-javaagent-<version>.jar` (or call `TraceAI.init()`) to trace AI provider HTTP calls and send only those spans to Future AGI, leaving the application's OpenTelemetry setup untouched. The BOM now aligns it with the other modules.
 
+### Changed
+
+* **java-core, javaagent:** plaintext `http://` to a Future AGI host is refused, and plaintext `http://` to any other host except literal `localhost`, `127.0.0.1` and `::1` is refused unless `FI_ALLOW_INSECURE_HTTP=1` (or `TraceConfig.builder().allowInsecureHttp(true)`) is set. Export starts only when both `FI_API_KEY` and `FI_SECRET_KEY` are set. Key-carrying requests do not follow redirects, and a plaintext send does not use a proxy.
+
 ## [1.1.0](https://github.com/future-agi/traceAI/compare/java-v1.0.3...java-v1.1.0) (2026-11-10)
 
 ### Features

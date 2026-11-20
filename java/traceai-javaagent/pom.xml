@@ -44,6 +44,14 @@
                     <groupId>io.opentelemetry</groupId>
                     <artifactId>opentelemetry-exporter-logging</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>io.opentelemetry</groupId>
+                    <artifactId>opentelemetry-exporter-otlp-common</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.opentelemetry</groupId>
+                    <artifactId>opentelemetry-exporter-common</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -353,6 +361,10 @@
                                     <shadedPattern>ai.traceai.auto.shaded.core.SamplingRatioSampler</shadedPattern>
                                 </relocation>
                                 <relocation>
+                                    <pattern>ai.traceai.KeyTransport</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.core.KeyTransport</shadedPattern>
+                                </relocation>
+                                <relocation>
                                     <pattern>ai.traceai.ContextAttributes</pattern>
                                     <shadedPattern>ai.traceai.auto.shaded.core.ContextAttributes</shadedPattern>
                                 </relocation>
@@ -389,6 +401,8 @@
                                         <include>ai/traceai/ContentKeys$*.class</include>
                                         <include>ai/traceai/SamplingRatioSampler.class</include>
                                         <include>ai/traceai/SamplingRatioSampler$*.class</include>
+                                        <include>ai/traceai/KeyTransport.class</include>
+                                        <include>ai/traceai/KeyTransport$*.class</include>
                                         <include>ai/traceai/ContextAttributes.class</include>
                                         <include>ai/traceai/ContextAttributes$*.class</include>
                                     </includes>

@@ -170,7 +170,7 @@ TraceAI.init(TraceConfig.builder()
     .build());
 ```
 
-Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
+Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Export requires both `FI_API_KEY` and `FI_SECRET_KEY`. Future AGI hosts use `https://`; plaintext `http://` is accepted for literal `localhost`, `127.0.0.1` and `::1`, and for other hosts only when `FI_ALLOW_INSECURE_HTTP=1`. Export requests do not follow redirects, and a plaintext send does not use a proxy. Console export can include request and response content; enable it only when that is appropriate.
 
 ### Provider ownership and shutdown
 

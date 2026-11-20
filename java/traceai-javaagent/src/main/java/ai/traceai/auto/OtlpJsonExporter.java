@@ -1,5 +1,6 @@
 package ai.traceai.auto;
 
+import ai.traceai.KeyTransport;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.trace.data.SpanData;
@@ -23,16 +24,23 @@ final class OtlpJsonExporter implements SpanExporter {
         try {
             List<Object> resources = new ArrayList<>();
             for (SpanData span : spans) resources.add(serialize(span));
-            if (client == null) client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
-            String base = config.get("FI_BASE_URL").replaceAll("/+$", "");
-            HttpRequest request = HttpRequest.newBuilder(URI.create(base + "/tracer/v1/traces")).timeout(Duration.ofSeconds(2))
+            String optIn = config.get(KeyTransport.ALLOW_INSECURE_SETTING);
+            KeyTransport.Target target = KeyTransport.check(config.get("FI_BASE_URL"), config.credentials(),
+                optIn == null ? Map.of() : Map.of(KeyTransport.ALLOW_INSECURE_SETTING, optIn), false);
+            if (client == null) client = KeyTransport.client(target, Duration.ofSeconds(2));
+            HttpRequest request = HttpRequest.newBuilder(target.endpoint("/tracer/v1/traces")).timeout(Duration.ofSeconds(2))
                 .header("Content-Type", "application/json").header("X-Api-Key", config.get("FI_API_KEY"))
                 .header("X-Secret-Key", config.get("FI_SECRET_KEY")).header("fi-project-name", projectHeader(config.get("FI_PROJECT_NAME")))
                 .POST(HttpRequest.BodyPublishers.ofString(WireCore.dump(Map.of("resourceSpans", resources)))).build();
             int status;
             try (AutoCloseable ignored = TraceAIAuto.suppress()) { status = client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode(); }
+            KeyTransport.checkStatus(status);
             if (status >= 200 && status < 300) { lastExport = "accepted"; return CompletableResultCode.ofSuccess(); }
             lastExport = "rejected (HTTP " + status + ")";
+        } catch (KeyTransport.Refused refused) {
+            lastExport = refused.getMessage().endsWith("redirect") ? "refused (redirect)" : "refused (key transport)";
+            TraceAIAuto.warn("Collector export refused: keys are sent only to a permitted target");
+            return CompletableResultCode.ofFailure();
         } catch (Throwable ignored) { lastExport = "unreachable"; }
         TraceAIAuto.warn("Collector export failed; application requests are unaffected");
         return CompletableResultCode.ofFailure();
