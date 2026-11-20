@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AnthropicVersion Condition="'$(AnthropicVersion)' == ''">13.3.0</AnthropicVersion>
+    <DefineConstants Condition="'$(AnthropicVersion)' == '12.55.0'">$(DefineConstants);BEFORE_NATIVE</DefineConstants>
+    <DefineConstants Condition="'$(AnthropicVersion)' == '12.55.0' Or '$(AnthropicVersion)' == '12.56.0'">$(DefineConstants);LEGACY_MESSAGES</DefineConstants>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath>locks/$(AnthropicVersion).json</NuGetLockFilePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Anthropic" Version="$(AnthropicVersion)" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.1" />
+  </ItemGroup>
+</Project>

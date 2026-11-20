@@ -1,0 +1,72 @@
+name: Anthropic CSharp native contract
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'csharp/tests/AnthropicNativeContract/**'
+      - '.github/workflows/anthropic-csharp-native-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'csharp/tests/AnthropicNativeContract/**'
+      - '.github/workflows/anthropic-csharp-native-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-contract:
+    name: Anthropic ${{ matrix.anthropic }} / ${{ matrix.framework }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        anthropic: ['12.55.0', '12.56.0', '13.3.0']
+        framework: ['net8.0', 'net10.0']
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore locked published packages and build
+        env:
+          ANTHROPIC_VERSION: ${{ matrix.anthropic }}
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          project=csharp/tests/AnthropicNativeContract/AnthropicNativeContract.csproj
+          python -m pip install -r csharp/tests/AnthropicNativeContract/requirements.txt ruff==0.14.4
+          python -m ruff check csharp/tests/AnthropicNativeContract/wire.py
+          python -m ruff format --check csharp/tests/AnthropicNativeContract/wire.py
+          dotnet restore "$project" -p:AnthropicVersion="$ANTHROPIC_VERSION" --locked-mode
+          dotnet build "$project" --no-restore -p:AnthropicVersion="$ANTHROPIC_VERSION" -f "$FRAMEWORK" -c Release
+      - name: Verify protobuf, privacy, lifecycle and negative control offline
+        env:
+          ANTHROPIC_VERSION: ${{ matrix.anthropic }}
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          negative=''
+          if [ "$ANTHROPIC_VERSION" = '12.55.0' ]; then negative='--negative'; fi
+          # An isolated network namespace permits loopback only. No real provider keys.
+          sudo unshare --net bash -c '
+            ip link set lo up
+            exec "$1" -I "$2/wire.py" --dotnet "$3" --dll "$2/bin/Release/$4/AnthropicNativeContract.dll" --output "$5" ${6:+$6}
+          ' _ "$(command -v python)" "$GITHUB_WORKSPACE/csharp/tests/AnthropicNativeContract" "$(command -v dotnet)" "$FRAMEWORK" "$RUNNER_TEMP/native-contract" "$negative"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: anthropic-${{ matrix.anthropic }}-${{ matrix.framework }}
+          path: ${{ runner.temp }}/native-contract
+          if-no-files-found: ignore
