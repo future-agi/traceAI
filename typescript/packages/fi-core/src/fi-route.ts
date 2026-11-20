@@ -12,21 +12,26 @@
 import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { createSpanExporter } from "./otel";
 import { declareFiRoute } from "./fi-route-registry";
+import { hasCompleteKeyPair } from "./fi-key-pair";
 
 export const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory.v1");
 
-function hasExplicitPair(headers: unknown): boolean {
-  if (typeof headers !== "object" || headers === null) return false;
-  const value = (name: string) => Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
-  const key = value("x-api-key"), secret = value("x-secret-key");
-  return typeof key === "string" && key.trim() !== "" && typeof secret === "string" && secret.trim() !== "";
+/** The string-valued entries of `headers`, each read once, so what is checked is what is used. */
+function snapshotHeaders(headers: unknown): Record<string, string> | undefined {
+  if (typeof headers !== "object" || headers === null) return undefined;
+  const snapshot: Record<string, string> = {};
+  try { for (const name of Object.keys(headers)) { const value = (headers as Record<string, unknown>)[name]; if (typeof value === "string") snapshot[name] = value; } }
+  catch { return undefined; }
+  return snapshot;
 }
 
 export function createFiRouteSpanExporter(options: Parameters<typeof createSpanExporter>[0] = {}): SpanExporter {
-  if (!hasExplicitPair(options.headers)) {
+  const copy = { ...options };
+  const headers = snapshotHeaders(copy.headers);
+  if (!headers || !hasCompleteKeyPair(headers)) {
     throw new Error("The Future AGI route needs an explicit x-api-key and x-secret-key pair; it does not read them from the environment.");
   }
-  return createSpanExporter(declareFiRoute({ ...options }));
+  return createSpanExporter(declareFiRoute({ ...copy, headers }));
 }
 
 // The first copy of this package loaded in the process provides the factory; it checks its own registry.

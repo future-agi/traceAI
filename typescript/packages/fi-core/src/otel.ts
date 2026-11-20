@@ -31,6 +31,7 @@ import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-h
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { endpointTarget, isFiEndpoint, isLoopbackTarget, sameEndpointTarget } from "./fi-endpoint";
 import { credentialSecrets } from "./privacy-runtime";
+import { hasCompleteKeyPair } from "./fi-key-pair";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
@@ -43,8 +44,8 @@ interface ExportPrivacyOptions {
   /** Routing attributes are added only to this destination's detached snapshot. */
   resourceAttributes?: Attributes;
 }
-function exportPrivacy(options: ExportPrivacyOptions, headers: FIHeaders = {}) {
-  const credentials = credentialSecrets(headers);
+function exportPrivacy(options: ExportPrivacyOptions, headers: FIHeaders = {}, configured: readonly string[] = []) {
+  const credentials = credentialSecrets(headers, configured);
   seedSecrets(process.env, credentials);
   const filter = privacyFilter(options.traceConfig, credentials);
   return (spans: ReadableSpan[]) => spans.map(span => filter.span(span, [], options.resourceAttributes));
@@ -299,6 +300,17 @@ function metadataStrings(metadata: unknown): FIHeaders {
   return strings;
 }
 
+/** Every credential value in the caller's gRPC Metadata, repeated values included. */
+function metadataSecrets(metadata: unknown): string[] {
+  const found = new Set<string>();
+  try {
+    const source = metadata as { getMap?: () => Record<string, unknown>; get?: (name: string) => unknown[] } | undefined;
+    for (const name of Object.keys(source?.getMap?.() ?? {}))
+      for (const value of source?.get?.(name) ?? []) if (typeof value === "string") for (const secret of credentialSecrets({ [name]: value })) found.add(secret);
+  } catch { /* An unreadable metadata object adds nothing. */ }
+  return [...found];
+}
+
 /** Every value of the caller's gRPC Metadata, repeated and binary ones included, into `target`. */
 function copyMetadata(metadata: unknown, target: grpc.Metadata): void {
   try {
@@ -322,8 +334,12 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     // FI headers are resolved from the caller's headers option alone; the caller's metadata sits underneath
     // them (an entry of the same name is replaced), so it can neither suppress the FI keys nor be dropped.
     const callerStrings = metadataStrings(callerMetadata);
-    seedSecrets(process.env, credentialSecrets(callerStrings));
-    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, callerHeaders, isFiRouteDeclared(options));
+    const metadataKnown = metadataSecrets(callerMetadata);
+    seedSecrets(process.env, metadataKnown);
+    // A complete key pair in the caller's metadata is as explicit as one in the headers option.
+    const requested = callerHeaders === undefined && hasCompleteKeyPair(callerStrings)
+      ? Object.fromEntries(Object.entries(callerStrings).filter(([name]) => /^(?:x-api-key|x-secret-key)$/i.test(name))) : callerHeaders;
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, requested, isFiRouteDeclared(options));
     const headers = resolvedHeaders ?? {};
     const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
@@ -337,11 +353,12 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       ...restOptions,
       url: endpoint,
       metadata: metadata,
-      // A Future AGI bound exporter connects the way the SDK chooses; other targets may bring their own credentials.
-      ...(callerCredentials !== undefined && !fiBound ? { credentials: callerCredentials } : {}),
-      ...(callerCredentials === undefined || fiBound
-        ? (isLoopbackTarget(endpoint) ? { credentials: grpc.credentials.createInsecure() } : {})
-        : {}),
+      // A Future AGI bound exporter uses TLS, whatever the endpoint's scheme or OTEL_EXPORTER_OTLP_(TRACES_)INSECURE say, except
+      // on a loopback target (a local collector). Another target uses the caller's credentials, or the exporter's own choice.
+      ...(fiBound
+        ? { credentials: isLoopbackTarget(endpoint) ? grpc.credentials.createInsecure() : grpc.credentials.createSsl() }
+        : callerCredentials !== undefined ? { credentials: callerCredentials }
+        : isLoopbackTarget(endpoint) ? { credentials: grpc.credentials.createInsecure() } : {}),
     };
 
     try {
@@ -353,7 +370,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
     
     this.verbose = verbose;
-    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers });
+    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers }, metadataKnown);
     privacyDestinations.add(this);
 
     if (this.verbose) {
@@ -463,6 +480,8 @@ function getEnvGrpcCollectorEndpoint(): string {
 
 // Explicit endpoints retain their base-or-full URL behavior. Environment collector
 // endpoints are full URLs; only FI_BASE_URL and the default are base origins.
+/** The collector URL an HTTP exporter given `endpoint` dials: the endpoint itself when it is a usable URL, else the environment's or the default route. */
+export function resolveTraceEndpoint(endpoint?: string): string { return constructFullEndpoint(endpoint); }
 function constructFullEndpoint(customEndpoint?: string): string {
   if (customEndpoint) {
     try {
@@ -503,6 +522,10 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders } = {}) {
     const url = constructFullEndpoint(resolveTarget(options, false));
     const { headers, fiBound } = headersForEndpoint(url, false, options.headers, isFiRouteDeclared(options));
+    // Keys go to a Future AGI host over TLS only.
+    if (fiBound && hasCompleteKeyPair(headers) && isFiEndpoint(url, "http") && endpointTarget(url, "http")?.origin.startsWith("http:")) {
+      throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
+    }
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);

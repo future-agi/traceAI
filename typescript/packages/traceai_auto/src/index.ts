@@ -1,12 +1,16 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { getAttributesFromContext, ProjectType, register, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
+import { getAttributesFromContext, ProjectType, register, resolveTraceEndpoint, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 // The Future AGI route factory is provided by @traceai/fi-core through a process-wide symbol, not a package export.
 const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory.v1");
 function createFiRouteSpanExporter(options: Record<string, unknown>): SpanExporter {
   const factory = (globalThis as any)[FI_ROUTE_FACTORY];
-  if (typeof factory !== "function") throw new Error("The installed @traceai/fi-core does not provide a compatible Future AGI route (protocol v1), or a different version of it was loaded first. Install one matching @traceai/fi-core version.");
+  if (typeof factory !== "function") {
+    const message = "The installed @traceai/fi-core does not provide a compatible Future AGI route (protocol v1), or a different version of it was loaded first. Install one matching @traceai/fi-core version.";
+    warn("fi-route", message);
+    throw new Error(message);
+  }
   return factory(options);
 }
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
@@ -270,7 +274,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     options = { ...options, traceConfig: config.traceConfig };
     state = agent; (globalThis as any)[STATE_KEY] = agent;
     seedSecrets(process.env, credentialsForConfig(config));
-    const fiCredentials = !!config.apiKey && !!config.secretKey;
+    const fiCredentials = !!config.apiKey?.trim() && !!config.secretKey?.trim();
     // The FI route: the Future AGI collector, or an exporter/processor given to init().
     const route = fiCredentials || !!options.exporter || !!options.spanProcessor;
     // Without a route or a provider given to init(), install nothing: no provider,
@@ -294,9 +298,9 @@ export function init(options: Options = {}): TracerProvider | undefined {
     else if (options.exporter || fiCredentials) {
       // The FI keys go to the resolved base URL. When a file or profile chose it, say which host, once.
       if (!options.exporter && (config.baseUrlSource === "config file" || config.baseUrlSource === "profile")) {
-        // The host the exporter dials: a scheme-less base URL is read as https://, as the exporter reads it.
+        // The host the exporter dials, resolved by the exporter's own rule (a base URL it cannot read falls back to the environment's route).
         let host = "<invalid URL>";
-        try { host = new URL(/^https?:\/\//i.test(config.baseUrl.trim()) ? config.baseUrl.trim() : `https://${config.baseUrl.trim()}`).host || host; } catch { /* Reported as invalid. */ }
+        try { host = new URL(resolveTraceEndpoint(config.baseUrl)).host || host; } catch { /* Reported as invalid. */ }
         warn("base-host", `Sending traces to ${host} (base URL from the ${config.baseUrlSource}).`);
       }
       const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl,

@@ -21,11 +21,11 @@ const grpcExporter = (options: Record<string, unknown>) => createSpanExporter({ 
 describe("a Future AGI bound gRPC exporter uses TLS", () => {
   test("default FI target with OTEL_EXPORTER_OTLP_INSECURE=true", () => {
     process.env.OTEL_EXPORTER_OTLP_INSECURE = "true";
-    expect(channel(grpcExporter({}))).toEqual({ address: "grpc.futureagi.com:443", secure: true });
+    expect(channel(grpcExporter({}))).toEqual({ address: "grpc.futureagi.com", secure: true });
   });
   test("default FI target with OTEL_EXPORTER_OTLP_TRACES_INSECURE=true", () => {
     process.env.OTEL_EXPORTER_OTLP_TRACES_INSECURE = "true";
-    expect(channel(grpcExporter({}))).toEqual({ address: "grpc.futureagi.com:443", secure: true });
+    expect(channel(grpcExporter({}))).toEqual({ address: "grpc.futureagi.com", secure: true });
   });
   test("an http:// Future AGI target is not refused and uses TLS", () => {
     expect(channel(grpcExporter({ endpoint: "http://grpc.futureagi.com:4317" }))).toEqual({ address: "grpc.futureagi.com:4317", secure: true });
