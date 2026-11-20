@@ -252,3 +252,92 @@ def test_compressed_export_still_names_its_encoding(monkeypatch, http_sink, comp
 
     assert seen[0]["content-encoding"] == compression
     assert "x-ambient" not in seen[0]
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_future_agi_keys_are_not_sent_to_a_collector_the_user_chose(monkeypatch, http_sink, grpc_sink, transport):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    # Future AGI lives elsewhere; the environment keys are set, as for a normal Future AGI setup.
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "http://127.0.0.1:9")
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    _export_one_span(cls(endpoint=url, headers={"x-custom": "kept"}))
+
+    assert len(seen) == 1
+    assert seen[0]["x-custom"] == "kept"
+    assert "x-api-key" not in seen[0], seen[0]
+    assert "x-secret-key" not in seen[0], seen[0]
+
+
+@pytest.mark.parametrize("variable", ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"])
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_an_endpoint_named_in_the_environment_does_not_receive_future_agi_keys(
+    monkeypatch, http_sink, grpc_sink, transport, variable
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    # The environment names the user's own collector; Future AGI is elsewhere and unreachable here.
+    monkeypatch.setenv(variable, url + ("/v1/traces" if transport == "http" else ""))
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "http://127.0.0.1:9")
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    exporter = cls(timeout=1)
+    resolved = exporter._endpoint
+    _export_one_span(exporter)
+
+    # The exporter resolved the Future AGI endpoint, so the user's collector sees no request and no keys.
+    assert otel._is_future_agi_endpoint(resolved)
+    assert all("x-api-key" not in h and "x-secret-key" not in h for h in seen), seen
+    assert seen == []
+
+
+def test_an_http_exporter_of_unknown_shape_is_refused():
+    class Stub:
+        pass
+
+    with pytest.raises(otel.UnsupportedOTLPExporterError) as raised:
+        otel._pin_http_headers(Stub(), {"x-api-key": "synthetic-env-key"})
+    message = str(raised.value)
+    assert "Stub" in message and "opentelemetry-exporter-otlp-proto-http" in message
+    assert "synthetic-env-key" not in message
+
+
+def test_a_grpc_exporter_of_unknown_shape_is_refused():
+    class Stub:
+        _headers = "x-api-key=synthetic-env-key"
+
+    with pytest.raises(otel.UnsupportedOTLPExporterError) as raised:
+        otel._pin_grpc_headers(Stub(), {"x-api-key": "synthetic-env-key"})
+    assert "synthetic-env-key" not in str(raised.value)
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_an_unknown_exporter_shape_sends_nothing_to_future_agi(monkeypatch, http_sink, grpc_sink, transport):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    _set_env(monkeypatch, "both")
+    base = otel._GRPCSpanExporter if transport == "grpc" else otel._HTTPSpanExporter
+
+    def unknown_layout(self, endpoint=None, *args, **kwargs):
+        # A future release that keeps headers somewhere this SDK does not know.
+        self._endpoint = endpoint
+
+    monkeypatch.setattr(base, "__init__", unknown_layout)
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    with pytest.raises(otel.UnsupportedOTLPExporterError):
+        cls()
+    assert seen == []
+
+
+def test_a_grpc_exporter_without_keys_or_environment_headers_is_built(monkeypatch, grpc_sink):
+    url, seen = grpc_sink
+    _point_at(monkeypatch, "grpc", url)
+    monkeypatch.delenv("FI_API_KEY")
+    monkeypatch.delenv("FI_SECRET_KEY")
+
+    _export_one_span(otel.GRPCSpanExporter())
+
+    assert len(seen) == 1
+    assert "x-api-key" not in seen[0]
