@@ -128,6 +128,26 @@ class KnownSecretsEscapeTest {
         return false;
     }
 
+    /**
+     * True when index {@code at} is the letter of a JSON escape (the character right after an unescaped backslash) or one of the four hex
+     * digits of a {@code \\uXXXX} escape. Backslash parity decides whether a backslash is itself escaped.
+     */
+    private static boolean startsInsideEscape(String text, int at) {
+        if (at <= 0) return false;
+        if (unescapedBackslashAt(text, at - 1)) return true;
+        for (int back = 2; back <= 5 && at - back >= 0; back++) {
+            if (text.charAt(at - back + 1) == 'u' && unescapedBackslashAt(text, at - back)) return true;
+        }
+        return false;
+    }
+
+    private static boolean unescapedBackslashAt(String text, int index) {
+        if (text.charAt(index) != '\\') return false;
+        int run = 0;
+        for (int i = index; i >= 0 && text.charAt(i) == '\\'; i--) run++;
+        return run % 2 == 1;
+    }
+
     /** In the raw exported text, no marker is preceded by a non-empty prefix of the secret or of its JSON-escaped form. */
     private static void assertNoPrefixBeforeAMarker(String raw, String secret) {
         String escaped = KnownSecrets.jsonEscaped(secret);
@@ -135,6 +155,8 @@ class KnownSecretsEscapeTest {
             String before = raw.substring(0, at);
             for (String form : new String[] {secret, escaped}) {
                 for (int length = 1; length <= form.length(); length++) {
+                    // A match that begins at a JSON escape's own letter or hex digits is not secret text.
+                    if (before.length() >= length && startsInsideEscape(before, before.length() - length)) continue;
                     assertThat(before.endsWith(form.substring(0, length))).as("the raw text ends with the first %d characters of the secret before a marker: %s", length, raw).isFalse();
                 }
             }
@@ -205,12 +227,14 @@ class KnownSecretsEscapeTest {
         String secret = "QCAPSECRET-VALUE-9988";
         KnownSecrets.Snapshot snapshot = snapshot(secret);
         int limit = 400;
+        // cap() keeps the first limit - marker length characters, so that is where the raw cut falls.
+        int cut = limit - KnownSecrets.TRUNCATION_MARKER.length();
         for (int k = 1; k < secret.length(); k++) {
-            // The raw value's character number `limit` falls after the first k characters of the secret: every offset is inside it.
-            String value = "x".repeat(limit - k - 1) + "\n" + secret + "z".repeat(50);
+            // The kept content ends after the first k characters of the secret: every offset is inside it.
+            String value = "x".repeat(cut - k - 1) + "\n" + secret + "z".repeat(50);
             int start = value.indexOf(secret);
-            assertThat(start).as("k=%d: the cut is inside the secret", k).isLessThan(limit).isGreaterThan(limit - secret.length());
-            assertThat(limit - start).isEqualTo(k);
+            assertThat(cut - start).as("k=%d: the content cut is after exactly k characters of the secret", k).isEqualTo(k);
+            assertThat(start).as("k=%d: the cut is inside the secret", k).isLessThan(cut).isGreaterThan(cut - secret.length());
             String capped = snapshot.cap(value, limit);
             String scrubbed = snapshot.scrub(GSON.toJson(Map.of("v", capped)));
             assertSafe(scrubbed, secret);
