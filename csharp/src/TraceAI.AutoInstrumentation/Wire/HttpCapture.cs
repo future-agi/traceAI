@@ -321,7 +321,9 @@ internal sealed class Capture
             var ended=error!=null?observed:_lastByte??_headers??observed;
             if(ended<_start) ended=_start;
             if(!_enabled()) return;
-            var result=WireCore.Build(_match,_request,Response,_privacy?.HideErrorDetails==true); if(result==null) return;
+            // Raw: the known secrets are replaced below for the application's copy, from the registry as it is when the span
+            // ends, and again at export for the Future AGI copy, from the unreplaced values kept on the Activity.
+            var result=WireCore.Build(_match,_request,Response,_privacy?.HideErrorDetails==true,raw:true); if(result==null) return;
             var tags=new ActivityTagsCollection(result.Attributes.Select(p=>new KeyValuePair<string,object?>(p.Key,p.Value)));
             foreach(var (key,value) in _context) tags[key]=value;
             var hints=PrivacyCatalog.IndexHints(tags);
@@ -330,16 +332,30 @@ internal sealed class Capture
             // supplied. Apply the same hide policy before Activity creation, while
             // MIME siblings are still available and before projection drops groups.
             // Host/library spans remain untouched; export snapshots sanitize again.
-            var candidates=tags.Select(pair=> {
+            var unreplaced=tags.Select(pair=> {
                 try
                 {
                     var value=pair.Value==null?null:WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints);
-                    if(value!=null && _privacy!=null) value=_privacy.Mask(pair.Key,value,operation);
+                    if(value!=null && _privacy!=null) value=_privacy.Mask(pair.Key,value,operation,replaceSecrets:false);
                     return new KeyValuePair<string,object?>(pair.Key,value);
                 }
                 catch { return new KeyValuePair<string,object?>(pair.Key,FIInstrumentation.TraceConfig.RedactedValue); }
             }).ToArray();
-            var projected=AttributeProjection.Project(candidates,_attributeLimit);
+            // One lookup for this span: replace on each full value first, then project (cap) the replaced values.
+            string[]? secrets;
+            try { secrets=KnownSecrets.Snapshot(); } catch { secrets=null; }
+            object? Replaced(string key,object? value)
+            {
+                if(value==null) return null;
+                try
+                {
+                    return secrets==null?(value is bool or int or long or double?value:WirePrivacy.Redacted):WirePrivacy.Scrub(value,secrets,path:AutoProcessor.ScrubPath(key));
+                }
+                catch { return FIInstrumentation.TraceConfig.RedactedValue; }
+            }
+            var projected=AttributeProjection.Project(unreplaced.Select(pair=>new KeyValuePair<string,object?>(pair.Key,Replaced(pair.Key,pair.Value))).ToArray(),_attributeLimit).ToArray();
+            var name=secrets==null?"traceai.redacted":WirePrivacy.ScrubString(result.Name,secrets);
+            var description=result.Description==null||secrets==null?null:WirePrivacy.ScrubString(result.Description,secrets);
             ExecutionContext.Run(_requestContext,_=>
             {
                 // Explicitly clear ambient context so a request with no parent stays a root.
@@ -347,8 +363,10 @@ internal sealed class Capture
                 try
                 {
                     Activity.Current=null;
-                    using var activity=TraceAIAuto.Source.StartActivity(result.Name,ActivityKind.Client,_parent,projected,startTime:_start);
-                    activity?.SetStatus(result.Ok?ActivityStatusCode.Ok:ActivityStatusCode.Error,result.Description);
+                    using var activity=TraceAIAuto.Source.StartActivity(name,ActivityKind.Client,_parent,projected,startTime:_start);
+                    // The unreplaced values stay with the agent: a custom property is not read by exporters.
+                    activity?.SetCustomProperty(WireRecord.Key,new WireRecord(result.Name,result.Description,unreplaced,projected,name,description));
+                    activity?.SetStatus(result.Ok?ActivityStatusCode.Ok:ActivityStatusCode.Error,description);
                     activity?.SetEndTime(ended.UtcDateTime);
                 }
                 finally { Activity.Current=ambient; }

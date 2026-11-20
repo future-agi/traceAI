@@ -664,7 +664,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         foreach(var activity in batch) activities.Add(activity);
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
-        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation);
+        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation,replaceSecrets:false);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
         return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails,
             sampled:_sampler==null?null:_sampler.Export,samplingMetadata:_sampler==null?null:_sampler.ApplyMetadata);
@@ -684,7 +684,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
         return ExportSnapshot.SanitizeResource(resource,
-            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key))),
+            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),replaceSecrets:false),
             text=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets));
     }
     private static string EventKey(string name,string key) => name switch {
@@ -697,7 +697,9 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     /// values are still removed from its value.</summary>
     internal const string SessionKey="session.id";
     internal static string ScrubPath(string key)=>key==SessionKey?"":key;
-    internal object? Mask(string key,object value,string? operation=null)
+    /// <summary>Applies the hide policy to a value. Known secrets are replaced here too, unless <paramref name="replaceSecrets"/> is false: a
+    /// caller that replaces them itself, once, from one snapshot (export, and the wire span's application copy) passes false.</summary>
+    internal object? Mask(string key,object value,string? operation=null,bool replaceSecrets=true)
     {
         if(key!=SessionKey && (WirePrivacy.CredentialKey(key)||IsSensitiveKey(key))) return TraceConfig.RedactedValue;
         bool tool=key.StartsWith("gen_ai.tool.",StringComparison.Ordinal);
@@ -732,13 +734,13 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         value=WirePrivacy.Scrub(value,path:ScrubPath(key));
         if(value is string str)
         {
-            str=_config.RedactSecrets(str);
+            if(replaceSecrets) str=_config.RedactSecrets(str);
             if(_mask.HideInputImages && WireCore.Parse(System.Text.Encoding.UTF8.GetBytes(str)) is System.Text.Json.Nodes.JsonNode node && node is System.Text.Json.Nodes.JsonObject or System.Text.Json.Nodes.JsonArray)
             { HideImages(node); str=WireCore.J(node); }
             return str;
         }
-        if(value is string[] strings) return strings.Select(item=>item==null?null:(string?)Mask(key,item,operation)).ToArray();
-        if(value is object[] objects) return objects.Select(item=>item==null?null:Mask(key,item,operation)).ToArray();
+        if(value is string[] strings) return strings.Select(item=>item==null?null:(string?)Mask(key,item,operation,replaceSecrets)).ToArray();
+        if(value is object[] objects) return objects.Select(item=>item==null?null:Mask(key,item,operation,replaceSecrets)).ToArray();
         return value;
     }
     private static bool IsSensitiveKey(string key)

@@ -694,11 +694,14 @@ internal static class WireCore
             for(int k=0;k<m.Calls.Count;k++) { var c=m.Calls[k]; var ck=$"{key}.tool_calls.{k}.tool_call"; Put(attrs,ck+".id",c.Id); Put(attrs,ck+".function.name",c.Name); Put(attrs,ck+".function.arguments",c.Arguments); }
         }
     }
-    internal static SpanResult? Build(WireMatch m,RequestData req,ResponseData resp,bool hideErrorDetails=false)
+    /// <summary>Builds the span's name, attributes and status description. With <paramref name="raw"/> the known secrets are not
+    /// replaced (the caller replaces them, once, from the registry at the moment each copy is made); every other privacy rule
+    /// applies, and content is still dropped when the registry is unavailable.</summary>
+    internal static SpanResult? Build(WireMatch m,RequestData req,ResponseData resp,bool hideErrorDetails=false,bool raw=false)
     {
-        try { return BuildInternal(m,req,resp,hideErrorDetails); } catch { return null; }
+        try { return BuildInternal(m,req,resp,hideErrorDetails,raw); } catch { return null; }
     }
-    private static SpanResult? BuildInternal(WireMatch m,RequestData req,ResponseData resp,bool hideErrorDetails)
+    private static SpanResult? BuildInternal(WireMatch m,RequestData req,ResponseData resp,bool hideErrorDetails,bool raw)
     {
         var p=Check(m,req); if(p==null) return null;
         var body=Decode(resp,S(m.Endpoint["format"])!); bool ok=resp.Error==null&&(resp.Status??0)<400;
@@ -757,9 +760,10 @@ internal static class WireCore
             if(dropped>0) a[AttributeProjection.DroppedContent]=dropped;
             description=null;
         }
+        var replace=raw?null:secrets;
         foreach(var (key,value) in a.ToArray()) a[key]=secrets==null?
-            (value is bool or int or long or double?value:WirePrivacy.Redacted):WirePrivacy.Scrub(value,secrets,path:key);
+            (value is bool or int or long or double?value:WirePrivacy.Redacted):WirePrivacy.Scrub(value,replace,path:key);
         var model=p.Model??p.ResponseModel;
-        return new(secrets==null?"traceai.redacted":WirePrivacy.ScrubString(model!=null?$"{operation} {model}":operation,secrets),a,ok,description==null?null:WirePrivacy.ScrubString(description,secrets));
+        return new(secrets==null?"traceai.redacted":WirePrivacy.ScrubString(model!=null?$"{operation} {model}":operation,replace),a,ok,description==null?null:WirePrivacy.ScrubString(description,replace));
     }
 }

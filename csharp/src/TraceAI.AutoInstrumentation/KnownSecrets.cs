@@ -74,7 +74,8 @@ internal static class KnownSecrets
         State[4]=true;
         TraceAIAuto.Warn("secrets-failed","Credential redaction is unavailable; exported spans keep identity and timing but no content for the rest of this process.");
     }
-    // One lookup per export batch, never per span start or attribute. Returned arrays
+    // One lookup per export batch, and one for each wire span the agent ends (its application copy); never per span start
+    // or attribute. Returned arrays
     // are immutable; mutation/eviction publishes a new snapshot on the next export.
     internal static string[] Snapshot()
     { lock(State[0]) return ReadSnapshot(); }

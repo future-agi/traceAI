@@ -230,10 +230,40 @@ internal static class PrivacyCatalog
                 return UrlValue(original)+quote;
             });
         }
-        foreach(string secret in (secrets??[]).Where(s=>s.Length>=8&&s!=Redacted).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length).ThenBy(s=>s,StringComparer.Ordinal))
-            value=string.Join(Redacted,value.Split(Redacted,StringSplitOptions.None).Select(part=>part.Replace(secret,Redacted,StringComparison.Ordinal)));
+        value=ReplaceSecrets(value,secrets);
         foreach(var shape in ValueShapes) value=shape.Replace(value,Redacted);
         return value;
+    }
+    /// <summary>Replaces every occurrence of every known secret (eight or more characters). Occurrences that overlap or contain
+    /// one another, including secrets that overlap only at their edges, are replaced as one span, so no part of either secret
+    /// remains. Text already replaced is left as it is and no secret matches across a placeholder.</summary>
+    internal static string ReplaceSecrets(string value,IEnumerable<string>? secrets)
+    {
+        if(secrets==null||value.Length<8) return value;
+        // A registry snapshot is an immutable array shared by every value of an export batch: prepare it once, not per value.
+        var known=secrets is string[] snapshot?Prepared.GetValue(snapshot,Prepare):Prepare(secrets.ToArray());
+        if(known.Length==0) return value;
+        return string.Join(Redacted,value.Split(Redacted,StringSplitOptions.None).Select(part=>ReplaceInPart(part,known)));
+    }
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<string[],string[]> Prepared=new();
+    private static string[] Prepare(string[] secrets)=>secrets.Where(s=>s.Length>=8&&s!=Redacted).Distinct(StringComparer.Ordinal).ToArray();
+    private static string ReplaceInPart(string part,string[] known)
+    {
+        List<(int Start,int End)>? spans=null;
+        foreach(var secret in known)
+            for(int at=part.IndexOf(secret,StringComparison.Ordinal);at>=0;at=at+1<part.Length?part.IndexOf(secret,at+1,StringComparison.Ordinal):-1)
+                (spans??=[]).Add((at,at+secret.Length));
+        if(spans==null) return part;
+        spans.Sort((a,b)=>a.Start!=b.Start?a.Start.CompareTo(b.Start):b.End.CompareTo(a.End));
+        var result=new System.Text.StringBuilder(part.Length);
+        int copied=0,start=spans[0].Start,end=spans[0].End;
+        for(int i=1;i<=spans.Count;i++)
+        {
+            if(i<spans.Count&&spans[i].Start<end) { end=Math.Max(end,spans[i].End); continue; }
+            result.Append(part,copied,start-copied).Append(Redacted); copied=end;
+            if(i<spans.Count) { start=spans[i].Start; end=spans[i].End; }
+        }
+        return result.Append(part,copied,part.Length-copied).ToString();
     }
     internal sealed class Budget
     {

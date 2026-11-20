@@ -354,9 +354,15 @@ the variable, never its value.
 `TraceAIAuto.RegisterSecret(value)` lets an integration register additional values;
 shorter values are ignored. If the registry itself must fail closed (for example an
 overlong registered value), the agent says so once on standard error and exports
-spans with identity and timing but no content for the rest of the process. The export boundary takes one immutable, longest-first
-snapshot per batch and replaces these values in every exported string, including
-unrelated and later spans. There is no per-request secret set, span-start inheritance
+spans with identity and timing but no content for the rest of the process.
+Replacement works on the whole value, then any length cap applies to the replaced text, so a cap never cuts a secret in two.
+Values that contain or overlap known secrets, including two secrets that overlap only at their edges, are replaced as one span, so
+no part of any of them remains. The Future AGI copy is replaced at export: the export boundary takes one immutable
+snapshot per batch, at export, and replaces these values in every exported string, including unrelated and later spans, so a
+secret learned after a span was captured is still replaced. For the HTTP model-call spans the agent itself creates, the agent
+keeps the unreplaced values in a custom property, which exporters do not read, and the application's own providers, listeners and
+exporters see the same values replaced once, from the registry as it is when the span ends (a secret learned after that is
+not known to them). There is no per-request secret set, span-start inheritance
 or ancestor credential propagation. Registry values never appear in diagnostics.
 
 The HttpClient observer always collects credentials, before sampling, model-span

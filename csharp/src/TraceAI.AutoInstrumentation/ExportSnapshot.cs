@@ -15,6 +15,30 @@ namespace TraceAI.AutoInstrumentation;
 /// Field access is deliberately limited to the supported DiagnosticSource 8–10
 /// layout. A missing field fails closed, never falls back to the shared activity.
 /// </summary>
+/// <summary>What the agent put on a span it created, kept in a custom property (exporters do not read it): the unreplaced name,
+/// status description and attributes, beside what the application's copy was given. The Future AGI copy is replaced at export
+/// from the unreplaced values, except for anything a later processor changed on the shared Activity: that is exported from the
+/// Activity as it is, and sanitized like any other host value.</summary>
+internal sealed class WireRecord(string name,string? description,KeyValuePair<string,object?>[] unreplaced,IEnumerable<KeyValuePair<string,object?>> applied,string appliedName,string? appliedDescription)
+{
+    internal const string Key="traceai.wire.unreplaced";
+    private readonly Dictionary<string,object?> _unreplaced=unreplaced.ToDictionary(pair=>pair.Key,pair=>pair.Value);
+    private readonly Dictionary<string,object?> _applied=applied.ToDictionary(pair=>pair.Key,pair=>pair.Value);
+    internal string Name(Activity current)=>current.DisplayName==appliedName?name:current.DisplayName;
+    internal string? Description(Activity current)=>current.StatusDescription==appliedDescription?description:current.StatusDescription;
+    /// <summary>The Activity's tags with the unreplaced value in place of each one the agent set and nobody changed.</summary>
+    internal IEnumerable<KeyValuePair<string,object?>> Tags(Activity current)
+    {
+        foreach(var tag in current.TagObjects)
+            yield return _applied.TryGetValue(tag.Key,out var applied)&&Same(applied,tag.Value)&&_unreplaced.TryGetValue(tag.Key,out var kept)?new(tag.Key,kept):tag;
+    }
+    private static bool Same(object? a,object? b)
+    {
+        if(Equals(a,b)) return true;
+        return a is Array x&&b is Array y&&x.Length==y.Length&&x.Cast<object?>().Zip(y.Cast<object?>(),Equals).All(same=>same);
+    }
+}
+
 internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
 {
     internal Activity[] Spans { get; }=spans;
@@ -147,16 +171,17 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
             try
             {
                 var budget=new Budget(shared:shared);
+                var unreplaced=original.GetCustomProperty(WireRecord.Key) as WireRecord;
                 var operation=original.GetTagItem("gen_ai.operation.name") as string;
                 Set(copy,"<Source>k__BackingField",Scope(original.Source,budget,safe,redact));
                 Set(copy,"_traceState",original.TraceStateString==null?null:budget.Text(original.TraceStateString,redact));
-                copy.DisplayName=budget.Text(original.DisplayName,redact);
+                copy.DisplayName=budget.Text(unreplaced?.Name(original)??original.DisplayName,redact);
                 Set(copy,"<OperationName>k__BackingField",budget.Text(original.OperationName,redact));
                 // Hidden error details keep the status code but never its description.
                 copy.SetStatus(original.Status==ActivityStatusCode.Unset?ActivityStatusCode.Ok:original.Status,
-                    hideErrorDetails||original.StatusDescription==null?null:budget.Text(original.StatusDescription,redact));
+                    hideErrorDetails||(unreplaced==null?original.StatusDescription:unreplaced.Description(original))==null?null:budget.Text((unreplaced==null?original.StatusDescription:unreplaced.Description(original))!,redact));
                 var startContext=original.GetCustomProperty(AutoProcessor.ContextProperty) as KeyValuePair<string,string>[];
-                foreach(var tag in Tags(WithContext(original.TagObjects,startContext),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
+                foreach(var tag in Tags(WithContext(unreplaced?.Tags(original)??original.TagObjects,startContext),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
                 foreach(var item in original.Events)
                 {
                     budget.Node();
@@ -196,10 +221,10 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 RuntimeLayout.Field(typeof(ActivitySource),"<TelemetrySchemaUrl>k__BackingField")?.SetValue(source,null);
                 Set(copy,"<Source>k__BackingField",source); Set(copy,"_traceState",null);
                 string Text(string text) { try { return redact(text); } catch { return "traceai.redacted"; } }
-                copy.DisplayName=Text(original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(original.OperationName)); copy.SetStatus(original.Status);
+                copy.DisplayName=Text(original.GetCustomProperty(WireRecord.Key) is WireRecord named?named.Name(original):original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(original.OperationName)); copy.SetStatus(original.Status);
                 var retained=new ActivityTagsCollection();
                 var operation=original.GetTagItem("gen_ai.operation.name") as string;
-                var originalTags=original.TagObjects.Take(PrivacyCatalog.MaxNodes+1).ToArray();
+                var originalTags=(original.GetCustomProperty(WireRecord.Key) is WireRecord kept?kept.Tags(original):original.TagObjects).Take(PrivacyCatalog.MaxNodes+1).ToArray();
                 Dictionary<string,PrivacyCatalog.Hint>? hints;
                 try { hints=originalTags.Length<=PrivacyCatalog.MaxNodes?PrivacyCatalog.IndexHints(originalTags):null; } catch { hints=null; }
                 foreach(var tag in originalTags.Where(tag=>AttributeProjection.Protected(tag.Key)))
