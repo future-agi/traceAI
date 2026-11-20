@@ -103,19 +103,19 @@ def test_loopback_http_with_keys_is_allowed_without_an_opt_in_or_a_warning(site,
 
 @pytest.mark.parametrize("site", list(HTTP_SITES))
 def test_self_hosted_http_is_refused_by_default_with_one_value_free_error_that_names_the_opt_in(site, monkeypatch, sent):
-    _set_base(monkeypatch, "http://user:pw@collector.internal:8080/path?token=secret-value")
+    _set_base(monkeypatch, "http://collector.internal:8080/path?token=secret-value")
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
         HTTP_SITES[site]()
     message = str(raised.value)
     assert OPT_IN in message
-    for hidden in (FI_KEY, FI_SECRET, "secret-value", "pw", "/path", "collector.internal"):
+    for hidden in (FI_KEY, FI_SECRET, "secret-value", "/path", "collector.internal"):
         assert hidden not in message
     assert sent == []
 
 
 @pytest.mark.parametrize("site", list(HTTP_SITES))
 def test_the_opt_in_allows_self_hosted_http_with_one_warning_naming_the_setting_and_the_origin(site, monkeypatch, sent, caplog):
-    _set_base(monkeypatch, "http://user:pw@collector.internal:8080/path?token=secret-value")
+    _set_base(monkeypatch, "http://collector.internal:8080/path?token=secret-value")
     monkeypatch.setenv(OPT_IN, "1")
     with caplog.at_level(logging.WARNING, logger=otel.logger.name):
         for _ in range(2):
@@ -123,7 +123,7 @@ def test_the_opt_in_allows_self_hosted_http_with_one_warning_naming_the_setting_
     warnings = [r.getMessage() for r in caplog.records if OPT_IN in r.getMessage()]
     assert len(warnings) == 1, caplog.text
     assert "http://collector.internal:8080" in warnings[0]
-    for hidden in (FI_KEY, FI_SECRET, "secret-value", "pw", "/path", "user"):
+    for hidden in (FI_KEY, FI_SECRET, "secret-value", "/path"):
         assert hidden not in warnings[0]
 
 

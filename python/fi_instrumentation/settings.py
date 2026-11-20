@@ -117,7 +117,7 @@ class UuidIdGenerator(IdGenerator):
 
 
 def get_custom_eval_template(
-    eval_name: str, base_url: Optional[str] = None
+    eval_name: str, base_url: Optional[str] = None, allow_insecure_http: bool = False
 ) -> Dict[str, Any]:
     """
     Check if a custom eval template exists for a given eval name.
@@ -131,7 +131,7 @@ def get_custom_eval_template(
     url = f"{base_url}/tracer/custom-eval-config/get_custom_eval_by_name/"
     from fi_instrumentation.otel import _guard_future_agi_request
 
-    send_keys = _guard_future_agi_request(url)
+    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http)
 
     try:
         headers = {

@@ -215,26 +215,12 @@ def fresh_warnings(monkeypatch):
         warned.clear()
 
 
-def test_a_self_hosted_http_base_url_on_another_host_is_allowed_with_one_warning(monkeypatch, caplog, fresh_warnings):
-    monkeypatch.setenv("FI_BASE_URL", "http://collector.internal:8080/path?token=secret-value")
-    with caplog.at_level(logging.WARNING, logger=otel.logger.name):
-        for _ in range(2):
-            exporter = otel.HTTPSpanExporter(timeout=2)
-            assert "x-api-key" in _sent_headers(exporter)
-            exporter.shutdown()
-    warnings = [r.getMessage() for r in caplog.records if "FI_BASE_URL" in r.getMessage()]
-    assert len(warnings) == 1, caplog.text
-    assert "http://collector.internal:8080" in warnings[0]
-    for hidden in (FI_KEY, FI_SECRET, "secret-value", "/path"):
-        assert hidden not in warnings[0]
-
-
 @pytest.mark.parametrize("base", ["http://127.0.0.1:4318", "http://localhost:4318", "http://[::1]:4318", "https://self-hosted.example"])
 def test_no_plain_text_warning_for_loopback_or_https(monkeypatch, caplog, fresh_warnings, base):
     monkeypatch.setenv("FI_BASE_URL", base)
     with caplog.at_level(logging.WARNING, logger=otel.logger.name):
         otel.HTTPSpanExporter(timeout=2).shutdown()
-    assert not [r for r in caplog.records if "FI_BASE_URL" in r.getMessage()], caplog.text
+    assert not [r for r in caplog.records if "FI_ALLOW_INSECURE_HTTP" in r.getMessage()], caplog.text
 
 
 def test_a_grpc_refusal_after_the_channel_is_built_closes_the_channel(monkeypatch):

@@ -914,20 +914,21 @@ def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers:
     return decision
 
 
-def _guard_future_agi_request(url: str, named: bool = False) -> bool:
+def _guard_future_agi_request(url: str, named: bool = False, allow: bool = False, session: Any = None) -> bool:
     """True when Future AGI keys may be attached to an HTTP request to ``url``.
 
     The endpoint rules of the exporters apply before any request: a Future AGI host reached over http, or in a form that
     cannot be verified, raises UnsupportedFutureAGIEndpointError (which names FI_BASE_URL) when Future AGI credentials are
     set. ``named`` marks a URL the user configured as their Future AGI base, which is then treated as self-hosted when
-    it is not a futureagi.com host. A plain-text self-hosted base logs one warning per process.
+    it is not a futureagi.com host. A plain http base on a host other than loopback is refused unless it is opted in
+    (see ``_authorize_plain_text``).
     """
     decision = _check_future_agi_endpoint(url, False)
     if decision == "other" and named and _http_origin(url) is not None:
         decision = "fi"
     if decision != "fi":
         return False
-    _warn_plain_text_once(url)
+    _authorize_http_endpoint(url, allow, session)
     return True
 
 
@@ -1121,24 +1122,56 @@ def _force_tls_for_future_agi(endpoint: str | None, insecure: Any) -> bool:
 
 
 _PLAIN_TEXT_WARNED: set[str] = set()
+_ALLOW_INSECURE_HTTP = "FI_ALLOW_INSECURE_HTTP"
 
 
-def _warn_plain_text_once(endpoint: str | None) -> None:
-    """One log warning per process when Future AGI credentials go over http to a host other than loopback.
+def _proxy_applies(host: str, port: int, session: Any = None) -> bool:
+    """True when a request to ``host:port`` would go through a proxy: ``HTTP_PROXY``, ``HTTPS_PROXY`` or ``ALL_PROXY``
+    (upper or lower case, skipped for hosts ``NO_PROXY`` lists), or the proxies of the caller's session."""
+    from requests.utils import get_environ_proxies, select_proxy
 
-    It names FI_BASE_URL and the origin (scheme, host and port) and no path, query, userinfo or key.
+    for scheme in ("http", "https"):
+        url = f"{scheme}://{host}:{port}"
+        if select_proxy(url, get_environ_proxies(url)) or (session is not None and select_proxy(url, getattr(session, "proxies", {}))):
+            return True
+    return False
+
+
+def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None) -> None:
+    """Allow Future AGI keys on a plain (not TLS) channel to ``host:port``, or raise UnsupportedFutureAGIEndpointError.
+
+    Loopback needs no opt-in. Any other host needs ``FI_ALLOW_INSECURE_HTTP=1`` or the ``allow_insecure_http`` option;
+    the opt-in does not apply when the request would go through a proxy. An allowed channel logs one warning per
+    process that names the setting and the origin (scheme, host and port), and no userinfo, path, query or key.
     """
-    origin = _http_origin(endpoint)
-    if origin is None or origin[0] != "http" or _is_loopback_host(origin[1]) or _PLAIN_TEXT_WARNED:
+    if _is_loopback_host(host):
         return
-    _PLAIN_TEXT_WARNED.add(f"{origin[0]}://{origin[1]}:{origin[2]}")
+    if not (allow or os.environ.get(_ALLOW_INSECURE_HTTP) == "1"):
+        raise UnsupportedFutureAGIEndpointError(
+            "Future AGI keys are not sent over a plain channel to a host other than loopback. Use https (or TLS), or set "
+            f"{_ALLOW_INSECURE_HTTP}=1 (or the allow_insecure_http option) to allow it for your own self-hosted collector."
+        )
+    if _proxy_applies(host, port, session):
+        raise UnsupportedFutureAGIEndpointError(
+            f"{_ALLOW_INSECURE_HTTP} does not apply when the request goes through a proxy (HTTP_PROXY, HTTPS_PROXY or "
+            "ALL_PROXY, unless NO_PROXY lists the host). Use https (or TLS), or remove the proxy for this host."
+        )
+    if _PLAIN_TEXT_WARNED:
+        return
+    _PLAIN_TEXT_WARNED.add(f"{host}:{port}")
     logger.warning(
-        "Future AGI credentials are sent over http to %s://%s:%s, the endpoint named by FI_BASE_URL (or FI_TRACES_URL). "
-        "Use an https URL to send them over TLS.",
-        origin[0],
-        origin[1],
-        origin[2],
+        "Future AGI keys are sent over a plain channel to http://%s:%s, allowed by %s. Use https (or TLS) to send them over TLS.",
+        host,
+        port,
+        _ALLOW_INSECURE_HTTP,
     )
+
+
+def _authorize_http_endpoint(endpoint: str | None, allow: bool = False, session: Any = None) -> None:
+    """The plain-channel rule for an HTTP endpoint that carries Future AGI keys (see ``_authorize_plain_text``)."""
+    origin = _http_origin(endpoint)
+    if origin is not None and origin[0] == "http":
+        _authorize_plain_text(origin[1], origin[2], allow, session)
 
 
 def _close_after_refusal(exporter: Any, base: Any) -> None:
@@ -1223,9 +1256,12 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         headers: Headers to send when exporting. For a Future AGI endpoint, the
             `FI_API_KEY` and `FI_SECRET_KEY` environment variables are added when no
             credential header is given.
+        allow_insecure_http (bool): Allow Future AGI keys over plain http to a self-hosted host other than
+            loopback, like ``FI_ALLOW_INSECURE_HTTP=1``. It does not apply to a Future AGI host, or when the
+            request goes through a proxy.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args: Any, allow_insecure_http: bool = False, **kwargs: Any):
         bound_args = _get_class_signature(_HTTPSpanExporter, "http").bind_partial(*args, **kwargs)
         caller_headers = _materialize_headers(bound_args.arguments.get("headers"))
         if "headers" in bound_args.arguments:
@@ -1237,7 +1273,8 @@ class HTTPSpanExporter(_HTTPSpanExporter):
 
         # Built once, with the caller's own arguments: nothing Future AGI specific reaches the
         # session or the headers a caller supplied until the resolved endpoint is known.
-        _check_future_agi_endpoint(bound_args.arguments["endpoint"], False, caller_headers)
+        if _check_future_agi_endpoint(bound_args.arguments["endpoint"], False, caller_headers) == "fi":
+            _authorize_http_endpoint(bound_args.arguments["endpoint"], allow_insecure_http, bound_args.arguments.get("session"))
         super().__init__(*bound_args.args, **bound_args.kwargs)
         try:
             resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), False, caller_headers)
@@ -1245,7 +1282,6 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             _close_after_refusal(self, _HTTPSpanExporter)
             raise
         if resolved == "fi":
-            _warn_plain_text_once(self._endpoint)
             _pin_http_headers(
                 self,
                 _with_fi_auth_headers(caller_headers, add_env_keys=True),
@@ -1364,7 +1400,11 @@ def _get_class_signature(fn: Type[Any], kind: str | None = None) -> inspect.Sign
 
 
 def check_custom_eval_config_exists(
-    project_name: str, eval_tags: list, project_type: str = ProjectType.EXPERIMENT.value, base_url: Optional[str] = None
+    project_name: str,
+    eval_tags: list,
+    project_type: str = ProjectType.EXPERIMENT.value,
+    base_url: Optional[str] = None,
+    allow_insecure_http: bool = False,
 ) -> bool:
     """
     Check if a custom eval config exists for a given project.
@@ -1376,7 +1416,7 @@ def check_custom_eval_config_exists(
         base_url = get_env_collector_endpoint()
 
     url = f"{base_url}/tracer/custom-eval-config/check_exists/"
-    send_keys = _guard_future_agi_request(url)
+    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http)
 
     try:
         headers = {
