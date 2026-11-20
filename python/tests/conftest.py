@@ -60,6 +60,7 @@ def clean_env():
 def mock_requests():
     """Mock requests module for HTTP calls."""
     with patch('requests.post') as mock_post, \
+         patch('requests.Session.post', new=mock_post), \
          patch('requests.get') as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"result": {"isUserEvalTemplate": False, "evalTemplate": {}}}
@@ -100,7 +101,9 @@ def set_env_vars(sample_env_vars):
 def mock_eval_config_check():
     """Auto-mock eval config checks to avoid HTTP calls."""
     with patch('fi_instrumentation.otel.check_custom_eval_config_exists') as mock_check, \
+         patch('fi_instrumentation.fi_types.get_custom_eval_template') as mock_fi_types_template, \
          patch('fi_instrumentation.settings.get_custom_eval_template') as mock_template:
+        mock_fi_types_template.return_value = {"isUserEvalTemplate": False, "evalTemplate": {}}
         mock_check.return_value = False
         mock_template.return_value = {"isUserEvalTemplate": False, "evalTemplate": {}}
         yield {
