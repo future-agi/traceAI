@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -231,7 +232,7 @@ func (t *moduleTracer) Start(ctx context.Context, spanName string, opts ...trace
 	}
 	ctx, span := s.provider.Tracer(t.name, t.opts...).Start(ctx, m.text(rawName), masked...)
 	// The context carries the masked span too, so a module that reads the span back from it writes through the same rules.
-	ms := &maskedSpan{Span: span, m: m, reg: s.registration}
+	ms := &maskedSpan{Span: span, m: m, reg: s.registration, caps: readSpanCaps(s.provider)}
 	ms.keep(raw, written, &rawName)
 	for _, l := range cfg.Links() {
 		ms.addLink(trace.Link{SpanContext: l.SpanContext, Attributes: l.Attributes})
@@ -331,9 +332,47 @@ func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attr
 // overlapping one was seen still matches as a whole. A span that never ends keeps its record until shutdown.
 type maskedSpan struct {
 	trace.Span
-	m   moduleMask
-	reg *processorRegistration
+	m    moduleMask
+	reg  *processorRegistration
+	caps spanCaps
 }
+
+// spanCaps are the application provider's limits that decide what the SDK keeps of a span: the attribute value length
+// (runes), and the event and link counts (-1: unlimited, or not readable, in which case nothing is bounded).
+type spanCaps struct{ value, events, links int }
+
+func readSpanCaps(provider *sdktrace.TracerProvider) spanCaps {
+	caps := spanCaps{value: spanLimit(reflect.ValueOf(provider).Elem(), "AttributeValueLengthLimit"), events: -1, links: -1}
+	if n, ok := spanLimitIfReadable(provider, "EventCountLimit"); ok {
+		caps.events = n
+	}
+	if n, ok := spanLimitIfReadable(provider, "LinkCountLimit"); ok {
+		caps.links = n
+	}
+	return caps
+}
+
+// exceeds reports whether the SDK would cut this value to the attribute value-length limit.
+func (c spanCaps) exceeds(v attribute.Value) bool {
+	if c.value < 0 {
+		return false
+	}
+	switch v.Type() {
+	case attribute.STRING:
+		return utf8.RuneCountInString(v.AsString()) > c.value
+	case attribute.STRINGSLICE:
+		for _, item := range v.AsStringSlice() {
+			if utf8.RuneCountInString(item) > c.value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// maxBufferedStack bounds a stack trace held in the record. Secrets are replaced in it before it is cut to maxStackTrace, so
+// the bound only has to leave room for a secret that straddles that cut.
+const maxBufferedStack = 64 << 10
 
 // keep records raw attribute values (those the replacement changed, and the name when not nil) in the span's record.
 func (s *maskedSpan) keep(raw, written []attribute.KeyValue, name *string) {
@@ -342,7 +381,8 @@ func (s *maskedSpan) keep(raw, written []attribute.KeyValue, name *string) {
 			r.raw = map[attribute.Key]attribute.Value{}
 		}
 		for i, kv := range raw {
-			if kv.Value.Emit() != written[i].Value.Emit() {
+			// A value the SDK would cut to the length limit is kept whole too: a secret learned after the write may straddle the cut.
+			if kv.Value.Emit() != written[i].Value.Emit() || s.caps.exceeds(kv.Value) {
 				r.raw[kv.Key] = kv.Value
 			} else {
 				delete(r.raw, kv.Key)
@@ -371,7 +411,20 @@ func (s *maskedSpan) addEvent(name string, kvs []attribute.KeyValue, at time.Tim
 		at = time.Now()
 	}
 	rawName, raw := s.m.event(name, kvs)
-	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) { r.events = append(r.events, rawEvent{name: rawName, attrs: raw, time: at}) })
+	for i, kv := range raw {
+		if kv.Key == "exception.stacktrace" && kv.Value.Type() == attribute.STRING {
+			raw = append([]attribute.KeyValue(nil), raw...)
+			raw[i].Value = attribute.StringValue(capStackTo(kv.Value.AsString(), maxBufferedStack))
+		}
+	}
+	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
+		r.events = append(r.events, rawEvent{name: rawName, attrs: raw, time: at})
+		// Like the SDK's queue: past the count limit the oldest event goes.
+		if over := len(r.events) - s.caps.events; s.caps.events >= 0 && over > 0 {
+			r.events = append([]rawEvent(nil), r.events[over:]...)
+			r.eventsDropped += over
+		}
+	})
 }
 
 // RecordError writes the exception event the SDK writes: exception.type, exception.message and, when asked,
@@ -433,8 +486,18 @@ func (s *maskedSpan) SetName(name string) {
 func (s *maskedSpan) AddLink(link trace.Link) { s.addLink(link) }
 
 func (s *maskedSpan) addLink(link trace.Link) {
+	// The SDK refuses a link that is invalid, has no attributes and no trace state.
+	if !link.SpanContext.IsValid() && len(link.Attributes) == 0 && link.SpanContext.TraceState().Len() == 0 {
+		return
+	}
 	raw := s.m.captured(link.Attributes)
-	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) { r.links = append(r.links, rawLink{sc: link.SpanContext, attrs: raw}) })
+	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
+		r.links = append(r.links, rawLink{sc: link.SpanContext, attrs: raw})
+		if over := len(r.links) - s.caps.links; s.caps.links >= 0 && over > 0 {
+			r.links = append([]rawLink(nil), r.links[over:]...)
+			r.linksDropped += over
+		}
+	})
 }
 
 // End replaces the credentials known by now in what the span carries, adds its events and links, and ends it.
@@ -463,6 +526,13 @@ func (s *maskedSpan) End(opts ...trace.SpanEndOption) {
 				s.Span.SetName(rep)
 			}
 		}
+		// What the buffer let go of is counted by the SDK as it would have been: placeholders, all evicted by what follows.
+		for i := 0; i < raw.linksDropped; i++ {
+			s.Span.AddLink(trace.Link{Attributes: []attribute.KeyValue{attribute.Bool("dropped", true)}})
+		}
+		for i := 0; i < raw.eventsDropped; i++ {
+			s.Span.AddEvent("")
+		}
 		for _, l := range raw.links {
 			s.Span.AddLink(trace.Link{SpanContext: l.sc, Attributes: s.m.replaced(l.attrs)})
 		}
@@ -477,6 +547,18 @@ func (s *maskedSpan) End(opts ...trace.SpanEndOption) {
 		}
 		if raw.status != nil {
 			s.Span.SetStatus(raw.status.code, s.m.text(raw.status.description))
+		}
+		// Restoration is 1:1: the record keeps exactly the newest events and links the SDK kept.
+		if current, ok := s.Span.(sdktrace.ReadOnlySpan); ok {
+			keptEvents, keptLinks := len(current.Events()), len(current.Links())
+			s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
+				if keptEvents < len(r.events) {
+					r.events = r.events[len(r.events)-keptEvents:]
+				}
+				if keptLinks < len(r.links) {
+					r.links = r.links[len(r.links)-keptLinks:]
+				}
+			})
 		}
 	}
 	s.Span.End(opts...)

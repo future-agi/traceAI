@@ -45,7 +45,10 @@ type spanRecord struct {
 	rawName *string
 	events  []rawEvent
 	links   []rawLink
-	status  *rawStatus
+	// Events and links the buffer let go of because the provider's count limit would drop them (the oldest first, as
+	// the SDK does); the span gets that many placeholders when it ends so its dropped counts stay the SDK's.
+	eventsDropped, linksDropped int
+	status                      *rawStatus
 }
 
 // Live dedup ancestry is process-local and removed at OnEnd. Credentials are
@@ -162,6 +165,7 @@ func (p *processorRegistration) rawSnapshot(span trace.SpanContext) (out rawSpan
 		out.events = append([]rawEvent(nil), r.events...)
 		out.links = append([]rawLink(nil), r.links...)
 		out.status = r.status
+		out.eventsDropped, out.linksDropped = r.eventsDropped, r.linksDropped
 	})
 	return out
 }
@@ -196,6 +200,8 @@ type rawSpan struct {
 	events []rawEvent
 	links  []rawLink
 	status *rawStatus
+	// What the record let go of past the provider's count limits (see spanRecord).
+	eventsDropped, linksDropped int
 }
 
 func (s rawSpan) with(span sdktrace.ReadOnlySpan) rawSpan { s.ReadOnlySpan = span; return s }
@@ -219,13 +225,40 @@ func (s rawSpan) Name() string {
 	return s.ReadOnlySpan.Name()
 }
 
-// Events are the module's, in the order they were added when the span ended.
+// restoreAttributes puts the value the module wrote on each attribute the SDK kept (it applies its own per-event and per-link
+// limits and keeps the last of duplicate keys): by key, so what is kept is the SDK's and what it holds is the raw value.
+func restoreAttributes(kept, raw []attribute.KeyValue) []attribute.KeyValue {
+	written := map[attribute.Key][]attribute.Value{}
+	for _, kv := range raw {
+		written[kv.Key] = append(written[kv.Key], kv.Value)
+	}
+	keptCount := map[attribute.Key]int{}
+	for _, kv := range kept {
+		keptCount[kv.Key]++
+	}
+	seen := map[attribute.Key]int{}
+	out := make([]attribute.KeyValue, len(kept))
+	for i, kv := range kept {
+		if values := written[kv.Key]; len(values) > 0 {
+			// The n-th kept entry of a key is the n-th written one; when the SDK kept fewer of a key than were written (it keeps
+			// the last of duplicates), the kept ones are the last written ones.
+			n := seen[kv.Key] + max(len(values)-keptCount[kv.Key], 0)
+			kv.Value = values[min(n, len(values)-1)]
+		}
+		seen[kv.Key]++
+		out[i] = kv
+	}
+	return out
+}
+
+// Events are the module's, in the order they were added when the span ended. When the span ended the record was trimmed to
+// exactly the events the SDK kept (see maskedSpan.End), so entry i of the record is entry i of the SDK's list.
 func (s rawSpan) Events() []sdktrace.Event {
 	src := s.ReadOnlySpan.Events()
 	out := make([]sdktrace.Event, len(src))
 	for i, e := range src {
 		if i < len(s.events) {
-			e.Name, e.Attributes = s.events[i].name, s.events[i].attrs
+			e.Name, e.Attributes = s.events[i].name, restoreAttributes(e.Attributes, s.events[i].attrs)
 		}
 		out[i] = e
 	}
@@ -237,7 +270,7 @@ func (s rawSpan) Links() []sdktrace.Link {
 	out := make([]sdktrace.Link, len(src))
 	for i, l := range src {
 		if i < len(s.links) {
-			l.Attributes = s.links[i].attrs
+			l.Attributes = restoreAttributes(l.Attributes, s.links[i].attrs)
 		}
 		out[i] = l
 	}
@@ -286,11 +319,13 @@ func capText(s string, limit int) string {
 }
 
 // capStack cuts a stack trace to maxStackTrace bytes at a rune boundary.
-func capStack(s string) string {
-	if len(s) <= maxStackTrace {
+func capStack(s string) string { return capStackTo(s, maxStackTrace) }
+
+func capStackTo(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	cut := maxStackTrace
+	cut := limit
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}

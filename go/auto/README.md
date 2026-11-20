@@ -66,8 +66,9 @@ to your provider, its wire spans, with their captured content, also go to that
 provider's own exporters. `FI_HIDE_*` applies to both copies. Known-secret
 replacement applies to both copies of an Eino span (see below) on every part of
 it, including events, links and the status: in your provider's copy with the
-credentials known as the span ends (its events and links are added then), in the
-copy sent to Future AGI with the credentials known at export. For a wire span it
+credentials known as the span ends (its events and links are added then: links
+given at span start are added when the span ends, so a sampler does not see them
+at start), in the copy sent to Future AGI with the credentials known at export. For a wire span it
 applies to the copy sent to Future AGI.
 
 **Eino needs one more import, and no provider.** For an Eino program, import
