@@ -110,7 +110,7 @@ module ChildHelper
   end
 end
 
-# On an OpenTelemetry SDK whose span hooks the agent cannot verify (1.3 and 1.4), AI spans export only
+# On an OpenTelemetry SDK whose span hooks the agent cannot verify (1.3 and 1.4), the spans the agent exports (AI and server spans, and every span sent to a supplied exporter) export only
 # identity, timing and usage metadata from the application SDK path, so tests that read exported content
 # do not apply there. test_media_sdk_verification.rb covers that fail-closed behaviour.
 #

@@ -38,7 +38,7 @@ module TraceAI
         def report_unverified
           return if @reported
           @reported = true
-          warn 'traceai-auto: the media hooks could not be verified on this OpenTelemetry SDK; AI spans export only identity, timing and usage metadata, and their content, events and links are not exported'
+          warn 'traceai-auto: the media hooks could not be verified on this OpenTelemetry SDK; AI and server spans, and every span sent to an exporter passed to the agent, export only identity, timing and usage metadata, and their content, events and links are not exported'
         rescue StandardError
           nil
         end
