@@ -11,7 +11,7 @@ import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-tra
 import { Agent, EnvHttpProxyAgent, Pool, ProxyAgent, setGlobalDispatcher } from "undici";
 import "../fi-route";
 import { checkCustomEvalConfigExists, createSpanExporter, FITracerProvider, Transport } from "../otel";
-import { grpcProxyFor } from "../fi-send-guard";
+import { grpcProxyFor, guardedFetch } from "../fi-send-guard";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
 
 /**
@@ -204,10 +204,29 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
     try { await check(target.url); } finally { process.env.NODE_OPTIONS = process.env.NODE_OPTIONS.replace(" --use-env-proxy", ""); }
     expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
-  test("a send whose final headers carry an FI key under another name is refused before the send", async () => {
+  test("a guarded fetch whose final headers carry an FI key value under another name is refused: the sink sees 0 bytes", async () => {
     const target = await sink();
-    await check(target.url, { headers: { "x-copy": ENV_KEYS.FI_API_KEY } });
-    expect(target.requests).toHaveLength(0);
+    await expect(guardedFetch({ url: `${target.url}/x`, init: { method: "POST", headers: { "x-copy": `Bearer ${ENV_KEYS.FI_API_KEY}` } }, intended: { keys: new Map(), values: [] } }))
+      .rejects.toEqual(expect.objectContaining({ code: "FI_AMBIENT_KEY_HEADERS" }));
+    seenNothing(target);
+  });
+  test("a guarded fetch whose final headers carry a key name the decision did not put there is refused, in any case and percent-encoded", async () => {
+    const target = await sink();
+    for (const name of ["x-api-key", "X-Secret-Key", "x%2Dapi%2Dkey"]) {
+      await expect(guardedFetch({ url: `${target.url}/x`, init: { method: "POST", headers: { [name]: "some-other-value-0007" } }, intended: { keys: new Map(), values: [] } }))
+        .rejects.toEqual(expect.objectContaining({ code: "FI_AMBIENT_KEY_HEADERS" }));
+    }
+    seenNothing(target);
+  });
+  test("a guarded fetch with the decision's own key headers is sent, and a 3xx answer is a refusal", async () => {
+    const target = await sink(), redirected = await sink();
+    const keys = { "x-api-key": ENV_KEYS.FI_API_KEY, "x-secret-key": ENV_KEYS.FI_SECRET_KEY };
+    const intended = { keys: new Map(Object.entries(keys)), values: Object.values(keys) };
+    const ok = await guardedFetch({ url: `${target.url}/x`, init: { method: "POST", headers: keys }, intended });
+    expect(ok.status).toBe(200); expect(target.requests[0].headers["x-api-key"]).toBe(ENV_KEYS.FI_API_KEY);
+    const moved = await sink({ respond: res => { res.statusCode = 302; res.setHeader("location", `${redirected.url}/leak`); res.end(); } });
+    await expect(guardedFetch({ url: `${moved.url}/x`, init: { method: "POST", headers: keys }, intended })).rejects.toEqual(expect.objectContaining({ code: "FI_REDIRECT" }));
+    seenNothing(redirected);
   });
 });
 

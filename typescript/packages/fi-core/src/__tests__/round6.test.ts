@@ -6,6 +6,7 @@ import { registerSecret, getRegisteredSecrets } from "../secrets";
 import { privacyFilter } from "../export-privacy";
 
 const delivered: any[][] = [];
+jest.mock("../fi-send-guard", () => ({ ...(jest.requireActual("../fi-send-guard") as object), guardOtlpHttpExporter: jest.fn(), guardOtlpGrpcExporter: jest.fn() }));
 jest.mock("@opentelemetry/exporter-trace-otlp-http", () => ({ OTLPTraceExporter: class {
   export(spans: any[], callback: Function) { delivered.push(spans); callback({ code: 0 }); }
   async shutdown() {} async forceFlush() {}

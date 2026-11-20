@@ -185,11 +185,6 @@ function dispatcherReadsProxy(dispatcher: unknown): boolean {
   const name = dispatcherName(dispatcher);
   return name === undefined || /Proxy/.test(name) || !DIRECT_DISPATCHERS.has(name);
 }
-/** The dispatcher a global fetch uses right now (undici's global slot), whatever installed it, or undefined when none is set. */
-function globalDispatcher(): unknown {
-  try { return (globalThis as Record<symbol, unknown>)[Symbol.for("undici.globalDispatcher.1")]; } catch { return undefined; }
-}
-
 // --- plaintext rule --------------------------------------------------------------------------------------------
 
 let warnedInsecure = false;
@@ -220,29 +215,6 @@ function plaintextRule(target: string, transport: EndpointTransport, allowInsecu
     try { process.emitWarning(message, { code: "FI_KEYS_PLAINTEXT" }); } catch { /* A host warning handler may throw; the decision stands. */ }
   }
   return true;
-}
-
-/**
- * Called by every fetch that carries Future AGI keys, right before it is sent: a plaintext request, loopback included, must
- * not go through a proxy. The dispatcher is the caller's, or else the global one, read now (a global dispatcher
- * can be set at any time), and Node's own environment-proxy switch counts. Throws FiKeyRefusal("FI_PLAINTEXT_PROXIED").
- */
-export function assertDirectFetch(url: string, keysAttached: boolean, callerDispatcher?: unknown): void {
-  if (!keysAttached) return;
-  const parsed = endpointTarget(url, "http");
-  if (parsed === undefined || parsed.protocol !== "http:") return;
-  const loopback = isLiteralLoopback(url, "http");
-  const port = (() => { try { return new URL(url.trim()).port; } catch { return ""; } })();
-  const active = callerDispatcher !== undefined ? callerDispatcher : globalDispatcher();
-  // Node's own environment-proxy switch makes the global fetch read the proxy variables itself: such a send is proxied.
-  const nodeEnvProxy = callerDispatcher === undefined && ["1", "true"].includes((process.env.NODE_USE_ENV_PROXY ?? "").toLowerCase());
-  if (nodeEnvProxy) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
-  // An empty global slot is the default Agent: the same rule as a plain Agent installed there (Python's proxy_bypass_environment).
-  // Loopback is exempt from the opt-in only. An empty slot is the default Agent, which sends loopback direct; a dispatcher that may read a
-  // proxy is refused; for any other host the cross-language rule (Python's proxy_bypass_environment) applies.
-  const proxied = loopback ? (active !== undefined && dispatcherReadsProxy(active))
-    : active === undefined ? proxiedByPython(parsed.hostname, port) : dispatcherProxied(active, parsed.hostname, port);
-  if (proxied) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
 }
 
 /** Whether a response is a redirect (3xx): not followed when keys were sent. */

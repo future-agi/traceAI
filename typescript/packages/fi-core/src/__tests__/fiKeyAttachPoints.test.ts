@@ -65,6 +65,7 @@ describe("the functions that mention the key names are exactly the pinned ones",
       "fi-core/fi-request-policy.ts::fiBoundHeaders",
       "fi-core/fi-request-policy.ts::hasCompleteKeyPair",
       "fi-core/fi-request-policy.ts::readEnvKeys",
+      "fi-core/fi-send-guard.ts::keyValues", // reads the FI key values only to refuse them under another header name; sends nothing
       "fi-core/trace/trace-config/piiRedaction.ts::<top level>",
       // traceai_auto: credential sources and the route-factory call; the decision itself is made in fi-core
       "traceai_auto/config.ts::<top level>",
@@ -132,12 +133,11 @@ const isDecide = (node: ts.Node): boolean => ts.isCallExpression(node) && ts.isI
  */
 const ATTACH: Record<string, "decides" | "consumes"> = {
   "fi-core/otel.ts::HTTPSpanExporter.constructor": "decides",
-  "fi-core/otel.ts::HTTPSpanExporter.export": "consumes", // fetch with the headers the constructor decided
   "fi-core/otel.ts::OTLPHTTPSpanExporter.constructor": "decides",
   "fi-core/otel.ts::FITracerProvider.constructor": "decides", // keeps the decided headers; the default exporter decides again on them
   "fi-core/otel.ts::GRPCSpanExporter.constructor": "decides",
-  "fi-core/otel.ts::checkCustomEvalConfigExists": "decides",
-  "fi-core/otel.ts::checkCustomEvalTemplateExists": "decides",
+  "fi-core/fi-send-guard.ts::guardedFetch": "consumes", // the one fetch: judges the final headers it is given, which the callers decided
+  "fi-core/fi-send-guard.ts::guardOtlpGrpcExporter": "consumes", // the one gRPC client: the interceptor judges the final metadata against the decided set
   "fi-core/otlp-header-isolation.ts::isolateHttpExporterHeaders": "consumes", // rebuilds the delegate from the decided headers
   "fi-core/otlp-header-isolation.ts::isolateGrpcExporterHeaders": "consumes", // rebuilds the delegate from the decided metadata
   "fi-core/fi-request-policy.ts::decideFiRequest": "decides", // builds the final metadata
@@ -168,8 +168,8 @@ describe("every site that hands headers or metadata to a transport goes through 
 });
 
 describe("the decider is called from the pinned sites only", () => {
-  test("decideFiRequest is referenced only by its module and by the one wrapper in otel.ts", () => {
-    expect(sites(node => ts.isIdentifier(node) && node.text === "decideFiRequest")).toEqual(["fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/otel.ts::<top level>", "fi-core/otel.ts::decide"]);
+  test("decideFiRequest is referenced only by its module, by the send guard and by the one wrapper in otel.ts", () => {
+    expect(sites(node => ts.isIdentifier(node) && node.text === "decideFiRequest")).toEqual(["fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-send-guard.ts::<top level>", "fi-core/fi-send-guard.ts::guardSend", "fi-core/otel.ts::<top level>", "fi-core/otel.ts::decide"]);
   });
   test("the wrapper is called by every exporter constructor and eval check, and nothing else", () => {
     expect(sites(node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "decide")).toEqual([
@@ -190,7 +190,7 @@ describe("loopback is decided on the host as written, in the pinned places only"
   test("only these functions name the loopback set or call the literal-loopback decider", () => {
     expect(sites(node => ts.isIdentifier(node) && /^(?:LOOPBACK_HOSTS|isLiteralLoopback)$/.test(node.text))).toEqual([
       "fi-core/fi-endpoint.ts::<top level>", "fi-core/fi-endpoint.ts::isLiteralLoopback", "fi-core/fi-request-policy.ts::<top level>" /* the import */,
-      "fi-core/fi-request-policy.ts::assertDirectFetch", "fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-request-policy.ts::hostClass", "fi-core/fi-request-policy.ts::plaintextRule"]);
+      "fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-request-policy.ts::hostClass", "fi-core/fi-request-policy.ts::plaintextRule", "fi-core/fi-send-guard.ts::<top level>", "fi-core/fi-send-guard.ts::guardSend"]);
   });
   test("the decider reads the written host and agrees it with the parsed one; it never reads the parsed host alone", () => {
     const parsed = PARSED.find(p => p.id === "fi-core/fi-endpoint.ts")!.sf;

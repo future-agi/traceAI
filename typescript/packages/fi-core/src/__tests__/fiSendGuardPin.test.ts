@@ -71,7 +71,6 @@ function isTransportPrimitive(node: ts.Node): boolean {
 describe("every transport primitive in the key-carrying modules is inside the guard", () => {
   test("the exact set of sites", () => {
     expect(sites(isTransportPrimitive)).toEqual([
-      "fi-core/fi-send-guard.ts::<top level>", // the imports of the transports the guard uses
       "fi-core/fi-send-guard.ts::guardOtlpGrpcExporter", // the channel it builds with proxies off
       "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch
     ]);

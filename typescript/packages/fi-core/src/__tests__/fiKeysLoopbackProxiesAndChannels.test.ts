@@ -5,7 +5,7 @@ import { diag, DiagLogLevel } from "@opentelemetry/api";
 import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import "../fi-route";
 import { checkCustomEvalConfigExists, createSpanExporter, FITracerProvider, Transport } from "../otel";
-import { assertDirectFetch, decideFiRequest, FiKeyRefusal } from "../fi-request-policy";
+import { decideFiRequest, FiKeyRefusal } from "../fi-request-policy";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
 
 /**
@@ -60,7 +60,6 @@ describe("a plaintext loopback send never goes through a proxy", () => {
     try {
       process.env.HTTP_PROXY = proxy.url;
       expect(() => decideFiRequest({ target: "http://127.0.0.1:4318", transport: "http", headers: { ...KEYS }, dispatcher: new ProxyAgent() })).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_PROXIED" }));
-      expect(() => assertDirectFetch("http://127.0.0.1:4318/x", true, new ProxyAgent())).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_PROXIED" }));
       await check("http://127.0.0.1:4318", new ProxyAgent());
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(proxy.bytes).toBe(0);
@@ -73,7 +72,6 @@ describe("a plaintext loopback send never goes through a proxy", () => {
       (globalThis as any)[GLOBAL] = new EnvHttpProxyAgent();
       await check("http://localhost:4318");
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(() => assertDirectFetch("http://localhost:4318/x", true)).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_PROXIED" }));
       expect(proxy.bytes).toBe(0);
     } finally { await proxy.close(); }
   });
@@ -83,14 +81,12 @@ describe("a plaintext loopback send never goes through a proxy", () => {
       process.env.NODE_USE_ENV_PROXY = "1"; process.env.HTTP_PROXY = proxy.url;
       await check("http://[::1]:4318");
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(() => assertDirectFetch("http://[::1]:4318/x", true)).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_PROXIED" }));
       expect(proxy.bytes).toBe(0);
     } finally { await proxy.close(); }
   });
   test.each(LOOPBACKS)("a send with no caller dispatcher and no environment proxy to %s is not refused", async base => {
     await check(base);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(() => assertDirectFetch(`${base}/x`, true)).not.toThrow();
   });
   test.each(LOOPBACKS)("HTTP_PROXY set does not refuse a send to %s that Node sends direct", async base => {
     const proxy = await proxyListener();

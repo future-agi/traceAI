@@ -192,9 +192,18 @@ describe("the custom eval checks follow the same rules", () => {
     await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
-  test("with a proxy in the environment the check is not sent, whether the global dispatcher slot is empty or holds a plain Agent", async () => {
+  test("a request the SDK builds itself goes direct: with a proxy variable set and an empty global dispatcher slot (the default Agent) the check is sent", async () => {
     process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
+    delete (globalThis as any)[Symbol.for("undici.globalDispatcher.1")];
     await checkCustomEvalConfigExists("p", [tag()]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+  test("with a proxy variable set and a global dispatcher that can read a proxy the check is not sent", async () => {
+    process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
+    class EnvHttpProxyAgent {}
+    const slot = Symbol.for("undici.globalDispatcher.1"), saved = (globalThis as any)[slot];
+    (globalThis as any)[slot] = new EnvHttpProxyAgent();
+    try { await checkCustomEvalConfigExists("p", [tag()]); } finally { if (saved === undefined) delete (globalThis as any)[slot]; else (globalThis as any)[slot] = saved; }
     expect(fetchSpy).not.toHaveBeenCalled();
   });
   test("loopback and https bases are checked", async () => {

@@ -341,26 +341,25 @@ for (const compression of [undefined, 'gzip']) {
     assert.deepEqual(sink.received[0].get('x-api-key'), [FI['x-api-key']]);
   });
 }
-test('a plaintext loopback gRPC channel that carries keys replaces the exporter send; caller TLS credentials keep the exporter\'s own', async () => {
-  const own = exporter => Object.prototype.hasOwnProperty.call(exporter._delegate._transport, 'send');
+test('every OTLP gRPC exporter has the guarded send, and caller TLS credentials stay TLS', async () => {
+  const guarded = exporter => Object.prototype.hasOwnProperty.call(exporter._delegate._transport, 'send');
   const loopback = createSpanExporter({ transport: Transport.GRPC, endpoint: 'localhost:4317', headers: FI });
-  assert.equal(own(loopback), true);
-  const tls = createSpanExporter({ transport: Transport.GRPC, endpoint: 'localhost:4317', credentials: grpc.credentials.createSsl(), headers: FI });
-  assert.equal(own(tls), false);
-  assert.equal(tls._delegate._transport._parameters.credentials()._isSecure(), true);
-  await loopback.shutdown(); await tls.shutdown();
-});
-test('a gRPC channel that is not plaintext keeps the exporter\'s own send; the plaintext opt-in one replaces it', async () => {
-  const own = exporter => Object.prototype.hasOwnProperty.call(exporter._delegate._transport, 'send');
   const tls = createSpanExporter({ transport: Transport.GRPC, endpoint: 'collector.example:4317', credentials: grpc.credentials.createSsl(), headers: FI });
-  assert.equal(own(tls), false);
+  const keyless = createSpanExporter({ transport: Transport.GRPC, endpoint: 'collector.example:4317' });
   const plaintext = createSpanExporter({ transport: Transport.GRPC, endpoint: '127.0.0.2:4317', credentials: grpc.credentials.createInsecure(), headers: FI, allowInsecureHttp: true });
-  assert.equal(own(plaintext), true);
-  await tls.shutdown(); await plaintext.shutdown();
+  for (const exporter of [loopback, tls, keyless, plaintext]) assert.equal(guarded(exporter), true);
+  const callerTls = createSpanExporter({ transport: Transport.GRPC, endpoint: 'localhost:4317', credentials: grpc.credentials.createSsl(), headers: FI });
+  assert.equal(callerTls._delegate._transport._parameters.credentials()._isSecure(), true);
+  await Promise.all([loopback, tls, keyless, plaintext, callerTls].map(exporter => exporter.shutdown()));
 });
-test('an exporter without the layout the direct channel relies on is refused, naming nothing', () => {
-  const { connectGrpcDirect } = load('./dist/src/otlp-header-isolation');
+test('an exporter without the layout the guard relies on is refused when it carries keys, naming nothing, and left alone when no key is in play', () => {
+  const { guardOtlpGrpcExporter, guardOtlpHttpExporter } = load('./dist/src/fi-send-guard');
+  const withKeys = { keys: new Map([['x-api-key', 'synthetic-fi-key-value']]), values: ['synthetic-fi-key-value'] };
+  const without = { keys: new Map(), values: [] };
   for (const stand of [{}, { _delegate: {} }, { _delegate: { _transport: { send() {}, _parameters: {} } } }]) {
-    assert.throws(() => connectGrpcDirect(stand), error => /^Unsupported OTLP exporter layout: /.test(error.message) && !/synthetic|x-api-key/i.test(error.message));
+    for (const guard of [guardOtlpGrpcExporter, guardOtlpHttpExporter]) {
+      assert.throws(() => guard(stand, withKeys), error => /^Unsupported OTLP exporter layout: /.test(error.message) && !/synthetic|x-api-key/i.test(error.message));
+      assert.doesNotThrow(() => guard(stand, without));
+    }
   }
 });

@@ -105,32 +105,3 @@ export function isolateGrpcExporterHeaders(exporter: unknown, config: { metadata
     refuse();
   }
 }
-
-/**
- * Build an OTLP gRPC exporter's channel with proxies off (grpc.enable_http_proxy: 0), whatever grpc_proxy, https_proxy and
- * http_proxy say. The exporter creates its client on first send with fixed channel options, so the client is created here, on first
- * send, with the same options plus that one, and the exporter's own send path then uses it. When the installed exporter does not have
- * the layout this relies on, the exporter is refused (naming nothing) instead of risking a proxied channel.
- */
-export function connectGrpcDirect(exporter: unknown): void {
-  const transport = (exporter as any)?._delegate?._transport;
-  const parameters = transport?._parameters;
-  if (!transport || typeof transport.send !== "function" || !parameters || typeof parameters.credentials !== "function" || typeof parameters.metadata !== "function"
-    || typeof parameters.address !== "string" || typeof parameters.grpcPath !== "string" || typeof parameters.grpcName !== "string") refuse();
-  const identity = (value: Buffer): Buffer => value;
-  const Client = grpc.makeGenericClientConstructor({ export: { path: parameters.grpcPath, requestStream: false, responseStream: false,
-    requestSerialize: identity, requestDeserialize: identity, responseSerialize: identity, responseDeserialize: identity } } as grpc.ServiceDefinition, parameters.grpcName);
-  const original = transport.send.bind(transport);
-  transport.send = (data: Uint8Array, timeoutMillis: number) => {
-    if (transport._client == null) {
-      try {
-        transport._metadata = parameters.metadata();
-        transport._client = new Client(parameters.address, parameters.credentials(), {
-          "grpc.enable_http_proxy": 0,
-          "grpc.default_compression_algorithm": parameters.compression === "gzip" ? 2 : 0,
-        });
-      } catch (error) { return Promise.resolve({ status: "failure", error }); }
-    }
-    return original(data, timeoutMillis);
-  };
-}

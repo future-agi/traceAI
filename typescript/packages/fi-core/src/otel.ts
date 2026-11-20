@@ -27,10 +27,11 @@ import {
 } from "@opentelemetry/sdk-trace-node";
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
-import { connectGrpcDirect, isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
+import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
+import { guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
-import { assertDirectFetch, assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, hasCompleteKeyPair, isRedirect, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
+import { assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -154,12 +155,16 @@ class UuidIdGenerator implements IdGenerator {
 class HTTPSpanExporter implements SpanExporter {
   private readonly endpoint: string;
   private readonly headers: FIHeaders;
+  private readonly intended: Intended;
+  private readonly allowInsecureHttp: unknown;
   private isShutdown = false;
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
   constructor(options: HTTPSpanExporterOptions) {
     const { headers } = decide({ target: options.endpoint, transport: "http", headers: options.headers, allowInsecureHttp: options.allowInsecureHttp });
+    this.intended = intendedFrom({ headers });
+    this.allowInsecureHttp = options.allowInsecureHttp;
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
@@ -260,25 +265,10 @@ class HTTPSpanExporter implements SpanExporter {
         diag.info("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
     }
 
-    // A request that carries Future AGI keys is not routed through a proxy dispatcher (read now: the global one can change)
-    // and does not follow a redirect.
-    try { assertDirectFetch(this.endpoint, hasCompleteKeyPair(this.headers)); }
-    catch (error) {
-      diag.error(`HTTPSpanExporter: not sent: ${(error as Error).message}`);
-      resultCallback({ code: ExportResultCode.FAILED });
-      return;
-    }
-    fetch(this.endpoint, {
-      method: "POST",
-      headers: this.headers,
-      body: JSON.stringify(spansData),
-      redirect: "manual",
-    })
+    // The one guarded fetch: the final headers and the proxy exposure are judged right before the send, redirects are not followed.
+    guardedFetch({ url: this.endpoint, init: { method: "POST", headers: this.headers, body: JSON.stringify(spansData) }, intended: this.intended, allowInsecureHttp: this.allowInsecureHttp })
       .then((response) => {
-        if (isRedirect(response) && hasCompleteKeyPair(this.headers)) {
-          diag.error(`HTTPSpanExporter: ${new FiKeyRefusal("FI_REDIRECT").message}`);
-          resultCallback({ code: ExportResultCode.FAILED });
-        } else if (response.ok) {
+        if (response.ok) {
           resultCallback({ code: ExportResultCode.SUCCESS });
         } else {
           diag.error(
@@ -288,8 +278,9 @@ class HTTPSpanExporter implements SpanExporter {
           resultCallback({ code: ExportResultCode.FAILED });
         }
       })
-      .catch((errorCaught) => { 
-        diag.error(`HTTPSpanExporter: Error exporting spans: ${errorCaught}`);
+      .catch((errorCaught) => {
+        if (errorCaught instanceof FiKeyRefusal) diag.error(`HTTPSpanExporter: not sent: ${errorCaught.message}`);
+        else diag.error(`HTTPSpanExporter: Error exporting spans: ${errorCaught}`);
         resultCallback({ code: ExportResultCode.FAILED });
       });
   }
@@ -352,15 +343,15 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       throw error;
     }
     if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
-    // A plaintext channel that carries keys, loopback included, is built with proxies off: no environment can route it.
-    if (decision.plaintextDirect) connectGrpcDirect(this);
+    // Every send is judged on its final metadata, and a plaintext channel that carries keys, loopback included, is built with proxies off.
+    guardOtlpGrpcExporter(this, intendedFrom(decision), allowInsecureHttp);
     
     this.verbose = verbose;
     this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers }, metadataKnown);
     privacyDestinations.add(this);
 
     if (this.verbose) {
-      diag.info(`GRPCSpanExporter: Configured for endpoint: ${loggable(endpoint)}`);
+      diag.info(`GRPCSpanExporter: Configured for endpoint: ${hostClass(endpoint)}`);
       diag.info(`GRPCSpanExporter: Authentication: ${Object.keys(lower_case_auth_header).length > 0 ? 'Enabled' : 'None'}`);
     }
   }
@@ -419,10 +410,6 @@ function getEnvGrpcCollectorEndpoint(): string {
 
 // Explicit endpoints retain their base-or-full URL behavior. Environment collector
 // endpoints are full URLs; only FI_BASE_URL and the default are base origins.
-/** An endpoint as it may be logged: scheme, host and path only, never userinfo or a query; an unparseable value is not echoed. */
-function loggable(endpoint: string): string {
-  try { const url = new URL(endpoint); return `${url.protocol}//${url.host}${url.pathname}`; } catch { return "(not a URL)"; }
-}
 /** The collector URL an HTTP exporter given `endpoint` dials: the endpoint itself when it is a usable URL, else the environment's or the default route. It carries no userinfo. */
 export function resolveTraceEndpoint(endpoint?: string): string {
   const resolved = constructFullEndpoint(endpoint);
@@ -450,16 +437,16 @@ function constructFullEndpoint(customEndpoint?: string): string {
     try {
       const parsedCustom = new URL(customEndpoint);
       if (!parsedCustom.protocol || !parsedCustom.host) {
-        diag.warn(`Custom endpoint '${loggable(customEndpoint)}' is missing protocol or host. Falling back to environment or default.`);
+        diag.warn(`The custom endpoint (${hostClass(customEndpoint)}) is missing protocol or host. Falling back to environment or default.`);
       } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
-        diag.warn(`Using custom endpoint as full URL: ${loggable(customEndpoint)}`);
+        diag.warn(`Using the custom endpoint (${hostClass(customEndpoint)}) as a full URL.`);
         return customEndpoint;
       } else {
         return `${writtenOrigin(customEndpoint, parsedCustom)}${FI_COLLECTOR_PATH}`;
       }
     } catch (e) {
       if (e instanceof FiKeyRefusal) throw e;
-      diag.warn(`Custom endpoint '${loggable(customEndpoint)}' is not a valid URL. Falling back to environment or default.`);
+      diag.warn("The custom endpoint is not a valid URL. Falling back to environment or default.");
     }
   }
 
@@ -492,6 +479,8 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
     if (!fiBound) assertNoKeysInAmbientHeaders(fiKeyHeaderValues(options.headers));
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
+    // Every send is judged on its final url and headers, after every merge the exporter performs.
+    guardOtlpHttpExporter(this, intendedFrom({ headers }), options.allowInsecureHttp);
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
   }
@@ -571,7 +560,7 @@ class FITracerProvider extends BasicTracerProvider {
       : config.headers;
 
     if (verbose) {
-      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${loggable(endpoint)}`);
+      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${hostClass(endpoint)}`);
     }
 
     // Explicit lists, including [], never construct a hidden default exporter.
@@ -601,7 +590,7 @@ class FITracerProvider extends BasicTracerProvider {
 
     // Log to confirm processor and exporter details
     if (verbose) {
-      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${loggable(endpoint)}`);
+      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${hostClass(endpoint)}`);
     }
 
     if (verbose) {
@@ -923,23 +912,17 @@ async function checkCustomEvalConfigExists(
   };
 
   if (verbose) {
-    diag.info(`checkCustomEvalConfigExists: Checking custom eval config at ${url} with payload:`, JSON.stringify(payload, null, 2));
+    diag.info(`checkCustomEvalConfigExists: Checking custom eval config at ${hostClass(url)} with payload:`, JSON.stringify(payload, null, 2));
   }
 
   try {
-    try { assertDirectFetch(url, hasCompleteKeyPair(headers), options.dispatcher); }
-    catch (error) { diag.warn(`checkCustomEvalConfigExists: skipped: ${(error as Error).message}`); return false; }
-    const response = await fetch(url, {
-      ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}),
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload),
-      redirect: "manual",
-    });
-
-    if (isRedirect(response) && hasCompleteKeyPair(headers)) {
-      diag.error(`checkCustomEvalConfigExists: ${new FiKeyRefusal("FI_REDIRECT").message}`);
-      return false;
+    let response: Response;
+    try {
+      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp,
+        init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
+    } catch (error) {
+      if (error instanceof FiKeyRefusal) { diag.warn(`checkCustomEvalConfigExists: skipped: ${error.message}`); return false; }
+      throw error;
     }
     if (!response.ok) {
       const errorText = await response.text();
@@ -1000,26 +983,20 @@ export async function checkCustomEvalTemplateExists(
   };
 
   if (verbose) {
-    diag.info(`checkCustomEvalTemplateExists: Checking custom eval template at ${url} with payload:`, JSON.stringify(payload, null, 2));
+    diag.info(`checkCustomEvalTemplateExists: Checking custom eval template at ${hostClass(url)} with payload:`, JSON.stringify(payload, null, 2));
   }
 
   try {
-    try { assertDirectFetch(url, hasCompleteKeyPair(headers), options.dispatcher); }
-    catch (error) {
-      diag.warn(`checkCustomEvalTemplateExists: skipped: ${(error as Error).message}`);
-      return { result: { isUserEvalTemplate: false, evalTemplate: null } };
-    }
-    const response = await fetch(url, {
-      ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}),
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload),
-      redirect: "manual",
-    });
-
-    if (isRedirect(response) && hasCompleteKeyPair(headers)) {
-      diag.error(`checkCustomEvalTemplateExists: ${new FiKeyRefusal("FI_REDIRECT").message}`);
-      return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+    let response: Response;
+    try {
+      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp,
+        init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
+    } catch (error) {
+      if (error instanceof FiKeyRefusal) {
+        diag.warn(`checkCustomEvalTemplateExists: skipped: ${error.message}`);
+        return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+      }
+      throw error;
     }
     if (!response.ok) {
       const errorText = await response.text();
