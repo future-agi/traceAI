@@ -42,10 +42,11 @@ public final class TraceAIAgent {
             })
             // Only HTTP client classes are transformed. The application's OpenTelemetry SDK classes,
             // providers and processors are never rewritten, wrapped or observed.
-            // Application classes with a method annotated with ai.traceai.annotations.*; matched by name, so the annotation module is not needed here.
-            .type(declaresMethod(isAnnotatedWith(annotationType())).and(not(isInterface())).and(not(nameStartsWith("java.").or(nameStartsWith("jdk.")).or(nameStartsWith("sun.")))))
-            .transform((builder, type, loader, module, domain) -> builder
-                .visit(Advice.to(AnnotatedMethodAdvice.class).on(isAnnotatedWith(annotationType()).and(not(isAbstract())).and(not(isConstructor())).and(not(isTypeInitializer())))))
+            // Application classes (and interfaces, for their default methods) with a method annotated with ai.traceai.annotations.*;
+            // matched by name, so the annotation module is not needed here. Not woven at all while the annotations are disabled.
+            .type(declaresMethod(annotated()).and(not(nameStartsWith("java.").or(nameStartsWith("jdk.")).or(nameStartsWith("sun."))))
+                .and(type -> TraceAIAuto.annotationsEnabled()))
+            .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(AnnotatedMethodAdvice.class).on(annotated())))
             .type(named("jdk.internal.net.http.HttpRequestImpl"))
             .transform((builder, type, loader, module, domain) -> builder
                 .visit(Advice.to(JdkHeaderAdvice.class).on(namedOneOf("setSystemHeader", "addSystemHeader").and(takesArguments(String.class, String.class)))))
@@ -69,21 +70,30 @@ public final class TraceAIAgent {
             .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))))
             .installOn(instrumentation);
     }
+    /** A concrete method with one of the annotations; the compiler's bridge and other synthetic copies of it are never woven, so one call is one span. */
+    private static net.bytebuddy.matcher.ElementMatcher.Junction<net.bytebuddy.description.method.MethodDescription> annotated() {
+        return isAnnotatedWith(annotationType()).and(not(isAbstract())).and(not(isConstructor())).and(not(isTypeInitializer())).and(not(isBridge())).and(not(isSynthetic()));
+    }
     private static net.bytebuddy.matcher.ElementMatcher<TypeDescription> annotationType() { return type -> AnnotationTracing.annotationName(type.getName()); }
     /** The integration a transformed class belongs to, for the status report. */
     private static String integration(String type) {
-        return type.startsWith("okhttp3") ? "okhttp" : type.startsWith("jdk.internal.net.http") ? "java.net.http" : "annotations";
+        return type.startsWith("okhttp3") || type.startsWith("okio") ? "okhttp" : type.startsWith("jdk.internal.net.http") ? "java.net.http" : "annotations";
     }
     public static class AnnotatedMethodAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)
         public static Object enter(@Advice.Origin java.lang.reflect.Method method, @Advice.AllArguments Object[] arguments) throws Exception {
-            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("enterAnnotated", java.lang.reflect.Method.class, Object[].class).invoke(null, method, arguments);
+            Class<?> bridge;
+            // The system class path first (the agent flag puts the jar there); else the annotated class's own loader chain (a jar
+            // that is on the application's class path only, such as a fat jar's, or a web application's).
+            try { bridge = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto"); }
+            catch (ClassNotFoundException missing) { bridge = Class.forName("ai.traceai.auto.TraceAIAuto", false, method.getDeclaringClass().getClassLoader()); }
+            return bridge.getMethod("enterAnnotated", java.lang.reflect.Method.class, Object[].class).invoke(null, method, arguments);
         }
         @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
         public static void exit(@Advice.Enter Object state, @Advice.Return(readOnly = false, typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,
                                 @Advice.Thrown Throwable error) throws Exception {
             if (state == null) return;
-            Object replacement = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("exitAnnotated", Object.class, Object.class, Throwable.class).invoke(null, state, returned, error);
+            Object replacement = state.getClass().getClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("exitAnnotated", Object.class, Object.class, Throwable.class).invoke(null, state, returned, error);
             if (replacement != null) returned = replacement;
         }
     }

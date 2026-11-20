@@ -1,7 +1,6 @@
 package ai.traceai.auto;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonElement;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
@@ -27,19 +26,23 @@ import java.util.function.Consumer;
 final class AnnotationTracing {
     /** Present in the context while an annotated method runs, so nested annotated and wire spans parent under it. */
     static final ContextKey<Boolean> ACTIVE = ContextKey.named("traceai.auto.annotation");
+    /** The id of the application's own span that was current when the outermost annotated call began ("" if none): a different current span inside the method is the application's own inner span. */
+    static final ContextKey<String> APP_SPAN = ContextKey.named("traceai.auto.annotation.app-span");
     static final String PACKAGE = "ai.traceai.annotations.";
     /** Annotation simple name -> span kind, in the order used when a method carries more than one. */
     private static final LinkedHashMap<String, String> KINDS = new LinkedHashMap<>();
     static {
         KINDS.put("Agent", "AGENT"); KINDS.put("Chain", "CHAIN"); KINDS.put("LLM", "LLM"); KINDS.put("Tool", "TOOL"); KINDS.put("Span", null);
     }
-    private static final int MAX_DEPTH = 6, MAX_ITEMS = 100, MAX_NAME = 1000;
-    private static final Gson GSON = new Gson();
+    private static final int MAX_ITEMS = 100, MAX_NAME = 1000, MAX_CAPTURE = 64 << 10;
+    private static final Gson GSON = new com.google.gson.GsonBuilder().disableHtmlEscaping().create();
 
     /** What the exit advice needs; handed back to it as an opaque object. */
     private static final class Started {
         final Span span; final Scope scope; final AutoConfig config; final boolean returnsVoid; final int limit;
         final AtomicBoolean ended = new AtomicBoolean();
+        /** Characters of text one captured input or output may hold: the configured body limit, and never more than 64 KiB. */
+        int chars() { return limit > 0 ? Math.min(limit, MAX_CAPTURE) : MAX_CAPTURE; }
         Started(Span span, Scope scope, AutoConfig config, boolean returnsVoid) {
             this.span = span; this.scope = scope; this.config = config; this.returnsVoid = returnsVoid; this.limit = config.maxBodyBytes;
         }
@@ -61,7 +64,8 @@ final class AnnotationTracing {
             Context parent = current.get(ACTIVE) != null ? current : snapshot.parent();
             Span span = state.tracer().spanBuilder(truncate(meta.name(), MAX_NAME)).setSpanKind(SpanKind.INTERNAL).setParent(parent).startSpan();
             Started started;
-            Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).makeCurrent();
+            String outerApp = current.get(ACTIVE) != null ? String.valueOf(current.get(APP_SPAN)) : Span.fromContext(snapshot.parent()).getSpanContext().isValid() ? Span.fromContext(snapshot.parent()).getSpanContext().getSpanId() : "";
+            Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).with(APP_SPAN, outerApp).makeCurrent();
             try { started = new Started(span, scope, state.config(), method.getReturnType() == void.class); }
             catch (Throwable error) { scope.close(); span.end(); return null; }
             if (span.isRecording()) {
@@ -96,14 +100,18 @@ final class AnnotationTracing {
         return null;
     }
 
-    private static void finish(Started started, Object value, Throwable error) {
+    private static void finish(Started started, Object value, Throwable error) { finish(started, value, error, false, true); }
+
+    /** Ends the span once. A cancelled span carries the marker, and its output only when something was emitted before the cancel. */
+    private static void finish(Started started, Object value, Throwable error, boolean cancelled, boolean hasOutput) {
         if (!started.ended.compareAndSet(false, true)) return;
         try {
             if (started.span.isRecording()) {
+                if (cancelled) started.span.setAttribute(AttributeKey.booleanKey("traceai.cancelled"), true);
                 Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
                 if (cause != null) fail(started, cause);
                 else {
-                    if (!started.returnsVoid) output(started, value);
+                    if (!started.returnsVoid && hasOutput) output(started, value);
                     started.span.setStatus(StatusCode.OK);
                 }
             }
@@ -117,14 +125,15 @@ final class AnnotationTracing {
         Map<String, Object> values = new LinkedHashMap<>();
         for (int i = 0; i < parameters.length && i < arguments.length; i++) {
             if (excluded(parameters[i])) continue;
-            values.put(parameters[i].isNamePresent() ? parameters[i].getName() : "arg" + i, json(arguments[i], 0));
+            values.put(parameters[i].isNamePresent() ? parameters[i].getName() : "arg" + i, arguments[i]);
         }
         if (values.isEmpty()) return;
-        set(started, "input.value", write(values, started.limit)); set(started, "input.mime_type", "application/json");
+        // One walk over all the arguments, so the depth, item, node and character bounds hold for the whole input.
+        set(started, "input.value", render(values, started.chars())); set(started, "input.mime_type", "application/json");
     }
     private static void output(Started started, Object value) {
         if (TraceAIAuto.hidden("output.value", "v", null, started.config)) return;
-        set(started, "output.value", write(json(value, 0), started.limit)); set(started, "output.mime_type", "application/json");
+        set(started, "output.value", render(value, started.chars())); set(started, "output.mime_type", "application/json");
     }
     private static void fail(Started started, Throwable error) {
         Span span = started.span; AutoConfig config = started.config;
@@ -168,48 +177,22 @@ final class AnnotationTracing {
     }
     private static String truncate(String value, int max) { return value.length() <= max ? value : value.substring(0, max); }
 
-    private static String write(Object tree, int limit) {
-        String text;
-        try { text = GSON.toJson(tree); } catch (Throwable ignored) { text = "\"[unserializable]\""; }
-        return limit > 0 && text.length() > limit ? text.substring(0, limit) + "...[truncated]" : text;
-    }
-    /** A bounded JSON-safe view of an application value. Never throws, never calls an application method other than toString of a leaf. */
-    static Object json(Object value, int depth) {
-        try {
-            if (value == null || value instanceof Boolean) return value;
-            if (value instanceof Number number) {
-                double d = number.doubleValue();
-                return Double.isNaN(d) || Double.isInfinite(d) ? number.toString() : value;
-            }
-            if (value instanceof CharSequence || value instanceof Character || value instanceof Enum<?> || value instanceof UUID || value instanceof java.net.URI
-                || value instanceof java.nio.file.Path || value instanceof Class<?> || value.getClass().getName().startsWith("java.time.")) {
-                return value instanceof Enum<?> e ? e.name() : value instanceof Class<?> c ? c.getName() : value.toString();
-            }
-            if (depth >= MAX_DEPTH) return "[depth limit]";
-            if (value instanceof Optional<?> optional) return optional.isPresent() ? json(optional.get(), depth + 1) : null;
-            if (value instanceof Map<?, ?> map) {
-                Map<String, Object> out = new LinkedHashMap<>(); int n = 0;
-                for (Map.Entry<?, ?> entry : map.entrySet()) { if (n++ >= MAX_ITEMS) break; out.put(String.valueOf(entry.getKey()), json(entry.getValue(), depth + 1)); }
-                return out;
-            }
-            if (value instanceof Iterable<?> items) {
-                List<Object> out = new ArrayList<>(); int n = 0;
-                for (Object item : items) { if (n++ >= MAX_ITEMS) break; out.add(json(item, depth + 1)); }
-                return out;
-            }
-            if (value.getClass().isArray()) {
-                List<Object> out = new ArrayList<>(); int length = java.lang.reflect.Array.getLength(value);
-                for (int i = 0; i < Math.min(length, MAX_ITEMS); i++) out.add(json(java.lang.reflect.Array.get(value, i), depth + 1));
-                return out;
-            }
-            if (value.getClass().getName().startsWith("java.") || value.getClass().getName().startsWith("jdk.")) return value.toString();
-            // Application objects (beans, records): reflection over their fields, then each field value through this method.
-            JsonElement tree = GSON.toJsonTree(value);
-            return tree;
-        } catch (Throwable ignored) {
-            try { return String.valueOf(value); } catch (Throwable alsoIgnored) { return value.getClass().getName(); }
+    /**
+     * The JSON of a bounded view of the value, never longer than {@code limit} characters and always valid JSON: a cut JSON text
+     * is not JSON, and the export boundary withholds a text it cannot read as such. The view is built with half the limit as its
+     * text budget (the JSON syntax and escapes add to it); if the text is still too long the budget is halved until it fits.
+     */
+    private static String render(Object value, int limit) {
+        for (long budget = Math.max(limit / 2, 32); ; budget /= 2) {
+            String text;
+            try { text = GSON.toJson(CapturedValue.of(value, budget)); } catch (Throwable ignored) { return "\"<unserializable>\""; }
+            if (text.length() <= limit) return text;
+            if (budget <= 32) return "\"" + CapturedValue.CUT + "\"";
         }
     }
+    /** The bounded JSON-safe view of an application value (see CapturedValue); never throws. */
+    static Object json(Object value, int depth) { return CapturedValue.of(value, DEFAULT_CHARS); }
+    private static final long DEFAULT_CHARS = MAX_CAPTURE;
 
     /** Reactor support without a compile-time dependency: a Mono or Flux is wrapped so the span ends when it terminates. */
     private static final class Reactor {
@@ -219,15 +202,15 @@ final class AnnotationTracing {
             if (mono != null) {
                 Object result = call(mono, returned, "doOnSuccess", Consumer.class, (Consumer<Object>) value -> finish(started, value, null));
                 result = call(mono, result, "doOnError", Consumer.class, (Consumer<Throwable>) error -> finish(started, null, error));
-                return call(mono, result, "doOnCancel", Runnable.class, (Runnable) () -> finish(started, null, null));
+                return call(mono, result, "doOnCancel", Runnable.class, (Runnable) () -> finish(started, null, null, true, false));
             }
             Class<?> flux = ancestor(returned.getClass(), "reactor.core.publisher.Flux");
             if (flux == null) return null;
             List<Object> items = Collections.synchronizedList(new ArrayList<>());
-            Object result = call(flux, returned, "doOnNext", Consumer.class, (Consumer<Object>) item -> { if (items.size() < MAX_ITEMS) items.add(json(item, 1)); });
+            Object result = call(flux, returned, "doOnNext", Consumer.class, (Consumer<Object>) item -> { if (items.size() < MAX_ITEMS) items.add(CapturedValue.of(item, Math.max(started.chars() / MAX_ITEMS, 256))); });
             result = call(flux, result, "doOnComplete", Runnable.class, (Runnable) () -> finish(started, new ArrayList<>(items), null));
             result = call(flux, result, "doOnError", Consumer.class, (Consumer<Throwable>) error -> finish(started, null, error));
-            return call(flux, result, "doOnCancel", Runnable.class, (Runnable) () -> finish(started, null, null));
+            return call(flux, result, "doOnCancel", Runnable.class, (Runnable) () -> { List<Object> seen = new ArrayList<>(items); finish(started, seen, null, true, !seen.isEmpty()); });
         }
         private static Class<?> ancestor(Class<?> type, String name) {
             for (Class<?> c = type; c != null; c = c.getSuperclass()) if (c.getName().equals(name)) return c;

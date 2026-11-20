@@ -77,10 +77,12 @@ final class OtelBridge {
             }
             Object sc = spanApi.getMethod("getSpanContext").invoke(external);
             Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
+            // Inside an annotated method the enclosing annotated span is the parent, unless the application's current span is not the one
+            // that was current when the annotated call began: that is the application's own inner span, and it wins.
             boolean validContext = (boolean)scApi.getMethod("isValid").invoke(sc);
             validSpan |= validContext;
-            // The annotated span stays the parent inside an annotated method; the application's span context does not replace it.
-            if (validContext && !annotated) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
+            boolean innerApplicationSpan = annotated && validContext && !String.valueOf(scApi.getMethod("getSpanId").invoke(sc)).equals(String.valueOf(parent.get(AnnotationTracing.APP_SPAN)));
+            if (validContext && (!annotated || innerApplicationSpan)) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
             // A Google ADK span is current: it is the parent even inside an annotated method (the agent span nests under the
             // annotated span, and the model and tool spans nest under the agent span).
             Context adkParent = GoogleAdk.contextOf(external);

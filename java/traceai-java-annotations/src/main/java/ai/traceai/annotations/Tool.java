@@ -9,7 +9,7 @@ import java.lang.annotation.Target;
 /**
  * Traces the annotated method as a span of kind {@code TOOL}. The span records the method's arguments
  * as {@code input.value}, its return value as {@code output.value} and any exception, which is
- * rethrown unchanged. Spans are created only while the TraceAI Java agent is active (see the module README).
+ * rethrown unchanged. Spans are created only while the TraceAI Java agent is active (see "Trace your own methods" in the Java README).
  */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)
