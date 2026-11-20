@@ -60,6 +60,33 @@ def safe_serialize(obj: Any, max_length: int = 2000) -> str:
     return result
 
 
+def _requested_model(model_client: Any) -> Optional[str]:
+    """Return the model name a model client sends with its requests.
+
+    Clients that expose ``model`` or ``_model`` keep working. Current
+    autogen-ext clients (OpenAI, Azure OpenAI, Anthropic, Ollama) have
+    neither: they keep the requested model in ``_create_args`` and their
+    constructor arguments in ``_raw_config``. The constructor arguments also
+    hold the API key, so only the "model" value is ever read from them. The
+    ``_raw_config`` lookup is a fallback for clients that keep the model only
+    in their constructor settings. ``_resolved_model`` is not used: it is
+    autogen-ext's guess at the dated model version, used only to warn when a
+    response names a different model, while every request is sent with the
+    model in ``_create_args``.
+    """
+    for name in ("model", "_model"):
+        value = getattr(model_client, name, None)
+        if isinstance(value, str) and value:
+            return value
+    for name in ("_create_args", "_raw_config"):
+        config = getattr(model_client, name, None)
+        if isinstance(config, dict):
+            value = config.get("model")
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def extract_agent_info(agent: Any) -> Dict[str, Any]:
     """Extract information from an AutoGen v0.4 agent.
 
@@ -82,11 +109,9 @@ def extract_agent_info(agent: Any) -> Dict[str, Any]:
     if hasattr(agent, "_model_client"):
         model_client = agent._model_client
         if model_client:
-            # Try to get model name
-            if hasattr(model_client, "model"):
-                info["model_name"] = model_client.model
-            elif hasattr(model_client, "_model"):
-                info["model_name"] = model_client._model
+            model_name = _requested_model(model_client)
+            if model_name:
+                info["model_name"] = model_name
 
     # Count tools
     if hasattr(agent, "_tools"):
