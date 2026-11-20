@@ -917,7 +917,14 @@ class _ResourceOverlayProcessor(SpanProcessor):
 
 def _exporter(settings: AutoConfig, kwargs: Mapping[str, Any]) -> Any:
     """The Future AGI exporter for the resolved keys and base URL."""
-    from fi_instrumentation.otel import GRPCSpanExporter, HTTPSpanExporter, Transport, _normalized_endpoint
+    from fi_instrumentation.otel import (
+        GRPCSpanExporter,
+        HTTPSpanExporter,
+        Transport,
+        _normalized_endpoint,
+        _pin_grpc_headers,
+        _pin_http_headers,
+    )
 
     headers = {str(k).lower(): v for k, v in (kwargs.get("headers") or {}).items()}
     # Explicit credential headers win, as they do for register().
@@ -925,11 +932,16 @@ def _exporter(settings: AutoConfig, kwargs: Mapping[str, Any]) -> Any:
         headers.update({"x-api-key": settings.api_key, "x-secret-key": settings.secret_key})
     transport = kwargs.get("transport", Transport.HTTP)
     if transport == Transport.GRPC:
-        return GRPCSpanExporter(headers=headers, timeout=kwargs.get("timeout"))
+        exporter = GRPCSpanExporter(headers=headers, timeout=kwargs.get("timeout"))
+        _pin_grpc_headers(exporter, headers)
+        return exporter
     if transport != Transport.HTTP:
         raise ValueError(f"Invalid transport: {transport}")
     _, endpoint = _normalized_endpoint(settings.base_url)
-    return HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=kwargs.get("timeout"))
+    exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=kwargs.get("timeout"))
+    # The configured base URL is Future AGI, wherever it is hosted.
+    _pin_http_headers(exporter, headers)
+    return exporter
 
 
 def _fi_resource(settings: AutoConfig, project_type: Any, kwargs: Mapping[str, Any]) -> Resource:

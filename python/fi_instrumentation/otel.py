@@ -637,6 +637,113 @@ def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
     return merged
 
 
+_AMBIENT_HEADER_ENV_VARS = ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")
+
+
+def _ambient_headers() -> Dict[str, str]:
+    """Headers named by the OTLP environment variables, keyed by lower-case name.
+
+    Upstream OpenTelemetry exporters read these when they are built (and, from
+    1.4x, merge them under the headers passed in). They are meant for the
+    collector the user configured, which is not necessarily Future AGI.
+    """
+    from opentelemetry.util.re import parse_env_headers
+
+    found: Dict[str, str] = {}
+    for var in reversed(_AMBIENT_HEADER_ENV_VARS):
+        raw = os.environ.get(var)
+        if raw:
+            found.update({k.lower(): v for k, v in parse_env_headers(raw, liberal=True).items()})
+    return found
+
+
+def _is_future_agi_endpoint(endpoint: Optional[str]) -> bool:
+    """True when the exporter sends to Future AGI.
+
+    No endpoint means the default derived from FI_TRACES_URL / FI_BASE_URL (HTTP)
+    or FI_GRPC_URL (gRPC), falling back to the Future AGI hosts. An explicit
+    endpoint counts when it has the same host and port as one of those. Any other
+    endpoint is a collector the user chose and keeps standard OpenTelemetry
+    environment behaviour.
+    """
+    if endpoint is None:
+        return True
+
+    def _origin(url: Optional[str]) -> Optional[Tuple[str, Optional[int]]]:
+        if not url:
+            return None
+        parsed = urlparse(url if "://" in url else f"//{url}")
+        return (parsed.hostname or "").lower(), parsed.port
+
+    known = [
+        get_env_traces_endpoint(),
+        get_env_collector_endpoint(),
+        get_env_grpc_collector_endpoint(),
+        "https://api.futureagi.com",
+        "https://grpc.futureagi.com",
+    ]
+    return _origin(endpoint) in {_origin(url) for url in known}
+
+
+def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+    """Make an HTTP exporter send the OTLP defaults plus exactly ``sdk_headers``.
+
+    OpenTelemetry 1.29 sends from ``exporter._session.headers`` (and
+    ``exporter._headers``); both take environment headers only when no headers
+    are passed. From 1.4x the sent headers live in ``exporter._client._headers``
+    and always include the environment headers. Both are rewritten here, so the
+    environment is not read again at export time and ``os.environ`` is untouched.
+    """
+    try:
+        from opentelemetry.exporter.otlp.proto.http import _OTLP_HTTP_HEADERS
+    except ImportError:  # pragma: no cover - layout of an unknown release
+        _OTLP_HTTP_HEADERS = {}
+    defaults = {k.lower(): v for k, v in _OTLP_HTTP_HEADERS.items()}
+    sdk = {str(k).lower(): v for k, v in sdk_headers.items()}
+    ambient = _ambient_headers()
+
+    client = getattr(exporter, "_client", None)
+    current = getattr(client, "_headers", None)
+    if isinstance(current, dict):
+        pinned = dict(defaults)
+        if "content-encoding" in current and "content-encoding" not in ambient:
+            pinned["content-encoding"] = current["content-encoding"]
+        pinned.update(sdk)
+        current.clear()
+        current.update(pinned)
+
+    session = getattr(exporter, "_session", None)
+    session_headers = getattr(session, "headers", None)
+    if session_headers is not None and isinstance(getattr(exporter, "_headers", None), dict):
+        for name, value in ambient.items():
+            if name not in sdk and session_headers.get(name) == value:
+                del session_headers[name]
+                if name in defaults:
+                    session_headers[name] = defaults[name]
+        session_headers.update(sdk)
+        exporter._headers = dict(sdk)
+
+
+def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+    """Make a gRPC exporter send its metadata from exactly ``sdk_headers``.
+
+    The metadata is ``exporter._headers`` in 1.29 and 1.4x. Both take environment
+    headers whenever no headers are passed, so the pairs that came from the
+    environment are removed and the SDK's are set.
+    """
+    current = getattr(exporter, "_headers", None)
+    if not isinstance(current, (tuple, list)):
+        return
+    sdk = {str(k).lower(): v for k, v in sdk_headers.items()}
+    ambient = _ambient_headers()
+    kept = [
+        (k, v)
+        for k, v in current
+        if str(k).lower() not in sdk and not (str(k).lower() in ambient and ambient[str(k).lower()] == v)
+    ]
+    exporter._headers = tuple(kept) + tuple(sdk.items())
+
+
 class GRPCSpanExporter(_GRPCSpanExporter):
     """
     OTLP span exporter using gRPC.
@@ -652,13 +759,14 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
-        bound_args.arguments["headers"] = (
-            _with_fi_auth_headers(bound_args.arguments.get("headers")) or None
-        )
+        sdk_headers = _with_fi_auth_headers(bound_args.arguments.get("headers"))
+        bound_args.arguments["headers"] = sdk_headers or None
 
         if bound_args.arguments.get("endpoint") is None:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
         super().__init__(*bound_args.args, **bound_args.kwargs)
+        if _is_future_agi_endpoint(bound_args.arguments.get("endpoint")):
+            _pin_grpc_headers(self, sdk_headers)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -695,9 +803,12 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
-        bound_args.arguments["headers"] = _with_fi_auth_headers(headers) or None
+        sdk_headers = _with_fi_auth_headers(headers)
+        bound_args.arguments["headers"] = sdk_headers or None
 
         super().__init__(*bound_args.args, **bound_args.kwargs)
+        if _is_future_agi_endpoint(bound_args.arguments.get("endpoint")):
+            _pin_http_headers(self, sdk_headers)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
