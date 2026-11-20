@@ -278,6 +278,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | LLM | Anthropic | `traceai-java-anthropic` |
 | LLM | Cohere | `traceai-java-cohere` |
 | LLM | Google GenAI | `traceai-java-google-genai` |
+| Framework | Google ADK for Java (1.0.0 to 1.15.0) | `traceai-java-google-adk` |
 | LLM | Ollama | `traceai-java-ollama` |
 | LLM | AWS Bedrock | `traceai-java-bedrock` |
 | LLM | Google Vertex AI | `traceai-java-vertexai` |

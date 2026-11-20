@@ -55,6 +55,12 @@
             </exclusions>
         </dependency>
         <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-google-adk</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
             <version>${byte-buddy.version}</version>
@@ -370,6 +376,16 @@
                                 </relocation>
                             </relocations>
                             <filters>
+                                <filter>
+                                    <artifact>com.futureagi:traceai-java-google-adk</artifact>
+                                    <excludes>
+                                        <!-- Only the attribute mapping is bundled; the library wrappers need ADK itself. -->
+                                        <exclude>ai/traceai/googleadk/TracedLlm*.class</exclude>
+                                        <exclude>ai/traceai/googleadk/TracedTool*.class</exclude>
+                                        <exclude>ai/traceai/googleadk/AdkJson.class</exclude>
+                                        <exclude>ai/traceai/googleadk/SpanAttributes.class</exclude>
+                                    </excludes>
+                                </filter>
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>

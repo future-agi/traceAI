@@ -34,6 +34,7 @@ class ContentCensusTest {
         Map.entry("traceai-java-redis/TracedRedisVectorSearch.java", "the key is a result-count attribute"),
         Map.entry("traceai-java-semantic-kernel/NativeTelemetry.java", "token counts, a cancellation flag and caller-supplied context attributes, not content keys"),
         Map.entry("traceai-java-watsonx/WatsonxAttributes.java", "helpers called only with model, token-count and parameter keys"),
+        Map.entry("traceai-javaagent/GoogleAdk.java", "every key passes AttributeProjection.sanitize and hidden(k, ...) before the typed write"),
         Map.entry("traceai-javaagent/TraceAIAuto.java", "every key passes hidden(k, ...) before the typed write"),
         Map.entry("traceai-spring-ai/SpringAITracingContext.java", "context attributes (session, user, metadata), not content keys"));
 

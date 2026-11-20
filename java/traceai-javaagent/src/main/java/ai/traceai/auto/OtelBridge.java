@@ -56,9 +56,14 @@ final class OtelBridge {
                     suppressed |= Boolean.TRUE.equals(contextApi.getMethod("get", keyApi).invoke(externalContext, key));
                 } catch (ReflectiveOperationException ignored) { }
             }
+            // A span Google ADK started: its model call is a library span, and the agent's own span for it is the parent.
+            String adkKind = GoogleAdk.kindOf(external);
+            if (adkKind != null) suppressed |= library(adkKind);
             Object sc = spanApi.getMethod("getSpanContext").invoke(external);
             Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
             if ((boolean)scApi.getMethod("isValid").invoke(sc)) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
+            Context adkParent = GoogleAdk.contextOf(external);
+            if (adkParent != null) parent = adkParent;
             try {
                 Class<?> contextAttrs = Class.forName(String.join(".", "ai", "traceai", "ContextAttributes"), false, loader);
                 Object data = contextAttrs.getMethod("getAttributesFromContext").invoke(null);

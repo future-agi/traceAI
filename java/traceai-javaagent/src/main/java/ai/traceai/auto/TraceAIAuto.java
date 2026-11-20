@@ -410,6 +410,7 @@ public final class TraceAIAuto {
         };
         for (String[] library : libraries) STATUS.put(library[0], !config.enabled(library[0]) ? "disabled" : !present(library[1]) ? "not_installed" : !present(library[2]) ? "missing_instrumentor (known HTTP protocols still covered by wire)" : "manual (use " + library[2] + "; wrapper/listener registration required)");
         STATUS.put("servlet", config.credentials() && transportEnabled("servlet") ? "pending (joins incoming W3C trace context when loaded)" : "disabled");
+        STATUS.put(GoogleAdk.INTEGRATION, !config.credentials() || !transportEnabled(GoogleAdk.INTEGRATION) ? "disabled" : !present("com.google.adk.runner.Runner") ? "not_installed" : "pending (enabled when loaded)");
         boolean wire = config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && config.credentials();
         STATUS.putIfAbsent("wire", wire ? "pending (agent not initialized)" : "disabled");
         STATUS.putIfAbsent("java.net.http", wire && transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");
