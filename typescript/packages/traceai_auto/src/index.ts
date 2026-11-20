@@ -3,10 +3,10 @@ import { ExportResultCode } from "@opentelemetry/core";
 import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 // The Future AGI route factory is provided by @traceai/fi-core through a process-wide symbol, not a package export.
-const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory");
+const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory.v1");
 function createFiRouteSpanExporter(options: Record<string, unknown>): SpanExporter {
   const factory = (globalThis as any)[FI_ROUTE_FACTORY];
-  if (typeof factory !== "function") throw new Error("The installed @traceai/fi-core does not provide the Future AGI route. Install a matching @traceai/fi-core version.");
+  if (typeof factory !== "function") throw new Error("The installed @traceai/fi-core does not provide a compatible Future AGI route (protocol v1), or a different version of it was loaded first. Install one matching @traceai/fi-core version.");
   return factory(options);
 }
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
@@ -294,8 +294,9 @@ export function init(options: Options = {}): TracerProvider | undefined {
     else if (options.exporter || fiCredentials) {
       // The FI keys go to the resolved base URL. When a file or profile chose it, say which host, once.
       if (!options.exporter && (config.baseUrlSource === "config file" || config.baseUrlSource === "profile")) {
+        // The host the exporter dials: a scheme-less base URL is read as https://, as the exporter reads it.
         let host = "<invalid URL>";
-        try { host = new URL(config.baseUrl).host || host; } catch { /* Reported as invalid. */ }
+        try { host = new URL(/^https?:\/\//i.test(config.baseUrl.trim()) ? config.baseUrl.trim() : `https://${config.baseUrl.trim()}`).host || host; } catch { /* Reported as invalid. */ }
         warn("base-host", `Sending traces to ${host} (base URL from the ${config.baseUrlSource}).`);
       }
       const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl,

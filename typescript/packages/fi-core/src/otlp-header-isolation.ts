@@ -94,7 +94,9 @@ export function isolateGrpcExporterHeaders(exporter: unknown, config: { metadata
     const kept = new Set([...own, "user-agent"]);
     const clean = new grpc.Metadata();
     for (const name of Object.keys(probe.getMap())) {
-      if (kept.has(name)) { for (const value of probe.get(name)) clean.add(name, value); }
+      // The exporter's own merge keeps one value per name; the caller's metadata is copied whole (repeated and binary values).
+      if (own.has(name) && config.metadata) { for (const value of config.metadata.get(name)) clean.add(name, value); }
+      else if (kept.has(name)) { for (const value of probe.get(name)) clean.add(name, value); }
       else if (!env.has(name)) refuse(); // not ours, not from the environment: unknown layout
     }
     (exporter as any)._delegate = createOtlpGrpcExportDelegate({ ...(resolved as any), metadata: () => clean.clone() } as any, ProtobufTraceSerializer, "TraceExportService", "/opentelemetry.proto.collector.trace.v1.TraceService/Export");

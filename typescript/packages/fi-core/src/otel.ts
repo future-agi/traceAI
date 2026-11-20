@@ -29,7 +29,7 @@ import { Resource, ResourceDetector, resourceFromAttributes, detectResources, de
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
-import { endpointTarget, isFiEndpoint, sameEndpointTarget } from "./fi-endpoint";
+import { endpointTarget, isFiEndpoint, isLoopbackTarget, sameEndpointTarget } from "./fi-endpoint";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -289,15 +289,22 @@ class HTTPSpanExporter implements SpanExporter {
   }
 }
 
-/** The string-valued entries of a gRPC Metadata object, as headers, with `headers` (when given) taking precedence. */
-function metadataAsHeaders(metadata: unknown, headers?: FIHeaders): FIHeaders | undefined {
-  const fromMetadata: FIHeaders = {};
+/** The string-valued entries of a gRPC Metadata object (for secret discovery and the exporter's privacy filter). */
+function metadataStrings(metadata: unknown): FIHeaders {
+  const strings: FIHeaders = {};
   try {
     const map = (metadata as { getMap?: () => Record<string, unknown> } | undefined)?.getMap?.() ?? {};
-    for (const [name, value] of Object.entries(map)) if (typeof value === "string") fromMetadata[name] = value;
+    for (const [name, value] of Object.entries(map)) if (typeof value === "string") strings[name] = value;
   } catch { /* An unreadable metadata object adds nothing. */ }
-  if (!Object.keys(fromMetadata).length) return headers;
-  return { ...fromMetadata, ...(headers ?? {}) };
+  return strings;
+}
+
+/** Every value of the caller's gRPC Metadata, repeated and binary ones included, into `target`. */
+function copyMetadata(metadata: unknown, target: grpc.Metadata): void {
+  try {
+    const source = metadata as { getMap?: () => Record<string, unknown>; get?: (name: string) => unknown[] } | undefined;
+    for (const name of Object.keys(source?.getMap?.() ?? {})) for (const value of source?.get?.(name) ?? []) target.add(name, value as string | Buffer);
+  } catch { /* An unreadable metadata object adds nothing. */ }
 }
 
 // --- Custom GRPCSpanExporter extending OTLP gRPC exporter ---
@@ -312,16 +319,16 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     // The target is the one the options name (endpoint, or the standard url option), so the classification
     // below is made on the host that is dialled.
     const endpoint = resolveTarget({ endpoint: givenEndpoint, url: givenUrl }, true) ?? getEnvGrpcCollectorEndpoint();
-    // Caller metadata is more caller headers; the explicit headers option wins over it.
-    const requested = metadataAsHeaders(callerMetadata, callerHeaders);
-    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, requested, isFiRouteDeclared(options));
+    // FI headers are resolved from the caller's headers option alone; the caller's metadata sits underneath
+    // them (an entry of the same name is replaced), so it can neither suppress the FI keys nor be dropped.
+    const callerStrings = metadataStrings(callerMetadata);
+    seedSecrets(process.env, credentialSecrets(callerStrings));
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, callerHeaders, isFiRouteDeclared(options));
     const headers = resolvedHeaders ?? {};
-    const auth_header = headers;
-    const lower_case_auth_header = auth_header 
-      ? Object.fromEntries(Object.entries(auth_header).map(([k, v]) => [k.toLowerCase(), v]))
-      : {};
+    const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
     const metadata = new grpc.Metadata();
+    copyMetadata(callerMetadata, metadata);
     Object.entries(lower_case_auth_header).forEach(([key, value]) => {
       metadata.set(key, value);
     });
@@ -333,7 +340,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       // A Future AGI bound exporter connects the way the SDK chooses; other targets may bring their own credentials.
       ...(callerCredentials !== undefined && !fiBound ? { credentials: callerCredentials } : {}),
       ...(callerCredentials === undefined || fiBound
-        ? (endpoint.includes('localhost') || endpoint.includes('127.0.0.1') ? { credentials: grpc.credentials.createInsecure() } : {})
+        ? (isLoopbackTarget(endpoint) ? { credentials: grpc.credentials.createInsecure() } : {})
         : {}),
     };
 
@@ -346,7 +353,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
     
     this.verbose = verbose;
-    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, headers);
+    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers });
     privacyDestinations.add(this);
 
     if (this.verbose) {

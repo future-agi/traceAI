@@ -138,11 +138,13 @@ test('gRPC FI endpoint: an explicit headers pair wins over metadata and env, met
   assert.deepEqual(sink.received[0].get('x-secret-key'), [FI['x-secret-key']]);
   assert.deepEqual(sink.received[0].get('x-caller-meta'), ['from-metadata']);
 });
-test('gRPC caller metadata keeps repeated and binary values', async () => {
-  const sink = await grpcSink();
+test('gRPC FI endpoint: caller metadata keeps repeated and binary values', async () => {
+  envKeys();
+  const sink = await grpcSink(); fiEndpoint(sink, true);
   const metadata = new grpc.Metadata(); metadata.add('x-repeated', 'one'); metadata.add('x-repeated', 'two'); metadata.set('x-blob-bin', Buffer.from([1, 2, 3]));
   await exportThrough(createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, metadata }));
-  assert.deepEqual(sink.received[0].get('x-repeated'), ['one', 'two']);
+  // HTTP/2 joins repeated header values with a comma on receipt.
+  assert.deepEqual(sink.received[0].get('x-repeated'), ['one, two']);
   assert.deepEqual(sink.received[0].get('x-blob-bin'), [Buffer.from([1, 2, 3])]);
 });
 // ---- A second physical copy of @opentelemetry/otlp-exporter-base ------------------------------------

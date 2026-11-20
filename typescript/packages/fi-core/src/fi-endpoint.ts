@@ -48,3 +48,10 @@ export function sameEndpointTarget(a: string, b: string, transport: EndpointTran
   const left = endpointTarget(a, transport), right = endpointTarget(b, transport);
   return left !== undefined && right !== undefined && left.origin === right.origin;
 }
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+/** True when the gRPC target dials exactly localhost, 127.0.0.1 or ::1 (decided on the parsed host, not on the text). */
+export function isLoopbackTarget(endpoint: string): boolean {
+  const target = grpcTarget(endpoint);
+  return target !== undefined && LOOPBACK_HOSTS.has(target.hostname.toLowerCase());
+}

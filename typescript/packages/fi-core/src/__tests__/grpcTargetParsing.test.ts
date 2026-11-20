@@ -10,7 +10,8 @@ describe("gRPC target parsing agrees with the installed exporter", () => {
   test.each(GRPC_INPUTS)("%p", input => {
     const dialled = (() => { try { return (convertLegacyOtlpGrpcOptions({ url: input } as any, "TRACES") as { url: string }).url; } catch { return undefined; } })();
     const mine = endpointTarget(input, "grpc");
-    if (dialled === undefined || dialled.startsWith("unix:")) { expect(mine).toBeUndefined(); return; }
+    if (!dialled || dialled.startsWith("unix:")) { // an empty host dials nothing
+       expect(mine).toBeUndefined(); return; }
     expect(mine).toBeDefined();
     expect(new URL(`https://${dialled}`).hostname).toBe(mine!.hostname);
   });
