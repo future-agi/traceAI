@@ -61,8 +61,9 @@ public class KeyTransportAutoTests : InitIsolation
     {
         private readonly TcpListener _tcp = new(IPAddress.Loopback, 0);
         public int Connections; public readonly List<string> FirstLines = new();
+        private readonly List<TcpClient> _held = new();
         public int Port => ((IPEndPoint)_tcp.LocalEndpoint).Port;
-        public Listener()
+        public Listener(bool answer = true)
         {
             _tcp.Start();
             _ = Task.Run(async () =>
@@ -73,11 +74,12 @@ public class KeyTransportAutoTests : InitIsolation
                     try { client = await _tcp.AcceptTcpClientAsync(); } catch { return; }
                     Interlocked.Increment(ref Connections);
                     try { var buffer = new byte[512]; var n = await client.GetStream().ReadAsync(buffer); lock (FirstLines) FirstLines.Add(Encoding.ASCII.GetString(buffer, 0, n).Split('\r')[0]); } catch { }
-                    client.Dispose();
+                    // A silent collector keeps the connection open and never answers.
+                    if (answer) client.Dispose(); else lock (FirstLines) _held.Add(client);
                 }
             });
         }
-        public void Dispose() => _tcp.Stop();
+        public void Dispose() { _tcp.Stop(); lock (FirstLines) foreach (var c in _held) c.Dispose(); }
     }
 
     /// <summary>One span through the route the agent builds, on the transport the agent selects (the native SDK or the compatibility encoder).</summary>
@@ -112,26 +114,38 @@ public class KeyTransportAutoTests : InitIsolation
     {
         try
         {
-            Assert.ThrowsAny<Exception>(() => Agent.FiRouteOptions(Config(baseUrl)));
+            Assert.Equal("FI_PLAINTEXT_FI_HOST", Assert.Throws<FiKeyRefusedException>(() => Agent.FiRouteOptions(Config(baseUrl))).Code);
             Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
-            Assert.ThrowsAny<Exception>(() => Agent.FiRouteOptions(Config(baseUrl)));
-            Assert.ThrowsAny<Exception>(() => Agent.FiRouteOptions(Config(baseUrl, allow: true)));
+            Assert.Equal("FI_PLAINTEXT_FI_HOST", Assert.Throws<FiKeyRefusedException>(() => Agent.FiRouteOptions(Config(baseUrl))).Code);
+            Assert.Equal("FI_PLAINTEXT_FI_HOST", Assert.Throws<FiKeyRefusedException>(() => Agent.FiRouteOptions(Config(baseUrl, allow: true))).Code);
         }
         finally { Restore(); }
     }
 
-    [Theory]
-    [InlineData("http://api.futureagi.com\\@collector.example")]
-    [InlineData("http://collector.example%5C@api.futureagi.com")]
-    [InlineData("http://collector.example/x@api.futureagi.com")]
-    [InlineData("http://localhost\\@collector.example:4318")]
-    [InlineData("http:///api.futureagi.com")]
-    public void AnAmbiguousBaseUrlBuildsNoRoute(string baseUrl)
+    [Fact]
+    public void ABaseUrlWithAnAtAfterTheHostPartIsRefusedByTheDecision()
     {
         try
         {
             Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
-            Assert.ThrowsAny<Exception>(() => Agent.FiRouteOptions(Config(baseUrl, allow: true)));
+            Assert.Equal("FI_HOST_MISMATCH", Assert.Throws<FiKeyRefusedException>(() => Agent.FiRouteOptions(Config("http://collector.example/x@api.futureagi.com", allow: true))).Code);
+        }
+        finally { Restore(); }
+    }
+
+    // The agent's configuration already rejects these spellings (a backslash, a percent-encoded backslash before an @, an empty host) as an
+    // invalid collector URL, so no route is built; the decision's own codes for them are asserted in the core tests.
+    [Theory]
+    [InlineData("http://api.futureagi.com\\@collector.example")]
+    [InlineData("http://collector.example%5C@api.futureagi.com")]
+    [InlineData("http://localhost\\@collector.example:4318")]
+    [InlineData("http:///api.futureagi.com")]
+    public void AnUnreadableBaseUrlIsRejectedByTheConfigurationBeforeAnyRoute(string baseUrl)
+    {
+        try
+        {
+            Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
+            Assert.Throws<ArgumentException>(() => Agent.FiRouteOptions(Config(baseUrl, allow: true)));
         }
         finally { Restore(); }
     }
@@ -202,6 +216,88 @@ public class KeyTransportAutoTests : InitIsolation
         finally { Restore(); }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void LiteralLoopbackPlaintextGoesDirectWhenAProxyIsConfigured(bool compatibility, bool optIn)
+    {
+        try
+        {
+            using var sink = new Sink(); using var proxy = new Listener();
+            HttpClient.DefaultProxy = new WebProxy($"http://127.0.0.1:{proxy.Port}", BypassOnLocal: false);
+            if (optIn) Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
+            Send(Config($"http://127.0.0.1:{sink.Port}", allow: optIn ? true : null), compatibility);
+            Assert.Equal(1, sink.Count); Assert.Equal(0, proxy.Connections);
+        }
+        finally { Restore(); }
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:4318", false)]
+    [InlineData("http://[::1]:4318", false)]
+    [InlineData("http://localhost:4318", false)]
+    [InlineData("http://127.0.0.1:4318", true)]
+    [InlineData("http://[::1]:4318", true)]
+    public void TheRouteClientForAnyPlaintextKeyCarryingTargetUsesNoProxy(string baseUrl, bool optIn)
+    {
+        try
+        {
+            var options = Agent.FiRouteOptions(Config(baseUrl, allow: optIn ? true : null));
+            using var client = options.HttpClientFactory();
+            Assert.Equal(2000, options.TimeoutMilliseconds);
+            Assert.Equal(TimeSpan.FromMilliseconds(2000), client.Timeout);
+        }
+        finally { Restore(); }
+    }
+
+    [Fact]
+    public void ACollectorThatNeverAnswersEndsTheNativeExportWithinTheConfiguredTimeout()
+    {
+        try
+        {
+            using var silent = new Listener(answer: false);
+            var watch = Stopwatch.StartNew();
+            Send(Config($"http://127.0.0.1:{silent.Port}"), compatibility: false);
+            watch.Stop();
+            Assert.True(silent.Connections >= 1, "the export reached the collector");
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2 + 4), $"the export hung for {watch.Elapsed}");
+        }
+        finally { Restore(); }
+    }
+
+    [Fact]
+    public void AnotherVendorsCredentialInTheAmbientHeadersDoesNotRefuseTheSuppliedExporter()
+    {
+        try
+        {
+            Environment.SetEnvironmentVariable("X_VENDOR_API_KEY", "vendor-key-synthetic-0002");
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "x-vendor-team=vendor-key-synthetic-0002");
+            using var agent = new Agent(Config(null, exporter: new NullExporter()));
+            // A value the wire layer happened to observe on a request is not a Future AGI secret either.
+            KnownSecrets.Register("wire-observed-synthetic-0009");
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "x-vendor-team=wire-observed-synthetic-0009");
+            using var second = new Agent(Config(null, exporter: new NullExporter()));
+        }
+        finally { Environment.SetEnvironmentVariable("X_VENDOR_API_KEY", null); Restore(); }
+    }
+
+    [Fact]
+    public void AFutureAgiKeyValueInTheAmbientHeadersRefusesTheSuppliedExporter()
+    {
+        try
+        {
+            Environment.SetEnvironmentVariable("FI_SECRET_KEY", "synthetic-fi-secret-0001");
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "x-trace-token=synthetic-fi-secret-0001");
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => new Agent(Config(null, exporter: new NullExporter()))).Code);
+            Environment.SetEnvironmentVariable("FI_SECRET_KEY", null);
+            // The same value supplied through the options, not the environment.
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => new Agent(Config(null, exporter: new NullExporter()))).Code);
+        }
+        finally { Restore(); }
+    }
+
     private sealed class NullExporter : BaseExporter<Activity> { public override ExportResult Export(in Batch<Activity> batch) => ExportResult.Success; }
 
     [Theory]
@@ -212,10 +308,10 @@ public class KeyTransportAutoTests : InitIsolation
         try
         {
             Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", headers);
-            Assert.ThrowsAny<Exception>(() => new Agent(Config(null, exporter: new NullExporter())));
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => new Agent(Config(null, exporter: new NullExporter()))).Code);
             Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", null);
             Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_HEADERS", headers);
-            Assert.ThrowsAny<Exception>(() => new Agent(Config(null, exporter: new NullExporter())));
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => new Agent(Config(null, exporter: new NullExporter()))).Code);
         }
         finally { Restore(); }
     }
@@ -227,7 +323,7 @@ public class KeyTransportAutoTests : InitIsolation
         {
             TraceAIAuto.RegisterSecret("registered-secret-synthetic-0004");
             Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "x-trace-token=registered-secret-synthetic-0004");
-            Assert.ThrowsAny<Exception>(() => new Agent(Config(null, exporter: new NullExporter())));
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => new Agent(Config(null, exporter: new NullExporter()))).Code);
             Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20other-backend-token");
             using var agent = new Agent(Config(null, exporter: new NullExporter()));
         }

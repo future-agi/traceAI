@@ -44,6 +44,21 @@ public class KeyTransportDecisionTests : IDisposable
         Assert.True(decision.PlaintextOptIn);
     }
 
+    [Theory]
+    [InlineData("http://api.futureagi.com\\@collector.example", "FI_HOST_MISMATCH")]
+    [InlineData("http://collector.example%5C@api.futureagi.com", "FI_HOST_MISMATCH")]
+    [InlineData("http://collector.example/x@api.futureagi.com", "FI_HOST_MISMATCH")]
+    [InlineData("http://localhost\\@collector.example:4318", "FI_HOST_MISMATCH")]
+    [InlineData("https://api.futureagi.com\\@collector.example", "FI_HOST_MISMATCH")]
+    [InlineData("http:///api.futureagi.com", "FI_EMPTY_AUTHORITY")]
+    [InlineData("https:///api.futureagi.com/", "FI_EMPTY_AUTHORITY")]
+    [InlineData("https://\\api.futureagi.com/", "FI_EMPTY_AUTHORITY")]
+    public void AnAmbiguousTargetIsRefusedWithItsOwnCode(string target, string code)
+    {
+        foreach (var optIn in new[] { false, true })
+            Assert.Equal(code, Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.Decide(target, false, true, allowInsecureHttp: optIn)).Code);
+    }
+
     [Fact]
     public void NoKeysNoDecision()
     {
@@ -75,6 +90,39 @@ public class KeyTransportDecisionTests : IDisposable
     }
 
     [Theory]
+    [InlineData("http://127.0.0.1:4318", false)]
+    [InlineData("http://localhost:4318", false)]
+    [InlineData("http://[::1]:4318", false)]
+    [InlineData("http://127.1:4318", true)]
+    [InlineData("http://collector.example:4318", true)]
+    public void NoPlaintextKeyCarryingClientEverUsesAProxy(string target, bool optIn)
+    {
+        var decision = FiKeyTransport.Decide(target, false, true, allowInsecureHttp: optIn);
+        Assert.False(decision.Tls);
+        Assert.False(FiKeyTransport.CreateHandler(decision).UseProxy);
+        Assert.False(FiKeyTransport.CreateHandler(decision).AllowAutoRedirect);
+        // The same targets with the opt-in set do not change it for loopback either.
+        if (!optIn) Assert.False(FiKeyTransport.CreateHandler(FiKeyTransport.Decide(target, false, true, allowInsecureHttp: true)).UseProxy);
+    }
+
+    [Fact]
+    public void AClientForARequestWithNoKeysIsNotChangedByTheProxyRule()
+    {
+        Assert.True(FiKeyTransport.CreateHandler(FiKeyTransport.Decide("http://collector.example:4318", false, false)).UseProxy);
+    }
+
+    [Theory]
+    [InlineData(1500)]
+    [InlineData(2000)]
+    [InlineData(10000)]
+    public void TheClientFactoryKeepsTheExporterTimeout(int milliseconds)
+    {
+        var decision = FiKeyTransport.Decide("https://collector.example:4318", false, true);
+        using var client = FiKeyTransport.HttpClientFactory(decision, milliseconds)();
+        Assert.Equal(TimeSpan.FromMilliseconds(milliseconds), client.Timeout);
+    }
+
+    [Theory]
     [InlineData("x-api-key=ambient-key-synthetic-0001")]
     [InlineData("X-Secret-Key=ambient-secret-synthetic-0001,authorization=Bearer%20x")]
     public void AmbientHeadersWithAKeyHeaderAreRefusedForAnotherCollector(string headers)
@@ -84,6 +132,22 @@ public class KeyTransportDecisionTests : IDisposable
         Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", null);
         Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_HEADERS", headers);
         Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.AssertNoFiKeysInAmbientHeaders());
+    }
+
+    [Fact]
+    public void AnotherVendorsCredentialInTheAmbientHeadersIsNotAKnownFutureAgiSecret()
+    {
+        // Only Future AGI key values (environment, options) and secrets registered through Future AGI's own options count; a
+        // credential-named variable of another vendor does not, so that vendor's collector keeps working.
+        Environment.SetEnvironmentVariable("X_VENDOR_API_KEY", "vendor-key-synthetic-0002");
+        try
+        {
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "x-vendor-team=vendor-key-synthetic-0002");
+            FiKeyTransport.AssertNoFiKeysInAmbientHeaders();
+            Environment.SetEnvironmentVariable("FI_SECRET_KEY", "vendor-key-synthetic-0002");
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.AssertNoFiKeysInAmbientHeaders()).Code);
+        }
+        finally { Environment.SetEnvironmentVariable("X_VENDOR_API_KEY", null); }
     }
 
     [Fact]

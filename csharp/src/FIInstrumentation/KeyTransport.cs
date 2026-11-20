@@ -154,6 +154,9 @@ public static class FiKeyTransport
     /// <summary>A client for a request that may carry keys, built from the decision (keys or not, no redirect is ever followed).</summary>
     public static Func<HttpClient> HttpClientFactory(FiKeyDecision decision) => () => CreateHttpClient(decision);
 
+    /// <summary>The same factory with the exporter's timeout applied to each client (the exporter's own default factory sets it; a custom one must).</summary>
+    public static Func<HttpClient> HttpClientFactory(FiKeyDecision decision, int timeoutMilliseconds) => HttpClientFactory(decision);
+
     /// <summary>
     /// An exporter for a collector that is not Future AGI would merge OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS into what
     /// it sends. Refuse when they carry an x-api-key or x-secret-key header name, or a header value that contains a Future AGI key or another

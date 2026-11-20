@@ -77,11 +77,12 @@ public class KeyTransportSendTests : IDisposable
         public void Dispose() => _tcp.Stop();
     }
 
-    private static void RegisterAndSend(string endpoint)
+    private static void RegisterAndSend(string endpoint, bool grpc = false)
     {
         var tracer = TraceAI.Register(o =>
         {
             o.ProjectName = "key-transport"; o.Verbose = false; o.Batch = false; o.SetGlobalTracerProvider = false;
+            if (grpc) o.Transport = FIInstrumentation.Types.Transport.Grpc;
             o.Endpoint = endpoint; o.ApiKey = "synthetic-fi-key-0001"; o.SecretKey = "synthetic-fi-secret-0001";
         });
         using (var span = tracer.ActivitySource.StartActivity("one")) { span?.SetTag("k", "v"); }
@@ -103,22 +104,50 @@ public class KeyTransportSendTests : IDisposable
     [InlineData("http://eu.futureagi.com")]
     public void APlaintextFutureAgiHostIsRefusedBeforeAnyRequest(string endpoint)
     {
-        Assert.ThrowsAny<Exception>(() => RegisterAndSend(endpoint));
+        Assert.Equal("FI_PLAINTEXT_FI_HOST", Assert.Throws<FiKeyRefusedException>(() => RegisterAndSend(endpoint)).Code);
         Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
         TraceAI.Shutdown();
-        Assert.ThrowsAny<Exception>(() => RegisterAndSend(endpoint));
+        Assert.Equal("FI_PLAINTEXT_FI_HOST", Assert.Throws<FiKeyRefusedException>(() => RegisterAndSend(endpoint)).Code);
     }
 
     [Theory]
-    [InlineData("http://api.futureagi.com\\@collector.example")]
-    [InlineData("http://collector.example%5C@api.futureagi.com")]
-    [InlineData("http://collector.example/x@api.futureagi.com")]
-    [InlineData("http://localhost\\@collector.example:4318")]
-    [InlineData("http:///api.futureagi.com")]
-    public void AnAmbiguousTargetIsRefused(string endpoint)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LoopbackPlaintextIsDirectWhenAProxyIsConfigured(bool optIn)
+    {
+        using var sink = new Sink(); using var proxy = new Listener();
+        HttpClient.DefaultProxy = new WebProxy($"http://127.0.0.1:{proxy.Port}", BypassOnLocal: false);
+        if (optIn) Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
+        RegisterAndSend($"http://127.0.0.1:{sink.Port}");
+        Assert.Equal(1, sink.Count);
+        Assert.Equal(0, proxy.Connections);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AGrpcPlaintextSendIsDirectWhenAProxyIsConfigured(bool optIn)
+    {
+        // gRPC to a plaintext target (loopback, or the opted-in self-hosted spelling): the connection goes to the target, not the proxy.
+        using var target = new Listener(); using var proxy = new Listener();
+        HttpClient.DefaultProxy = new WebProxy($"http://127.0.0.1:{proxy.Port}", BypassOnLocal: false);
+        if (optIn) Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
+        var endpoint = optIn ? $"http://127.1:{target.Port}" : $"http://127.0.0.1:{target.Port}";
+        try { RegisterAndSend(endpoint, grpc: true); } catch (FiKeyRefusedException) { throw; } catch { /* the listener never speaks gRPC; a failed export is not the point */ }
+        Assert.True(target.Connections >= 1, "the gRPC connection went to the target");
+        Assert.Equal(0, proxy.Connections);
+    }
+
+    [Theory]
+    [InlineData("http://api.futureagi.com\\@collector.example", "FI_HOST_MISMATCH")]
+    [InlineData("http://collector.example%5C@api.futureagi.com", "FI_HOST_MISMATCH")]
+    [InlineData("http://collector.example/x@api.futureagi.com", "FI_HOST_MISMATCH")]
+    [InlineData("http://localhost\\@collector.example:4318", "FI_HOST_MISMATCH")]
+    [InlineData("http:///api.futureagi.com", "FI_EMPTY_AUTHORITY")]
+    public void AnAmbiguousTargetIsRefused(string endpoint, string code)
     {
         Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "1");
-        Assert.ThrowsAny<Exception>(() => RegisterAndSend(endpoint));
+        Assert.Equal(code, Assert.Throws<FiKeyRefusedException>(() => RegisterAndSend(endpoint)).Code);
     }
 
     [Fact]
@@ -127,11 +156,11 @@ public class KeyTransportSendTests : IDisposable
         // 127.1 is not the literal loopback (a parser reads it as 127.0.0.1): it needs the opt-in, and still reaches this machine.
         using var sink = new Sink();
         var endpoint = $"http://127.1:{sink.Port}";
-        Assert.ThrowsAny<Exception>(() => RegisterAndSend(endpoint));
+        Assert.Equal("FI_PLAINTEXT_NOT_ALLOWED", Assert.Throws<FiKeyRefusedException>(() => RegisterAndSend(endpoint)).Code);
         Assert.Equal(0, sink.Count);
         TraceAI.Shutdown();
         Environment.SetEnvironmentVariable("FI_ALLOW_INSECURE_HTTP", "yes");
-        Assert.ThrowsAny<Exception>(() => RegisterAndSend(endpoint));
+        Assert.Equal("FI_PLAINTEXT_NOT_ALLOWED", Assert.Throws<FiKeyRefusedException>(() => RegisterAndSend(endpoint)).Code);
         Assert.Equal(0, sink.Count);
     }
 
