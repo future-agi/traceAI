@@ -128,6 +128,19 @@ class KnownSecretsEscapeTest {
         return false;
     }
 
+    /** In the raw exported text, no marker is preceded by a non-empty prefix of the secret or of its JSON-escaped form. */
+    private static void assertNoPrefixBeforeAMarker(String raw, String secret) {
+        String escaped = KnownSecrets.jsonEscaped(secret);
+        for (int at = raw.indexOf(M); at >= 0; at = raw.indexOf(M, at + M.length())) {
+            String before = raw.substring(0, at);
+            for (String form : new String[] {secret, escaped}) {
+                for (int length = 1; length <= form.length(); length++) {
+                    assertThat(before.endsWith(form.substring(0, length))).as("the raw text ends with the first %d characters of the secret before a marker: %s", length, raw).isFalse();
+                }
+            }
+        }
+    }
+
     /**
      * A registered secret really straddles the cut: the kept text ends with its first {@code k} characters, so its start lies within
      * {@code longest() - 1} of the cut. The sealed text then goes into a JSON string, where a control character before the secret is an
@@ -144,6 +157,7 @@ class KnownSecretsEscapeTest {
                 assertThat(sealed).endsWith(M).hasSizeLessThanOrEqualTo(400);
                 String scrubbed = snapshot.scrub(GSON.toJson(Map.of("v", sealed)));
                 assertSafe(scrubbed, secret);
+                assertNoPrefixBeforeAMarker(scrubbed, secret);
                 String decoded = String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v"));
                 String left = decoded.replace(M, "").replace(KnownSecrets.PLACEHOLDER, "").replace("x", "").replace("\n", "").replace("\u0001", "");
                 assertThat(left).as("k=%d control=%s: part of the secret is left at the cut in %s", k, control.length(), scrubbed).isEmpty();
@@ -151,15 +165,56 @@ class KnownSecretsEscapeTest {
         }
     }
 
+    /**
+     * The marker-aware scrub on its own: the tail drop of sealCut is not applied (the input is built directly), so a secret cut off right
+     * before a truncation marker can only be removed because the export scrub treats every marker as a cut point. Covers plain text, inside
+     * a JSON string after an escaped newline and after an escaped U+0001, a marker in the middle of a value, and two markers in one value.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"QCAPSECRET-VALUE-9988", "nQCAPSECRET-VALUE-9988", "u0001QCAPSECRET-VAL"})
+    void theMarkerAwareScrubAloneRemovesAPartialSecretBeforeEveryMarker(String secret) {
+        KnownSecrets.Snapshot snapshot = snapshot(secret);
+        String[][] shapes = {
+            // {value before the partial, text after the last marker} for a marker at the end and in the middle
+            {"plain ", ""}, {"plain ", " and more text"}, {"line one\n", ""}, {"line one\n", " tail"}, {"x\u0001", ""}, {"x\u0001", " tail"}};
+        for (String[] shape : shapes) {
+            boolean json = shape[0].contains("\n") || shape[0].contains("\u0001");
+            String before = shape[0].replace("\\n", "\n").replace("\\u0001", "\u0001");
+            for (int k = 1; k < secret.length(); k++) {
+                String partial = secret.substring(0, k);
+                for (int markers = 1; markers <= 2; markers++) {
+                    StringBuilder value = new StringBuilder(before).append(partial).append(M);
+                    if (markers == 2) value.append(" middle ").append(before).append(partial).append(M);
+                    value.append(shape[1]);
+                    String text = json ? GSON.toJson(Map.of("v", value.toString())) : value.toString();
+                    String scrubbed = snapshot.scrub(text);
+                    String shown = "k=" + k + " markers=" + markers + " in " + scrubbed;
+                    String decoded = json ? String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v")) : scrubbed;
+                    if (json) { parse(scrubbed); assertThat(illegalEscape(scrubbed)).as(shown).isEqualTo(-1); }
+                    String unit = before + KnownSecrets.PLACEHOLDER + M;
+                    String expected = unit + (markers == 2 ? " middle " + unit : "") + shape[1];
+                    assertThat(decoded).as("a secret prefix is left before a marker: " + shown).isEqualTo(expected);
+                    assertNoPrefixBeforeAMarker(scrubbed, secret);
+                }
+            }
+        }
+    }
+
     @Test
-    void aFullValueWhoseCutLandsInsideTheSecretIsReplacedFirstEverywhere() {
-        KnownSecrets.Snapshot snapshot = snapshot("QCAPSECRET-VALUE-9988");
-        for (int offset = 0; offset < 21; offset++) {
-            String value = "x".repeat(399 - offset) + "\n" + "QCAPSECRET-VALUE-9988" + "z".repeat(50);
-            String capped = snapshot.cap(value, 400);
+    void aFullValueWhoseRawCutLandsAfterEachPrefixOfTheSecretIsReplacedFirst() {
+        String secret = "QCAPSECRET-VALUE-9988";
+        KnownSecrets.Snapshot snapshot = snapshot(secret);
+        int limit = 400;
+        for (int k = 1; k < secret.length(); k++) {
+            // The raw value's character number `limit` falls after the first k characters of the secret: every offset is inside it.
+            String value = "x".repeat(limit - k - 1) + "\n" + secret + "z".repeat(50);
+            int start = value.indexOf(secret);
+            assertThat(start).as("k=%d: the cut is inside the secret", k).isLessThan(limit).isGreaterThan(limit - secret.length());
+            assertThat(limit - start).isEqualTo(k);
+            String capped = snapshot.cap(value, limit);
             String scrubbed = snapshot.scrub(GSON.toJson(Map.of("v", capped)));
-            assertSafe(scrubbed, "QCAPSECRET-VALUE-9988");
-            assertThat(String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v")).replace(KnownSecrets.PLACEHOLDER, "")).doesNotContain("Q");
+            assertSafe(scrubbed, secret);
+            assertThat(String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v")).replace(KnownSecrets.PLACEHOLDER, "").replace(M, "").replace("x", "").replace("\n", "").replace("z", "")).as("k=%d", k).isEmpty();
         }
     }
 
