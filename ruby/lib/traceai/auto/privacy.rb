@@ -9,6 +9,15 @@ module TraceAI
     module Privacy
       INVOCATION_FAMILIES = %w[gen_ai.request anthropic.request anthropic.thinking].freeze
       REQUEST_IDENTITY_KEYS = %w[gen_ai.request.model gen_ai.request.stream anthropic.request.id].freeze
+      # Raw input and raw output (and their children) are withheld while any
+      # content hide setting is on, whichever one it is.
+      RAW_CONTENT_SWITCHES = %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text
+                                hide_input_images hide_embedding_vectors hide_llm_invocation_parameters].freeze
+      # A tool call's identity is not content; its arguments belong to the input
+      # side and its result to the output side.
+      TOOL_IDENTITY_KEYS = %w[gen_ai.tool.name gen_ai.tool.call.id gen_ai.tool.type].freeze
+      TOOL_ARGUMENT_SWITCHES = %w[hide_inputs hide_input_text hide_input_messages].freeze
+      TOOL_RESULT_SWITCHES = %w[hide_outputs hide_output_text hide_output_messages].freeze
       SESSION_ID = 'session.id'
       # Unlike other protected families, usage permits application-defined suffixes.
       # Only these literal schema keys are recoverable without a working registry.
@@ -429,6 +438,11 @@ module TraceAI
           output_messages = k == 'gen_ai.output.messages' || k.start_with?('gen_ai.output.messages.')
           system = k == 'gen_ai.system_instructions' || k.start_with?('gen_ai.system_instructions.')
           tools = k == 'gen_ai.tool' || k.start_with?('gen_ai.tool.')
+          tool_arguments = k == 'gen_ai.tool.call.arguments'
+          tool_result = k == 'gen_ai.tool.call.result'
+          tools &&= !(tool_arguments || tool_result || TOOL_IDENTITY_KEYS.include?(k))
+          raw = k == 'raw.input' || k.start_with?('raw.input.') || k == 'raw.output' || k.start_with?('raw.output.')
+          next if raw && RAW_CONTENT_SWITCHES.any? { |flag| hide.call(flag) }
           parameters = !REQUEST_IDENTITY_KEYS.include?(k) && INVOCATION_FAMILIES.any? { |family| k == family || k.start_with?(family + '.') }
           next if (input_messages || system) && (hide.call('hide_inputs') || hide.call('hide_input_messages'))
           next if output_messages && (hide.call('hide_outputs') || hide.call('hide_output_messages'))
@@ -445,6 +459,8 @@ module TraceAI
           hidden ||= k == 'input.value' && (hide.call('hide_input_messages') || hide.call('hide_input_images') || hide.call('hide_llm_invocation_parameters'))
           hidden ||= k == 'output.value' && hide.call('hide_output_messages')
           hidden ||= tools && %w[hide_inputs hide_outputs hide_input_text hide_output_text].any? { |flag| hide.call(flag) }
+          hidden ||= tool_arguments && TOOL_ARGUMENT_SWITCHES.any? { |flag| hide.call(flag) }
+          hidden ||= tool_result && TOOL_RESULT_SWITCHES.any? { |flag| hide.call(flag) }
           out[k] = hidden ? '__REDACTED__' : v
         end
       end
