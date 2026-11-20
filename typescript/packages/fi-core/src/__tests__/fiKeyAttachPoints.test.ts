@@ -86,6 +86,39 @@ function guardCallers(): string[] {
   return [...found].sort();
 }
 
+/**
+ * Loopback and Future AGI host decisions read the host as written in the URL or target (writtenHost), before a
+ * parser rewrites it. These are the only places that decide loopback; every other site asks one of them.
+ */
+const LOOPBACK_DECIDERS = ["fi-endpoint.ts::guardFiKeys", "fi-endpoint.ts::isLiteralLoopback"];
+function loopbackDeciders(): string[] {
+  const found = new Set<string>();
+  for (const path of sourceFiles(SRC)) {
+    const file = relative(SRC, path);
+    const text = readFileSync(path, "utf8").split("\n");
+    const fns = functions(text, file);
+    text.forEach((line, i) => {
+      const code = line.replace(/\/\/.*$/, "");
+      if (/^\s*(\*|\/\*)/.test(code) || !/LOOPBACK_HOSTS|isLiteralLoopback\(|isLoopbackTarget\(|isLoopbackHost\(/.test(code)) return;
+      found.add([...fns].reverse().find(f => f.start <= i)?.site ?? `${file}::<top level>`);
+    });
+  }
+  return [...found].sort();
+}
+
+describe("loopback is decided on the host as written", () => {
+  test("only the pinned functions decide loopback or call the decider", () => {
+    expect(loopbackDeciders()).toEqual(["fi-endpoint.ts::guardFiKeys", "fi-endpoint.ts::isLiteralLoopback", "otel.ts::grpcChannelCredentials"]);
+  });
+  test("the decider reads the written host, never the parsed one", () => {
+    const text = readFileSync(join(SRC, "fi-endpoint.ts"), "utf8");
+    const body = /export function isLiteralLoopback[\s\S]*?\n}\n/.exec(text)?.[0] ?? "";
+    expect(body).toMatch(/writtenHost\(/);
+    expect(body).not.toMatch(/\.hostname/);
+    expect(/export function writtenHost/.test(text)).toBe(true);
+  });
+});
+
 describe("every place Future AGI keys are read or attached goes through the shared guard", () => {
   test("the guard is applied in exactly the pinned places", () => {
     expect(guardCallers()).toEqual(GUARD_CALLERS);

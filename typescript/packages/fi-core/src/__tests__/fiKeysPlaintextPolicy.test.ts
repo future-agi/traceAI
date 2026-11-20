@@ -205,3 +205,50 @@ describe("the custom eval checks follow the same rules", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * Loopback is decided on the host as written in the URL or target, before any parser rewrites it: only the literal
+ * localhost, 127.0.0.1 and ::1 / [::1] count. A spelling a parser turns into loopback is another host: it is refused with
+ * FI keys over plaintext, allowed (with the one warning) under the opt-in, and still refused through a proxy.
+ */
+describe("only a literal loopback host is loopback", () => {
+  const WRITTEN = ["127.0.0.1.", "127.1", "0x7f.0.0.1", "2130706433", "127.0.0.01", "0177.0.0.1", "LOCALHOST.", "localhost."];
+  test.each(["localhost", "LOCALHOST", "127.0.0.1", "[::1]"])("%s stays loopback on HTTP and gRPC", async host => {
+    await http(`http://${host}:4318`).shutdown();
+    expect(channel(rpc(`${host}:4317`)).secure).toBe(false);
+    expect(channel(rpc(`http://${host}:4317`)).secure).toBe(false);
+  });
+  test.each(WRITTEN)("(a) %s: HTTP and gRPC plaintext with FI keys are refused by default", host => {
+    expect(refused(() => http(`http://${host}:4318`))).toMatch(/FI_ALLOW_INSECURE_HTTP/);
+    expect(refused(() => rpc(`http://${host}:4317`))).toMatch(/FI_ALLOW_INSECURE_HTTP/);
+    expect(refused(() => rpc(`${host}:4317`, { credentials: grpc.credentials.createInsecure() }))).toMatch(/FI_ALLOW_INSECURE_HTTP/);
+  });
+  test.each(WRITTEN)("(b) %s: allowed by the opt-in as a self-hosted host, with one warning", host => {
+    const { warnings } = withFreshModule(m => {
+      process.env.FI_ALLOW_INSECURE_HTTP = "1";
+      m.createSpanExporter({ endpoint: `http://${host}:4318`, headers: { ...KEYS } } as any);
+      delete process.env.FI_ALLOW_INSECURE_HTTP;
+      m.createSpanExporter({ endpoint: `http://${host}:4318`, headers: { ...KEYS }, allowInsecureHttp: true } as any);
+      const exporter = m.createSpanExporter({ transport: m.Transport.GRPC, endpoint: `http://${host}:4317`, headers: { ...KEYS }, allowInsecureHttp: true } as any);
+      expect(channel(exporter).secure).toBe(false);
+    });
+    expect(warnings.filter(w => /FI_ALLOW_INSECURE_HTTP/.test(w))).toHaveLength(1);
+  });
+  test.each(WRITTEN)("(b) %s: still refused through a proxy", host => {
+    process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
+    expect(refused(() => http(`http://${host}:4318`, { allowInsecureHttp: true }))).not.toBe("");
+    expect(refused(() => rpc(`http://${host}:4317`, { allowInsecureHttp: true }))).not.toBe("");
+  });
+  test.each(WRITTEN)("%s as an eval-check base: no request by default, a request with the opt-in", async host => {
+    process.env.FI_BASE_URL = `http://${host}:8000`;
+    await checkCustomEvalConfigExists("p", [tag()]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+  test("a Future AGI host is decided the same way: never loopback, never plaintext", () => {
+    for (const host of ["api.futureagi.com.", "API.FUTUREAGI.COM"]) {
+      expect(refused(() => http(`http://${host}`, { allowInsecureHttp: true }))).not.toBe("");
+    }
+  });
+});
