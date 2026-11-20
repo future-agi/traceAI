@@ -47,7 +47,9 @@ public class AdversarialTests : InitIsolation
         multipart.Add(new ByteArrayContent(new byte[8192]),"file","x.wav");
         var req=Request(null,"https://api.openai.com/v1/audio/transcriptions"); HttpCapture.ReadRequest(multipart,req,4);
         var result=Build(req); Assert.NotNull(result); Assert.Equal("whisper-1",result.Attributes["gen_ai.request.model"]);
-        Assert.Equal(65536,Encoding.UTF8.GetByteCount(req.Fields!["prompt"])); Assert.Equal(8192L,result.Attributes["traceai.audio.input_bytes"]);
+        // The field is read to 64 KiB, independent of the file and body limit; a cut field then loses the last 4,095 characters, so that no
+        // secret straddling the cap keeps a part of itself.
+        Assert.Equal(65536-(KnownSecrets.MaxLength-1),Encoding.UTF8.GetByteCount(req.Fields!["prompt"])); Assert.Equal(8192L,result.Attributes["traceai.audio.input_bytes"]);
     }
     private sealed class OneShotStream(byte[] bytes) : MemoryStream(bytes)
     {
@@ -161,7 +163,7 @@ public class AdversarialTests : InitIsolation
     {
         var processor=new AutoProcessor(Config(new MemoryExporter()));
         var values=new[] { "https://s.example/a?sig=URL_SECRET_123&X-Amz-Credential=CREDENTIAL_123&x=ok", "explicit-api-key", "{\"authorization_token\":\"NESTED_SECRET_123\"}" };
-        var result=WireCore.J(processor.Mask("metadata",values));
+        var result=WireCore.J(processor.Mask("metadata",values,true));
         foreach(var secret in new[] { "URL_SECRET_123","CREDENTIAL_123","explicit-api-key","NESTED_SECRET_123" }) Assert.DoesNotContain(secret,result);
     }
     [Theory]
@@ -170,14 +172,14 @@ public class AdversarialTests : InitIsolation
     {
         var mask=side=="input"?new TraceConfig { HideInputText=true }:new TraceConfig { HideOutputText=true };
         var processor=new AutoProcessor(Config(new MemoryExporter(),mask));
-        Assert.Equal(TraceConfig.RedactedValue,processor.Mask($"gen_ai.{side}.messages.0.message.tool_calls.0.tool_call.function.arguments","private"));
-        if(side=="input") { Assert.Equal(TraceConfig.RedactedValue,processor.Mask("gen_ai.tool.definitions.0.tool.json_schema","private")); Assert.Equal(TraceConfig.RedactedValue,processor.Mask("gen_ai.request.parameters","private")); }
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask($"gen_ai.{side}.messages.0.message.tool_calls.0.tool_call.function.arguments","private",true));
+        if(side=="input") { Assert.Equal(TraceConfig.RedactedValue,processor.Mask("gen_ai.tool.definitions.0.tool.json_schema","private",true)); Assert.Equal(TraceConfig.RedactedValue,processor.Mask("gen_ai.request.parameters","private",true)); }
     }
     [Fact]
     public void InvocationParameterMaskCannotLeakThroughRawRequestJson()
     {
         var processor=new AutoProcessor(Config(new MemoryExporter(),new TraceConfig { HideLlmInvocationParameters=true }));
-        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("input.value","{\"messages\":[],\"temperature\":0.7,\"max_tokens\":321}"));
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("input.value","{\"messages\":[],\"temperature\":0.7,\"max_tokens\":321}",true));
     }
     [Theory]
     [InlineData("text_to_speech",true,false,true)] [InlineData("text_to_speech",false,true,false)]
@@ -248,7 +250,7 @@ public class AdversarialTests : InitIsolation
     public void MessageHideFlagsCannotLeakThroughRawValues(bool input)
     {
         var processor=new AutoProcessor(Config(new MemoryExporter(),input?new TraceConfig { HideInputMessages=true }:new TraceConfig { HideOutputMessages=true }));
-        Assert.Equal(TraceConfig.RedactedValue,processor.Mask(input?"input.value":"output.value","private"));
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask(input?"input.value":"output.value","private",true));
     }
     [Theory]
     [InlineData(true)] [InlineData(false)]
@@ -340,7 +342,11 @@ public class AdversarialTests : InitIsolation
         for(int i=0;i<2;i++)
         {
             using var agent=new Agent(Config(exporter)); using(var span=TraceAIAuto.Source.StartActivity("custom-otlp")) Assert.NotNull(span);
-            Assert.True(agent.Flush(1000));
+            // The first export in a process pays for JIT, HttpClient and protobuf start-up, which
+            // can exceed a 1 s deadline on a starved runner (always iteration 0; later exports take
+            // ~30 ms). Flush returns as soon as the export completes, so this is only a ceiling:
+            // the test asserts delivery after retirement, not flush latency (the deadline tests do).
+            Assert.True(agent.Flush(30000));
         }
         Assert.Equal(2,server.Exports.SelectMany(Otlp.Spans).Count());
     }

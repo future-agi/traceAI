@@ -83,6 +83,20 @@ public sealed class TraceHostingStartup : IHostingStartup
         catch { }
     }
 
+    private static int s_contentNoted;
+
+    /// <summary>One value-free line per process, through the agent's warning path (standard error, "[traceAI auto]" prefix): the
+    /// libraries' switch is on, so other listeners and exporters in the application receive content unscrubbed. Names only the setting.</summary>
+    internal static void NoteContentOn()
+    {
+        try
+        {
+            if (Interlocked.Exchange(ref s_contentNoted, 1) == 1) return;
+            Console.Error.WriteLine("[traceAI auto] Prompt and response content capture is on, so other OpenTelemetry listeners and exporters in this application receive that content unscrubbed. Set FI_AUTO_CAPTURE_CONTENT=false to turn it off.");
+        }
+        catch { }
+    }
+
     internal static void Report(string message)
     {
         try { if (Environment.GetEnvironmentVariable("FI_AUTO_DEBUG") == "true") Console.Error.WriteLine("[traceAI auto] hosting startup " + message); }
@@ -164,6 +178,7 @@ internal static class Decorator
             var owner = Ownership.Owner(kind, serviceType, wrapped, new Release(wrapped, created));
             if (owner == null) { DisposeWrapper(wrapped); TraceHostingStartup.Report("left a registration untraced: no ownership type for " + kind); return created; }
             TraceHostingStartup.RecordWrapped(kind);
+            if (wrapper.AppliedContent(sensitive)) TraceHostingStartup.NoteContentOn();
             return owner;
         }
         catch (Exception error)
@@ -251,7 +266,8 @@ internal sealed class Wrapper
             // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT set to anything but true keeps it off whatever the traceAI opt-in says.
             if (sensitive && ContentVariableForbids()) sensitive = false;
             _sensitive?.SetValue(wrapped, sensitive);
-            if (record) TraceHostingStartup.RecordWrapped(kind);
+            // A registration the caller keeps (record) is complete here; one the container owns is noted by Own once it is kept.
+            if (record) { if (sensitive && _sensitive != null) TraceHostingStartup.NoteContentOn(); TraceHostingStartup.RecordWrapped(kind); }
             return wrapped;
         }
         catch (Exception error) { TraceHostingStartup.Report("could not wrap a registration: " + error.GetType().Name); return inner; }
@@ -264,6 +280,9 @@ internal sealed class Wrapper
         var value = Environment.GetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")?.Trim();
         return !string.IsNullOrEmpty(value) && !string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>Whether <see cref="Wrap"/> switched the libraries' content switch on for this wrapper.</summary>
+    internal bool AppliedContent(bool sensitive) => sensitive && _sensitive != null && !ContentVariableForbids();
 
     private bool AlreadyTraced(object inner)
     {
