@@ -73,13 +73,15 @@ module TraceAI
     class WireExporter
       def initialize
         @endpoint = Auto.config['base_url'].to_s.sub(%r{/+$}, '') + '/tracer/v1/traces'
+        # Fixed with the endpoint: a later change of the environment does not change the decision.
+        @insecure_opt_in = ENV['FI_ALLOW_INSECURE_HTTP']
       end
       def export(records, timeout: nil)
         return 1 if @shutdown
         url = Wire.parse_url(@endpoint)
         return 1 unless url && !url.path.match?(/[\r\n\0 ]/)
         # The only gate for FI keys: decided on the written target before any key header exists.
-        KeyTransport.check(@endpoint)
+        KeyTransport.check(@endpoint, opt_in: @insecure_opt_in)
         socket_class = native_class('Socket') || load_socket
         return 1 unless socket_class
         # Use the application's already-loaded socket/TLS implementation. Even
@@ -140,6 +142,8 @@ module TraceAI
         end
         raise KeyTransport::Refused, 'redirect answered a key-carrying send' if KeyTransport.refuses_redirect?(response)
         response.match?(/\AHTTP\/1\.[01] 2\d\d(?: |\r)/) ? 0 : 1
+      rescue KeyTransport::Refused => e
+        KeyTransport.warn_refused(e); Auto.debug(e); 1
       rescue StandardError => e
         Auto.debug(e); 1
       ensure

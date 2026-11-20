@@ -16,33 +16,36 @@ module TraceAI
         def initialize(message = 'FI keys are not sent over this transport') = super
       end
       LOOPBACK = %w[localhost 127.0.0.1 ::1].freeze
+      LOCK = Mutex.new
       class << self
-        def reset_warning = @warned = false
+        def reset_warning
+          LOCK.synchronize { @warned = false; @refusal_warned = false }
+        end
 
-        def allowed?(base)
-          check(base)
+        def allowed?(base, opt_in: ENV['FI_ALLOW_INSECURE_HTTP'])
+          check(base, opt_in: opt_in)
           true
         rescue Refused
           false
         end
 
         # Raises Refused unless keys may go to base (the target as written).
-        def check(base)
+        def check(base, opt_in: ENV['FI_ALLOW_INSECURE_HTTP'])
           written = written_host(base.to_s) or raise Refused
           scheme = base.to_s[/\A(https?):\/\//i, 1].to_s.downcase
           parsed = Wire.parse_url(base.to_s)
           raise Refused unless parsed && parsed.host.casecmp?(written)
           return true if scheme == 'https'
           raise Refused, 'Future AGI hosts require https' if future_agi?(written)
-          return true if LOOPBACK.include?(written)
-          raise Refused, 'plaintext target; FI_ALLOW_INSECURE_HTTP=1 allows it on a trusted network' unless ENV['FI_ALLOW_INSECURE_HTTP'] == '1'
+          return true if LOOPBACK.include?(written.downcase)
+          raise Refused, 'plaintext target; FI_ALLOW_INSECURE_HTTP=1 allows it on a trusted network' unless opt_in == '1'
           warn_once
           true
         end
 
         # The connected peer must agree with a loopback claim.
         def peer_agrees?(written, socket)
-          return true unless LOOPBACK.include?(written)
+          return true unless LOOPBACK.include?(written.to_s.downcase)
           address = socket.remote_address
           address.ipv4_loopback? || address.ipv6_loopback?
         rescue StandardError
@@ -65,16 +68,28 @@ module TraceAI
           host unless host.nil? || host.empty?
         end
 
+        # One value-free warning per process for the first refused send.
+        def warn_refused(error)
+          LOCK.synchronize do
+            return if @refusal_warned
+            @refusal_warned = true
+          end
+          detail = error.message.include?('FI_ALLOW_INSECURE_HTTP') ? ' (set FI_ALLOW_INSECURE_HTTP=1 only for a trusted network)' : ''
+          Kernel.warn "traceai-auto: Future AGI export refused: the target is not allowed to receive keys#{detail}"
+        end
+
         private
 
         def future_agi?(host)
-          name = host.downcase.sub(/\.+\z/, '')
+          name = host.downcase.delete_suffix('.')
           name == 'futureagi.com' || name.end_with?('.futureagi.com')
         end
 
         def warn_once
-          return if @warned
-          @warned = true
+          LOCK.synchronize do
+            return if @warned
+            @warned = true
+          end
           Kernel.warn 'traceai-auto: FI_ALLOW_INSECURE_HTTP=1 sends Future AGI keys over plaintext HTTP to a non-loopback target'
         end
       end

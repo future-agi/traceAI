@@ -32,7 +32,7 @@ class KeyTransportTest < Minitest::Test
 
   # Runs one export and reports whether any connection was attempted and to whom.
   def export_to(base, opt_in: nil)
-    ENV['FI_ALLOW_INSECURE_HTTP'] = opt_in if opt_in
+    opt_in ? ENV['FI_ALLOW_INSECURE_HTTP'] = opt_in : ENV.delete('FI_ALLOW_INSECURE_HTTP')
     config = {'base_url' => base, 'api_key' => KEY, 'secret_key' => SECRET}
     attempts = []
     result = nil
