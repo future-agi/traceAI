@@ -103,4 +103,28 @@ class AdkAttributesTest {
         assertThat(AdkAttributes.provider("my-private-model")).isNull();
         assertThat(AdkAttributes.provider(null)).isNull();
     }
+
+    @Test
+    void aHugeListIsWalkedOnlyUpToTheBudget() {
+        java.util.List<Object> huge = new java.util.ArrayList<>(java.util.Collections.nCopies(1_000_000, "x"));
+        String json = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), () -> AdkAttributes.toJson(Map.of("result", huge)));
+        assertThat(json).contains("<truncated>").hasSizeLessThan(400_000);
+    }
+
+    @Test
+    void anInfiniteIterableNeverHangsTheCall() {
+        Iterable<String> endless = () -> new java.util.Iterator<>() {
+            @Override public boolean hasNext() { return true; }
+            @Override public String next() { return "x"; }
+        };
+        String json = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), () -> AdkAttributes.toJson(Map.of("result", endless)));
+        assertThat(json).contains("<truncated>").hasSizeLessThan(400_000);
+    }
+
+    @Test
+    void enumsCharactersAndUuidsKeepTheirValues() {
+        java.util.UUID id = java.util.UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+        String json = AdkAttributes.toJson(Map.of("kind", java.util.concurrent.TimeUnit.SECONDS, "letter", 'q', "id", id));
+        assertThat(json).contains("\"SECONDS\"").contains("\"q\"").contains("\"123e4567-e89b-12d3-a456-426614174000\"").doesNotContain("unserializable");
+    }
 }

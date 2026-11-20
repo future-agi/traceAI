@@ -44,9 +44,16 @@ public class AdkApp {
     static final java.util.concurrent.CountDownLatch ENTERED = new java.util.concurrent.CountDownLatch(1);
     static final java.util.concurrent.CountDownLatch RELEASE = new java.util.concurrent.CountDownLatch(1);
 
-    static void post() throws Exception {
-        HttpRequest http = HttpRequest.newBuilder(URI.create(endpoint + "/v1/chat/completions")).header("content-type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}")).build();
+    static void post() throws Exception { post("hi"); }
+
+    static void post(String content) throws Exception { post(content, "", null); }
+
+    /** An LLM HTTP call whose body, query and a header can each carry {@code marker}. */
+    static void post(String content, String query, String header) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint + "/v1/chat/completions" + query)).header("content-type", "application/json");
+        if (header != null) builder.header("x-spanless-marker", header);
+        HttpRequest http = builder
+            .POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"" + content + "\"}]}")).build();
         HttpClient.newHttpClient().send(http, HttpResponse.BodyHandlers.ofString());
     }
 
@@ -78,8 +85,8 @@ public class AdkApp {
                     }
                     if (failingModel) {
                         post();
-                        return Flowable.just(LlmResponse.builder().errorMessage("SEED-MODEL-ERROR test-secret-key")
-                            .content(Content.builder().role("model").parts(Part.fromText("SEED-FAILED-OUTPUT test-secret-key")).build()).build());
+                        return Flowable.just(LlmResponse.builder().errorMessage("SEED-MODEL-ERROR")
+                            .content(Content.builder().role("model").parts(Part.fromText("SEED-FAILED-OUTPUT")).build()).build());
                     }
                     if (send.equals("subscribe")) post();
                     else if (send.equals("executor")) executor.submit(() -> { post(); return null; }).get();
@@ -113,12 +120,21 @@ public class AdkApp {
         InMemoryRunner runner = new InMemoryRunner(agent);
         var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
         Thread slow = null;
-        if (scenario.equals("tool-call") || scenario.equals("own-span")) {
+        if (scenario.equals("tool-call") || scenario.equals("own-span") || scenario.equals("span-less")) {
             // A second, unrelated session whose model call is open while this one runs.
             var other = runner.sessionService().createSession(runner.appName(), "user-2").blockingGet();
             slow = new Thread(() -> runner.runAsync("user-2", other.id(), Content.fromParts(Part.fromText("SLOW-SESSION"))).toList().blockingGet(), "slow-session");
             slow.start();
             if (!ENTERED.await(60, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("the slow session never reached its model");
+        }
+        if (scenario.equals("span-less")) {
+            // Another thread of the application, with no span of its own, makes an LLM HTTP call while the other session's model call is open.
+            Thread other = new Thread(() -> { try { String marker = System.getenv("SPANLESS_MARKER_KEY"); post("SPANLESS-B-MARKER test-secret-key " + marker, "?key=" + marker, marker); } catch (Exception e) { throw new IllegalStateException(e); } }, "span-less-b");
+            other.start(); other.join();
+            RELEASE.countDown();
+            slow.join();
+            printAndFinish(own);
+            return;
         }
         if (scenario.equals("own-span")) {
             // This thread's own application span (mode "sdk"), with an LLM HTTP call under it, while the other session's model call is open.

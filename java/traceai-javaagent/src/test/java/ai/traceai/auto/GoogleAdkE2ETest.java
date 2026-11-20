@@ -25,6 +25,8 @@ class GoogleAdkE2ETest {
     ExecutorService executor;
     final java.util.concurrent.atomic.AtomicInteger modelCalls = new java.util.concurrent.atomic.AtomicInteger();
     final List<Map<String, Object>> spans = new CopyOnWriteArrayList<>();
+    /** Every export request body as the collector received it. */
+    final List<String> exported = new CopyOnWriteArrayList<>();
 
     @BeforeEach void startServer() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -35,7 +37,8 @@ class GoogleAdkE2ETest {
             try (var out = exchange.getResponseBody()) { out.write(body); }
         });
         server.createContext("/tracer/v1/traces", exchange -> {
-            Object root = WireCore.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            String payload = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8); exported.add(payload);
+            Object root = WireCore.parse(payload);
             for (Object resource : WireCore.list(WireCore.get(root, "resourceSpans")))
                 for (Object scope : WireCore.list(WireCore.get(resource, "scopeSpans")))
                     for (Object span : WireCore.list(WireCore.get(scope, "spans"))) spans.add(WireCore.map(span));
@@ -194,6 +197,41 @@ class GoogleAdkE2ETest {
         assertEquals(2, ((Number) ((Map<?, ?>) llm.get("status")).get("code")).intValue(), "still an error");
         assertFalse(attributes(llm).containsKey("output.value"), "output of a failed call is withheld: " + llm);
         assertFalse(attributes(llm).containsKey("output.mime_type"), llm.toString());
+        // The seeded output is not an FI key: it must be absent everywhere, in the messages and in the copies on the AGENT and CHAIN spans.
+        assertFalse(everything.contains("SEED-FAILED-OUTPUT"), everything);
+    }
+
+    /** A span-less request (a thread of the application with no span) is never dropped because another context's model call is open. */
+    @Test void aSpanLessRequestIsNeverDroppedByAnotherSessionsOpenModelCall() throws Exception {
+        for (String mode : List.of("plain", "sdk")) {
+            spans.clear(); modelCalls.set(0);
+            run(mode, PROMPT, Map.of(), "subscribe", "span-less");
+            List<Map<String, Object>> wire = byLayer("wire");
+            assertEquals(1, wire.size(), mode + ": the span-less request is a wire span: " + spans);
+            Map<String, Object> b = wire.get(0);
+            // B's own context: no parent, and a trace of its own.
+            assertNull(b.get("parentSpanId"), mode + ": " + b);
+            List<Map<String, Object>> adk = byLayer("google-adk");
+            assertFalse(adk.isEmpty());
+            for (Map<String, Object> span : adk) assertNotEquals(b.get("traceId"), span.get("traceId"), mode + ": B shares no trace with the ADK spans");
+            // The same redaction as any capture, and nothing of B in A's model call spans.
+            assertTrue(attributes(b).toString().contains("SPANLESS-B-MARKER"), mode + ": " + b);
+            assertFalse(b.toString().contains("test-secret-key"), mode + ": " + b);
+            for (Map<String, Object> span : adk) assertFalse(span.toString().contains("SPANLESS-B-MARKER"), mode + ": B data in an ADK span: " + span);
+        }
+    }
+
+    /** A span-less request that is traced is still redacted: a registered secret is absent from the exported bytes, from its body, query and header. */
+    @Test void aSpanLessRequestThatIsTracedIsStillRedacted() throws Exception {
+        String marker = "SPANLESS-MARKER-KEY-77310042";
+        for (String mode : List.of("plain", "sdk")) {
+            spans.clear(); exported.clear(); modelCalls.set(0);
+            run(mode, PROMPT, Map.of("SPANLESS_MARKER_KEY", marker), "subscribe", "span-less");
+            assertEquals(1, byLayer("wire").size(), mode + ": the span-less request is traced: " + spans);
+            assertFalse(exported.isEmpty());
+            for (String bytes : exported) assertFalse(bytes.contains(marker), mode + ": the marker reached the exporter: " + bytes);
+            assertTrue(attributes(byLayer("wire").get(0)).toString().contains("SPANLESS-B-MARKER"), mode + ": the request's other content is kept");
+        }
     }
 
     @Test void aFailedModelCallKeepsItsErrorTextWithSecretsReplacedWhenDetailsAreShown() throws Exception {
