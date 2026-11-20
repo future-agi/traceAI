@@ -1,0 +1,61 @@
+name: Pinecone Java contract tests
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-pinecone/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/pinecone-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-java-pinecone/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/pinecone-java-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Pinecone ${{ matrix.pinecone }} / Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        pinecone: ['5.1.0', '6.2.0']
+        java: ['17', '21']
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Cache dependencies without executing tests
+        run: |
+          mvn -B -ntp -pl traceai-java-pinecone -am -Dpinecone.version=${{ matrix.pinecone }} -DskipTests test-compile dependency:go-offline
+          mvn -B -ntp -N dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
+          mvn -B -ntp -N dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.10.1
+      - name: Run offline contracts with only loopback networking
+        run: |
+          sudo --preserve-env=JAVA_HOME,PATH unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            mvn -o -B -ntp -Dmaven.repo.local="$HOME/.m2/repository" \
+            -pl traceai-java-pinecone -am -Dpinecone.version=${{ matrix.pinecone }} \
+            -Dtest=TracedPineconeIndexTest,PineconeOtlpTest \
+            -Dsurefire.failIfNoSpecifiedTests=false -Djava.net.preferIPv4Stack=true test
+      - name: Upload contract reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinecone-${{ matrix.pinecone }}-java-${{ matrix.java }}
+          path: java/traceai-java-pinecone/target/surefire-reports/
+          if-no-files-found: error
