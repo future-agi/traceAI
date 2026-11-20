@@ -19,9 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ruby `traceai-auto` instruments RubyLLM 2.x with no application code: a chat span for each model request (streamed or not) and an `execute_tool <name>` span for each tool call, masked by the existing hide settings, with no second wire span for the same call. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
 
 ### Changed
-- Ruby `traceai-auto` keeps forwarding spans when the application bundles `opentelemetry-sdk` 1.3 through 1.9, whose span data does not report whether the parent is remote; those spans are forwarded with a local parent. SDK 1.10 and later report it. The test suite runs on SDK 1.10 or later: the Gemfile declares `opentelemetry-sdk` `~> 1.10` and `opentelemetry-exporter-otlp` `~> 0.31` (at least 0.31.1).
+- Ruby `traceai-auto` is tested with `opentelemetry-sdk` 1.10 and later (the Gemfile declares `opentelemetry-sdk` `~> 1.10` and `opentelemetry-exporter-otlp` `~> 0.31`, at least 0.31.1) and `opentelemetry-api` 1.8 and 1.11, and forwards spans from SDK 1.3 through 1.9 with a local parent. It runs its media bookkeeping hooks once at startup; on an SDK where they do not behave as expected (1.3 and 1.4) media is omitted from forwarded spans and one line is printed. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
 
 ### Fixed
+- Ruby `traceai-auto` copies span events and links whether the SDK and API define them as structs or plain objects, and no longer drops a batch for an SDK span-data member it does not know.
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
 ### Coming Soon

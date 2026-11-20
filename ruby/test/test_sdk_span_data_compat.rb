@@ -36,7 +36,12 @@ class SdkSpanDataCompatTest < Minitest::Test
       "opentelemetry-sdk #{Gem.loaded_specs['opentelemetry-sdk']&.version} is below the declared floor 1.10"
   end
 
+  def require_remote_flag
+    skip 'this SDK is below the 1.10 floor the suite runs on' unless SpanData.members.include?(:parent_span_is_remote)
+  end
+
   def test_snapshot_keeps_the_remote_parent_flag
+    require_remote_flag
     copy = snapshot(finished_span(remote_parent: true))
     assert_equal 'child', copy.name
     assert_equal true, copy.parent_span_is_remote
@@ -46,12 +51,14 @@ class SdkSpanDataCompatTest < Minitest::Test
   end
 
   def test_otlp_flags_carry_the_remote_parent_bits
+    require_remote_flag
     sampled = 1
     assert_includes A::Protobuf.span(snapshot(finished_span(remote_parent: true))), A::Protobuf.flags(16, sampled | 256 | 512)
     assert_includes A::Protobuf.span(snapshot(finished_span(remote_parent: false))), A::Protobuf.flags(16, sampled | 256)
   end
 
   def test_sdk_records_for_the_application_exporter_are_built_for_this_sdk
+    require_remote_flag
     delegate = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
     exporter = A::ResourceExporter.new(delegate, A::ExportResource.new({'project_name' => 'compat'}), sdk_records: true)
     assert_equal 0, exporter.export([finished_span(remote_parent: true)])

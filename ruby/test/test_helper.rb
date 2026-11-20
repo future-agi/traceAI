@@ -109,3 +109,21 @@ module ChildHelper
     end
   end
 end
+
+# On an OpenTelemetry SDK whose span hooks the agent cannot verify (1.3 and 1.4), exports carry no
+# media and no span content from the application SDK path, so tests that read exported content do not
+# apply there. test_media_sdk_verification.rb covers that fail-closed behaviour.
+module SkipWhenMediaHooksUnproven
+  def self.proven?
+    return @proven unless @proven.nil?
+    script = "require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'traceai/auto/media_admission'; " \
+             "print TraceAI::Auto::MediaAdmission.verify!"
+    out, = Open3.capture3(RbConfig.ruby, '-I', File.join(ROOT, 'lib'), '-e', script)
+    @proven = out == 'true'
+  end
+
+  def before_setup
+    super
+    skip 'media hooks are unproven on this OpenTelemetry SDK; exports omit media' unless SkipWhenMediaHooksUnproven.proven?
+  end
+end

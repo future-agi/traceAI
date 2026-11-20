@@ -36,6 +36,16 @@ module TraceAI
       module_function
       def ivar(value, name) = Object.instance_method(:instance_variable_get).bind_call(value, name)
       def field(value, name) = Struct.instance_method(:[]).bind_call(value, name)
+      # Events and links are Structs in some SDK/API releases and plain objects with
+      # instance variables in others. Both are read without calling any method the
+      # application's object defines.
+      def part(value, name)
+        if Object.instance_method(:is_a?).bind_call(value, Struct)
+          Struct.instance_method(:members).bind_call(value).include?(name) ? field(value, name) : nil
+        else
+          ivar(value, :"@#{name}")
+        end
+      end
       def record_member?(value, name)
         Struct.instance_method(:members).bind_call(value).include?(name)
       rescue StandardError
@@ -551,8 +561,8 @@ module TraceAI
           original_events = field(record, :events) || []; original_links = field(record, :links) || []
           raise Limit unless Codec.type(original_events) == Array && Codec.type(original_links) == Array
           raise Limit if original_events.size + original_links.size > Budget::MAX_NODES
-          lossy ||= original_events.any? { |event| truncated_attributes?(field(event, :attributes)) } ||
-                    original_links.any? { |link| truncated_attributes?(ivar(link, :@attributes)) }
+          lossy ||= original_events.any? { |event| truncated_attributes?(part(event, :attributes)) } ||
+                    original_links.any? { |link| truncated_attributes?(part(link, :attributes)) }
           status = field(record, :status)
           code = Codec.type(status) == LocalStatus ? field(status, :code) : ivar(status, :@code)
           description = Codec.type(status) == LocalStatus ? field(status, :description) : ivar(status, :@description)
@@ -578,15 +588,15 @@ module TraceAI
           safe_scope = ExportScope.new(scrub(safe_string(scope_name || ''), secrets, nil, 0, budget), scrub(safe_string(scope_version || ''), secrets, nil, 0, budget), apply.call(scope_attrs))
           events = original_events.map do |event|
             budget.spend
-            SafeEvent.new(scrub(safe_string(field(event, :name)), secrets, nil, 0, budget), apply_media.call(field(event, :attributes), event_media[event.object_id]), field(event, :timestamp))
+            SafeEvent.new(scrub(safe_string(part(event, :name)), secrets, nil, 0, budget), apply_media.call(part(event, :attributes), event_media[event.object_id]), part(event, :timestamp))
           end
           links = original_links.map do |link|
             budget.spend
-            ctx = ivar(link, :@span_context)
+            ctx = part(link, :span_context)
             link_flags = ivar(ctx, :@trace_flags)
             link_flags = ivar(link_flags, :@flags) unless Codec.type(link_flags) == Integer
             link_flags = Codec.type(link_flags) == Integer ? link_flags & 255 : 0
-            SafeLink.new(SafeContext.new(ivar(ctx, :@trace_id), ivar(ctx, :@span_id), state(ivar(ctx, :@tracestate), secrets, budget), link_flags, ivar(ctx, :@remote) == true), apply_media.call(ivar(link, :@attributes), link_media[link.object_id]))
+            SafeLink.new(SafeContext.new(ivar(ctx, :@trace_id), ivar(ctx, :@span_id), state(ivar(ctx, :@tracestate), secrets, budget), link_flags, ivar(ctx, :@remote) == true), apply_media.call(part(link, :attributes), link_media[link.object_id]))
           end
           tracestate = state(field(record, :tracestate), secrets, budget)
           # Commit only after every field succeeds: fail closed on limits/errors.

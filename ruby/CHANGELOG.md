@@ -5,9 +5,14 @@ by the release process.
 
 ## Unreleased
 
-### Fixed
-- Spans are forwarded when the application bundles `opentelemetry-sdk` 1.3 through 1.9, whose span data does not report whether the parent is remote; they are forwarded with a local parent. SDK 1.10 and later report it, and the test suite runs on SDK 1.10 or later.
-
 ### Added
 - RubyLLM 2.x (`>= 2.0, < 3`) is instrumented with no application code: each model request has a `chat <model>` span (streamed or not) and each tool call an `execute_tool <name>` span, with GenAI model, usage, finish-reason and message attributes, tool arguments and results, and errors recorded and re-raised. The HTTP request inside a chat span is not reported a second time. `FI_DISABLED_INSTRUMENTATIONS=ruby_llm` turns it off, and the doctor reports `ruby_llm` as `instrumented` when a supported RubyLLM is installed.
 - Raw input and raw output (`raw.input`, `raw.output` and their children) are not recorded while any content hide setting is on, and a tool call's name and id stay visible while its arguments and result follow the input and output hide settings.
+
+### Changed
+- Forwarding through the application's OpenTelemetry SDK is tested on `opentelemetry-sdk` 1.10 and later (the lock pins 1.10.0) with `opentelemetry-api` 1.8 and 1.11. Spans from SDK 1.3 through 1.9 are forwarded too, with a local parent because their span data does not report whether the parent is remote.
+- At startup the agent runs its media bookkeeping hooks once against the SDK in use. When they do not behave as expected (SDK 1.3 and 1.4 do not), spans are still forwarded, media is omitted from them, and one line is printed.
+
+### Fixed
+- Span events and links are copied whether the SDK and API define them as structs or as plain objects, with the same masking.
+- Forwarding to an application SDK exporter no longer drops a batch when the SDK's span data has a member the agent does not know; that member is left empty.
