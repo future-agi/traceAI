@@ -207,11 +207,6 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
             firstEmbedding != null && firstEmbedding.getVector() != null ? firstEmbedding.getVector().size() : 0));
     }
 
-    private String truncateIfNeeded(String value) {
-        // Known secrets are replaced in the whole value before it is cut.
-        return ai.traceai.privacy.KnownSecrets.cap(value, 1000);
-    }
-
     /**
      * Internal class to summarize embedding output without storing full vectors.
      */

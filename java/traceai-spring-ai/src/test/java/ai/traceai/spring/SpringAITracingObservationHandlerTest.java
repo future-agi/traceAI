@@ -144,6 +144,7 @@ class SpringAITracingObservationHandlerTest {
     void secretsWithJsonSensitiveCharactersAreReplacedInTheMessagesAttributes(String secret) {
         ai.traceai.privacy.KnownSecrets.process().register(secret);
         try (var fixture = new Fixture(true)) {
+            fixture.registry.observationConfig().observationFilter(new SpringAIObservationFilter(true, true));
             var context = ChatModelObservationContext.builder().prompt(new Prompt("my secret is " + secret + " ok"))
                 .provider("synthetic").build();
             context.setResponse(new org.springframework.ai.chat.model.ChatResponse(List.of(

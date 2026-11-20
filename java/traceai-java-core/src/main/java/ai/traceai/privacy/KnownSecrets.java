@@ -39,6 +39,7 @@ public final class KnownSecrets {
 
     private static final int MAX_VALUES = 1024;
     private static final int MAX_CHARACTERS = 4 * 1024 * 1024;
+    private static final int[] NO_CUTS = new int[0];
     private static final long MAX_WORK = 16L * 1024 * 1024;
     private static final KnownSecrets PROCESS = new KnownSecrets();
     private static final Logger LOG = Logger.getLogger(KnownSecrets.class.getName());
@@ -49,7 +50,7 @@ public final class KnownSecrets {
     private int characters;
     private boolean unavailable;
     private String failure = "the registry was marked unavailable";
-    private volatile Snapshot cached = new Snapshot(new Secret[0], false, null);
+    private volatile Snapshot cached = new Snapshot(new Secret[0], 0, false, null);
 
     /** Creates an empty registry. Most callers want {@link #process()}. */
     public KnownSecrets() {
@@ -98,6 +99,35 @@ public final class KnownSecrets {
         cached = null;
     }
 
+    /** The value as it appears inside a JSON string (quotes, backslashes and control characters escaped). */
+    static String jsonEscaped(String value) {
+        StringBuilder out = null;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            String replacement = null;
+            switch (c) {
+                case '"': replacement = "\\\""; break;
+                case '\\': replacement = "\\\\"; break;
+                case '\n': replacement = "\\n"; break;
+                case '\r': replacement = "\\r"; break;
+                case '\t': replacement = "\\t"; break;
+                case '\b': replacement = "\\b"; break;
+                case '\f': replacement = "\\f"; break;
+                default:
+                    if (c < 0x20) {
+                        replacement = String.format("\\u%04x", (int) c);
+                    }
+            }
+            if (replacement != null && out == null) {
+                out = new StringBuilder(value.length() + 8).append(value, 0, i);
+            }
+            if (out != null) {
+                out.append(replacement != null ? replacement : String.valueOf(c));
+            }
+        }
+        return out == null ? value : out.toString();
+    }
+
     /** Test hook: forgets which one-time warnings were already logged. */
     static void resetWarningsForTest() {
         WARNED_SHORT.set(false);
@@ -131,13 +161,22 @@ public final class KnownSecrets {
 
     private synchronized Snapshot compile() {
         if (cached == null) {
-            List<String> sorted = new ArrayList<>(values);
-            sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
-            Secret[] secrets = new Secret[sorted.size()];
-            for (int i = 0; i < secrets.length; i++) {
-                secrets[i] = new Secret(sorted.get(i));
+            List<String> forms = new ArrayList<>();
+            int longest = 0;
+            for (String value : values) {
+                forms.add(value);
+                longest = Math.max(longest, value.length());
+                String escaped = jsonEscaped(value);
+                if (!escaped.equals(value)) {
+                    forms.add(escaped);
+                }
             }
-            cached = new Snapshot(secrets, unavailable, unavailable ? failure : null);
+            forms.sort((a, b) -> Integer.compare(b.length(), a.length()));
+            Secret[] secrets = new Secret[forms.size()];
+            for (int i = 0; i < secrets.length; i++) {
+                secrets[i] = new Secret(forms.get(i));
+            }
+            cached = new Snapshot(secrets, longest, unavailable, unavailable ? failure : null);
         }
         return cached;
     }
@@ -147,9 +186,11 @@ public final class KnownSecrets {
         private final Secret[] secrets;
         private final boolean unavailable;
         private final String failure;
+        private final int longest;
 
-        private Snapshot(Secret[] secrets, boolean unavailable, String failure) {
+        private Snapshot(Secret[] secrets, int longest, boolean unavailable, String failure) {
             this.secrets = secrets;
+            this.longest = longest;
             this.unavailable = unavailable;
             this.failure = failure;
         }
@@ -175,9 +216,26 @@ public final class KnownSecrets {
             return secrets.length == 0;
         }
 
-        /** @return the length of the longest known secret, 0 when none */
+        private static int[] markers(String text) {
+            int at = text.indexOf(TRUNCATION_MARKER);
+            if (at < 0) {
+                return NO_CUTS;
+            }
+            List<Integer> found = new ArrayList<>();
+            while (at >= 0) {
+                found.add(at);
+                at = text.indexOf(TRUNCATION_MARKER, at + TRUNCATION_MARKER.length());
+            }
+            int[] cuts = new int[found.size()];
+            for (int i = 0; i < cuts.length; i++) {
+                cuts[i] = found.get(i);
+            }
+            return cuts;
+        }
+
+        /** @return the length of the longest raw (unescaped) known secret, 0 when none */
         public int longest() {
-            return secrets.length == 0 ? 0 : secrets[0].value.length();
+            return longest;
         }
 
         private String scrubOrRaw(String text) {
@@ -189,12 +247,16 @@ public final class KnownSecrets {
          * only then is it cut, so no secret can straddle the cut. A cut value ends with
          * {@link #TRUNCATION_MARKER}.
          * @param value the full value, may be null
-         * @param limit the longest result, marker included
+         * @param limit the longest result, marker included; below the marker's length nothing safe fits and
+         *     the result is empty
          * @return the value, replaced and cut to {@code limit} characters
          */
         public String cap(String value, int limit) {
             if (value == null || value.length() <= limit) {
                 return value;
+            }
+            if (limit < TRUNCATION_MARKER.length()) {
+                return "";
             }
             String clean = scrubOrRaw(value);
             if (clean.length() <= limit) {
@@ -207,10 +269,13 @@ public final class KnownSecrets {
          * Finishes text that was already cut at a capture-time cap (so the rest of it is gone): drops the
          * last {@code longest() - 1} characters, which could be the start of a secret that continued past
          * the cut, replaces known secrets in what remains and appends {@link #TRUNCATION_MARKER}.
-         * @param cutText the retained prefix
-         * @return the replaced text ending with the marker
+         * @param cutText the retained prefix, may be null
+         * @return the replaced text ending with the marker, or null for null
          */
         public String sealCut(String cutText) {
+            if (cutText == null) {
+                return null;
+            }
             int keep = Math.max(0, cutText.length() - Math.max(0, longest() - 1));
             if (keep > 0 && Character.isHighSurrogate(cutText.charAt(keep - 1))) {
                 keep--;
@@ -235,11 +300,11 @@ public final class KnownSecrets {
             if ((long) text.length() * (secrets.length + 1) > MAX_WORK) {
                 return PLACEHOLDER;
             }
-            boolean truncated = text.endsWith(TRUNCATION_MARKER);
-            int bodyEnd = truncated ? text.length() - TRUNCATION_MARKER.length() : text.length();
+            // Every marker is a cut point: a known secret that is cut off right before one loses that start.
+            int[] cuts = markers(text);
             List<int[]> regions = null;
             for (Secret secret : secrets) {
-                regions = secret.find(text, bodyEnd, truncated, regions);
+                regions = secret.find(text, cuts, regions);
             }
             if (regions == null) {
                 return text;
@@ -286,10 +351,20 @@ public final class KnownSecrets {
             }
         }
 
-        /** Adds [start,end) regions of full matches, plus a trailing partial match when truncated. */
-        List<int[]> find(String text, int end, boolean truncated, List<int[]> regions) {
+        /** Adds [start,end) regions of full matches, plus the partial match right before each cut point. */
+        List<int[]> find(String text, int[] cuts, List<int[]> regions) {
             int j = 0;
-            for (int i = 0; i < end; i++) {
+            int nextCut = 0;
+            for (int i = 0; i < text.length(); i++) {
+                while (nextCut < cuts.length && cuts[nextCut] < i) {
+                    nextCut++;
+                }
+                if (j > 0 && nextCut < cuts.length && cuts[nextCut] == i) {
+                    if (regions == null) {
+                        regions = new ArrayList<>();
+                    }
+                    regions.add(new int[] {i - j, i});
+                }
                 while (j > 0 && text.charAt(i) != value.charAt(j)) {
                     j = prefix[j - 1];
                 }
@@ -303,12 +378,6 @@ public final class KnownSecrets {
                     regions.add(new int[] {i + 1 - j, i + 1});
                     j = prefix[j - 1];
                 }
-            }
-            if (truncated && j > 0) {
-                if (regions == null) {
-                    regions = new ArrayList<>();
-                }
-                regions.add(new int[] {end - j, end});
             }
             return regions;
         }
