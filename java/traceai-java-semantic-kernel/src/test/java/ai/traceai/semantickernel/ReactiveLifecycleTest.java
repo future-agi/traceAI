@@ -198,8 +198,31 @@ class ReactiveLifecycleTest {
         var result = traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
         assertThat(result).containsExactly(chunk);
         var span = exporter.getFinishedSpanItems().get(0);
-        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value"))).hasSize(32000);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value"))).hasSizeBetween(32000 - 4096, 32000)
+            .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
         assertThat(span.getAttributes().get(AttributeKey.booleanKey("semantic_kernel.output_truncated"))).isTrue();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 8, 15, 30})
+    void aKnownSecretStraddlingTheStreamCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-SK-STREAM-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        ChatCompletionService chat = mock(ChatCompletionService.class);
+        StreamingChatContent<?> first = mock(StreamingChatContent.class);
+        StreamingChatContent<?> second = mock(StreamingChatContent.class);
+        when(first.getContent()).thenReturn("a".repeat(32000 - inside));
+        when(second.getContent()).thenReturn(secret + "tail".repeat(10));
+        when(chat.getStreamingChatMessageContentsAsync(any(ChatHistory.class), isNull(), any()))
+            .thenReturn(Flux.just(first, second));
+        FITracer contentTracer = new FITracer(sdk.get("test"), TraceConfig.builder().build());
+        var traced = new TracedChatCompletionService(chat, "model", "test", contentTracer);
+        traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
+        var span = exporter.getFinishedSpanItems().get(0);
+        assertThat(span.getAttributes().get(AttributeKey.booleanKey("semantic_kernel.output_truncated"))).isTrue();
+        assertThat(span.getAttributes().toString()).doesNotContain("PFX");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value")))
+            .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
     }
 
     @Test void customChatServiceRetainsUsageWithoutCountingSharedMetadataTwice() {

@@ -208,11 +208,8 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
     }
 
     private String truncateIfNeeded(String value) {
-        int maxLength = 1000;
-        if (value != null && value.length() > maxLength) {
-            return value.substring(0, maxLength - 13) + "...[truncated]";
-        }
-        return value;
+        // Known secrets are replaced in the whole value before it is cut.
+        return ai.traceai.privacy.KnownSecrets.cap(value, 1000);
     }
 
     /**
