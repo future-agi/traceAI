@@ -136,6 +136,10 @@ Content capture is on by default. Configure `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
 
 Pass your own OpenTelemetry `TracerProvider` to `OpenAIInstrumentor().instrument(tracer_provider=provider)` to use an existing exporter. The `register()` helper configures Future AGI by default. On current source, `register(span_exporter=...)` replaces that destination; older published versions may not include this option.
 
+### OTLP headers from the environment
+
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` and `OTEL_EXPORTER_OTLP_HEADERS` describe the collector you configured for OpenTelemetry, which may be a different backend. The exporters traceAI creates for Future AGI (`HTTPSpanExporter` and `GRPCSpanExporter` at the default or `FI_BASE_URL` / `FI_TRACES_URL` / `FI_GRPC_URL` endpoints, `register()` and zero-code auto-instrumentation) send the Future AGI keys and the headers you pass in, and ignore those two variables. They read them when the exporter is created, not at export time. An exporter you point at another endpoint yourself, such as `HTTPSpanExporter(endpoint="https://collector.example/v1/traces")`, and any OpenTelemetry exporter you build, keep standard OpenTelemetry behaviour and use the environment headers.
+
 [Provider setup](fi_instrumentation/otel.py) · [Examples](examples/)
 
 ## Troubleshooting: 401 Unauthorized when exporting traces
