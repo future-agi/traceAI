@@ -3,12 +3,13 @@ import inspect
 import json
 import logging
 import os
+import re
 import threading
 import uuid
 import warnings
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import ParseResult, unquote, urlparse, urlsplit
 
 import requests
 from fi_instrumentation.fi_types import (
@@ -700,39 +701,168 @@ def _caller_headers(headers: Any) -> dict[str, Any]:
     return {(k.decode() if isinstance(k, bytes) else str(k)).lower(): v for k, v in pairs}
 
 
-def _is_future_agi_endpoint(endpoint: str | None) -> bool:
-    """True when ``endpoint`` is a Future AGI endpoint.
+class UnsupportedFutureAGIEndpointError(ValueError):
+    """An endpoint that resembles Future AGI's but cannot be verified, used with Future AGI credentials."""
 
-    ``endpoint`` is the URL (HTTP) or host:port (gRPC) an exporter resolved. It
-    counts when its host matches FI_TRACES_URL, FI_BASE_URL, FI_GRPC_URL or the
-    Future AGI hosts, with the same port when both name one. Anything else,
-    including no endpoint at all, is a collector the user chose and keeps
-    standard OpenTelemetry environment behaviour.
+
+_HOST_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+_PLAIN_GRPC_TARGET = re.compile(r"^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$")
+
+
+def _normalize_host(host: str | None) -> str | None:
+    """A host name in one comparable form, or None when it is not a plain ASCII DNS name or address.
+
+    Lower case, one trailing dot removed, labels of letters, digits and hyphens only. A name
+    that does not normalise matches nothing.
+    """
+    if not host or not host.isascii():
+        return None
+    host = host.lower()
+    if host.endswith("."):
+        host = host[:-1]
+    if host.startswith("[") and host.endswith("]"):
+        return host if re.fullmatch(r"\[[0-9a-f:.]+\]", host) else None
+    labels = host.split(".")
+    return host if host and all(_HOST_LABEL.match(label) for label in labels) else None
+
+
+def _looks_like_future_agi(endpoint: str) -> bool:
+    """True when the text names Future AGI under any common escaping or width form."""
+    import unicodedata
+
+    variants = {endpoint, unquote(endpoint), unicodedata.normalize("NFKC", endpoint)}
+    variants.add(unicodedata.normalize("NFKC", unquote(endpoint)))
+    return any("futureagi" in variant.lower() for variant in variants)
+
+
+def _http_origin(endpoint: str | None) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of an http(s) URL on which urlsplit and urllib3 agree, else None.
+
+    The URL carries no userinfo, no backslash and no percent-escape in its authority; the port is
+    explicit or the scheme's default.
+    """
+    if not endpoint or "\\" in endpoint or any(ord(c) < 33 or ord(c) == 127 for c in endpoint):
+        return None
+    try:
+        import urllib3.util
+
+        split = urlsplit(endpoint)
+        parsed = urllib3.util.parse_url(endpoint)
+        scheme = split.scheme.lower()
+        if scheme not in ("http", "https") or "@" in split.netloc or "%" in split.netloc or parsed.auth:
+            return None
+        host = _normalize_host(split.hostname)
+        if host is None or host != _normalize_host(parsed.host):
+            return None
+        if split.port != parsed.port:
+            return None
+        return scheme, host, split.port or (80 if scheme == "http" else 443)
+    except Exception:  # an endpoint the parsers cannot read matches nothing
+        return None
+
+
+def _grpc_target(endpoint: str | None) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of the exact target grpc receives, or None unless it is a plain host[:port].
+
+    The exporters pass ``urlparse(endpoint).netloc`` to grpc when there is one, so that is the string read
+    here; a target-grammar prefix (dns:, ipv4:, unix:, xds: ...), userinfo or a backslash is never plain.
     """
     if not endpoint:
-        return False
+        return None
+    try:
+        parsed = urlsplit(endpoint)
+    except ValueError:
+        return None
+    target = parsed.netloc or endpoint
+    scheme = parsed.scheme.lower() if parsed.netloc else ""
+    match = _PLAIN_GRPC_TARGET.match(target)
+    if match is None:
+        return None
+    host = _normalize_host(match.group(1))
+    if host is None:
+        return None
+    return scheme, host, int(match.group(2)) if match.group(2) else 443
 
-    def _origin(url: str | None) -> tuple[str, int | None] | None:
-        if not url:
-            return None
-        parsed = urlparse(url if "://" in url else f"//{url}")
-        return (parsed.hostname or "").lower(), parsed.port
 
-    known = [
-        get_env_traces_endpoint(),
-        get_env_collector_endpoint(),
-        get_env_grpc_collector_endpoint(),
-        "https://api.futureagi.com",
-        "https://grpc.futureagi.com",
-    ]
-    target = _origin(endpoint)
-    for url in known:
-        origin = _origin(url)
-        if origin and target and origin[0] == target[0] and (
-            origin[1] == target[1] or origin[1] is None or target[1] is None
-        ):
-            return True
-    return False
+def _known_future_agi_origins(grpc: bool) -> set[tuple[str, int]]:
+    """The (host, port) pairs the Future AGI environment and defaults name."""
+    known: set[tuple[str, int]] = set()
+    if grpc:
+        candidates = [get_env_grpc_collector_endpoint(), "grpc.futureagi.com:443"]
+        for url in candidates:
+            target = _grpc_target(url)
+            if target:
+                known.add((target[1], target[2]))
+    else:
+        candidates = [get_env_traces_endpoint(), get_env_collector_endpoint(), "https://api.futureagi.com"]
+        for url in candidates:
+            origin = _http_origin(url)
+            if origin:
+                known.add((origin[1], origin[2]))
+    return known
+
+
+def _is_futureagi_host(host: str) -> bool:
+    return host == "futureagi.com" or host.endswith(".futureagi.com")
+
+
+def _future_agi_decision(endpoint: str | None, grpc: bool = False) -> str:
+    """``"fi"`` for a Future AGI endpoint, ``"refuse"`` for one that resembles it but cannot be
+    verified, ``"other"`` for a collector of the user's own.
+
+    ``endpoint`` is the URL (HTTP) or the target an exporter received or resolved (gRPC; either
+    spelling). It is Future AGI only when it is a plain target on exact host and port the Future AGI
+    environment or defaults name; a Future AGI host reached over http is not verified either.
+    """
+    if not endpoint:
+        return "other"
+    if grpc:
+        target = _grpc_target(endpoint)
+        host = target[1] if target else None
+        origin = (target[1], target[2]) if target else None
+        clear_text = bool(target and target[0] == "http")
+    else:
+        parsed = _http_origin(endpoint)
+        host = parsed[1] if parsed else None
+        origin = (parsed[1], parsed[2]) if parsed else None
+        clear_text = bool(parsed and parsed[0] == "http")
+    if origin is not None and origin in _known_future_agi_origins(grpc):
+        # A futureagi.com host is reached over https; a self-hosted base the environment names may use http.
+        return "refuse" if clear_text and _is_futureagi_host(host or "") else "fi"
+    if _looks_like_future_agi(endpoint) or (host is not None and _is_futureagi_host(host)):
+        return "refuse"
+    return "other"
+
+
+def _is_future_agi_endpoint(endpoint: str | None, grpc: bool | None = None) -> bool:
+    """True when ``endpoint`` is a Future AGI endpoint (see _future_agi_decision).
+
+    Without ``grpc`` the endpoint may be either kind: a URL or a plain host:port target.
+    """
+    if grpc is None:
+        return _future_agi_decision(endpoint, False) == "fi" or _future_agi_decision(endpoint, True) == "fi"
+    return _future_agi_decision(endpoint, grpc) == "fi"
+
+
+def _fi_keys_configured(caller_headers: Any = None) -> bool:
+    """True when Future AGI credentials would be sent: from the environment or the caller's headers."""
+    if get_env_fi_auth_header():
+        return True
+    return any(
+        name in _CREDENTIAL_HEADERS and not _is_blank(value) for name, value in _caller_headers(caller_headers).items()
+    )
+
+
+def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers: Any = None) -> str:
+    """The decision for ``endpoint``; raises when it resembles Future AGI's and credentials are set."""
+    decision = _future_agi_decision(endpoint, grpc)
+    if decision == "refuse" and _fi_keys_configured(caller_headers):
+        raise UnsupportedFutureAGIEndpointError(
+            "The exporter endpoint resembles a Future AGI endpoint but cannot be verified as one, so the Future AGI "
+            "credentials are not sent to it. Set FI_BASE_URL (or the endpoint option) to a plain https Future AGI URL "
+            "with no userinfo and the default port, or remove the credentials."
+        )
+    return decision
 
 
 _SUPPORTED_OTLP_EXPORTERS = "1.29.0 to 1.45.x"
@@ -762,7 +892,27 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
     )
 
 
-def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_headers: Any = None) -> None:
+def _copy_session(session: requests.Session) -> requests.Session:
+    """A new session with the caller's settings and adapters, whose headers can be changed freely."""
+    copy = requests.Session()
+    copy.headers = session.headers.copy()
+    copy.auth = session.auth
+    copy.proxies = dict(session.proxies)
+    copy.hooks = {name: list(hooks) for name, hooks in session.hooks.items()}
+    copy.params = session.params
+    copy.stream = session.stream
+    copy.verify = session.verify
+    copy.cert = session.cert
+    copy.max_redirects = session.max_redirects
+    copy.trust_env = session.trust_env
+    copy.cookies = session.cookies.copy()
+    copy.adapters = type(session.adapters)(session.adapters)
+    return copy
+
+
+def _pin_http_headers(
+    exporter: Any, sdk_headers: Mapping[str, Any], caller_headers: Any = None, caller_session: Any = None
+) -> None:
     """Make an HTTP exporter send the OTLP defaults plus exactly ``sdk_headers``.
 
     OpenTelemetry 1.29 sends from ``exporter._session.headers`` (and
@@ -783,6 +933,9 @@ def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_head
     ambient = {**_ambient_headers(), **_caller_headers(caller_headers)}
 
     pinned_any = False
+    if caller_session is not None and getattr(exporter, "_session", None) is caller_session:
+        # The Future AGI headers go on a copy: the caller's own session is left as the caller built it.
+        exporter._session = _copy_session(caller_session)
     client = getattr(exporter, "_client", None)
     current = getattr(client, "_headers", None)
     if isinstance(current, dict):
@@ -858,8 +1011,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
 
         # Built once, with the caller's own arguments; the Future AGI headers are set afterwards,
         # and only when the exporter resolved a Future AGI endpoint.
+        _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers)
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
+        if _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers) == "fi":
             _pin_grpc_headers(self, _with_fi_auth_headers(caller_headers, add_env_keys=True), caller_headers)
 
     def shutdown(self) -> None:
@@ -901,9 +1055,15 @@ class HTTPSpanExporter(_HTTPSpanExporter):
 
         # Built once, with the caller's own arguments: nothing Future AGI specific reaches the
         # session or the headers a caller supplied until the resolved endpoint is known.
+        _check_future_agi_endpoint(bound_args.arguments["endpoint"], False, caller_headers)
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
-            _pin_http_headers(self, _with_fi_auth_headers(caller_headers, add_env_keys=True), caller_headers)
+        if _check_future_agi_endpoint(getattr(self, "_endpoint", None), False, caller_headers) == "fi":
+            _pin_http_headers(
+                self,
+                _with_fi_auth_headers(caller_headers, add_env_keys=True),
+                caller_headers,
+                bound_args.arguments.get("session"),
+            )
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
