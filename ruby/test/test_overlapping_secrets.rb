@@ -158,6 +158,8 @@ class OverlappingSecretsTest < Minitest::Test
   end
 
   def clean(text, secrets) = TraceAI::Auto::Privacy.clean_string(text, secrets.sort_by { |s| -s.length })
+  # In exactly the order given (no sorting, which is not stable for secrets of equal length).
+  def clean_in_order(text, secrets) = TraceAI::Auto::Privacy.clean_string(text, secrets)
 
   def with_limits(limits)
     privacy = TraceAI::Auto::Privacy
@@ -182,8 +184,8 @@ class OverlappingSecretsTest < Minitest::Test
   ROUND_TEXT = 'bbaaaabbbb<redacted>b'
 
   def test_a_value_that_needs_more_rounds_than_the_cap_is_replaced_whole
-    assert_equal "bb#{PLACEHOLDER}", clean(ROUND_TEXT, ROUND_SECRETS)
-    with_limits(MATCH_ROUNDS: 1) { assert_equal PLACEHOLDER, clean(ROUND_TEXT, ROUND_SECRETS) }
+    assert_equal "bb#{PLACEHOLDER}", clean_in_order(ROUND_TEXT, ROUND_SECRETS)
+    with_limits(MATCH_ROUNDS: 1) { assert_equal PLACEHOLDER, clean_in_order(ROUND_TEXT, ROUND_SECRETS) }
   end
 
   def test_a_value_that_settles_within_the_cap_is_not_replaced_whole
@@ -194,8 +196,64 @@ class OverlappingSecretsTest < Minitest::Test
     with_limits(MATCH_STEPS: 1) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
   end
 
-  def test_hitting_the_work_cap_replaces_the_whole_value
-    with_limits(MATCH_WORK: 50) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+  # The work counter is an optional argument; a build without it is called with two (its work is then unobserved, and
+  # what the results say still fails the tests that need the budget).
+  def close(text, secrets, work = [0, 0])
+    method = TraceAI::Auto::Privacy.method(:close_fragments)
+    method.arity.abs > 2 ? method.call(text, secrets, work) : method.call(text, secrets)
+  end
+
+  # The first scan fits the budget; the work that trips it is the rescan after the change, or the output built for it.
+  def test_hitting_the_work_cap_after_a_change_replaces_the_whole_value
+    full = [0, 0]
+    assert_equal "bb#{PLACEHOLDER}", close(ROUND_TEXT, ROUND_SECRETS, full)
+    limit = ROUND_TEXT.length + 1 + 40
+    assert_operator full[0], :>, limit
+    spent = [0, 0]
+    with_limits(MATCH_WORK: limit) { assert_equal PLACEHOLDER, close(ROUND_TEXT, ROUND_SECRETS, spent) }
+    assert_operator spent[0], :<=, limit
+  end
+
+  # The first scan fits the budget and nothing is ever replaced; the candidate prefilter alone trips it: a secret of
+  # 3000 characters that has none of the characters that follow the placeholders.
+  def test_hitting_the_work_cap_in_the_candidate_prefilter_replaces_the_whole_value
+    secret = ('abcdefghij' * 300) + 'ABCDEFGH'
+    text = '!-!' + (PLACEHOLDER + '!-!') * 500
+    assert_equal text, close(text, [secret]) # within the default budget it is left as it is
+    spent = [0, 0]
+    limit = text.length + 1 + 100_000
+    with_limits(MATCH_WORK: limit) { assert_equal PLACEHOLDER, close(text, [secret], spent) }
+    assert_operator spent[0], :<=, limit
+  end
+
+  def dense_text(characters) = ('!-!' + PLACEHOLDER) * (characters / ('!-!' + PLACEHOLDER).length)
+
+  def test_a_long_secret_and_a_multi_megabyte_value_dense_with_placeholders_are_replaced_whole_in_bounded_time
+    spent = [0, 0]
+    result, seconds = timed { close(dense_text(3_000_000), ['k' * 3000 + 'Z'], spent) }
+    assert_equal PLACEHOLDER, result
+    assert_operator spent[0], :<=, TraceAI::Auto::Privacy::MATCH_WORK
+    assert_operator seconds, :<, 20
+  end
+
+  def test_a_four_kib_secret_and_an_eight_megabyte_value_aimed_at_the_prefilter_stay_inside_the_budget
+    spent = [0, 0]
+    result, seconds = timed { close(dense_text(8_000_000), [('Q' * 4095) + 'z'], spent) }
+    assert_equal PLACEHOLDER, result
+    assert_operator spent[0], :<=, TraceAI::Auto::Privacy::MATCH_WORK
+    assert_operator seconds, :<, 30
+    puts "\n  [4 KiB secret x 8 MB value] #{seconds.round(2)}s, work #{spent[0]} of #{TraceAI::Auto::Privacy::MATCH_WORK}" if ENV['TIMINGS']
+  end
+
+  # An ordinary large value with one fragment settles; the budget alone does not blank it.
+  def test_a_three_million_character_value_with_one_fragment_settles
+    secrets = ['XYYYYYYYYYYYY']
+    text = ('plain words ' * 250_000) + PLACEHOLDER + 'YYYYYYYYYYYY' + ' end'
+    spent = [0, 0]
+    result, seconds = timed { close(text, secrets, spent) }
+    assert_equal ('plain words ' * 250_000) + PLACEHOLDER + ' end', result
+    assert_operator spent[0], :<=, TraceAI::Auto::Privacy::MATCH_WORK
+    puts "\n  [3M value, one fragment] #{seconds.round(2)}s, work #{spent[0]}" if ENV['TIMINGS']
   end
 
   def timed
