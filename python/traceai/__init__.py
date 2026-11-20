@@ -188,7 +188,9 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
 
         # Create and instrument
         instrumentor = instrumentor_class()
-        instrumentor.instrument()
+        # Use the provider returned by init(), even when another provider owns
+        # OpenTelemetry's global slot. None preserves the pre-init global fallback.
+        instrumentor.instrument(tracer_provider=_tracer_provider)
 
         if verbose:
             print(f"|  Auto-instrumented: {lib_name}")
