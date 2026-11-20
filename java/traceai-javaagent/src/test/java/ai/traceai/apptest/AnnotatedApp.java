@@ -43,6 +43,7 @@ public final class AnnotatedApp {
             }
             case "mono" -> System.out.println("RESULT=" + service.mono("m").block(java.time.Duration.ofSeconds(10)));
             case "flux" -> System.out.println("RESULT=" + service.flux(3).collectList().block(java.time.Duration.ofSeconds(10)));
+            case "async_cancel" -> { var pending = service.neverCompletes("q"); pending.cancel(true); System.out.println("RESULT=cancelled=" + pending.isCancelled()); }
             case "nested_own_span" -> System.out.println("RESULT=" + service.outerWithOwnSpan(args[1]));
             case "own_span" -> System.out.println("RESULT=" + service.withOwnSpan(args[1]));
             case "bridge" -> System.out.println("RESULT=" + ((java.util.function.Function<String, String>) new Doubler()).apply("ab"));
@@ -127,6 +128,9 @@ public final class AnnotatedApp {
                 .header("Content-Type", "application/json").POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}")).build();
             return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
         }
+
+        @Chain(name = "never_completes")
+        public java.util.concurrent.CompletableFuture<String> neverCompletes(String q) { return new java.util.concurrent.CompletableFuture<>(); }
 
         @Span(kind = " ")
         public String blank() { return "b"; }

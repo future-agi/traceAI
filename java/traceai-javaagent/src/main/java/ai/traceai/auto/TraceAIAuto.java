@@ -442,7 +442,7 @@ public final class TraceAIAuto {
     // Called reflectively from advice woven into application methods annotated with ai.traceai.annotations.*.
     public static Object enterAnnotated(java.lang.reflect.Method method, Object[] arguments) { return AnnotationTracing.enter(method, arguments); }
     public static Object exitAnnotated(Object state, Object returned, Throwable error) { return AnnotationTracing.exit(state, returned, error); }
-    static boolean annotationsEnabled() { return config != null && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains("annotations"); }
+    static boolean annotationsEnabled() { return config != null && config.enabled("annotations"); }
     public static void installOkHttp(Object builder) {
         try { if (transportEnabled("okhttp") && !besideOtelJavaAgent()) OkHttpTransport.install(builder); } catch (Throwable ignored) { integrationFailed("okhttp"); }
     }

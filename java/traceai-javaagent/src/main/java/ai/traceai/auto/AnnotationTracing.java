@@ -64,8 +64,8 @@ final class AnnotationTracing {
             Context parent = current.get(ACTIVE) != null ? current : snapshot.parent();
             Span span = state.tracer().spanBuilder(truncate(meta.name(), MAX_NAME)).setSpanKind(SpanKind.INTERNAL).setParent(parent).startSpan();
             Started started;
-            String outerApp = current.get(ACTIVE) != null ? String.valueOf(current.get(APP_SPAN)) : Span.fromContext(snapshot.parent()).getSpanContext().isValid() ? Span.fromContext(snapshot.parent()).getSpanContext().getSpanId() : "";
-            Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).with(APP_SPAN, outerApp).makeCurrent();
+            // At every annotated entry, nested ones included: the application's own span that is current right here.
+            Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).with(APP_SPAN, snapshot.appSpanId()).makeCurrent();
             try { started = new Started(span, scope, state.config(), method.getReturnType() == void.class); }
             catch (Throwable error) { scope.close(); span.end(); return null; }
             if (span.isRecording()) {
@@ -90,7 +90,11 @@ final class AnnotationTracing {
         try {
             if (error != null) { finish(started, null, error); return null; }
             if (returned instanceof CompletionStage<?> stage) {
-                stage.whenComplete((value, failure) -> finish(started, value, failure));
+                stage.whenComplete((value, failure) -> {
+                    Throwable cause = failure instanceof CompletionException && failure.getCause() != null ? failure.getCause() : failure;
+                    if (cause instanceof java.util.concurrent.CancellationException) finish(started, null, null, true, false);
+                    else finish(started, value, failure);
+                });
                 return null;
             }
             Object wrapped = Reactor.wrap(started, returned);
@@ -182,10 +186,11 @@ final class AnnotationTracing {
      * is not JSON, and the export boundary withholds a text it cannot read as such. The view is built with half the limit as its
      * text budget (the JSON syntax and escapes add to it); if the text is still too long the budget is halved until it fits.
      */
-    private static String render(Object value, int limit) {
+    static String render(Object value, int limit) {
+        CapturedValue.Memo memo = new CapturedValue.Memo(); // application code runs once, however many times the text is cut
         for (long budget = Math.max(limit / 2, 32); ; budget /= 2) {
             String text;
-            try { text = GSON.toJson(CapturedValue.of(value, budget)); } catch (Throwable ignored) { return "\"<unserializable>\""; }
+            try { text = GSON.toJson(CapturedValue.of(value, budget, memo)); } catch (Throwable ignored) { return "\"<unserializable>\""; }
             if (text.length() <= limit) return text;
             if (budget <= 32) return "\"" + CapturedValue.CUT + "\"";
         }
@@ -207,7 +212,7 @@ final class AnnotationTracing {
             Class<?> flux = ancestor(returned.getClass(), "reactor.core.publisher.Flux");
             if (flux == null) return null;
             List<Object> items = Collections.synchronizedList(new ArrayList<>());
-            Object result = call(flux, returned, "doOnNext", Consumer.class, (Consumer<Object>) item -> { if (items.size() < MAX_ITEMS) items.add(CapturedValue.of(item, Math.max(started.chars() / MAX_ITEMS, 256))); });
+            Object result = call(flux, returned, "doOnNext", Consumer.class, (Consumer<Object>) item -> { if (items.size() < MAX_ITEMS && started.span.isRecording() && !TraceAIAuto.hidden("output.value", "v", null, started.config)) items.add(CapturedValue.of(item, Math.max(started.chars() / MAX_ITEMS, 256))); });
             result = call(flux, result, "doOnComplete", Runnable.class, (Runnable) () -> finish(started, new ArrayList<>(items), null));
             result = call(flux, result, "doOnError", Consumer.class, (Consumer<Throwable>) error -> finish(started, null, error));
             return call(flux, result, "doOnCancel", Runnable.class, (Runnable) () -> { List<Object> seen = new ArrayList<>(items); finish(started, seen, null, true, !seen.isEmpty()); });

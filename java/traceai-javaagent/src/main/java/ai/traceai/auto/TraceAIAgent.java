@@ -17,13 +17,21 @@ public final class TraceAIAgent {
         try { TraceAIAuto.start(Map.of(), instrumentation); }
         catch (Throwable ignored) { TraceAIAuto.warn("Agent startup failed; application runs without auto-instrumentation"); }
     }
+    static final String TRANSFORMER_CLAIM = "traceai.auto.annotation.transformer";
+    /**
+     * One annotation transformer per JVM: the first engine copy to ask (the agent flag, or a class-loader copy that calls
+     * init()) installs it, and later copies do not, so no method is woven twice. The claim is a JVM-wide system property,
+     * set atomically, because the copies share nothing else.
+     */
+    static boolean claimAnnotationTransformer() { return System.getProperties().putIfAbsent(TRANSFORMER_CLAIM, "1") == null; }
     static void install(Instrumentation instrumentation) {
         IncomingRequests.install(instrumentation);
         ToolSpans.install(instrumentation);
         GoogleAdk.install(instrumentation);
         // Shade relocates this property along with ByteBuddy: it cannot alter an application's copy.
         if (Runtime.version().feature() > 24) System.setProperty("net.bytebuddy.experimental", "true");
-        new AgentBuilder.Default().disableClassFormatChanges()
+        boolean annotations = claimAnnotationTransformer();
+        AgentBuilder base = new AgentBuilder.Default().disableClassFormatChanges()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .ignore(nameStartsWith("ai.traceai.auto.").and(not(hasSuperType(namedOneOf("okio.Source", "okhttp3.ResponseBody"))))
                 // Built at runtime: Shade would rewrite the literal to the agent's own relocated package.
@@ -44,10 +52,13 @@ public final class TraceAIAgent {
             // providers and processors are never rewritten, wrapped or observed.
             // Application classes (and interfaces, for their default methods) with a method annotated with ai.traceai.annotations.*;
             // matched by name, so the annotation module is not needed here. Not woven at all while the annotations are disabled.
-            .type(declaresMethod(annotated()).and(not(nameStartsWith("java.").or(nameStartsWith("jdk.")).or(nameStartsWith("sun."))))
-                .and(type -> TraceAIAuto.annotationsEnabled()))
-            .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(AnnotatedMethodAdvice.class).on(annotated())))
-            .type(named("jdk.internal.net.http.HttpRequestImpl"))
+            ;
+        if (annotations) {
+            base = base.type(declaresMethod(annotated()).and(not(nameStartsWith("java.").or(nameStartsWith("jdk.")).or(nameStartsWith("sun."))))
+                    .and(type -> TraceAIAuto.annotationsEnabled()))
+                .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(AnnotatedMethodAdvice.class).on(annotated())));
+        }
+        base.type(named("jdk.internal.net.http.HttpRequestImpl"))
             .transform((builder, type, loader, module, domain) -> builder
                 .visit(Advice.to(JdkHeaderAdvice.class).on(namedOneOf("setSystemHeader", "addSystemHeader").and(takesArguments(String.class, String.class)))))
             .type(named("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream"))

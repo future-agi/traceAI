@@ -144,7 +144,7 @@ class CapturedValueTest {
 
     /** Numbers are charged against the text limit while the tree is walked. */
     @Test void numbersAreChargedAgainstTheTextLimit() {
-        String captured = new com.google.gson.GsonBuilder().create().toJson(CapturedValue.of(Collections.nCopies(100, 1234567890123L), 64));
+        String captured = new com.google.gson.GsonBuilder().disableHtmlEscaping().create().toJson(CapturedValue.of(Collections.nCopies(100, 1234567890123L), 64));
         assertTrue(captured.length() < 400, "length " + captured.length() + ": " + captured);
         assertTrue(captured.contains(CapturedValue.CUT), captured);
     }

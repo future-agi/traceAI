@@ -12,9 +12,13 @@ import java.util.*;
  * A call is not traced again when the active span is a library span (LLM, EMBEDDING, RERANKER or
  * GUARDRAIL); only the active span is read, never its ancestors. */
 final class OtelBridge {
-    record Snapshot(Context parent, Map<String, String> attributes, boolean suppressed, long startEpochNanos, long startNanos, Integer attributeLimit, io.opentelemetry.sdk.resources.Resource resource) {
+    /** {@code appSpanId}: the id of the application's own span current at the moment of the snapshot, "" when there is none. */
+    record Snapshot(Context parent, Map<String, String> attributes, boolean suppressed, long startEpochNanos, long startNanos, Integer attributeLimit, io.opentelemetry.sdk.resources.Resource resource, String appSpanId) {
         Snapshot(Context parent, Map<String, String> attributes, boolean suppressed, long startEpochNanos, long startNanos) {
-            this(parent, attributes, suppressed, startEpochNanos, startNanos, null, null);
+            this(parent, attributes, suppressed, startEpochNanos, startNanos, null, null, "");
+        }
+        Snapshot(Context parent, Map<String, String> attributes, boolean suppressed, long startEpochNanos, long startNanos, Integer attributeLimit, io.opentelemetry.sdk.resources.Resource resource) {
+            this(parent, attributes, suppressed, startEpochNanos, startNanos, attributeLimit, resource, "");
         }
     }
     private static final Set<String> LIBRARY = Set.of("LLM", "EMBEDDING", "RERANKER", "GUARDRAIL");
@@ -37,6 +41,7 @@ final class OtelBridge {
         if (!annotated && current instanceof ReadableSpan readable) suppressed |= library(readable.getAttribute(AttributeKey.stringKey("gen_ai.span.kind"))) || library(readable.getAttribute(AttributeKey.stringKey("fi.span.kind")));
         Integer attributeLimit = null;
         io.opentelemetry.sdk.resources.Resource resource = null;
+        String appSpanId = "";
         Map<String, String> attrs = new LinkedHashMap<>(ContextAttributes.getAttributesFromContext());
         try {
             ClassLoader loader = Thread.currentThread().getContextClassLoader();
@@ -81,6 +86,7 @@ final class OtelBridge {
             // that was current when the annotated call began: that is the application's own inner span, and it wins.
             boolean validContext = (boolean)scApi.getMethod("isValid").invoke(sc);
             validSpan |= validContext;
+            if (validContext) appSpanId = String.valueOf(scApi.getMethod("getSpanId").invoke(sc));
             boolean innerApplicationSpan = annotated && validContext && !String.valueOf(scApi.getMethod("getSpanId").invoke(sc)).equals(String.valueOf(parent.get(AnnotationTracing.APP_SPAN)));
             if (validContext && (!annotated || innerApplicationSpan)) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
             // A Google ADK span is current: it is the parent even inside an annotated method (the agent span nests under the
@@ -97,7 +103,7 @@ final class OtelBridge {
             // An ADK span is current: only a model call that is its child can own this request. No span at all: fail open, traced.
             if (adkSpan != null) suppressed = GoogleAdk.modelCallInFlightNear(adkSpan);
         }
-        return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
+        return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource, appSpanId);
     }
     /**
      * True when the application already records this tool call: its active span is a TOOL span for this tool (what a

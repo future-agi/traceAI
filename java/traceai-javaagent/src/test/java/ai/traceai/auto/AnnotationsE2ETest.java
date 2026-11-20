@@ -299,4 +299,11 @@ class AnnotationsE2ETest {
         run("agent", "sync", Map.of("FI_INSTRUMENTATIONS", "okhttp"));
         assertTrue(spans.isEmpty(), "annotations are not on the allowlist: " + names(spans));
     }
+    @Test void aCancelledCompletableFutureEndsItsSpanWithACancelledMarkerNotAnError() throws Exception {
+        String log = run("agent", "async_cancel", Map.of());
+        assertTrue(log.contains("RESULT=cancelled=true"), log);
+        Map<String, Object> pending = span("never_completes");
+        assertEquals("true", String.valueOf(attrs(pending).get("traceai.cancelled")));
+        assertNotEquals(2, ((Number)WireCore.map(pending.get("status")).get("code")).intValue(), "a cancel is not an error");
+    }
 }

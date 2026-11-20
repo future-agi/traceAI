@@ -83,6 +83,8 @@ final class KnownSecrets {
         }
     }
     record Snapshot(List<Secret> secrets, boolean unavailable) {
+        /** The length of the longest registered secret, 0 when none. */
+        int longest() { return secrets.isEmpty() ? 0 : secrets.get(0).value.length(); }
         String scrub(String text) {
             if (unavailable) throw new IllegalStateException("Privacy registry unavailable");
             if ((long)text.length() * (secrets.size() + 1) > 16 * 1024 * 1024) return "<redacted>";
