@@ -273,7 +273,12 @@ public final class TraceAIAuto {
     }
     /** Test hook: one status entry of the doctor report. */
     static String statusOf(String key) { return STATUS.get(key); }
-    static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
+    /** An integration that is not a wire transport: gated on the agent being configured and its own name only. */
+    static boolean integrationEnabled(String name) { return config != null && config.enabled(name); }
+    static void integrationInstrumented(String name) {
+        boolean enabled = GoogleAdk.INTEGRATION.equals(name) ? integrationEnabled(name) : transportEnabled(name);
+        STATUS.put(name, enabled ? "instrumented" : "disabled");
+    }
     static void integrationFailed(String name) {
         STATUS.put(name, "failed");
         // An OpenTelemetry Java agent listed after this one rewrites the same classes once its own
@@ -410,7 +415,7 @@ public final class TraceAIAuto {
         };
         for (String[] library : libraries) STATUS.put(library[0], !config.enabled(library[0]) ? "disabled" : !present(library[1]) ? "not_installed" : !present(library[2]) ? "missing_instrumentor (known HTTP protocols still covered by wire)" : "manual (use " + library[2] + "; wrapper/listener registration required)");
         STATUS.put("servlet", config.credentials() && transportEnabled("servlet") ? "pending (joins incoming W3C trace context when loaded)" : "disabled");
-        STATUS.put(GoogleAdk.INTEGRATION, !config.credentials() || !transportEnabled(GoogleAdk.INTEGRATION) ? "disabled" : !present("com.google.adk.runner.Runner") ? "not_installed" : "pending (enabled when loaded)");
+        STATUS.put(GoogleAdk.INTEGRATION, !config.credentials() || !config.enabled(GoogleAdk.INTEGRATION) ? "disabled" : !present("com.google.adk.runner.Runner") ? "not_installed" : "pending (enabled when loaded)");
         boolean wire = config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && config.credentials();
         STATUS.putIfAbsent("wire", wire ? "pending (agent not initialized)" : "disabled");
         STATUS.putIfAbsent("java.net.http", wire && transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");

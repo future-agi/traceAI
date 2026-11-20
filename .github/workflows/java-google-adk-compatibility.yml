@@ -1,0 +1,50 @@
+name: Java Google ADK compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-google-adk/**'
+      - 'java/traceai-javaagent/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/java-google-adk-compatibility.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'java/traceai-java-google-adk/**'
+      - 'java/traceai-javaagent/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/java-google-adk-compatibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: java-google-adk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Google ADK ${{ matrix.adk }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        adk: ['1.0.0', '1.5.0', '1.10.1', '1.15.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: The wrapper module's tests and the packaged agent's Google ADK end-to-end test on this ADK version
+        run: |
+          mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify \
+            -Dgoogle-adk.version=${{ matrix.adk }} \
+            -Dtest='TracedAdkTest,AdkAttributesTest,GoogleAdkKindsTest' -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dit.test=GoogleAdkE2ETest -Dfailsafe.failIfNoSpecifiedTests=false

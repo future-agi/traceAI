@@ -211,6 +211,7 @@ public final class GoogleAdk {
         /** The agent's own span; null when the agent is not recording this one. */
         private final Span shadow;
         private final TraceAIAuto.RuntimeState state;
+        private final long startedNanos;
         private volatile Map<String, Object> request, response;
         private volatile String toolName, toolDescription, toolType, agentName, agentDescription, sessionId, userId;
         private volatile Object toolArguments, toolResult;
@@ -223,6 +224,10 @@ public final class GoogleAdk {
             this.delegate = delegate; this.name = name; this.api = api; this.startEpochNanos = startEpochNanos;
             this.attributes = new LinkedHashMap<>(started);
             this.kind = kindOf(name);
+            this.startedNanos = startNanos;
+            // Registered before ADK assembles the request, so a model client that sends at assembly time or on a thread of its
+            // own executor is covered; removed when ADK ends the span.
+            if ("LLM".equals(kind)) IN_FLIGHT_LLM.add(this);
             AdkSpan parentSpan = null;
             try {
                 Object holder = context == null ? null : api.fromContext().invoke(null, context);
@@ -232,8 +237,8 @@ public final class GoogleAdk {
             OtelBridge.Snapshot captured = null; Span span = null; TraceAIAuto.RuntimeState runtime = null;
             try {
                 runtime = TraceAIAuto.currentRuntime();
-                if (runtime != null && kind != null && TraceAIAuto.transportEnabled(INTEGRATION) && !TraceAIAuto.besideOtelJavaAgent()) {
-                    captured = parentSpan != null ? parentSpan.snapshot : OtelBridge.snapshot();
+                if (runtime != null && kind != null && TraceAIAuto.integrationEnabled(INTEGRATION) && !TraceAIAuto.besideOtelJavaAgent()) {
+                    captured = parentSpan != null ? parentSpan.snapshot : OtelBridge.snapshot(false);
                     if (!captured.suppressed() && runtime.acceptingResults()) {
                         Context parentContext = parentSpan != null && parentSpan.shadow != null ? Context.root().with(parentSpan.shadow) : captured.parent();
                         span = runtime.tracer().spanBuilder(bounded(name)).setSpanKind(SpanKind.INTERNAL).setParent(parentContext)
@@ -309,6 +314,7 @@ public final class GoogleAdk {
 
         private void finish(long endEpochNanos) {
             if (!ended.compareAndSet(false, true)) return;
+            IN_FLIGHT_LLM.remove(this);
             try {
                 Map<String, Object> mapped = mapped();
                 if (parent != null) parent.child(this, mapped);
@@ -489,6 +495,19 @@ public final class GoogleAdk {
     }
 
     // ---- Read by the wire capture -----------------------------------------------------------------------------
+
+    /** ADK model-call spans started and not yet ended, whichever thread runs the model client. */
+    private static final Set<AdkSpan> IN_FLIGHT_LLM = ConcurrentHashMap.newKeySet();
+    /** A model call ADK never ended must not silence the wire capture for good. */
+    private static final long STALE_NANOS = TimeUnit.MINUTES.toNanos(15);
+
+    /** True while an ADK model call is in flight: the HTTP request of a thread without any span context is that call's. */
+    static boolean modelCallInFlight() {
+        if (IN_FLIGHT_LLM.isEmpty()) return false;
+        long now = System.nanoTime();
+        IN_FLIGHT_LLM.removeIf(span -> now - span.startedNanos > STALE_NANOS);
+        return !IN_FLIGHT_LLM.isEmpty();
+    }
 
     /** The span kind of an ADK span the application sees as its current span, or null for any other span. */
     static String kindOf(Object external) {

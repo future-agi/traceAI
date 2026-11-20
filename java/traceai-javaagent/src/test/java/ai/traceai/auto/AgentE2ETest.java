@@ -238,8 +238,8 @@ class AgentE2ETest {
         try (var jar = new java.util.jar.JarFile(agentJar().toFile())) {
             var foreign = jar.stream().map(java.util.zip.ZipEntry::getName)
                 .filter(name -> !name.startsWith("ai/traceai/auto/") && !name.startsWith("META-INF/") && !name.equals("ai/") && !name.equals("ai/traceai/")).toList();
-            // The one exception is the attribute mapping of traceai-java-google-adk, shared with the library wrappers.
-            assertEquals(List.of("ai/traceai/googleadk/", "ai/traceai/googleadk/AdkAttributes.class"), foreign);
+            assertEquals(List.of(), foreign);
+            assertNotNull(jar.getEntry("ai/traceai/auto/shaded/googleadk/AdkAttributes.class"), "the attribute mapping is bundled, relocated");
             for (String helper : List.of("SamplingRatioSampler.class", "SamplingRatioSampler$KnownRatioSampler.class",
                     "SamplingRatioSampler$1.class")) {
                 assertNotNull(jar.getEntry("ai/traceai/auto/shaded/core/" + helper),

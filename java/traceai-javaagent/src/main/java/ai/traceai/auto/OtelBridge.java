@@ -18,7 +18,13 @@ final class OtelBridge {
         }
     }
     private static final Set<String> LIBRARY = Set.of("LLM", "EMBEDDING", "RERANKER", "GUARDRAIL");
-    static Snapshot snapshot() {
+    static Snapshot snapshot() { return snapshot(true); }
+    /**
+     * @param wire true for a request about to be captured by the wire layer: while an ADK model call is in flight, a request
+     *             from a thread with no valid span (a client's own executor thread carries no OpenTelemetry context) belongs to it.
+     */
+    static Snapshot snapshot(boolean wire) {
+        boolean validSpan = false;
         java.time.Instant instant = java.time.Instant.now(); long startNanos = System.nanoTime();
         Context parent = Context.current();
         Span current = Span.current();
@@ -61,7 +67,7 @@ final class OtelBridge {
             if (adkKind != null) suppressed |= library(adkKind);
             Object sc = spanApi.getMethod("getSpanContext").invoke(external);
             Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
-            if ((boolean)scApi.getMethod("isValid").invoke(sc)) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
+            if ((validSpan = (boolean)scApi.getMethod("isValid").invoke(sc))) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
             Context adkParent = GoogleAdk.contextOf(external);
             if (adkParent != null) parent = adkParent;
             try {
@@ -70,6 +76,7 @@ final class OtelBridge {
                 if (data instanceof Map<?, ?> map) map.forEach((k, v) -> attrs.put(String.valueOf(k), String.valueOf(v)));
             } catch (ReflectiveOperationException ignored) { }
         } catch (Throwable ignored) { }
+        if (wire && !validSpan && GoogleAdk.modelCallInFlight()) suppressed = true;
         return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
     }
     /**

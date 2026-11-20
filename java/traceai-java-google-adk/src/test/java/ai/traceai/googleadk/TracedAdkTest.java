@@ -54,6 +54,40 @@ public class TracedAdkTest {
         public BaseLlmConnection connect(LlmRequest request) { throw new UnsupportedOperationException(); }
     }
 
+    /** A built-in-style tool: no function declaration; it changes the model request itself, as Google Search and code execution do. */
+    static final class RequestShapingTool extends com.google.adk.tools.BaseTool {
+        RequestShapingTool() { super("built_in", "changes the request"); }
+
+        @Override
+        public io.reactivex.rxjava3.core.Completable processLlmRequest(LlmRequest.Builder builder, com.google.adk.tools.ToolContext context) {
+            builder.model("model-chosen-by-the-built-in-tool");
+            return io.reactivex.rxjava3.core.Completable.complete();
+        }
+    }
+
+    @Test
+    void aWrappedBuiltInToolStillShapesTheModelRequest() {
+        FITracer tracer = new FITracer(SdkTracerProvider.builder().build().get("adk-test"), TraceConfig.builder().build());
+        LlmRequest.Builder bare = LlmRequest.builder();
+        new RequestShapingTool().processLlmRequest(bare, null).blockingAwait();
+        assertThat(bare.build().model()).hasValue("model-chosen-by-the-built-in-tool");
+
+        LlmRequest.Builder wrapped = LlmRequest.builder();
+        new TracedTool(new RequestShapingTool(), tracer).processLlmRequest(wrapped, null).blockingAwait();
+        assertThat(wrapped.build().model()).hasValue("model-chosen-by-the-built-in-tool");
+    }
+
+    @Test
+    void aWrappedFunctionToolIsStillAddedToTheRequestAsBefore() throws Exception {
+        FITracer tracer = new FITracer(SdkTracerProvider.builder().build().get("adk-test"), TraceConfig.builder().build());
+        FunctionTool function = FunctionTool.create(TracedAdkTest.class, "weather");
+        LlmRequest.Builder plain = LlmRequest.builder();
+        function.processLlmRequest(plain, null).blockingAwait();
+        LlmRequest.Builder wrapped = LlmRequest.builder();
+        new TracedTool(function, tracer).processLlmRequest(wrapped, null).blockingAwait();
+        assertThat(wrapped.build().config().toString()).isEqualTo(plain.build().config().toString());
+    }
+
     private static List<SpanData> run(TraceConfig config) throws Exception {
         InMemorySpanExporter exporter = InMemorySpanExporter.create();
         SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();

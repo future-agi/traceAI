@@ -46,7 +46,9 @@ class GoogleAdkE2ETest {
     }
     @AfterEach void stopServer() { server.stop(0); executor.shutdownNow(); }
 
-    String run(String mode, String prompt, Map<String, String> options) throws Exception {
+    String run(String mode, String prompt, Map<String, String> options) throws Exception { return run(mode, prompt, options, "subscribe"); }
+
+    String run(String mode, String prompt, Map<String, String> options, String send) throws Exception {
         Path agent = AgentE2ETest.agentJar(); assertTrue(Files.isRegularFile(agent));
         // The application is the google-adk module's test application (AdkApp) with ADK and its dependencies, which the
         // module's build lists; the agent's classes come only from the packaged jar.
@@ -57,7 +59,7 @@ class GoogleAdkE2ETest {
         adkVersion100 = cp.contains("google-adk-1.0.0.jar");
         Path output = Files.createTempFile(Path.of("target"), "adk-e2e-", ".log");
         List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-javaagent:" + agent,
-            "-cp", cp, "ai.traceai.googleadk.AdkApp", mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt));
+            "-cp", cp, "ai.traceai.googleadk.AdkApp", mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt, send));
         ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         Map<String, String> env = pb.environment(); env.keySet().removeIf(k -> k.startsWith("FI_") || k.startsWith("OTEL_") || k.startsWith("ADK_"));
         env.put("FI_CONFIG_FILE", "target/no-e2e-config.toml"); env.put("FI_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort());
@@ -142,6 +144,36 @@ class GoogleAdkE2ETest {
         assertEquals(2, modelCalls.get(), "the model stub made its two HTTP calls");
         assertEquals(List.of(), byLayer("wire"), "the wire capture stays out of an ADK model call: " + spans);
         assertTrue(spans.stream().noneMatch(s -> String.valueOf(s.get("name")).startsWith("chat ")), spans.toString());
+    }
+
+    /** The model client may send the HTTP call while ADK assembles the request, or on a thread of its own executor. */
+    @Test void theModelsHttpCallIsNotTracedASecondTimeWhereverTheClientSendsIt() throws Exception {
+        for (String send : List.of("assembly", "executor")) {
+            spans.clear(); modelCalls.set(0);
+            run("plain", PROMPT, Map.of(), send);
+            assertEquals(2, modelCalls.get(), send + ": the model stub made its two HTTP calls");
+            assertEquals(2, named("call_llm").size(), send + ": exactly one LLM span per model call: " + spans);
+            assertEquals(List.of(), byLayer("wire"), send + ": no wire span for the model's HTTP call: " + spans);
+            assertTrue(spans.stream().noneMatch(s -> String.valueOf(s.get("name")).startsWith("chat ")), send + ": " + spans);
+            assertEquals(5, spans.size(), send + ": " + spans);
+        }
+    }
+
+    @Test void adkSpansDoNotDependOnTheWireSwitches() throws Exception {
+        for (Map<String, String> options : List.of(Map.of("FI_WIRE_CAPTURE", "false"), Map.of("FI_DISABLED_INSTRUMENTATIONS", "wire"),
+                Map.of("FI_INSTRUMENTATIONS", "google-adk"))) {
+            spans.clear();
+            String log = run("plain", PROMPT, options);
+            assertEquals(5, spans.size(), options + ": ADK spans are still recorded: " + spans);
+            assertEquals(5, byLayer("google-adk").size(), options + ": " + spans);
+            assertTrue(log.lines().anyMatch(l -> l.startsWith("DOCTOR ") && l.contains("\"google-adk\":\"instrumented\"")), options + ": " + log);
+        }
+    }
+
+    @Test void onlyWiringTheWireIntegrationTurnsGoogleAdkOffAndTheStatusSaysSo() throws Exception {
+        String log = run("plain", PROMPT, Map.of("FI_INSTRUMENTATIONS", "wire"));
+        assertEquals(List.of(), byLayer("google-adk"), spans.toString());
+        assertTrue(log.lines().anyMatch(l -> l.startsWith("DOCTOR ") && l.contains("\"google-adk\":\"disabled\"")), log);
     }
 
     @Test void disablingGoogleAdkLeavesOnlyTheWireSpans() throws Exception {

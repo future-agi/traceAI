@@ -32,7 +32,8 @@ import java.util.Map;
  * OpenAI-compatible endpoint through the JDK HttpClient while ADK's model call is subscribed, as a real model
  * implementation does. No tracing code, no provider calls.
  *
- * <p>Arguments: mode ("plain" or "sdk", the application installs its own OpenTelemetry SDK), the model endpoint, the prompt.
+ * <p>Arguments: mode ("plain" or "sdk", the application installs its own OpenTelemetry SDK), the model endpoint, the prompt, and
+ * optionally where the model's HTTP call is sent ("subscribe", "assembly" or "executor").
  */
 public class AdkApp {
     public static Map<String, Object> weather(@Schema(name = "city") String city) {
@@ -41,15 +42,27 @@ public class AdkApp {
 
     static final class Model extends BaseLlm {
         private final String endpoint;
-        Model(String endpoint) { super("gemini-2.0-flash"); this.endpoint = endpoint; }
+        /** Where the model's HTTP call is sent: "subscribe" (while subscribed), "assembly" (inside generateContent, before the Flowable
+         *  exists) or "executor" (on a thread of the client's own executor, which carries no OpenTelemetry context). */
+        private final String send;
+        private final java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newCachedThreadPool(r -> { Thread t = new Thread(r, "model-client"); t.setDaemon(true); return t; });
+        Model(String endpoint, String send) { super("gemini-2.0-flash"); this.endpoint = endpoint; this.send = send; }
+
+        private void post() throws Exception {
+            HttpRequest http = HttpRequest.newBuilder(URI.create(endpoint + "/v1/chat/completions")).header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}")).build();
+            HttpClient.newHttpClient().send(http, HttpResponse.BodyHandlers.ofString());
+        }
 
         @Override
         public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
+            if (send.equals("assembly")) {
+                try { post(); } catch (Exception e) { return Flowable.error(e); }
+            }
             return Flowable.defer(() -> {
                 try {
-                    HttpRequest http = HttpRequest.newBuilder(URI.create(endpoint + "/v1/chat/completions")).header("content-type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}")).build();
-                    HttpClient.newHttpClient().send(http, HttpResponse.BodyHandlers.ofString());
+                    if (send.equals("subscribe")) post();
+                    else if (send.equals("executor")) executor.submit(() -> { post(); return null; }).get();
                 } catch (Exception e) {
                     return Flowable.error(e);
                 }
@@ -67,12 +80,12 @@ public class AdkApp {
     }
 
     public static void main(String[] args) throws Exception {
-        String mode = args[0], endpoint = args[1], prompt = args[2];
+        String mode = args[0], endpoint = args[1], prompt = args[2], send = args.length > 3 ? args[3] : "subscribe";
         InMemorySpanExporter own = InMemorySpanExporter.create();
         if (mode.equals("sdk")) {
             OpenTelemetrySdk.builder().setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(own)).build()).buildAndRegisterGlobal();
         }
-        LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(endpoint)).instruction("Be brief")
+        LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(endpoint, send)).instruction("Be brief")
             .tools(FunctionTool.create(AdkApp.class, "weather")).build();
         InMemoryRunner runner = new InMemoryRunner(agent);
         var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
