@@ -107,6 +107,7 @@ func makeReport(c Config, wire bool, reason string) AgentReport {
 		}
 		r.Integrations = append(r.Integrations, IntegrationStatus{Name: e.name, Status: s, Option: e.option, Installed: installed[e.target], WireProtocols: protocols, Reason: why})
 	}
+	markAttached(&r)
 	return r
 }
 
@@ -123,5 +124,7 @@ func Report() AgentReport {
 		r.Integrations[i].WireProtocols = append([]string(nil), r.Integrations[i].WireProtocols...)
 	}
 	r.Limitations = append([]string(nil), r.Limitations...)
+	// A module may attach after the report was built.
+	markAttached(&r)
 	return r
 }
