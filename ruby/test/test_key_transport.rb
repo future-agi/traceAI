@@ -163,12 +163,37 @@ class KeyTransportTest < Minitest::Test
     assert A::KeyTransport.peer_agrees?('LOCALHOST', peer.new('127.0.0.1'))
   end
 
+  # The check of the once-flag and its write are one step under the lock. A read that yields between the two lets an
+  # unlocked pair of threads both see "not yet warned"; with the lock only one gets past.
+  def with_slow_flag_reads
+    original = Object.instance_method(:instance_variable_get)
+    A::KeyTransport.define_singleton_method(:instance_variable_get) do |name|
+      value = original.bind_call(self, name)
+      sleep 0.01
+      value
+    end
+    yield
+  ensure
+    A::KeyTransport.singleton_class.send(:remove_method, :instance_variable_get)
+  end
+
   def test_concurrent_exports_warn_once
     ENV['FI_ALLOW_INSECURE_HTTP'] = '1'
     out = capture_io do
-      16.times.map { Thread.new { A::KeyTransport.check('http://collector.test:4318') } }.each(&:join)
+      with_slow_flag_reads do
+        16.times.map { Thread.new { A::KeyTransport.check('http://collector.test:4318') } }.each(&:join)
+      end
     end.last
     assert_equal 1, out.scan('FI_ALLOW_INSECURE_HTTP').length, out
+  end
+
+  def test_concurrent_refusals_warn_once
+    out = capture_io do
+      with_slow_flag_reads do
+        16.times.map { Thread.new { A::KeyTransport.warn_refused(A::KeyTransport::Refused.new) } }.each(&:join)
+      end
+    end.last
+    assert_equal 1, out.scan('refused by the key transport check').length, out
   end
 
   def test_opt_in_is_fixed_at_construction
@@ -213,6 +238,41 @@ class KeyTransportTest < Minitest::Test
     assert_equal 1, joined.scan('FI_ALLOW_INSECURE_HTTP').length, errors.inspect
     refute_includes joined, 'secret-host'
     refute_includes joined, KEY
+  end
+
+  # The base URL cannot be parsed: refused before any connection, with the one value-free warning.
+  def test_an_unparseable_base_url_is_refused_with_one_value_free_warning
+    errors = 2.times.map { export_to('http:///tracer').last }
+    attempts = export_to('http:///tracer').then { |_, tried, _| tried }
+    assert_empty attempts
+    joined = errors.join
+    assert_equal 1, joined.scan('refused by the key transport check').length, errors.inspect
+    assert_includes joined, 'unparseable URL'
+    refute_includes joined, 'tracer'
+    refute_includes joined, KEY
+    refute_includes joined, SECRET
+  end
+
+  # The warning does not claim the target is the problem for a redirect or a peer refusal, and names a reason from a short list.
+  def test_the_refusal_warning_is_neutral_and_names_a_reason_from_a_fixed_list
+    reasons = {'http://secret-host.test:4318' => 'insecure target', 'http://api.futureagi.com' => 'insecure target',
+               'http://user:pass@127.0.0.1:4318' => 'unparseable URL'}
+    reasons.each do |base, reason|
+      A::KeyTransport.reset_warning
+      err = export_to(base).last
+      assert_includes err, 'Future AGI export refused by the key transport check', base
+      assert_includes err, reason, base
+      refute_includes err, 'not allowed to receive keys', base
+      refute_includes err, 'secret-host'
+      refute_includes err, 'pass'
+    end
+    A::KeyTransport.reset_warning
+    out = capture_io { A::KeyTransport.warn_refused(A::KeyTransport::Refused.new('redirect answered a key-carrying send', reason: 'redirect')) }.last
+    assert_includes out, 'redirect'
+    refute_includes out, 'not allowed to receive keys'
+    A::KeyTransport.reset_warning
+    out = capture_io { A::KeyTransport.warn_refused(A::KeyTransport::Refused.new('connected peer is not loopback', reason: 'peer not loopback')) }.last
+    assert_includes out, 'peer not loopback'
   end
 
   def test_decision_function_is_the_single_gate
