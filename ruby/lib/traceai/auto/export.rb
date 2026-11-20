@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require_relative 'privacy'
+require_relative 'key_transport'
 module TraceAI
   module Auto
     # Internal serialization records, shared by SDK forwarding and dependency-free
@@ -72,9 +73,14 @@ module TraceAI
     class WireExporter
       def initialize
         @endpoint = Auto.config['base_url'].to_s.sub(%r{/+$}, '') + '/tracer/v1/traces'
+        # Fixed with the endpoint: a later change of the environment does not change the decision.
+        @insecure_opt_in = ENV['FI_ALLOW_INSECURE_HTTP']
       end
       def export(records, timeout: nil)
         return 1 if @shutdown
+        # The only gate for FI keys: decided on the written target before any key header exists, and before the
+        # target is parsed for anything else, so a URL that cannot be parsed is refused with the same warning.
+        KeyTransport.check(@endpoint, opt_in: @insecure_opt_in)
         url = Wire.parse_url(@endpoint)
         return 1 unless url && !url.path.match?(/[\r\n\0 ]/)
         socket_class = native_class('Socket') || load_socket
@@ -95,6 +101,10 @@ module TraceAI
                    'Content-Length' => payload.bytesize.to_s, 'X-Api-Key' => Auto.config['api_key'], 'X-Secret-Key' => Auto.config['secret_key']}
         return 1 unless headers.values.all? { |value| Codec.type(value) == String && !value.match?(/[\r\n\0]/) }
         socket = socket_class.tcp(url.host, url.port, connect_timeout: timeout)
+        unless KeyTransport.peer_agrees?(KeyTransport.written_host(@endpoint), socket)
+          socket.close
+          raise KeyTransport::Refused.new('connected peer is not loopback', reason: 'peer not loopback')
+        end
         io = socket
         if tls_socket
           context = tls_context.new
@@ -131,7 +141,10 @@ module TraceAI
             wait_for(io, part, deadline)
           end
         end
+        raise KeyTransport::Refused.new('redirect answered a key-carrying send', reason: 'redirect') if KeyTransport.refuses_redirect?(response)
         response.match?(/\AHTTP\/1\.[01] 2\d\d(?: |\r)/) ? 0 : 1
+      rescue KeyTransport::Refused => e
+        KeyTransport.warn_refused(e); Auto.debug(e); 1
       rescue StandardError => e
         Auto.debug(e); 1
       ensure
