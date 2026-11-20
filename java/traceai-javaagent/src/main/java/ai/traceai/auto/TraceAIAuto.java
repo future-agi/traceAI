@@ -146,6 +146,7 @@ public final class TraceAIAuto {
         active = false;
         STATUS.put("wire", "disabled (OpenTelemetry Java agent detected)");
         STATUS.put("servlet", "disabled (OpenTelemetry Java agent detected)");
+        STATUS.put(GoogleAdk.INTEGRATION, "disabled (OpenTelemetry Java agent detected)");
         warn("The OpenTelemetry Java agent is also running; the Future AGI agent stays off and the application runs unchanged");
     }
     /**

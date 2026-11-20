@@ -72,13 +72,23 @@ public final class TracedLlm extends BaseLlm {
     private void finish(Span span, Map<String, Object> request, Map<String, Object> response, Throwable error) {
         if (!span.isRecording()) return;
         try {
-            SpanAttributes.write(tracer, span, AdkAttributes.llm(request, response));
-            String failure = error != null ? null : AdkAttributes.llmError(response);
-            if (error != null) tracer.setError(span, error);
-            else if (failure != null) span.setStatus(StatusCode.ERROR, failure);
-            else span.setStatus(StatusCode.OK);
+            try {
+                SpanAttributes.write(tracer, span, AdkAttributes.llm(request, response));
+                String failure = error != null ? null : AdkAttributes.llmError(response);
+                if (error != null) tracer.setError(span, error);
+                else if (failure != null) {
+                    // The model's own error text follows the same switch as every other error detail.
+                    span.setStatus(StatusCode.ERROR, tracer.getConfig().isHideErrorDetails() ? "" : failure);
+                } else span.setStatus(StatusCode.OK);
+            } catch (Throwable tracingFailure) {
+                // Tracing never fails the model call.
+            }
         } finally {
-            span.end();
+            try {
+                span.end();
+            } catch (Throwable ignored) {
+                // Nothing to do.
+            }
         }
     }
 

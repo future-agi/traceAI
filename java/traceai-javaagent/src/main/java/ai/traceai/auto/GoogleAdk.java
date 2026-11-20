@@ -178,7 +178,8 @@ public final class GoogleAdk {
                 long epoch = startEpochNanos >= 0 ? startEpochNanos : Instant.now().getEpochSecond() * 1_000_000_000L + Instant.now().getNano();
                 Object context = parent != null ? parent : noParent ? null : api.current().invoke(null);
                 AdkSpan handler = new AdkSpan(span, name, api, context, epoch, startNanos, attributes);
-                return Proxy.newProxyInstance(api.span().getClassLoader(), new Class<?>[]{api.span()}, handler);
+                try { return Proxy.newProxyInstance(api.span().getClassLoader(), new Class<?>[]{api.span()}, handler); }
+                catch (Throwable failed) { handler.deregister(); throw failed; }
             } catch (Throwable ignored) { return span; }
         }
     }
@@ -211,7 +212,9 @@ public final class GoogleAdk {
         /** The agent's own span; null when the agent is not recording this one. */
         private final Span shadow;
         private final TraceAIAuto.RuntimeState state;
-        private final long startedNanos;
+        /** What the in-flight registry holds for this span: an identity, never any content. */
+        private final Object flight = new Object();
+        private volatile boolean answered;
         private volatile Map<String, Object> request, response;
         private volatile String toolName, toolDescription, toolType, agentName, agentDescription, sessionId, userId;
         private volatile Object toolArguments, toolResult;
@@ -224,10 +227,6 @@ public final class GoogleAdk {
             this.delegate = delegate; this.name = name; this.api = api; this.startEpochNanos = startEpochNanos;
             this.attributes = new LinkedHashMap<>(started);
             this.kind = kindOf(name);
-            this.startedNanos = startNanos;
-            // Registered before ADK assembles the request, so a model client that sends at assembly time or on a thread of its
-            // own executor is covered; removed when ADK ends the span.
-            if ("LLM".equals(kind)) IN_FLIGHT_LLM.add(this);
             AdkSpan parentSpan = null;
             try {
                 Object holder = context == null ? null : api.fromContext().invoke(null, context);
@@ -247,7 +246,12 @@ public final class GoogleAdk {
                 }
             } catch (Throwable ignored) { span = null; }
             this.snapshot = captured; this.shadow = span; this.state = runtime;
+            // Only a call the agent records is registered, before ADK assembles the request, so a client that sends at assembly
+            // time or on a thread of its own executor is covered; removed when ADK ends the span, or if no proxy is returned.
+            if (span != null && "LLM".equals(kind)) registerInFlight(flight, parentSpan);
         }
+
+        void deregister() { IN_FLIGHT_LLM.remove(flight); }
 
         private static String bounded(String value) { return value == null || value.length() <= 200 ? value : value.substring(0, 200); }
 
@@ -296,6 +300,8 @@ public final class GoogleAdk {
         // ---- the content ADK reports ------------------------------------------------------------------------
 
         void llm(Map<String, Object> request, Map<String, Object> response, String session, Throwable error) {
+            // The model has answered: its HTTP call is done, so nothing after this is that call's.
+            answered = true; IN_FLIGHT_LLM.remove(flight);
             this.request = request; this.response = response;
             if (session != null) sessionId = session;
             if (error != null) { failed = true; thrown = error; }
@@ -314,7 +320,7 @@ public final class GoogleAdk {
 
         private void finish(long endEpochNanos) {
             if (!ended.compareAndSet(false, true)) return;
-            IN_FLIGHT_LLM.remove(this);
+            IN_FLIGHT_LLM.remove(flight);
             try {
                 Map<String, Object> mapped = mapped();
                 if (parent != null) parent.child(this, mapped);
@@ -373,6 +379,13 @@ public final class GoogleAdk {
             AutoConfig config = state.config();
             var resource = snapshot.resource() == null ? state.resource : TraceAIAuto.withRouting(snapshot.resource(), state.resource);
             int limit = Math.min(state.provider().getSpanLimits().getMaxNumberOfAttributes(), snapshot.attributeLimit() == null ? Integer.MAX_VALUE : snapshot.attributeLimit());
+            String failure = failure();
+            boolean fails = failed || failure != null;
+            if (fails && TraceAIAuto.hidesErrorText(config)) {
+                // A failed call's output can carry the error's own text; withheld as on the wire path.
+                attrs = new LinkedHashMap<>(attrs);
+                attrs.remove("output.value"); attrs.remove("output.mime_type");
+            }
             try {
                 int samplingSlots = shadow instanceof io.opentelemetry.sdk.trace.ReadableSpan readable
                     && readable.getAttribute(io.opentelemetry.api.common.AttributeKey.doubleKey("fi.sampling.ratio")) != null ? 1 : 0;
@@ -387,8 +400,7 @@ public final class GoogleAdk {
                     else if (v instanceof List<?> list) shadow.setAttribute(io.opentelemetry.api.common.AttributeKey.stringArrayKey(k),
                         list.stream().map(item -> item instanceof String s ? s : item == null ? "null" : item.getClass().getName()).toList());
                 }
-                String failure = failure();
-                if (failed || failure != null) {
+                if (fails) {
                     boolean hide = TraceAIAuto.hidesErrorText(config);
                     String text = failure != null ? failure : errorText;
                     shadow.setStatus(StatusCode.ERROR, hide || text == null ? "" : text);
@@ -496,17 +508,69 @@ public final class GoogleAdk {
 
     // ---- Read by the wire capture -----------------------------------------------------------------------------
 
-    /** ADK model-call spans started and not yet ended, whichever thread runs the model client. */
-    private static final Set<AdkSpan> IN_FLIGHT_LLM = ConcurrentHashMap.newKeySet();
+    /**
+     * ADK model calls the agent records, started and not yet ended: an identity and a start time each, never request or response
+     * content. Bounded, and pruned whenever a span starts and whenever the wire capture asks.
+     */
+    private record Flight(long started, Object[] ancestors) {}
+    private static final Map<Object, Flight> IN_FLIGHT_LLM = new ConcurrentHashMap<>();
+    private static final int MAX_IN_FLIGHT = 256;
     /** A model call ADK never ended must not silence the wire capture for good. */
     private static final long STALE_NANOS = TimeUnit.MINUTES.toNanos(15);
 
-    /** True while an ADK model call is in flight: the HTTP request of a thread without any span context is that call's. */
+    private static void prune() {
+        long now = System.nanoTime();
+        IN_FLIGHT_LLM.values().removeIf(flight -> now - flight.started() > STALE_NANOS);
+    }
+
+    /** Past the cap a call is not registered: the dedup fails open, so the request is traced rather than lost. */
+    private static void registerInFlight(Object flight, AdkSpan parent) {
+        prune();
+        if (IN_FLIGHT_LLM.size() >= MAX_IN_FLIGHT) return;
+        // The identities of the enclosing ADK spans (agent, invocation), nothing else.
+        List<Object> ancestors = new ArrayList<>();
+        for (AdkSpan up = parent; up != null && ancestors.size() < 16; up = up.parent) ancestors.add(up.flight);
+        IN_FLIGHT_LLM.put(flight, new Flight(System.nanoTime(), ancestors.toArray()));
+    }
+
+    /**
+     * True while an ADK model call the agent records is waiting for its answer, for a request from a thread with no span of its own
+     * (no application span, no ADK span), such as a model client's own executor thread, which carries no OpenTelemetry context.
+     */
     static boolean modelCallInFlight() {
         if (IN_FLIGHT_LLM.isEmpty()) return false;
-        long now = System.nanoTime();
-        IN_FLIGHT_LLM.removeIf(span -> now - span.startedNanos > STALE_NANOS);
+        prune();
         return !IN_FLIGHT_LLM.isEmpty();
+    }
+
+    /**
+     * True while a model call is waiting for its answer inside the ADK span the application sees as current: a request made under
+     * the agent or invocation span that encloses it, while ADK assembles that call's request, belongs to it. So does one made
+     * under an earlier span of the same agent that has already ended or answered, which older ADK versions leave current. A request
+     * under any other ADK span (a tool's, another session's) never does.
+     */
+    static boolean modelCallInFlightNear(Object external) {
+        try {
+            if (external == null || IN_FLIGHT_LLM.isEmpty() || !Proxy.isProxyClass(external.getClass())
+                || !(Proxy.getInvocationHandler(external) instanceof AdkSpan adk)) return false;
+            prune();
+            // A span that has ended or answered is only left current by an older ADK; what encloses it is what the thread is in.
+            boolean spent = adk.ended.get() || "LLM".equals(adk.kind) && adk.answered;
+            for (Flight flight : IN_FLIGHT_LLM.values())
+                for (Object ancestor : flight.ancestors()) {
+                    if (ancestor == adk.flight) return true;
+                    if (spent) for (AdkSpan up = adk.parent; up != null; up = up.parent) if (ancestor == up.flight) return true;
+                }
+        } catch (Throwable ignored) { }
+        return false;
+    }
+
+    /** False once an ADK model-call span has its answer: a request made after that is not the model call's own. */
+    static boolean awaitingAnswer(Object external) {
+        try {
+            if (external != null && Proxy.isProxyClass(external.getClass()) && Proxy.getInvocationHandler(external) instanceof AdkSpan adk) return !adk.answered;
+        } catch (Throwable ignored) { }
+        return true;
     }
 
     /** The span kind of an ADK span the application sees as its current span, or null for any other span. */

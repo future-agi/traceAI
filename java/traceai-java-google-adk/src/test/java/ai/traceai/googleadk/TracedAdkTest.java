@@ -38,14 +38,16 @@ public class TracedAdkTest {
     }
 
     static final class StubLlm extends BaseLlm {
-        StubLlm() { super("gemini-2.0-flash"); }
+        private final String toolName;
+        StubLlm() { this("weather"); }
+        StubLlm(String toolName) { super("gemini-2.0-flash"); this.toolName = toolName; }
 
         @Override
         public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
             boolean answered = request.contents().stream().anyMatch(c -> c.parts().orElse(List.of()).stream().anyMatch(p -> p.functionResponse().isPresent()));
             Content out = answered
                 ? Content.builder().role("model").parts(Part.fromText(ANSWER)).build()
-                : Content.builder().role("model").parts(Part.builder().functionCall(FunctionCall.builder().name("weather").args(Map.of("city", "Kyoto")).id("call-1").build()).build()).build();
+                : Content.builder().role("model").parts(Part.builder().functionCall(FunctionCall.builder().name(toolName).args(Map.of("city", "Kyoto")).id("call-1").build()).build()).build();
             return Flowable.just(LlmResponse.builder().content(out)
                 .usageMetadata(GenerateContentResponseUsageMetadata.builder().promptTokenCount(11).candidatesTokenCount(7).totalTokenCount(18).build()).build());
         }
@@ -86,6 +88,120 @@ public class TracedAdkTest {
         LlmRequest.Builder wrapped = LlmRequest.builder();
         new TracedTool(function, tracer).processLlmRequest(wrapped, null).blockingAwait();
         assertThat(wrapped.build().config().toString()).isEqualTo(plain.build().config().toString());
+    }
+
+    /** A tool in the style of ADK's own LoadArtifactsTool: it overrides processLlmRequest and calls super. */
+    static final class SuperCallingTool extends com.google.adk.tools.BaseTool {
+        SuperCallingTool() { super("super_tool", "calls super"); }
+
+        @Override
+        public java.util.Optional<com.google.genai.types.FunctionDeclaration> declaration() {
+            return java.util.Optional.of(com.google.genai.types.FunctionDeclaration.builder().name("super_tool").description("calls super").build());
+        }
+
+        @Override
+        public io.reactivex.rxjava3.core.Completable processLlmRequest(LlmRequest.Builder builder, com.google.adk.tools.ToolContext context) {
+            return super.processLlmRequest(builder, context);
+        }
+
+        @Override
+        public io.reactivex.rxjava3.core.Single<Map<String, Object>> runAsync(Map<String, Object> args, com.google.adk.tools.ToolContext context) {
+            return io.reactivex.rxjava3.core.Single.just(Map.of("ok", "SUPER-RESULT"));
+        }
+    }
+
+    @Test
+    void aWrappedToolThatCallsSuperIsStillTheOneAdkRunsAndTraces() throws Exception {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+        try {
+            FITracer tracer = new FITracer(provider.get("adk-test"), TraceConfig.builder().build());
+            LlmAgent agent = LlmAgent.builder().name("super_agent").description("uses a tool that calls super")
+                .model(new TracedLlm(new StubLlm("super_tool"), tracer)).instruction("Be brief")
+                .tools(new TracedTool(new SuperCallingTool(), tracer)).build();
+            InMemoryRunner runner = new InMemoryRunner(agent);
+            var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
+            runner.runAsync("user-1", session.id(), Content.fromParts(Part.fromText(PROMPT))).toList().blockingGet();
+            List<SpanData> tool = exporter.getFinishedSpanItems().stream().filter(sp -> sp.getName().startsWith("execute_tool")).toList();
+            assertThat(tool).as("the TOOL span is recorded").hasSize(1);
+            assertThat(attr(tool.get(0), "gen_ai.tool.call.result")).contains("SUPER-RESULT");
+        } finally {
+            provider.close();
+        }
+    }
+
+    private static final class ResultTool extends com.google.adk.tools.BaseTool {
+        private final Map<String, Object> result;
+        ResultTool(Map<String, Object> result) { super("result_tool", "returns what it is given"); this.result = result; }
+
+        @Override
+        public io.reactivex.rxjava3.core.Single<Map<String, Object>> runAsync(Map<String, Object> args, com.google.adk.tools.ToolContext context) {
+            return io.reactivex.rxjava3.core.Single.just(result);
+        }
+    }
+
+    private static SpanData toolSpanFor(Map<String, Object> result) {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+        try {
+            FITracer tracer = new FITracer(provider.get("adk-test"), TraceConfig.builder().build());
+            Map<String, Object> seen = new TracedTool(new ResultTool(result), tracer).runAsync(Map.of("a", "b"), null).blockingGet();
+            assertThat(seen).as("the application sees the tool's real result").isSameAs(result);
+            assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+            return exporter.getFinishedSpanItems().get(0);
+        } finally {
+            provider.close();
+        }
+    }
+
+    @Test
+    void aToolResultGsonCannotSerializeNeverFailsTheCall() {
+        SpanData span = toolSpanFor(Map.of("when", java.time.Instant.parse("2026-01-02T03:04:05Z")));
+        assertThat(attr(span, "gen_ai.tool.call.result")).contains("<unserializable: java.time.Instant>").doesNotContain("2026");
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.OK);
+    }
+
+    @Test
+    void aCyclicToolResultNeverFailsTheCall() {
+        Map<String, Object> cyclic = new java.util.HashMap<>();
+        cyclic.put("self", cyclic);
+        SpanData span = toolSpanFor(cyclic);
+        assertThat(attr(span, "gen_ai.tool.call.result")).contains("<cycle>");
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.OK);
+    }
+
+    private static SpanData failedModelCall(TraceConfig config) {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+        try {
+            FITracer tracer = new FITracer(provider.get("adk-test"), config);
+            BaseLlm failing = new BaseLlm("gemini-2.0-flash") {
+                @Override
+                public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
+                    return Flowable.just(LlmResponse.builder().errorMessage("SEED-MODEL-ERROR-TEXT").build());
+                }
+
+                @Override
+                public BaseLlmConnection connect(LlmRequest request) { throw new UnsupportedOperationException(); }
+            };
+            LlmRequest request = LlmRequest.builder().model("gemini-2.0-flash")
+                .contents(List.of(Content.fromParts(Part.fromText(PROMPT)))).build();
+            new TracedLlm(failing, tracer).generateContent(request, false).blockingLast();
+            return exporter.getFinishedSpanItems().get(0);
+        } finally {
+            provider.close();
+        }
+    }
+
+    @Test
+    void aModelErrorMessageIsTheStatusDescriptionOnlyWhileErrorDetailsAreShown() {
+        SpanData shown = failedModelCall(TraceConfig.builder().build());
+        assertThat(shown.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+        assertThat(shown.getStatus().getDescription()).isEqualTo("SEED-MODEL-ERROR-TEXT");
+        SpanData hidden = failedModelCall(TraceConfig.builder().hideErrorDetails(true).build());
+        assertThat(hidden.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+        assertThat(hidden.getStatus().getDescription()).isEmpty();
+        assertThat(hidden.getAttributes().toString()).doesNotContain("SEED-MODEL-ERROR-TEXT");
     }
 
     private static List<SpanData> run(TraceConfig config) throws Exception {

@@ -25,9 +25,11 @@ final class OtelBridge {
      */
     static Snapshot snapshot(boolean wire) {
         boolean validSpan = false;
+        Object adkSpan = null;
         java.time.Instant instant = java.time.Instant.now(); long startNanos = System.nanoTime();
         Context parent = Context.current();
         Span current = Span.current();
+        validSpan = current.getSpanContext().isValid();
         boolean suppressed = Boolean.TRUE.equals(parent.get(TraceAIAuto.SUPPRESS));
         if (current instanceof ReadableSpan readable) suppressed |= library(readable.getAttribute(AttributeKey.stringKey("gen_ai.span.kind"))) || library(readable.getAttribute(AttributeKey.stringKey("fi.span.kind")));
         Integer attributeLimit = null;
@@ -64,10 +66,17 @@ final class OtelBridge {
             }
             // A span Google ADK started: its model call is a library span, and the agent's own span for it is the parent.
             String adkKind = GoogleAdk.kindOf(external);
-            if (adkKind != null) suppressed |= library(adkKind);
+            if (adkKind != null) {
+                // The model call's own span only counts until the model has answered: a tool that runs under it is not that call.
+                suppressed |= library(adkKind) && GoogleAdk.awaitingAnswer(external);
+                validSpan = true;
+                adkSpan = external;
+            }
             Object sc = spanApi.getMethod("getSpanContext").invoke(external);
             Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
-            if ((validSpan = (boolean)scApi.getMethod("isValid").invoke(sc))) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
+            boolean validContext = (boolean)scApi.getMethod("isValid").invoke(sc);
+            validSpan |= validContext;
+            if (validContext) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
             Context adkParent = GoogleAdk.contextOf(external);
             if (adkParent != null) parent = adkParent;
             try {
@@ -76,7 +85,11 @@ final class OtelBridge {
                 if (data instanceof Map<?, ?> map) map.forEach((k, v) -> attrs.put(String.valueOf(k), String.valueOf(v)));
             } catch (ReflectiveOperationException ignored) { }
         } catch (Throwable ignored) { }
-        if (wire && !validSpan && GoogleAdk.modelCallInFlight()) suppressed = true;
+        if (wire && !suppressed) {
+            // An ADK span is current: only a model call that is its child can own this request. No span at all: any open model call.
+            if (adkSpan != null) suppressed = GoogleAdk.modelCallInFlightNear(adkSpan);
+            else if (!validSpan) suppressed = GoogleAdk.modelCallInFlight();
+        }
         return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
     }
     /**

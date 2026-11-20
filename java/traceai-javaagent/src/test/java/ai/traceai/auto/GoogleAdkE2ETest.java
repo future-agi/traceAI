@@ -48,7 +48,9 @@ class GoogleAdkE2ETest {
 
     String run(String mode, String prompt, Map<String, String> options) throws Exception { return run(mode, prompt, options, "subscribe"); }
 
-    String run(String mode, String prompt, Map<String, String> options, String send) throws Exception {
+    String run(String mode, String prompt, Map<String, String> options, String send) throws Exception { return run(mode, prompt, options, send, "single"); }
+
+    String run(String mode, String prompt, Map<String, String> options, String send, String scenario) throws Exception {
         Path agent = AgentE2ETest.agentJar(); assertTrue(Files.isRegularFile(agent));
         // The application is the google-adk module's test application (AdkApp) with ADK and its dependencies, which the
         // module's build lists; the agent's classes come only from the packaged jar.
@@ -59,7 +61,7 @@ class GoogleAdkE2ETest {
         adkVersion100 = cp.contains("google-adk-1.0.0.jar");
         Path output = Files.createTempFile(Path.of("target"), "adk-e2e-", ".log");
         List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-javaagent:" + agent,
-            "-cp", cp, "ai.traceai.googleadk.AdkApp", mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt, send));
+            "-cp", cp, "ai.traceai.googleadk.AdkApp", mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt, send, scenario));
         ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         Map<String, String> env = pb.environment(); env.keySet().removeIf(k -> k.startsWith("FI_") || k.startsWith("OTEL_") || k.startsWith("ADK_"));
         env.put("FI_CONFIG_FILE", "target/no-e2e-config.toml"); env.put("FI_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort());
@@ -157,6 +159,49 @@ class GoogleAdkE2ETest {
             assertTrue(spans.stream().noneMatch(s -> String.valueOf(s.get("name")).startsWith("chat ")), send + ": " + spans);
             assertEquals(5, spans.size(), send + ": " + spans);
         }
+    }
+
+    /** A call_llm open in an unrelated session must never drop an LLM call made under another span. */
+    @Test void aToolsOwnLlmCallIsOneWireSpanUnderTheToolSpanWhileAnotherSessionsModelCallIsOpen() throws Exception {
+        for (String mode : List.of("plain", "sdk")) {
+            spans.clear(); modelCalls.set(0);
+            run(mode, PROMPT, Map.of(), "subscribe", "tool-call");
+            List<Map<String, Object>> wire = byLayer("wire");
+            assertEquals(1, wire.size(), mode + ": exactly the tool's own HTTP call is a wire span: " + spans);
+            // Under the TOOL span, or under the model call that asked for it when this ADK version runs the tool inside that call's scope.
+            Object parent = wire.get(0).get("parentSpanId");
+            assertTrue(parent.equals(tool().get("spanId")) || parent.equals(tool().get("parentSpanId")), mode + ": under the tool's own span or its parent: " + spans);
+            assertEquals(3, named("call_llm").size(), mode + ": the two model calls of one session and the slow session's: " + spans);
+        }
+    }
+
+    @Test void anUnrelatedThreadWithItsOwnSpanIsNeverSuppressedByAnotherSessionsModelCall() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(), "subscribe", "own-span");
+        List<Map<String, Object>> wire = byLayer("wire");
+        // The slow session's own model call is not a wire span; the application's call under its own span is.
+        assertEquals(1, wire.size(), spans.toString());
+        String appSpan = log.lines().filter(l -> l.startsWith("APP-SPAN ")).findFirst().orElseThrow().substring("APP-SPAN ".length()).trim();
+        assertEquals(appSpan, wire.get(0).get("parentSpanId"), "under the application's span");
+    }
+
+    @Test void aFailedModelCallWithErrorDetailsHiddenCarriesNeitherTheErrorTextNorTheOutput() throws Exception {
+        run("plain", PROMPT, Map.of("FI_HIDE_ERROR_DETAILS", "true"), "subscribe", "error");
+        String everything = spans.toString();
+        assertFalse(everything.contains("SEED-MODEL-ERROR"), everything);
+        assertFalse(everything.contains("test-secret-key"), everything);
+        Map<String, Object> llm = named("call_llm").get(0);
+        assertEquals("", String.valueOf(((Map<?, ?>) llm.get("status")).get("message")), String.valueOf(llm.get("status")));
+        assertEquals(2, ((Number) ((Map<?, ?>) llm.get("status")).get("code")).intValue(), "still an error");
+        assertFalse(attributes(llm).containsKey("output.value"), "output of a failed call is withheld: " + llm);
+        assertFalse(attributes(llm).containsKey("output.mime_type"), llm.toString());
+    }
+
+    @Test void aFailedModelCallKeepsItsErrorTextWithSecretsReplacedWhenDetailsAreShown() throws Exception {
+        run("plain", PROMPT, Map.of(), "subscribe", "error");
+        Map<String, Object> llm = named("call_llm").get(0);
+        String message = String.valueOf(((Map<?, ?>) llm.get("status")).get("message"));
+        assertTrue(message.contains("SEED-MODEL-ERROR"), message);
+        assertFalse(spans.toString().contains("test-secret-key"), spans.toString());
     }
 
     @Test void adkSpansDoNotDependOnTheWireSwitches() throws Exception {

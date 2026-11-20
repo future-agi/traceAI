@@ -37,9 +37,47 @@ public final class AdkAttributes {
         }
     }
 
-    /** JSON text for a value already in plain form. */
+    /** The text a value that cannot be serialized is replaced by; it names no content. */
+    static final String UNSERIALIZABLE = "<unserializable>";
+    private static final int MAX_DEPTH = 32;
+    private static final int MAX_NODES = 20_000;
+
+    /**
+     * JSON text for a value. Never throws: maps, collections, arrays, strings, numbers and booleans are written; a cycle, a
+     * value nested too deeply or too large, and any other type (java.time values, application objects) are each replaced by
+     * a fixed placeholder, so tracing a call can never fail it.
+     */
     public static String toJson(Object value) {
-        return GSON.toJson(value);
+        try {
+            return GSON.toJson(plain(value, 0, new int[] {MAX_NODES}, new java.util.IdentityHashMap<>()));
+        } catch (Throwable e) {
+            return "\"" + UNSERIALIZABLE + "\"";
+        }
+    }
+
+    private static Object plain(Object value, int depth, int[] budget, java.util.IdentityHashMap<Object, Boolean> path) {
+        if (--budget[0] < 0 || depth > MAX_DEPTH) return "<truncated>";
+        if (value == null || value instanceof String || value instanceof Boolean) return value;
+        if (value instanceof Number n) {
+            double d = n.doubleValue();
+            return Double.isNaN(d) || Double.isInfinite(d) ? (Object) String.valueOf(d) : value;
+        }
+        boolean container = value instanceof Map || value instanceof Iterable || value.getClass().isArray();
+        if (!container) return "<unserializable: " + value.getClass().getName() + ">";
+        if (path.put(value, Boolean.TRUE) != null) return "<cycle>";
+        try {
+            if (value instanceof Map<?, ?> map) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> e : map.entrySet()) out.put(String.valueOf(e.getKey()), plain(e.getValue(), depth + 1, budget, path));
+                return out;
+            }
+            List<Object> out = new ArrayList<>();
+            if (value instanceof Iterable<?> items) for (Object item : items) out.add(plain(item, depth + 1, budget, path));
+            else for (int i = 0, n = java.lang.reflect.Array.getLength(value); i < n; i++) out.add(plain(java.lang.reflect.Array.get(value, i), depth + 1, budget, path));
+            return out;
+        } finally {
+            path.remove(value);
+        }
     }
 
     private static Object toPlain(JsonElement element) {

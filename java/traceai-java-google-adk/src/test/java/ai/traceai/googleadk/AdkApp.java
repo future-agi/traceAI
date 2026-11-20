@@ -36,23 +36,31 @@ import java.util.Map;
  * optionally where the model's HTTP call is sent ("subscribe", "assembly" or "executor").
  */
 public class AdkApp {
-    public static Map<String, Object> weather(@Schema(name = "city") String city) {
+    static volatile String endpoint;
+    /** The tool also makes an LLM HTTP call of its own (scenario "tool-call"). */
+    static volatile boolean toolCallsModel;
+    /** Scenario "error": the model answers with an error message and some output. */
+    static volatile boolean failingModel;
+    static final java.util.concurrent.CountDownLatch ENTERED = new java.util.concurrent.CountDownLatch(1);
+    static final java.util.concurrent.CountDownLatch RELEASE = new java.util.concurrent.CountDownLatch(1);
+
+    static void post() throws Exception {
+        HttpRequest http = HttpRequest.newBuilder(URI.create(endpoint + "/v1/chat/completions")).header("content-type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}")).build();
+        HttpClient.newHttpClient().send(http, HttpResponse.BodyHandlers.ofString());
+    }
+
+    public static Map<String, Object> weather(@Schema(name = "city") String city) throws Exception {
+        if (toolCallsModel) post();
         return Map.of("city", city, "forecast", "SENTINEL-TOOL-RESULT");
     }
 
     static final class Model extends BaseLlm {
-        private final String endpoint;
         /** Where the model's HTTP call is sent: "subscribe" (while subscribed), "assembly" (inside generateContent, before the Flowable
          *  exists) or "executor" (on a thread of the client's own executor, which carries no OpenTelemetry context). */
         private final String send;
         private final java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newCachedThreadPool(r -> { Thread t = new Thread(r, "model-client"); t.setDaemon(true); return t; });
-        Model(String endpoint, String send) { super("gemini-2.0-flash"); this.endpoint = endpoint; this.send = send; }
-
-        private void post() throws Exception {
-            HttpRequest http = HttpRequest.newBuilder(URI.create(endpoint + "/v1/chat/completions")).header("content-type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}")).build();
-            HttpClient.newHttpClient().send(http, HttpResponse.BodyHandlers.ofString());
-        }
+        Model(String send) { super("gemini-2.0-flash"); this.send = send; }
 
         @Override
         public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
@@ -61,6 +69,18 @@ public class AdkApp {
             }
             return Flowable.defer(() -> {
                 try {
+                    if (request.contents().toString().contains("SLOW-SESSION")) {
+                        // An unrelated session whose model call stays open while the others run.
+                        ENTERED.countDown();
+                        RELEASE.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                        post();
+                        return Flowable.just(LlmResponse.builder().content(Content.builder().role("model").parts(Part.fromText("SLOW-ANSWER")).build()).build());
+                    }
+                    if (failingModel) {
+                        post();
+                        return Flowable.just(LlmResponse.builder().errorMessage("SEED-MODEL-ERROR test-secret-key")
+                            .content(Content.builder().role("model").parts(Part.fromText("SEED-FAILED-OUTPUT test-secret-key")).build()).build());
+                    }
                     if (send.equals("subscribe")) post();
                     else if (send.equals("executor")) executor.submit(() -> { post(); return null; }).get();
                 } catch (Exception e) {
@@ -80,17 +100,44 @@ public class AdkApp {
     }
 
     public static void main(String[] args) throws Exception {
-        String mode = args[0], endpoint = args[1], prompt = args[2], send = args.length > 3 ? args[3] : "subscribe";
+        String mode = args[0], prompt = args[2], send = args.length > 3 ? args[3] : "subscribe", scenario = args.length > 4 ? args[4] : "single";
+        endpoint = args[1];
+        toolCallsModel = scenario.equals("tool-call");
+        failingModel = scenario.equals("error");
         InMemorySpanExporter own = InMemorySpanExporter.create();
         if (mode.equals("sdk")) {
             OpenTelemetrySdk.builder().setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(own)).build()).buildAndRegisterGlobal();
         }
-        LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(endpoint, send)).instruction("Be brief")
+        LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(send)).instruction("Be brief")
             .tools(FunctionTool.create(AdkApp.class, "weather")).build();
         InMemoryRunner runner = new InMemoryRunner(agent);
         var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
+        Thread slow = null;
+        if (scenario.equals("tool-call") || scenario.equals("own-span")) {
+            // A second, unrelated session whose model call is open while this one runs.
+            var other = runner.sessionService().createSession(runner.appName(), "user-2").blockingGet();
+            slow = new Thread(() -> runner.runAsync("user-2", other.id(), Content.fromParts(Part.fromText("SLOW-SESSION"))).toList().blockingGet(), "slow-session");
+            slow.start();
+            if (!ENTERED.await(60, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("the slow session never reached its model");
+        }
+        if (scenario.equals("own-span")) {
+            // This thread's own application span (mode "sdk"), with an LLM HTTP call under it, while the other session's model call is open.
+            var appSpan = io.opentelemetry.api.GlobalOpenTelemetry.getTracer("application").spanBuilder("application-own").startSpan();
+            try (var scope = appSpan.makeCurrent()) { post(); } finally { appSpan.end(); }
+            RELEASE.countDown();
+            slow.join();
+            System.out.println("APP-SPAN " + appSpan.getSpanContext().getSpanId());
+            printAndFinish(own);
+            return;
+        }
         List<Event> events = runner.runAsync("user-1", session.id(), Content.fromParts(Part.fromText(prompt))).toList().blockingGet();
+        RELEASE.countDown();
+        if (slow != null) slow.join();
         System.out.println("EVENTS " + events.size());
+        printAndFinish(own);
+    }
+
+    static void printAndFinish(InMemorySpanExporter own) {
         for (SpanData span : own.getFinishedSpanItems()) {
             // What the application's own provider recorded: ADK's spans, unchanged.
             System.out.println("OWN " + span.getName() + " attributes=" + span.getAttributes().size() + " parent=" + span.getParentSpanContext().isValid());

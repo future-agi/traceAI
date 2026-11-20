@@ -51,9 +51,26 @@ public final class TracedTool extends BaseTool {
     public Completable processLlmRequest(LlmRequest.Builder llmRequestBuilder, ToolContext toolContext) {
         // Without an override the wrapped tool would add the same declaration this wrapper adds; with one (a built-in tool),
         // the override is what puts the tool into the model request.
-        return overridesProcessLlmRequest(delegate)
-            ? delegate.processLlmRequest(llmRequestBuilder, toolContext)
-            : super.processLlmRequest(llmRequestBuilder, toolContext);
+        if (!overridesProcessLlmRequest(delegate)) return super.processLlmRequest(llmRequestBuilder, toolContext);
+        // A tool that overrides this and calls super registers itself in the request's tool map, and ADK runs the tool it finds
+        // there: put the wrapper back, so the call is still traced.
+        return delegate.processLlmRequest(llmRequestBuilder, toolContext).doOnComplete(() -> registerWrapper(llmRequestBuilder));
+    }
+
+    private void registerWrapper(LlmRequest.Builder builder) {
+        try {
+            Map<String, BaseTool> tools = new java.util.LinkedHashMap<>(builder.build().tools());
+            boolean changed = false;
+            for (Map.Entry<String, BaseTool> entry : tools.entrySet()) {
+                if (entry.getValue() == delegate) {
+                    entry.setValue(this);
+                    changed = true;
+                }
+            }
+            if (changed) builder.tools(tools);
+        } catch (Throwable ignored) {
+            // The request keeps what the wrapped tool registered; only this call's span is lost.
+        }
     }
 
     @Override
@@ -96,13 +113,21 @@ public final class TracedTool extends BaseTool {
     private void finish(Span span, Map<String, Object> args, Map<String, Object> result, Throwable error, ToolContext toolContext) {
         if (!span.isRecording()) return;
         try {
-            String callId = callId(toolContext);
-            SpanAttributes.write(tracer, span, AdkAttributes.tool(name(), description(), delegate.getClass().getSimpleName(),
-                args == null ? Map.of() : args, result, callId));
-            if (error != null) tracer.setError(span, error);
-            else span.setStatus(StatusCode.OK);
+            try {
+                String callId = callId(toolContext);
+                SpanAttributes.write(tracer, span, AdkAttributes.tool(name(), description(), delegate.getClass().getSimpleName(),
+                    args == null ? Map.of() : args, result, callId));
+                if (error != null) tracer.setError(span, error);
+                else span.setStatus(StatusCode.OK);
+            } catch (Throwable tracingFailure) {
+                // Tracing never fails the call: the tool's own result and error are what the application sees.
+            }
         } finally {
-            span.end();
+            try {
+                span.end();
+            } catch (Throwable ignored) {
+                // Nothing to do.
+            }
         }
     }
 
