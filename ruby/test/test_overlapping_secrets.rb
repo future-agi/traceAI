@@ -159,15 +159,13 @@ class OverlappingSecretsTest < Minitest::Test
 
   def clean(text, secrets) = TraceAI::Auto::Privacy.clean_string(text, secrets.sort_by { |s| -s.length })
 
-  def with_limits(rounds: nil, steps: nil)
+  def with_limits(limits)
     privacy = TraceAI::Auto::Privacy
-    saved = [privacy::MATCH_ROUNDS, privacy::MATCH_STEPS]
-    privacy.send(:remove_const, :MATCH_ROUNDS); privacy.const_set(:MATCH_ROUNDS, rounds || saved[0])
-    privacy.send(:remove_const, :MATCH_STEPS); privacy.const_set(:MATCH_STEPS, steps || saved[1])
+    saved = limits.keys.to_h { |name| [name, privacy.const_get(name)] }
+    limits.each { |name, value| privacy.send(:remove_const, name); privacy.const_set(name, value) }
     yield
   ensure
-    privacy.send(:remove_const, :MATCH_ROUNDS); privacy.const_set(:MATCH_ROUNDS, saved[0])
-    privacy.send(:remove_const, :MATCH_STEPS); privacy.const_set(:MATCH_STEPS, saved[1])
+    saved.each { |name, value| privacy.send(:remove_const, name); privacy.const_set(name, value) }
   end
 
   CHAIN = FOUR
@@ -178,12 +176,62 @@ class OverlappingSecretsTest < Minitest::Test
     assert_equal "see #{PLACEHOLDER} here", cleaned
   end
 
-  def test_hitting_the_round_cap_replaces_the_whole_value
-    with_limits(rounds: 1) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+  # The text holds placeholders from the capture and two overlapping secrets that only match after each other, so the
+  # match needs more than one round of changes.
+  ROUND_SECRETS = %w[abaabbab abaaabbb abaaaaba aabbbbab].freeze
+  ROUND_TEXT = 'bbaaaabbbb<redacted>b'
+
+  def test_a_value_that_needs_more_rounds_than_the_cap_is_replaced_whole
+    assert_equal "bb#{PLACEHOLDER}", clean(ROUND_TEXT, ROUND_SECRETS)
+    with_limits(MATCH_ROUNDS: 1) { assert_equal PLACEHOLDER, clean(ROUND_TEXT, ROUND_SECRETS) }
+  end
+
+  def test_a_value_that_settles_within_the_cap_is_not_replaced_whole
+    with_limits(MATCH_ROUNDS: 1) { assert_equal "see #{PLACEHOLDER} here", clean('see AAAAAAAAAAAAXYYYYYYYYYYYY here'.sub('AAAAAAAAAAAAX', PLACEHOLDER), ['XYYYYYYYYYYYY']) }
   end
 
   def test_hitting_the_step_cap_replaces_the_whole_value
-    with_limits(steps: 1) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+    with_limits(MATCH_STEPS: 1) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+  end
+
+  def test_hitting_the_work_cap_replaces_the_whole_value
+    with_limits(MATCH_WORK: 50) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+  end
+
+  def timed
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    result = yield
+    [result, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started]
+  end
+
+  # Every one of 300 secrets matches beside a placeholder and changes a long value, and every change is followed by a
+  # rescan of the whole value. The work is counted across all of it, and past the budget the value is replaced whole.
+  def test_rescans_beyond_the_work_budget_replace_the_whole_value_in_bounded_time
+    secrets = Array.new(300) { |i| format('Q%03dpadpadpad', i) }
+    text = secrets.map { |secret| secret[0, 4] + PLACEHOLDER }.join(' ') + (' z' * 100_000)
+    result, seconds = timed { TraceAI::Auto::Privacy.close_fragments(text, secrets) }
+    assert_equal PLACEHOLDER, result
+    assert_operator seconds, :<, 10
+  end
+
+  # Many placeholders against many overlapping secrets: every secret looks at every placeholder, round after round.
+  def test_a_flood_of_placeholders_against_many_secrets_replaces_the_whole_value_in_bounded_time
+    secrets = Array.new(300) { |i| format('ab%03dabababab', i) }
+    result, seconds = timed { TraceAI::Auto::Privacy.close_fragments(('ab' + PLACEHOLDER) * 60_000, secrets) }
+    assert_equal PLACEHOLDER, result
+    assert_operator seconds, :<, 10
+  end
+
+  def test_the_same_secrets_settle_quickly_in_a_short_value
+    secrets = Array.new(300) { |i| format('Q%03dpadpadpad', i) }
+    text = 'see ' + secrets.first(3).map { |secret| secret[0, 4] + PLACEHOLDER }.join(' ') + ' here'
+    assert_equal "see #{PLACEHOLDER} #{PLACEHOLDER} #{PLACEHOLDER} here", TraceAI::Auto::Privacy.close_fragments(text, secrets)
+  end
+
+  def test_an_ordinary_value_with_many_secrets_keeps_its_text
+    secrets = Array.new(300) { |i| format('unrelated-secret-%03d-value', i) }
+    text = (('plain words ' * 20) + PLACEHOLDER + ' more words') * 3
+    assert_equal text, clean(text, secrets)
   end
 
   # Nothing derived is stored: a flood of overlapping registrations never evicts a seeded secret beyond ordinary
