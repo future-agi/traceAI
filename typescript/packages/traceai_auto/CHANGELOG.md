@@ -5,6 +5,7 @@
 
 ### Changed
 - Uses `@traceai/fi-core` 1.4.2. `baseUrl` (or `FI_BASE_URL`) is the Future AGI route and gets only the Future AGI headers; a collector of your own goes through `init({ provider })` and gets only the headers configured on its exporter.
+- When the base URL comes from a config file or an fi profile, `init()` logs the host it resolved, once and with no other part of the URL, so a `futureagi.toml` in the working directory cannot redirect the Future AGI keys silently. Documented in the README.
 
 ## [0.4.1] - 2026-11-19
 
