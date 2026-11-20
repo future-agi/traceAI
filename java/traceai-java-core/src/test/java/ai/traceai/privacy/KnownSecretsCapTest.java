@@ -85,7 +85,7 @@ class KnownSecretsCapTest {
     void theProcessWideHelpersUseTheProcessRegistry() {
         String secret = "PFX-process-helper-secret-9876";
         KnownSecrets.process().register(secret);
-        String value = "a".repeat(32000 - M.length() - 7) + secret + "tail";
+        String value = "a".repeat(32000 - M.length() - 7) + secret + "tail".repeat(100);
         assertThat(KnownSecrets.cap(value, 32000)).doesNotContain("PFX").endsWith(M);
         assertThat(KnownSecrets.sealCut("b".repeat(50) + secret.substring(0, 9))).doesNotContain("PFX");
     }

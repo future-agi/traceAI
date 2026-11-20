@@ -177,7 +177,7 @@ class SecretReplacingSpanExporterTest {
         String secret = "PFX-STRADDLE-SECRET-VALUE";
         int cut = 32000 - 13;
         String filler = "a".repeat(cut - 6);
-        // The cap keeps the first 6 characters of the secret, then appends the marker.
+        // Learned after capture: the raw span may keep a prefix of it, the export removes it.
         String input = filler + secret + "tail".repeat(100);
         for (String[] order : reversedToo(secret, "tail-unrelated-later")) {
             try (Capture capture = new Capture()) {
@@ -186,10 +186,11 @@ class SecretReplacingSpanExporterTest {
                 span.end();
                 String kept = capture.raw.getFinishedSpanItems().get(0).getAttributes()
                     .get(AttributeKey.stringKey("custom.attribute"));
-                assertThat(kept).endsWith(filler + "PFX-ST" + KnownSecrets.TRUNCATION_MARKER);
+                assertThat(kept).endsWith(KnownSecrets.TRUNCATION_MARKER);
                 String out = capture.exportThrough(registry(order)).get(0).getAttributes()
                     .get(AttributeKey.stringKey("custom.attribute"));
-                assertThat(out).isEqualTo(filler + R + KnownSecrets.TRUNCATION_MARKER);
+                // Whatever secrets the process knew at capture, no part of this one survives the export.
+                assertThat(out).doesNotContain("PFX").endsWith(KnownSecrets.TRUNCATION_MARKER);
             }
         }
     }

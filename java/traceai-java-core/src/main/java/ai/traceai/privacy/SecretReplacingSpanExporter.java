@@ -4,6 +4,8 @@ import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.common.AttributesBuilder;
 import io.opentelemetry.sdk.common.CompletableResultCode;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.data.DelegatingSpanData;
 import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.LinkData;
@@ -20,7 +22,7 @@ import java.util.Objects;
  * Replaces known credential values in span content just before an exporter sees the span.
  *
  * <p>Covered: span name, string and string-array attributes, event names and attributes, link
- * attributes and the status description. Resource and instrumentation scope are not rewritten.
+ * attributes and the status description. Resource and instrumentation scope (name, version, attributes) go through the same pass.
  * Original span data is never mutated, so every outbound exporter that needs this policy must be
  * wrapped; {@code TraceAI.init(TraceConfig)} wraps the exporters it creates. Exporters on an
  * OpenTelemetry SDK the application owns are not reachable by TraceAI and are only covered when the
@@ -68,6 +70,7 @@ public final class SecretReplacingSpanExporter implements SpanExporter {
         try {
             KnownSecrets.Snapshot snapshot = secrets.snapshot();
             if (snapshot.isUnavailable()) {
+                snapshot.warnDropped();
                 return CompletableResultCode.ofFailure();
             }
             if (snapshot.isEmpty()) {
@@ -140,6 +143,19 @@ public final class SecretReplacingSpanExporter implements SpanExporter {
                     ? link
                     : LinkData.create(link.getSpanContext(), linkAttributes, link.getTotalAttributeCount()));
         }
+        Resource resource = span.getResource();
+        Attributes resourceAttributes = replace(resource.getAttributes(), snapshot);
+        Resource newResource = resourceAttributes == resource.getAttributes()
+                ? resource : Resource.create(resourceAttributes, resource.getSchemaUrl());
+        InstrumentationScopeInfo scope = span.getInstrumentationScopeInfo();
+        String scopeName = snapshot.scrub(scope.getName());
+        String scopeVersion = scope.getVersion() == null ? null : snapshot.scrub(scope.getVersion());
+        Attributes scopeAttributes = replace(scope.getAttributes(), snapshot);
+        InstrumentationScopeInfo newScope = scopeName.equals(scope.getName())
+                && Objects.equals(scopeVersion, scope.getVersion()) && scopeAttributes == scope.getAttributes()
+                ? scope
+                : InstrumentationScopeInfo.builder(scopeName).setVersion(scopeVersion)
+                        .setSchemaUrl(scope.getSchemaUrl()).setAttributes(scopeAttributes).build();
         List<EventData> immutableEvents = List.copyOf(events);
         List<LinkData> immutableLinks = List.copyOf(links);
         return new DelegatingSpanData(span) {
@@ -151,6 +167,16 @@ public final class SecretReplacingSpanExporter implements SpanExporter {
             @Override
             public Attributes getAttributes() {
                 return attributes;
+            }
+
+            @Override
+            public Resource getResource() {
+                return newResource;
+            }
+
+            @Override
+            public InstrumentationScopeInfo getInstrumentationScopeInfo() {
+                return newScope;
             }
 
             @Override
