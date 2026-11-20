@@ -2,7 +2,13 @@ import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } 
 import { ExportResultCode } from "@opentelemetry/core";
 import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
-import { createFiRouteSpanExporter } from "@traceai/fi-core/fi-route";
+// The Future AGI route factory is provided by @traceai/fi-core through a process-wide symbol, not a package export.
+const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory");
+function createFiRouteSpanExporter(options: Record<string, unknown>): SpanExporter {
+  const factory = (globalThis as any)[FI_ROUTE_FACTORY];
+  if (typeof factory !== "function") throw new Error("The installed @traceai/fi-core does not provide the Future AGI route. Install a matching @traceai/fi-core version.");
+  return factory(options);
+}
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
 import { createOutgoingPrivacy, noteOutgoingSpanStart } from "./outgoing-privacy";
@@ -286,6 +292,12 @@ export function init(options: Options = {}): TracerProvider | undefined {
       rememberAutoSpanSink(processor, supplied);
     }
     else if (options.exporter || fiCredentials) {
+      // The FI keys go to the resolved base URL. When a file or profile chose it, say which host, once.
+      if (!options.exporter && (config.baseUrlSource === "config file" || config.baseUrlSource === "profile")) {
+        let host = "<invalid URL>";
+        try { host = new URL(config.baseUrl).host || host; } catch { /* Reported as invalid. */ }
+        warn("base-host", `Sending traces to ${host} (base URL from the ${config.baseUrlSource}).`);
+      }
       const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl,
         headers: { "x-api-key": config.apiKey!, "x-secret-key": config.secretKey! }, verbose: false, traceConfig: config.traceConfig,
         resourceAttributes: { project_name: config.projectName, project_type: config.projectType } }), agent, options, failedCaptures);

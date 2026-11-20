@@ -30,7 +30,7 @@ export interface Config {
   forwardApplicationSpans: boolean;
   propagateOutgoingAdapters: boolean;
   propagateOutgoing: OutgoingPropagationMode;
-  apiKey?: string; secretKey?: string; baseUrl: string; projectName: string;
+  apiKey?: string; secretKey?: string; baseUrl: string; baseUrlSource?: "code" | "environment" | "config file" | "profile" | "default"; projectName: string;
   projectType: "observe" | "experiment"; instrumentations: string[];
   disabledInstrumentations: string[]; wireCapture: boolean; wireMaxBodyBytes: number;
   sampleRate: number;
@@ -191,6 +191,7 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
     propagateOutgoing: outgoing.mode,
     ...pair,
     baseUrl: value("baseUrl", "base_url") ?? profiles.find(p => typeof p.base_url === "string")?.base_url ?? "https://api.futureagi.com",
+    baseUrlSource: options.baseUrl != null ? "code" : env.FI_BASE_URL != null ? "environment" : file.base_url != null ? "config file" : profiles.some(p => typeof p.base_url === "string") ? "profile" : "default",
     projectName: value("projectName", "project_name") ?? env.OTEL_SERVICE_NAME ?? profiles.find(p => typeof p.project === "string")?.project ?? (basename(process.cwd()) || "DEFAULT_PROJECT_NAME"),
     projectType: String(value("projectType", "project_type") ?? "observe").toLowerCase() === "experiment" ? "experiment" : "observe",
     instrumentations: names(value("instrumentations", "instrumentations")), disabledInstrumentations: names(value("disabledInstrumentations", "disabled_instrumentations")),

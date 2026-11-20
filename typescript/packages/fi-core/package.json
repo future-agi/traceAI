@@ -12,18 +12,13 @@
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
     },
-    "./fi-route": {
-      "types": "./dist/src/fi-route.d.ts",
-      "import": "./dist/esm/fi-route.js",
-      "require": "./dist/src/fi-route.js"
-    },
     "./privacy": {
       "types": "./dist/src/privacy-runtime.d.ts",
       "import": "./dist/esm/privacy.js",
       "require": "./dist/src/privacy-runtime.js"
     }
   },
-  "typesVersions": { "*": { "privacy": ["dist/src/privacy-runtime.d.ts"], "fi-route": ["dist/src/fi-route.d.ts"] } },
+  "typesVersions": { "*": { "privacy": ["dist/src/privacy-runtime.d.ts"] } },
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",

@@ -29,6 +29,7 @@ import { Resource, ResourceDetector, resourceFromAttributes, detectResources, de
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
+import { endpointTarget, isFiEndpoint, sameEndpointTarget } from "./fi-endpoint";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -288,17 +289,33 @@ class HTTPSpanExporter implements SpanExporter {
   }
 }
 
+/** The string-valued entries of a gRPC Metadata object, as headers, with `headers` (when given) taking precedence. */
+function metadataAsHeaders(metadata: unknown, headers?: FIHeaders): FIHeaders | undefined {
+  const fromMetadata: FIHeaders = {};
+  try {
+    const map = (metadata as { getMap?: () => Record<string, unknown> } | undefined)?.getMap?.() ?? {};
+    for (const [name, value] of Object.entries(map)) if (typeof value === "string") fromMetadata[name] = value;
+  } catch { /* An unreadable metadata object adds nothing. */ }
+  if (!Object.keys(fromMetadata).length) return headers;
+  return { ...fromMetadata, ...(headers ?? {}) };
+}
+
 // --- Custom GRPCSpanExporter extending OTLP gRPC exporter ---
 class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
-  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
-    const { endpoint, verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
+    const { endpoint: givenEndpoint, url: givenUrl, metadata: callerMetadata, credentials: callerCredentials, headers: callerHeaders,
+      verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
     delete restOptions.fiEndpoint; // never an option: only the SDK's own FI route (fi-route.ts) declares an FI endpoint
-    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, options.headers, isFiRouteDeclared(options));
+    // The target is the one the options name (endpoint, or the standard url option), so the classification
+    // below is made on the host that is dialled.
+    const endpoint = resolveTarget({ endpoint: givenEndpoint, url: givenUrl }, true) ?? getEnvGrpcCollectorEndpoint();
+    // Caller metadata is more caller headers; the explicit headers option wins over it.
+    const requested = metadataAsHeaders(callerMetadata, callerHeaders);
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, requested, isFiRouteDeclared(options));
     const headers = resolvedHeaders ?? {};
-    delete restOptions.headers;
     const auth_header = headers;
     const lower_case_auth_header = auth_header 
       ? Object.fromEntries(Object.entries(auth_header).map(([k, v]) => [k.toLowerCase(), v]))
@@ -310,12 +327,14 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     });
 
     const grpcConfig = {
+      ...restOptions,
       url: endpoint,
       metadata: metadata,
-      ...(endpoint.includes('localhost') || endpoint.includes('127.0.0.1') ? { 
-        credentials: grpc.credentials.createInsecure() 
-      } : {}),
-      ...restOptions,
+      // A Future AGI bound exporter connects the way the SDK chooses; other targets may bring their own credentials.
+      ...(callerCredentials !== undefined && !fiBound ? { credentials: callerCredentials } : {}),
+      ...(callerCredentials === undefined || fiBound
+        ? (endpoint.includes('localhost') || endpoint.includes('127.0.0.1') ? { credentials: grpc.credentials.createInsecure() } : {})
+        : {}),
     };
 
     try {
@@ -387,25 +406,6 @@ function resolveFiHeaders(headers?: FIHeaders): FIHeaders | undefined {
   return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...getEnvFiAuthHeader() };
 }
 
-const FI_HOST = /(?:^|\.)futureagi\.com$/i;
-const hostOf = (endpoint: string): string => {
-  try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`).hostname; } catch { return ""; }
-};
-/** Scheme, host case, default port and trailing slash do not make two spellings of an endpoint different. */
-function normalizeEndpoint(endpoint: string, grpcTransport: boolean): string {
-  const text = endpoint.trim();
-  const schemeless = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
-  try {
-    if (grpcTransport) {
-      // gRPC targets are host:port; the scheme, on either side, only selects credentials, and the exporter dials 443 by default.
-      const url = new URL(`https://${schemeless}`);
-      return `${url.hostname}:${url.port || "443"}`;
-    }
-    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
-    const port = url.port || (url.protocol === "http:" ? "80" : "443");
-    return `${url.protocol}//${url.hostname}:${port}${url.pathname.replace(/\/+$/, "")}`;
-  } catch { return text; }
-}
 /**
  * An exporter is bound for Future AGI when its RESOLVED endpoint is one: a futureagi.com host, or
  * the endpoint the FI environment (or the default) selects. Nothing else binds it: header names the
@@ -414,9 +414,22 @@ function normalizeEndpoint(endpoint: string, grpcTransport: boolean): string {
  * a config file, the environment or the default); the endpoint is then the FI endpoint by that resolution.
  */
 function isFiBound(endpoint: string, grpcTransport: boolean, declaredFi = false): boolean {
-  if (declaredFi || FI_HOST.test(hostOf(endpoint))) return true;
+  const transport = grpcTransport ? "grpc" : "http";
+  if (declaredFi || isFiEndpoint(endpoint, transport)) return true;
   const fiEndpoint = grpcTransport ? getEnvGrpcCollectorEndpoint() : constructFullEndpoint();
-  return normalizeEndpoint(endpoint, grpcTransport) === normalizeEndpoint(fiEndpoint, grpcTransport);
+  return sameEndpointTarget(endpoint, fiEndpoint, transport);
+}
+/**
+ * The one target an exporter's options name. `endpoint` is this SDK's option and `url` the standard OTLP
+ * exporter option; both may be given only when they name the same host and port, and the error names neither.
+ */
+function resolveTarget(options: { endpoint?: unknown; url?: unknown }, grpcTransport: boolean): string | undefined {
+  const endpoint = typeof options.endpoint === "string" ? options.endpoint : undefined;
+  const url = typeof options.url === "string" ? options.url : undefined;
+  if (endpoint !== undefined && url !== undefined && endpoint !== url && !sameEndpointTarget(endpoint, url, grpcTransport ? "grpc" : "http")) {
+    throw new Error("Conflicting exporter options: endpoint and url name different targets. Pass only one of them.");
+  }
+  return endpoint ?? url;
 }
 /**
  * Headers for an exporter at `endpoint`: an FI-bound one gets the SDK's FI headers plus the
@@ -480,8 +493,8 @@ function constructFullEndpoint(customEndpoint?: string): string {
 /** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders } = {}) {
-    const url = constructFullEndpoint(options.endpoint);
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders } = {}) {
+    const url = constructFullEndpoint(resolveTarget(options, false));
     const { headers, fiBound } = headersForEndpoint(url, false, options.headers, isFiRouteDeclared(options));
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
@@ -495,6 +508,8 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
 /** Construct a privacy-protected FI exporter without registering a provider or doing I/O. */
 export function createSpanExporter(options: ExportPrivacyOptions & {
   endpoint?: string;
+  /** The standard OTLP exporter option; it names the target the same way `endpoint` does. */
+  url?: string;
   headers?: FIHeaders;
   transport?: Transport;
   verbose?: boolean;
@@ -505,7 +520,7 @@ export function createSpanExporter(options: ExportPrivacyOptions & {
   const { fiEndpoint: _ignored, ...rest } = options as typeof options & { fiEndpoint?: unknown };
   const mark = <T extends object>(built: T): T => (declared ? declareFiRoute(built) : built);
   return options.transport === Transport.GRPC
-    ? new GRPCSpanExporter(mark({ ...rest, endpoint: options.endpoint ?? getEnvGrpcCollectorEndpoint() }))
+    ? new GRPCSpanExporter(mark({ ...rest }))
     : new OTLPHTTPSpanExporter(mark({ ...rest }));
 }
 
@@ -517,6 +532,7 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
   verbose?: boolean;
   idGenerator?: IdGenerator;
   endpoint?: string; // Custom endpoint (can be base or full, _constructFullEndpoint will handle)
+  url?: string; // The standard OTLP exporter option; names the target like `endpoint`
   headers?: FIHeaders;
   transport?: Transport; // Transport type
   sampler?: Sampler;
@@ -541,10 +557,11 @@ class FITracerProvider extends BasicTracerProvider {
     
     // Construct the appropriate endpoint based on transport
     let endpoint: string;
+    const named = resolveTarget(config, transport === Transport.GRPC);
     if (transport === Transport.GRPC) {
-      endpoint = config.endpoint ?? getEnvGrpcCollectorEndpoint();
+      endpoint = named ?? getEnvGrpcCollectorEndpoint();
     } else {
-      endpoint = constructFullEndpoint(config.endpoint);
+      endpoint = constructFullEndpoint(named);
     }
     
     const { headers } = headersForEndpoint(endpoint, transport === Transport.GRPC, config.headers);
@@ -829,6 +846,39 @@ export interface CheckCustomEvalTemplateExistsResponse {
   // Add other fields if the API returns more
 }
 
+/** The Future AGI API base the FI environment (or the default) selects. */
+function fiApiBase(): string {
+  return getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+}
+/**
+ * The base URL an eval check is sent to. The check carries the FI keys, so it goes only to a Future AGI base:
+ * a custom endpoint is used when it is one (a futureagi.com host, or the host FI_BASE_URL selects); any other
+ * endpoint is the application's own collector, and the check goes to the base the FI environment selects.
+ */
+function evalCheckBase(name: string, checkPath: string, customEndpoint: string | undefined, verbose?: boolean): string {
+  if (customEndpoint) {
+    let candidate: string | undefined;
+    try {
+      const parsedCustom = new URL(customEndpoint);
+      if (parsedCustom.pathname.endsWith(checkPath)) {
+        if (verbose) diag.info(`${name}: Using custom full endpoint: ${customEndpoint}`);
+        candidate = customEndpoint.substring(0, customEndpoint.lastIndexOf(checkPath));
+      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") {
+        candidate = `${parsedCustom.protocol}//${parsedCustom.host}`;
+      } else {
+        candidate = customEndpoint;
+      }
+    } catch (e) {
+      if (verbose) diag.warn(`${name}: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
+    }
+    if (candidate !== undefined) {
+      if (isFiEndpoint(candidate, "http") || sameEndpointTarget(candidate, fiApiBase(), "http")) return candidate;
+      if (verbose) diag.info(`${name}: The endpoint is not a Future AGI base; checking the Future AGI base instead.`);
+    }
+  }
+  return fiApiBase();
+}
+
 async function checkCustomEvalConfigExists(
   projectName: string,
   evalTags: any[], // Expects result of prepareEvalTags
@@ -839,25 +889,7 @@ async function checkCustomEvalConfigExists(
     return false;
   }
 
-  let apiBaseUrl: string;
-  if (customEndpoint) {
-    try {
-      const parsedCustom = new URL(customEndpoint);
-      if (parsedCustom.pathname.endsWith(FI_CUSTOM_EVAL_CONFIG_CHECK_PATH)) {
-        if (verbose) diag.info(`checkCustomEvalConfigExists: Using custom full endpoint: ${customEndpoint}`);
-        apiBaseUrl = customEndpoint.substring(0, customEndpoint.lastIndexOf(FI_CUSTOM_EVAL_CONFIG_CHECK_PATH));
-      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") { 
-         apiBaseUrl = `${parsedCustom.protocol}//${parsedCustom.host}`;
-      } else { 
-         apiBaseUrl = customEndpoint; 
-      }
-    } catch (e) {
-      if (verbose) diag.warn(`checkCustomEvalConfigExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-    }
-  } else {
-    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-  }
+  let apiBaseUrl = evalCheckBase("checkCustomEvalConfigExists", FI_CUSTOM_EVAL_CONFIG_CHECK_PATH, customEndpoint, verbose);
 
   if (apiBaseUrl.endsWith('/')) {
     apiBaseUrl = apiBaseUrl.slice(0, -1);
@@ -919,25 +951,7 @@ export async function checkCustomEvalTemplateExists(
     return response;
   }
 
-  let apiBaseUrl: string;
-  if (customEndpoint) {
-    try {
-      const parsedCustom = new URL(customEndpoint);
-      if (parsedCustom.pathname.endsWith(FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH)) {
-        if (verbose) diag.info(`checkCustomEvalTemplateExists: Using custom full endpoint: ${customEndpoint}`);
-        apiBaseUrl = customEndpoint.substring(0, customEndpoint.lastIndexOf(FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH));
-      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") { 
-         apiBaseUrl = `${parsedCustom.protocol}//${parsedCustom.host}`;
-      } else { 
-         apiBaseUrl = customEndpoint; 
-      }
-    } catch (e) {
-      if (verbose) diag.warn(`checkCustomEvalTemplateExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-    }
-  } else {
-    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-  }
+  let apiBaseUrl = evalCheckBase("checkCustomEvalTemplateExists", FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH, customEndpoint, verbose);
 
   if (apiBaseUrl.endsWith('/')) {
     apiBaseUrl = apiBaseUrl.slice(0, -1);
