@@ -84,6 +84,9 @@ final class SpringAIMessageCapture {
         int overhead = key.length() + 4; // quoted key, colon, comma
         int budget = remaining - overhead;
         if (budget < 2) return;
+        // One registry snapshot serves the whole field, the budget probe and the final seal alike: a secret registered in between
+        // cannot lengthen the sealed text past the budget the probe measured. (Export replaces later registrations once more.)
+        KnownSecrets.Snapshot snapshot = snapshots.get();
         // Only ever serialize a bounded prefix, even for multi-megabyte content. Find the longest prefix whose
         // value, sealed when it is cut, fits as escaped JSON: sealing replaces known secrets, which can lengthen the
         // text, and cutting the final JSON would produce an invalid payload.
@@ -91,18 +94,18 @@ final class SpringAIMessageCapture {
         int high = Math.min(value.length(), budget - 2);
         while (low < high) {
             int middle = (low + high + 1) / 2;
-            if (JSON.toJson(sealed(value, middle)).length() <= budget) low = middle;
+            if (JSON.toJson(sealed(value, middle, snapshot)).length() <= budget) low = middle;
             else high = middle - 1;
         }
-        String captured = sealed(value, low);
+        String captured = sealed(value, low, snapshot);
         remaining -= overhead + JSON.toJson(captured).length();
         object.addProperty(key, captured);
     }
 
-    /** The first {@code length} characters of {@code value}; when that cuts it, sealed against known secrets. */
-    private static String sealed(String value, int length) {
+    /** The first {@code length} characters of {@code value}; when that cuts it, sealed against the snapshot's secrets. */
+    private static String sealed(String value, int length, KnownSecrets.Snapshot snapshot) {
         if (length >= value.length()) return value;
         int marker = KnownSecrets.TRUNCATION_MARKER.length();
-        return length < marker ? "" : KnownSecrets.sealCut(value.substring(0, length - marker));
+        return length < marker ? "" : snapshot.sealCut(value.substring(0, length - marker), length);
     }
 }

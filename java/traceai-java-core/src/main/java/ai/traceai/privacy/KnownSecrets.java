@@ -284,13 +284,16 @@ public final class KnownSecrets {
             if (clean.length() <= limit) {
                 return clean;
             }
-            return sealCut(clean.substring(0, limit - TRUNCATION_MARKER.length()));
+            return sealCut(clean.substring(0, limit - TRUNCATION_MARKER.length()), limit);
         }
 
         /**
          * Finishes text that was already cut at a capture-time cap (so the rest of it is gone): drops the
          * last {@code longest() - 1} characters, which could be the start of a secret that continued past
          * the cut, replaces known secrets in what remains and appends {@link #TRUNCATION_MARKER}.
+         * <p>The result can be longer than {@code cutText} plus the marker: a trailing partial secret becomes the
+         * placeholder, which is up to nine characters longer than a one-character partial. Use
+         * {@link #sealCut(String, int)} where a limit must hold.</p>
          * @param cutText the retained prefix, may be null
          * @return the replaced text ending with the marker, or null for null
          */
@@ -314,7 +317,20 @@ public final class KnownSecrets {
          * @return the replaced text ending with the marker, or null for null
          */
         public String sealCut(String cutText, int limit) {
-            return sealCut(cutText);
+            if (cutText == null) {
+                return null;
+            }
+            if (limit < TRUNCATION_MARKER.length()) {
+                return "";
+            }
+            String text = cutText;
+            String sealed = sealCut(text);
+            // Replacing a trailing partial secret by the placeholder can lengthen the text: cut again, by what is over.
+            while (sealed.length() > limit && !text.isEmpty()) {
+                text = text.substring(0, Math.max(0, text.length() - Math.max(1, sealed.length() - limit)));
+                sealed = sealCut(text);
+            }
+            return sealed.length() > limit ? "" : sealed;
         }
 
         /**
@@ -342,6 +358,10 @@ public final class KnownSecrets {
             if (regions == null) {
                 return text;
             }
+            for (int[] region : regions) {
+                region[0] = escapeStart(text, region[0]);
+                region[1] = escapeEnd(text, region[1]);
+            }
             regions.sort((a, b) -> Integer.compare(a[0], b[0]));
             StringBuilder out = new StringBuilder(text.length());
             int copied = 0;
@@ -363,6 +383,65 @@ public final class KnownSecrets {
             out.append(text, end, text.length());
             return out.toString();
         }
+    }
+
+    private static boolean isHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    /** True when the backslashes that end at {@code last} are an odd number: the last one starts an escape. */
+    private static boolean oddBackslashRun(String text, int last) {
+        int run = 0;
+        for (int i = last; i >= 0 && text.charAt(i) == '\\'; i--) {
+            run++;
+        }
+        return (run & 1) == 1;
+    }
+
+    /**
+     * Where the JSON escape (a backslash and its character, or a backslash, u and four hex digits) that the boundary before
+     * {@code position} lies inside begins, or -1 when that boundary is not inside one.
+     */
+    private static int insideEscape(String text, int position) {
+        if (position <= 0 || position >= text.length()) {
+            return -1;
+        }
+        if (oddBackslashRun(text, position - 1)) {
+            return position - 1;
+        }
+        for (int digits = 1; digits <= 4; digits++) {
+            int u = position - digits;
+            if (u < 1) {
+                break;
+            }
+            if (text.charAt(u) != 'u') {
+                if (!isHex(text.charAt(u))) {
+                    break;
+                }
+                continue;
+            }
+            if (oddBackslashRun(text, u - 1)) {
+                return u - 1;
+            }
+            break;
+        }
+        return -1;
+    }
+
+    /** A region that would start inside an escape starts at the escape's backslash instead. */
+    private static int escapeStart(String text, int start) {
+        int begin = insideEscape(text, start);
+        return begin < 0 ? start : begin;
+    }
+
+    /** A region that would end inside an escape ends after the escape instead. */
+    private static int escapeEnd(String text, int end) {
+        int begin = insideEscape(text, end);
+        if (begin < 0) {
+            return end;
+        }
+        int after = text.charAt(begin + 1) == 'u' ? begin + 6 : begin + 2;
+        return Math.min(text.length(), after);
     }
 
     /** KMP keeps matching linear for long, repeated-prefix credentials. */

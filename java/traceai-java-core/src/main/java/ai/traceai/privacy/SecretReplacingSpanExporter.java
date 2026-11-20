@@ -182,7 +182,7 @@ public final class SecretReplacingSpanExporter implements SpanExporter {
             @Override
             @SuppressWarnings("deprecation")
             public io.opentelemetry.sdk.common.InstrumentationLibraryInfo getInstrumentationLibraryInfo() {
-                return io.opentelemetry.sdk.common.InstrumentationLibraryInfo.create(newScope.getName(), newScope.getVersion());
+                return io.opentelemetry.sdk.common.InstrumentationLibraryInfo.create(newScope.getName(), newScope.getVersion(), newScope.getSchemaUrl());
             }
 
             @Override

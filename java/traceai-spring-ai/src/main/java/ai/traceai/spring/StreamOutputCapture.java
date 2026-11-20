@@ -87,7 +87,7 @@ final class StreamOutputCapture {
             return;
         }
         String text = overflow
-            ? KnownSecrets.sealCut(buffer.substring(0, MAX_CHARS - TRUNCATION_SUFFIX.length()))
+            ? KnownSecrets.sealCut(buffer.substring(0, MAX_CHARS - TRUNCATION_SUFFIX.length()), MAX_CHARS)
             : buffer.toString();
         tracer.setOutputValue(span, text);
         tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", text)));

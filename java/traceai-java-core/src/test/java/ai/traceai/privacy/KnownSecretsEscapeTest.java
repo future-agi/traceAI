@@ -81,8 +81,8 @@ class KnownSecretsEscapeTest {
     @ParameterizedTest
     @ValueSource(strings = {"0001-hex-secret-value", "001-hex-secret-value", "01-hex-secret-value", "1-hex-secret-value", "u0001-hex-secret-value"})
     void aPartialSecretBeforeAMarkerNeverSplitsAUnicodeEscape(String secret) {
+        assertThat(GSON.toJson(Map.of("v", "text\u0001" + M))).as("the control character is written as a unicode escape before it is replaced").contains("\\u0001");
         String scrubbed = exported(snapshot(secret), "text\u0001" + M);
-        assertThat(scrubbed).contains("\\u").as("the control character is written as a unicode escape before it is replaced").isNotNull();
         assertSafe(scrubbed, secret);
     }
 

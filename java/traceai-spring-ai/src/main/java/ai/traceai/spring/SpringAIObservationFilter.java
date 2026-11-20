@@ -102,7 +102,7 @@ public final class SpringAIObservationFilter implements ObservationFilter {
         String finished() {
             if (!cut) return builder.toString();
             return KnownSecrets.sealCut(builder.substring(0, Math.min(builder.length(),
-                MAX_CONTENT_LENGTH - KnownSecrets.TRUNCATION_MARKER.length())));
+                MAX_CONTENT_LENGTH - KnownSecrets.TRUNCATION_MARKER.length())), MAX_CONTENT_LENGTH);
         }
     }
 

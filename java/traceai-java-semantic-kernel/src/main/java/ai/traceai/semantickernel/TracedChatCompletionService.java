@@ -150,7 +150,7 @@ public class TracedChatCompletionService implements ChatCompletionService {
                     synchronized (content) {
                         // Text cut at the cap loses what could be the start of a known secret.
                         fullContent = cut[0] ? ai.traceai.privacy.KnownSecrets.sealCut(
-                            content.substring(0, MAX_STREAM_CONTENT - ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER.length())) : content.toString();
+                            content.substring(0, MAX_STREAM_CONTENT - ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER.length()), MAX_STREAM_CONTENT) : content.toString();
                     }
                     if (!fullContent.isEmpty()) {
                         tracer.setOutputValue(span, fullContent);
