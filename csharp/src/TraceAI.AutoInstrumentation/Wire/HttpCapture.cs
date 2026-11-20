@@ -323,7 +323,7 @@ internal sealed class Capture
             if(ended<_start) ended=_start;
             if(!_enabled()) return;
             // Raw: the known secrets are replaced below for the application's copy, from the registry as it is when the span
-            // ends, and again at export for the Future AGI copy, from the unreplaced values kept on the Activity.
+            // ends, and again at export for the Future AGI copy, from the unreplaced values the agent keeps for the span.
             var result=WireCore.Build(_match,_request,Response,_privacy?.HideErrorDetails==true,raw:true); if(result==null) return;
             var tags=new ActivityTagsCollection(result.Attributes.Select(p=>new KeyValuePair<string,object?>(p.Key,p.Value)));
             foreach(var (key,value) in _context) tags[key]=value;

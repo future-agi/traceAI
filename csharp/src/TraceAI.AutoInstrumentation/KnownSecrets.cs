@@ -9,8 +9,7 @@ internal static class KnownSecrets
     private const string StateKey="TraceAI.AutoInstrumentation.KnownSecrets.v2";
     internal const int Capacity=1024;
     internal const int MaxLength=4096;
-    internal const int PinnedCapacity=256;
-    // gate, LRU index/list, immutable sorted snapshot, failed, environment seeded, dirty, pinned (outside the LRU: never evicted).
+    // gate, LRU index/list, immutable sorted snapshot, failed, environment seeded, dirty, pinned (outside the LRU: never evicted, not bounded).
     private static readonly object[] State=ProcessState();
     private static object[] ProcessState()
     {
@@ -61,8 +60,8 @@ internal static class KnownSecrets
         if(index.Count==Capacity) { index.Remove(lru.First!.Value); lru.RemoveFirst(); }
         index[value]=lru.AddLast(value); State[3]=Array.Empty<string>(); State[6]=true;
     }
-    // The FI credentials of a configuration live outside the LRU: registering any number of other secrets never drops them.
-    // Past PinnedCapacity (many configurations in one process) they fall back to the LRU like any other secret.
+    // The FI credentials of a configuration live outside the LRU, in a set that is not bounded: registering any number of other
+    // secrets never drops them, and they never fall back to the LRU. Only a value over MaxLength fails the registry closed.
     private static void Pin(IEnumerable<string> values)
     {
         var pinned=(HashSet<string>)State[7];
@@ -71,7 +70,6 @@ internal static class KnownSecrets
             if(value.Length<8) continue;
             if(value.Length>MaxLength) { MarkFailed(); continue; }
             if(pinned.Contains(value)) continue;
-            if(pinned.Count>=PinnedCapacity) { Add(value); continue; }
             pinned.Add(value); State[3]=Array.Empty<string>(); State[6]=true;
         }
     }

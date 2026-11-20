@@ -345,7 +345,7 @@ an HttpClient callback. Transport errors read only the BCL's stored exception te
 never a virtual `Message` override. Unrecognized host context layouts are skipped, fail-open.
 **One process-wide known-secret registry** is shared as BCL state across the isolated
 hook and default load contexts. It holds at most 1,024 values of eight or more
-characters, evicting the least recently registered/observed value first; the FI keys of the configuration are pinned outside that LRU (a separate set of at most 256 values), so no amount of other registrations can evict them. At
+characters, evicting the least recently registered/observed value first; the FI keys and credential values of the configuration are pinned in a separate set that is not bounded and is never evicted, and they never fall back to the LRU, so no number of other registrations removes them. At
 initialization it learns every supplied FI key (including ignored incomplete explicit
 pairs and overridden TOML/environment values) and credential-like environment values
 (names containing KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH). Such an
@@ -357,7 +357,9 @@ overlong registered value), the agent says so once on standard error and exports
 spans with identity and timing but no content for the rest of the process.
 Replacement works on the whole value, then any length cap applies to the replaced text, so a cap never cuts a secret in two:
 the attribute limit, the 500-character status description of a non-JSON error body and the 4,096-character value limits all run
-after replacement. Known secrets are replaced first and the credential value shapes (`AKIA...`, `Bearer ...`, `sk-...`, JWT) run on
+after replacement. The caps that run before replacement are exactly these: multipart field names and file names are cut at 1,024
+characters and MIME types at 256, and the
+multipart text field cap described next. Known secrets are replaced first and the credential value shapes (`AKIA...`, `Bearer ...`, `sk-...`, JWT) run on
 the result, in the same call; no shape ever runs on text that still holds a known secret, because a shape that matched part of a
 secret would leave the rest of it behind. The one exception is a multipart text field, which is read to 64 KiB before the secrets of
 the request are known: a field cut at that cap also loses the last 4,095 characters it kept, so a secret straddling the cap keeps no part

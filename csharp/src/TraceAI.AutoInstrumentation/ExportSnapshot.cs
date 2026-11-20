@@ -7,14 +7,6 @@ using TraceAI.AutoInstrumentation.Wire;
 
 namespace TraceAI.AutoInstrumentation;
 
-/// <summary>
-/// The sole authoritative export boundary. Detached framework shells retain IDs,
-/// flags and timestamps, but no mutable content, parent or application objects.
-/// Cloning avoids ActivitySource constructors/listeners and Activity.Start/Stop:
-/// those APIs would invoke application callbacks on the exporter thread.
-/// Field access is deliberately limited to the supported DiagnosticSource 8–10
-/// layout. A missing field fails closed, never falls back to the shared activity.
-/// </summary>
 /// <summary>What the agent put on a span it created, kept in an agent-side table keyed by the Activity (never on the Activity itself): the unreplaced name,
 /// status description and attributes, beside what the application's copy was given. The Future AGI copy is replaced at export
 /// from the unreplaced values, except for anything a later processor changed on the shared Activity: that is exported from the
@@ -30,6 +22,7 @@ internal sealed class WireRecord(string name,string? description,bool capDescrip
     private readonly Dictionary<string,object?> _unreplaced=unreplaced.ToDictionary(pair=>pair.Key,pair=>pair.Value);
     private readonly Dictionary<string,object?> _applied=applied.ToDictionary(pair=>pair.Key,pair=>pair.Value);
     internal string Name(Activity current)=>current.DisplayName==appliedName?name:current.DisplayName;
+    internal string OperationName(Activity current)=>current.OperationName==appliedName?name:current.OperationName;
     internal string? Description(Activity current)=>current.StatusDescription==appliedDescription?description:current.StatusDescription;
     /// <summary>The Activity's tags with the unreplaced value in place of each one the agent set and nobody changed.</summary>
     internal IEnumerable<KeyValuePair<string,object?>> Tags(Activity current)
@@ -44,6 +37,14 @@ internal sealed class WireRecord(string name,string? description,bool capDescrip
     }
 }
 
+/// <summary>
+/// The sole authoritative export boundary. Detached framework shells retain IDs,
+/// flags and timestamps, but no mutable content, parent or application objects.
+/// Cloning avoids ActivitySource constructors/listeners and Activity.Start/Stop:
+/// those APIs would invoke application callbacks on the exporter thread.
+/// Field access is deliberately limited to the supported DiagnosticSource 8–10
+/// layout. A missing field fails closed, never falls back to the shared activity.
+/// </summary>
 internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
 {
     internal Activity[] Spans { get; }=spans;
@@ -181,7 +182,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 Set(copy,"<Source>k__BackingField",Scope(original.Source,budget,safe,redact));
                 Set(copy,"_traceState",original.TraceStateString==null?null:budget.Text(original.TraceStateString,redact));
                 copy.DisplayName=budget.Text(unreplaced?.Name(original)??original.DisplayName,redact);
-                Set(copy,"<OperationName>k__BackingField",budget.Text(original.OperationName,redact));
+                Set(copy,"<OperationName>k__BackingField",budget.Text(unreplaced?.OperationName(original)??original.OperationName,redact));
                 // Hidden error details keep the status code but never its description.
                 var statusText=unreplaced==null?original.StatusDescription:unreplaced.Description(original);
                 copy.SetStatus(original.Status==ActivityStatusCode.Unset?ActivityStatusCode.Ok:original.Status,
@@ -227,7 +228,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 RuntimeLayout.Field(typeof(ActivitySource),"<TelemetrySchemaUrl>k__BackingField")?.SetValue(source,null);
                 Set(copy,"<Source>k__BackingField",source); Set(copy,"_traceState",null);
                 string Text(string text) { try { return redact(text); } catch { return "traceai.redacted"; } }
-                copy.DisplayName=Text(WireRecord.For(original) is {} named?named.Name(original):original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(original.OperationName)); copy.SetStatus(original.Status);
+                copy.DisplayName=Text(WireRecord.For(original) is {} named?named.Name(original):original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(WireRecord.For(original) is {} wired?wired.OperationName(original):original.OperationName)); copy.SetStatus(original.Status);
                 var retained=new ActivityTagsCollection();
                 var operation=original.GetTagItem("gen_ai.operation.name") as string;
                 var originalTags=(WireRecord.For(original) is {} kept?kept.Tags(original):original.TagObjects).Take(PrivacyCatalog.MaxNodes+1).ToArray();

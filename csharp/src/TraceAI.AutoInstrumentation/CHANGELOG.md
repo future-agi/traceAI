@@ -6,17 +6,14 @@ Release notes are added here by the release process.
 
 ## Unreleased
 
-### Fixed
-- A known secret that contains a credential value shape (an `AKIA...` key followed by more characters, a `Bearer ...` value with a `~` or `.` suffix) is replaced whole on both copies of a wire span: known secrets are replaced first and value shapes run on the result, in the same call, never on raw text.
-- The FI keys are pinned outside the registry's LRU, so registering more than 1,024 other secrets never lets them be evicted from either copy.
-- The 500-character status description of a non-JSON error body is cut after replacement, not before. A multipart text field cut at 64 KiB also loses its last 4,095 characters, so no secret straddling the cap keeps a part of itself.
-- The unreplaced values of a wire span are kept in an agent-side table keyed by the Activity, not in a custom property the application can read.
-
 ### Added
 - ASP.NET Core hosts are traced with no application code: the startup hook activates the companion assembly `TraceAI.AutoInstrumentation.HostingStartup`, which wraps registered `IChatClient`, `IEmbeddingGenerator<,>` and `AIAgent` services in the libraries' own OpenTelemetry wrappers when `extensions_ai` or `agents` is enabled. An application that already calls `UseOpenTelemetry()` is not wrapped twice, no hide setting is overridden, and an existing `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` value is kept.
 - The agent starts next to `System.Diagnostics.DiagnosticSource` 11, which `Microsoft.Extensions.AI` 11 ships.
 
 ### Changed
+- A known secret that contains a credential value shape (an `AKIA...` key followed by more characters, a `Bearer ...` value with a `~` or `.` suffix) is replaced whole on both copies of a wire span: known secrets are replaced first and value shapes run on the result, in the same call, never on raw text.
+- The FI keys and credential values are pinned outside the registry's LRU, in a set that is not bounded, so registering more than 1,024 other secrets never removes them from either copy.
+- The 500-character status description of a non-JSON error body is cut after replacement, not before. A multipart text field cut at 64 KiB also loses its last 4,095 characters, so no secret straddling the cap keeps a part of itself.
 - Known secrets that overlap one another, or contain one another, are replaced as one span on both copies of the spans the agent creates for HTTP model calls, so no part of any of them remains, including in request-context values. The Future AGI copy is replaced at export from the registry as it is then, so a secret learned after a span was captured is replaced too; the application's own providers and exporters see the values replaced once, when the span ends. Replacement runs on the whole value before any length limit applies.
 - The spans the agent creates for HTTP model calls carry the same known-secret replacement for the application's own providers, listeners and exporters as on the Future AGI copy: secrets in the process-wide registry (registered secrets and credentials discovered in requests) are replaced in request-context values as well as the FI keys, whether or not any `FI_HIDE_*` setting is on. Spans a library creates are not changed by the agent.
 - Prompt and response content is recorded by default in ASP.NET Core hosts, like in every other language. Set `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, to keep it off; a `TraceConfig` supplied to the agent with any of those hides keeps it off too, and is used instead of the variables. `FI_AUTO_CAPTURE_CONTENT` also accepts `'false'` as a TOML literal string in the config file, and an unrecognised value keeps content off with one warning that names only the setting. The libraries' switch puts content on their spans for every listener in the application, not only this agent; the agent prints one line when it first turns the switch on for a service it keeps (factory and type registrations print it on first resolve).
