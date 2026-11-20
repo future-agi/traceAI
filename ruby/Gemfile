@@ -3,8 +3,12 @@ gemspec
 gem 'minitest', '~> 5.0'
 gem 'rake', '~> 13.0'
 # Optional SDK integration and independent protobuf decoder used by the tests.
-gem 'opentelemetry-sdk', '~> 1.0'
-gem 'opentelemetry-exporter-otlp', '~> 0.30'
+# Declared floors. SDK 1.10 is the first whose SpanData has parent_span_is_remote, which the span
+# snapshot reads; 1.3 through 1.9 break it, and 1.0 through 1.2 cannot resolve with exporter 0.30 or
+# later at all. Exporter 0.31.1 is the first at or above 0.31 that requires SDK 1.10 (0.31.0 reads the
+# SpanData field yet accepts older SDKs, and 0.30 cannot decode the span `flags` the tests read).
+gem 'opentelemetry-sdk', '~> 1.10'
+gem 'opentelemetry-exporter-otlp', '~> 0.31', '>= 0.31.1'
 gem 'openai'
 gem 'anthropic'
 gem 'ruby_llm'

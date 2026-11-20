@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Ruby `traceai-auto` instruments RubyLLM 2.x with no application code: a chat span for each model request (streamed or not) and an `execute_tool <name>` span for each tool call, masked by the existing hide settings, with no second wire span for the same call. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
 
+### Changed
+- Ruby `traceai-auto` forwarding through the application's OpenTelemetry SDK needs `opentelemetry-sdk` 1.10 or later, the first release whose span data has `parent_span_is_remote`; with SDK 1.3 through 1.9 the span snapshot raised and nothing was forwarded. The Gemfile now declares `opentelemetry-sdk` `~> 1.10` and `opentelemetry-exporter-otlp` `~> 0.31` (at least 0.31.1), the floors the suite runs on. The earlier declared floor, SDK 1.0, could not install with exporter 0.30.
+
 ### Fixed
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
