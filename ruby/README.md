@@ -212,7 +212,7 @@ content, and a file that does not exist prints nothing.
 | `FI_API_KEY`, `FI_SECRET_KEY` | Future AGI credentials. Used only as a complete pair from one source. |
 | `FI_BASE_URL` | Collector base URL. A `base_url` in the config file is used only when the key pair comes from the same file. |
 | `FI_PROJECT_NAME`, `FI_PROJECT_TYPE`, `FI_PROJECT_VERSION_NAME` | Project routing. The default name is `OTEL_SERVICE_NAME`, then the working directory name. |
-| `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Allow or deny integrations. `wire` covers both transports; `net_http` or `httpx` alone enables the wire layer for that transport only; `rack` controls server spans. An allowlist must name every integration you want, for example `wire,rack`. |
+| `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Allow or deny integrations. `wire` covers both transports; `net_http` or `httpx` alone enables the wire layer for that transport only; `rack` controls server spans. `ruby_llm` controls the RubyLLM spans. An allowlist must name every integration you want, for example `wire,rack,ruby_llm`. |
 | `FI_WIRE_CAPTURE` | `false` turns off wire capture. |
 | `FI_WIRE_MAX_BODY_BYTES` | Body capture limit, default 4 MiB, at most 64 MiB. |
 | `FI_SAMPLE_RATE` | Parent-based ratio sampler for an agent-created provider. |
@@ -270,7 +270,7 @@ match a known format.
 
 | Transport | Coverage |
 | --- | --- |
-| `Net::HTTP` | Buffered and streamed requests and responses, multipart uploads, gzip and deflate. Covers Faraday's default adapter, `ruby-openai`, the official `openai` and `anthropic` gems and RubyLLM. |
+| `Net::HTTP` | Buffered and streamed requests and responses, multipart uploads, gzip and deflate. Covers Faraday's default adapter, `ruby-openai`, the official `openai` and `anthropic` gems and RubyLLM (which also has its own spans, below). |
 | `HTTPX` | Buffered and `:stream` responses, retries and `:follow_redirects`. |
 
 Spans carry `gen_ai.*` request, response and usage attributes, input and output
@@ -280,6 +280,47 @@ when a body was truncated, incomplete or not decodable. If a library already
 records the call as an LLM, embedding, reranker or guardrail span, the wire span
 is suppressed so the call is not counted twice. The agent never adds retries,
 reads or network calls to your requests.
+
+### RubyLLM
+
+RubyLLM 2.x (`>= 2.0, < 3`; tested at 2.0.0, 2.1.1 and 2.2.3) is traced without
+any application code. The agent follows the `chat.ruby_llm` and
+`tool_call.ruby_llm` events that RubyLLM reports for every model request and
+every tool execution, so one RubyLLM call gives:
+
+- A `chat <model>` CLIENT span for each model request made by `Chat#ask`,
+  `#complete` or `#generate`, streamed or not, with `gen_ai.operation.name`
+  `chat`, `gen_ai.provider.name`, `gen_ai.request.model`,
+  `gen_ai.response.model`, `gen_ai.usage.*` token counts,
+  `gen_ai.response.finish_reasons`, the request parameters, and the input and
+  output messages. A question that runs a tool round trip has one chat span
+  before the tool call and one after it.
+- An `execute_tool <name>` INTERNAL span for each tool call, with
+  `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` and
+  `gen_ai.tool.call.result`. A tool that raises sets the span to ERROR with
+  `error.type` and the exception reaches your code unchanged.
+- No second wire span for the HTTP request inside a chat span.
+- A streaming span ends once: when the stream finishes, when it fails, or when
+  your block leaves early (`break`, `throw`, an exception). An early exit is
+  marked `traceai.ruby_llm.incomplete`.
+
+The spans nest under the span that is current when you call RubyLLM, including
+across RubyLLM's concurrent tool threads (RubyLLM 2.1 and later). There is no
+span of its own around `#ask`. The agent starts with the first RubyLLM call, as
+it does with the first wire request.
+
+The usual controls apply. Every `FI_HIDE_*` setting masks these spans like any
+other span: prompts, replies, tool arguments (input side) and tool results
+(output side). Raw input and output (`raw.input`, `raw.output` and their
+children) are not recorded while any content hide setting is on. A tool's name
+and call id are identity, not content, and stay visible. To turn the integration
+off, name `ruby_llm` in `FI_DISABLED_INSTRUMENTATIONS`; the HTTP calls are then
+reported by the wire layer alone. With an allowlist (`FI_INSTRUMENTATIONS`),
+name `ruby_llm` as well. `TraceAI::Auto.report` (the doctor) lists `ruby_llm`
+as `instrumented` when a supported RubyLLM is installed. RubyLLM 1.x and 3.x are
+not hooked and keep their wire spans. RubyLLM's own optional OpenTelemetry
+spans (`RubyLLM::OpenTelemetry.enable`) are vendor spans: they stay with your
+exporters and are not sent to Future AGI.
 
 When a span has more attributes than the SDK allows (128 by default), the agent
 keeps identity, outcome, model, usage, timing and provenance attributes first,
@@ -398,8 +439,8 @@ install anything.
 
 - Not covered: non-default Faraday adapters (Typhoeus, Excon, HTTP.rb), direct
   sockets, WebSockets, gRPC and custom HTTPX transport plugins.
-- There are no library-level instrumentors in this gem; calls are traced at the
-  HTTP layer. Rack server spans need `opentelemetry-instrumentation-rack` in the
+- Apart from RubyLLM, there are no library-level instrumentors in this gem;
+  calls are traced at the HTTP layer. Rack server spans need `opentelemetry-instrumentation-rack` in the
   application's bundle and your own OpenTelemetry provider; the agent installs
   it only after your application has loaded Rack and set its provider, and the
   report shows `pending` until then. Your framework's instrumentation still
@@ -431,7 +472,7 @@ install anything.
   - a tracer provider set later is used from the next AI request instead of at
     once.
 - When the first AI request starts the agent inside one of its lazy wrappers
-  (`Net::HTTP` or HTTPX), the call is passed through the method chain again from
+  (`Net::HTTP`, HTTPX or RubyLLM's instrumentation call), the call is passed through the method chain again from
   the top, so a wrapper that another library added above it runs twice for that
   one request. The network request is sent once.
 - If your application replaces its global tracer provider a second time, the

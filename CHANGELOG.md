@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Ruby `traceai-auto` instruments RubyLLM 2.x with no application code: a chat span for each model request (streamed or not) and an `execute_tool <name>` span for each tool call, masked by the existing hide settings, with no second wire span for the same call. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
+
 ### Fixed
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
