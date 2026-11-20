@@ -301,7 +301,7 @@ def test_the_opt_in_never_makes_a_future_agi_grpc_host_plaintext(name, monkeypat
 def test_the_opt_in_is_refused_for_grpc_through_a_proxy(monkeypatch):
     monkeypatch.setenv("FI_GRPC_URL", "http://collector.internal:50051")
     monkeypatch.setenv(OPT_IN, "1")
-    monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
+    monkeypatch.setenv("http_proxy", "http://proxy.internal:3128")
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
         _grpc()
 

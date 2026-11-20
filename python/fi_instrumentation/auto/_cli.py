@@ -83,7 +83,7 @@ def check_collector(settings: AutoConfig, timeout: float = 5.0) -> Tuple[bool, s
     _, endpoint = _normalized_endpoint(settings.base_url)
     keys = (
         {"X-Api-Key": settings.api_key or "", "X-Secret-Key": settings.secret_key or ""}
-        if _guard_future_agi_request(endpoint, named=True)
+        if _guard_future_agi_request(endpoint, named=True, base=settings.base_url)
         else {}
     )
     token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))

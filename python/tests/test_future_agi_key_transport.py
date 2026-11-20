@@ -88,7 +88,7 @@ def test_an_http_or_all_proxy_routes_an_http_request(site, variable, monkeypatch
     assert sent == []
 
 
-@pytest.mark.parametrize("no_proxy", ["collector.internal", ".internal", "*", "collector.internal:8080", "other.example, collector.internal"])
+@pytest.mark.parametrize("no_proxy", ["collector.internal", ".internal", "*", "collector.internal:8080", "other.example, collector.internal", "internal"])
 def test_a_no_proxy_entry_bypasses_the_proxy_like_the_standard_library(no_proxy, monkeypatch, sent):
     monkeypatch.setenv("FI_BASE_URL", "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")
@@ -97,7 +97,7 @@ def test_a_no_proxy_entry_bypasses_the_proxy_like_the_standard_library(no_proxy,
     _http()
 
 
-@pytest.mark.parametrize("no_proxy", ["collector.internal:9999", "10.0.0.0/8", "internal", "other.example"])
+@pytest.mark.parametrize("no_proxy", ["collector.internal:9999", "10.0.0.0/8", "other.example"])
 def test_a_no_proxy_entry_that_does_not_match_leaves_the_proxy_in_force(no_proxy, monkeypatch, sent):
     monkeypatch.setenv("FI_BASE_URL", "http://10.0.0.5:8080" if "/" in no_proxy else "http://collector.internal:8080")
     monkeypatch.setenv(OPT_IN, "1")

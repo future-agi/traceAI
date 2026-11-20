@@ -854,17 +854,69 @@ def _is_futureagi_host(host: str) -> bool:
     return host == "futureagi.com" or host.endswith(".futureagi.com")
 
 
-def _future_agi_decision(endpoint: str | None, grpc: bool = False) -> str:
+_CREDENTIAL_ESCAPES = ("%5c", "%40")
+
+
+def _authority_text(endpoint: str) -> str:
+    """The authority of a URL or target as written: the text after ``//`` up to ``/``, ``?`` or ``#``, else the leading
+    token of a bare ``host:port``."""
+    rest = endpoint.split("//", 1)[1] if "//" in endpoint else endpoint
+    return re.split(r"[/?#]", rest, maxsplit=1)[0]
+
+
+def _is_disputed(endpoint: str) -> bool:
+    """True when parsers can read the authority of ``endpoint`` differently, so no parser's reading is trusted.
+
+    That is the case for whitespace or control characters, a backslash or ``@`` (userinfo, or text that follows an
+    ``@``) or an escaped backslash or ``@`` in the endpoint, an empty authority that a path follows (the host is not
+    re-read from the path), and a host that ``urlsplit``, ``urllib3`` and the written text read differently.
+    """
+    if any(ord(c) < 33 or ord(c) == 127 for c in endpoint) or "\\" in endpoint or "@" in endpoint:
+        return True
+    lowered = endpoint.lower()
+    if any(escape in lowered for escape in _CREDENTIAL_ESCAPES):
+        return True
+    if "//" in endpoint and not _authority_text(endpoint) and endpoint.split("//", 1)[1].strip("/"):
+        return True
+    if "//" in endpoint:
+        try:
+            import urllib3.util
+
+            hosts = {
+                host.lower().strip("[]").removesuffix(".")
+                for host in (urlsplit(endpoint).hostname or "", urllib3.util.parse_url(endpoint).host or "", _written_host(endpoint) or "")
+            }
+        except Exception:  # a parser that cannot read the endpoint disagrees with the others
+            return True
+        if len(hosts) > 1:
+            return True
+    return False
+
+
+def _is_env_named(endpoint: str) -> bool:
+    """True when the authority of ``endpoint`` is the authority of ``FI_BASE_URL``, ``FI_TRACES_URL`` or ``FI_GRPC_URL``."""
+    wanted = _authority_text(endpoint)
+    return any(
+        value and _authority_text(value) == wanted
+        for value in (get_env_traces_endpoint(), get_env_collector_endpoint(), get_env_grpc_collector_endpoint())
+    )
+
+
+def _future_agi_decision(endpoint: str | None, grpc: bool = False, named: bool = False) -> str:
     """``"fi"`` for a Future AGI endpoint, ``"refuse"`` for one that names Future AGI but cannot be
     verified, ``"other"`` for a collector of the user's own.
 
     ``endpoint`` is the URL (HTTP) or the target an exporter received or resolved (gRPC; either
     spelling). It is Future AGI only when it is a plain target on exact host and port the Future AGI
     environment or defaults name. A Future AGI HTTP host is reached over https only; a gRPC target of any
-    scheme is bound and uses TLS (see ``_force_tls_for_future_agi``).
+    scheme is bound and uses TLS (see ``_force_tls_for_future_agi``). An endpoint whose authority parsers can read
+    differently (see ``_is_disputed``) is refused when it names Future AGI or is the one the environment names
+    (``named``), whichever parser reads it.
     """
     if not endpoint:
         return "other"
+    if _is_disputed(endpoint) and (_names_future_agi_host(endpoint, True) or named or _is_env_named(endpoint)):
+        return "refuse"
     if grpc:
         target = _grpc_target(endpoint)
         host = target[1] if target else None
@@ -897,14 +949,14 @@ def _fi_keys_configured(caller_headers: Any = None) -> bool:
     """True when Future AGI credentials would be sent: from the environment or the caller's headers."""
     if get_env_fi_auth_header():
         return True
-    return any(
-        name in _CREDENTIAL_HEADERS and not _is_blank(value) for name, value in _caller_headers(caller_headers).items()
-    )
+    final = {**_ambient_headers(), **_caller_headers(caller_headers)}
+    return any(name in _CREDENTIAL_HEADERS and not _is_blank(value) for name, value in final.items())
 
 
-def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers: Any = None) -> str:
-    """The decision for ``endpoint``; raises when it names Future AGI and credentials are set."""
-    decision = _future_agi_decision(endpoint, grpc)
+def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers: Any = None, named: bool = False) -> str:
+    """The decision for ``endpoint``; raises when it names Future AGI and credentials are set. The credentials are the
+    final outgoing set: the environment keys, the caller's headers and the OpenTelemetry environment headers."""
+    decision = _future_agi_decision(endpoint, grpc, named)
     if decision == "refuse" and _fi_keys_configured(caller_headers):
         raise UnsupportedFutureAGIEndpointError(
             "The exporter endpoint names Future AGI but cannot be verified as a Future AGI endpoint, so the Future AGI "
@@ -914,7 +966,9 @@ def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers:
     return decision
 
 
-def _guard_future_agi_request(url: str, named: bool = False, allow: bool = False, session: Any = None) -> bool:
+def _guard_future_agi_request(
+    url: str, named: bool = False, allow: bool = False, session: Any = None, base: str | None = None, from_env: bool = False
+) -> bool:
     """True when Future AGI keys may be attached to an HTTP request to ``url``.
 
     The endpoint rules of the exporters apply before any request: a Future AGI host reached over http, or in a form that
@@ -923,6 +977,8 @@ def _guard_future_agi_request(url: str, named: bool = False, allow: bool = False
     it is not a futureagi.com host. A plain http base on a host other than loopback is refused unless it is opted in
     (see ``_authorize_plain_text``).
     """
+    # The base as written is checked first (``from_env``: it is the one the environment names), then the request URL.
+    _check_future_agi_endpoint(base or url, False, named=named or from_env)
     decision = _check_future_agi_endpoint(url, False)
     if decision == "other" and named and _http_origin(url) is not None:
         decision = "fi"
@@ -1152,15 +1208,21 @@ _ALLOW_INSECURE_HTTP = "FI_ALLOW_INSECURE_HTTP"
 
 
 def _proxy_applies(host: str, port: int, session: Any = None) -> bool:
-    """True when a request to ``host:port`` would go through a proxy: ``HTTP_PROXY``, ``HTTPS_PROXY`` or ``ALL_PROXY``
-    (upper or lower case, skipped for hosts ``NO_PROXY`` lists), or the proxies of the caller's session."""
-    from requests.utils import get_environ_proxies, select_proxy
+    """True when a plain (http or non-TLS gRPC) request to ``host:port`` would go through a proxy.
 
-    for scheme in ("http", "https"):
-        url = f"{scheme}://{host}:{port}"
-        if select_proxy(url, get_environ_proxies(url)) or (session is not None and select_proxy(url, getattr(session, "proxies", {}))):
-            return True
-    return False
+    One rule: ``HTTP_PROXY`` or ``ALL_PROXY`` (upper or lower case, non-empty) routes it unless ``NO_PROXY`` bypasses the
+    host, read as the standard library reads it (``urllib.request.proxy_bypass_environment``: a host or a suffix, with or
+    without a leading dot, ``*``, ``host:port``; no network ranges). ``HTTPS_PROXY`` alone does not route a plain request.
+    A caller session with proxies of its own always counts.
+    """
+    import urllib.request
+
+    if session is not None and any((getattr(session, "proxies", None) or {}).values()):
+        return True
+    proxies = urllib.request.getproxies_environment()
+    if not (proxies.get("http") or proxies.get("all")):
+        return False
+    return not urllib.request.proxy_bypass_environment(f"{host}:{port}")
 
 
 def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None) -> None:
@@ -1235,12 +1297,13 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         if "headers" in bound_args.arguments:
             bound_args.arguments["headers"] = caller_headers
 
-        if bound_args.arguments.get("endpoint") is None:
+        from_env = bound_args.arguments.get("endpoint") is None
+        if from_env:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
 
         # Built once, with the caller's own arguments; the Future AGI headers are set afterwards,
         # and only when the exporter resolved a Future AGI endpoint.
-        decision = _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers)
+        decision = _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers, named=from_env)
         forced = False
         if decision == "fi" and _force_tls_for_future_agi(
             bound_args.arguments["endpoint"], bound_args.arguments.get("insecure"), allow_insecure_http
@@ -1253,7 +1316,7 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers)
             resolved_target = _grpc_target(getattr(self, "_endpoint", None))
             written = _written_host(getattr(self, "_endpoint", None))
-            if resolved == "fi" and not forced and resolved_target and not _is_loopback_host(written):
+            if resolved == "fi" and not forced and resolved_target and not _is_loopback_host(written) and _fi_keys_configured(caller_headers):
                 if _is_futureagi_host(resolved_target[1]):
                     raise UnsupportedFutureAGIEndpointError(
                         "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
@@ -1303,6 +1366,8 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             bound_args.arguments["headers"] = caller_headers
 
         if bound_args.arguments.get("endpoint") is None:
+            # The environment's endpoint is checked as written, before the exporter's own rewrite of its path.
+            _check_future_agi_endpoint(get_env_traces_endpoint(), False, caller_headers, named=True)
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
@@ -1447,11 +1512,12 @@ def check_custom_eval_config_exists(
     if not eval_tags:
         return False
 
+    from_env = base_url is None
     if base_url is None:
         base_url = get_env_collector_endpoint()
 
     url = f"{base_url}/tracer/custom-eval-config/check_exists/"
-    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http)
+    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http, base=base_url, from_env=from_env)
 
     try:
         headers = {

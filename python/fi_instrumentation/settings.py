@@ -125,13 +125,14 @@ def get_custom_eval_template(
     if not eval_name:
         raise ValueError("Eval name is required")
 
+    from_env = base_url is None
     if base_url is None:
         base_url = get_env_collector_endpoint()
 
     url = f"{base_url}/tracer/custom-eval-config/get_custom_eval_by_name/"
     from fi_instrumentation.otel import _guard_future_agi_request
 
-    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http)
+    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http, base=base_url, from_env=from_env)
 
     try:
         headers = {

@@ -262,10 +262,10 @@ def test_a_grpc_refusal_after_the_channel_is_built_closes_the_channel(monkeypatc
     closed.clear()
     real_check = otel._check_future_agi_endpoint
 
-    def check(endpoint, is_grpc, caller_headers=None):
+    def check(endpoint, is_grpc, caller_headers=None, **kwargs):
         if is_grpc and opened:  # the exporter has been built: this is the check on what it resolved
             raise otel.UnsupportedFutureAGIEndpointError("refused")
-        return real_check(endpoint, is_grpc, caller_headers)
+        return real_check(endpoint, is_grpc, caller_headers, **kwargs)
 
     monkeypatch.setattr(otel, "_check_future_agi_endpoint", check)
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
