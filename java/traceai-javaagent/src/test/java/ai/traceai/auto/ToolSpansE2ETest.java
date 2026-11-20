@@ -176,6 +176,6 @@ class ToolSpansE2ETest {
         String off = run("doctor", Map.of("FI_WIRE_CAPTURE", "false"));
         assertFalse(line(off, "DOCTOR=").contains("chat calls through wire"), off);
         assertTrue(line(off, "DOCTOR=").contains("execute_tool spans"), off);
-        assertTrue(line(off, "DOCTOR=").contains("ai.traceai.langchain4j"), "manual-wrapper hint kept: " + off);
+        assertTrue(line(off, "DOCTOR=").contains("manual (use ai.traceai.langchain4j.TracedChatLanguageModel"), "manual-wrapper hint kept: " + off);
     }
 }

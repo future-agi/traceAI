@@ -34,9 +34,11 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
  * {@code output.value}. Content is withheld by the same hide switches as the rest of the agent, and a failure is recorded
  * with the exception rethrown unchanged to the application.
  *
- * <p>No second span: a call nested directly in another advised call of the same tool and arguments on the thread (for
- * example {@code call(String)} delegating to {@code call(String, ToolContext)}) is not traced again, nor is a call made
- * under an application TOOL span for the same tool (a traceai-java-langchain4j or traceai-java-spring-ai wrapper).
+ * <p>No second span: a call to another overload of the same callee, with the same tool and arguments, directly inside a
+ * traced call (for example {@code call(String)} delegating to {@code call(String, ToolContext)}) is part of that one execution
+ * and is not traced again; a tool that calls itself recursively is traced at every level. The traceai libraries' own wrappers
+ * (any {@code ai.traceai.*} class except the agent's) are never advised, because they open their own TOOL span. A call made
+ * under an application TOOL span for the same tool, or under a Spring AI native {@code tool_call} observation span, is not traced again.
  * {@code FI_DISABLED_INSTRUMENTATIONS=langchain4j} or {@code spring-ai} turns each off, and an {@code FI_INSTRUMENTATIONS}
  * allow list without the name does the same.
  */
@@ -44,9 +46,16 @@ public final class ToolSpans {
     static final String LANGCHAIN4J = "langchain4j", SPRING_AI = "spring-ai";
     private static final String EXECUTOR = "dev.langchain4j.service.tool.ToolExecutor", REQUEST = "dev.langchain4j.agent.tool.ToolExecutionRequest";
     private static final String CALLBACK = "org.springframework.ai.tool.ToolCallback";
-    /** Fingerprints of the advised calls running on this thread, innermost first. */
-    private static final ThreadLocal<Deque<String>> ACTIVE = ThreadLocal.withInitial(ArrayDeque::new);
-    private record Token(String integration, String fingerprint, String name, String callId, String description, String input, OtelBridge.Snapshot context, TraceAIAuto.RuntimeState state) {}
+    private static final String LIBRARY_PREFIX = "ai.traceai.", AGENT_PREFIX = "ai.traceai.auto.";
+    /** One traced call on this thread: the callee object, the method entered, and the tool and arguments. */
+    private record Frame(Object callee, String method, int arity, String integration, String name, String input) {}
+    /** The traced calls running on this thread, innermost first. Calls that were not traced are not on it. */
+    private static final ThreadLocal<Deque<Frame>> ACTIVE = ThreadLocal.withInitial(ArrayDeque::new);
+    private record Token(Frame frame, String name, String callId, String description, OtelBridge.Snapshot context, TraceAIAuto.RuntimeState state) {
+        String input() { return frame.input(); }
+    }
+    /** A class of the traceai libraries (their own tool wrappers open their own TOOL span); the agent's classes are not. */
+    static boolean libraryType(String name) { return name.startsWith(LIBRARY_PREFIX) && !name.startsWith(AGENT_PREFIX); }
 
     static void install(Instrumentation instrumentation) {
         AutoConfig config = TraceAIAuto.config();
@@ -69,10 +78,10 @@ public final class ToolSpans {
                         TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                     }
                 });
-            if (langchain4j) builder = builder.type(hasSuperType(named(EXECUTOR)).and(not(isInterface())))
+            if (langchain4j) builder = builder.type(hasSuperType(named(EXECUTOR)).and(not(isInterface())).and(not(nameStartsWith(LIBRARY_PREFIX)).or(nameStartsWith(AGENT_PREFIX))))
                 .transform((b, type, loader, module, domain) -> b.visit(Advice.to(LangChain4jAdvice.class)
                     .on(namedOneOf("execute", "executeWithContext").and(takesArguments(2)).and(takesArgument(0, named(REQUEST))))));
-            if (springAi) builder = builder.type(hasSuperType(named(CALLBACK)).and(not(isInterface())))
+            if (springAi) builder = builder.type(hasSuperType(named(CALLBACK)).and(not(isInterface())).and(not(nameStartsWith(LIBRARY_PREFIX)).or(nameStartsWith(AGENT_PREFIX))))
                 .transform((b, type, loader, module, domain) -> b.visit(Advice.to(SpringAiAdvice.class)
                     .on(named("call").and(takesArguments(1).or(takesArguments(2))).and(takesArgument(0, String.class)))));
             builder.installOn(instrumentation);
@@ -96,8 +105,10 @@ public final class ToolSpans {
     }
 
     /** Called reflectively from the advice; returns an opaque token, or null when this call is not traced. */
-    public static Object enter(String integration, Object callee, Object[] arguments) {
+    public static Object enter(String integration, Object callee, String method, Object[] arguments) {
         try {
+            // The library's own wrappers open their TOOL span themselves, after this advice would run: never trace them.
+            if (callee != null && libraryType(callee.getClass().getName())) return null;
             AutoConfig config = TraceAIAuto.config(); TraceAIAuto.RuntimeState state = TraceAIAuto.currentRuntime();
             if (config == null || state == null || !config.enabled(integration) || TraceAIAuto.besideOtelJavaAgent() || !state.acceptingResults()) return null;
             if (TraceAIAuto.IN_FLIGHT.get() || Boolean.TRUE.equals(Context.current().get(TraceAIAuto.SUPPRESS))) return null;
@@ -110,21 +121,26 @@ public final class ToolSpans {
                 name = text(invoke(definition, "name")); description = text(invoke(definition, "description")); input = (String)arguments[0];
             }
             if (name == null) return null;
-            String fingerprint = integration + '\0' + name + '\0' + input;
-            Deque<String> active = ACTIVE.get();
-            if (fingerprint.equals(active.peek())) return null;
+            // A call is one frame: the callee object and the method entered. A different overload of the same callee, with the same
+            // tool and arguments, called directly from the traced frame is its delegation (call(String) -> call(String, ToolContext))
+            // and is part of that one execution; the same method calling itself, or another callee, is a new call.
+            Frame frame = new Frame(callee, method, arguments.length, integration, name, input);
+            Deque<Frame> active = ACTIVE.get();
+            Frame outer = active.peek();
+            if (outer != null && outer.callee() == callee && outer.integration().equals(integration) && outer.name().equals(name) && Objects.equals(outer.input(), input)
+                && !(outer.method().equals(method) && outer.arity() == arguments.length)) return null;
             OtelBridge.Snapshot context = OtelBridge.snapshot();
             if (OtelBridge.toolSpanActive(name)) return null;
-            active.push(fingerprint);
-            return new Token(integration, fingerprint, name, callId, description, input, context, state);
+            active.push(frame);
+            return new Token(frame, name, callId, description, context, state);
         } catch (Throwable ignored) { return null; }
     }
 
     /** Called reflectively when the advised call returns or throws, on the thread that entered it. */
     public static void exit(Object token, Object returned, Throwable error) {
         if (!(token instanceof Token tool)) return;
-        Deque<String> active = ACTIVE.get();
-        active.remove(tool.fingerprint());
+        Deque<Frame> active = ACTIVE.get();
+        active.removeFirstOccurrence(tool.frame());
         if (active.isEmpty()) ACTIVE.remove();
         TraceAIAuto.RuntimeState state = tool.state();
         boolean finalizing = false;
@@ -204,8 +220,8 @@ public final class ToolSpans {
 
     public static class LangChain4jAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)
-        public static Object enter(@Advice.This Object executor, @Advice.AllArguments Object[] arguments) throws Exception {
-            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.ToolSpans").getMethod("enter", String.class, Object.class, Object[].class).invoke(null, "langchain4j", executor, arguments);
+        public static Object enter(@Advice.This Object executor, @Advice.Origin("#m") String method, @Advice.AllArguments Object[] arguments) throws Exception {
+            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.ToolSpans").getMethod("enter", String.class, Object.class, String.class, Object[].class).invoke(null, "langchain4j", executor, method, arguments);
         }
         @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
         public static void exit(@Advice.Enter Object token, @Advice.Return(typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,
@@ -215,8 +231,8 @@ public final class ToolSpans {
     }
     public static class SpringAiAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)
-        public static Object enter(@Advice.This Object callback, @Advice.AllArguments Object[] arguments) throws Exception {
-            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.ToolSpans").getMethod("enter", String.class, Object.class, Object[].class).invoke(null, "spring-ai", callback, arguments);
+        public static Object enter(@Advice.This Object callback, @Advice.Origin("#m") String method, @Advice.AllArguments Object[] arguments) throws Exception {
+            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.ToolSpans").getMethod("enter", String.class, Object.class, String.class, Object[].class).invoke(null, "spring-ai", callback, method, arguments);
         }
         @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
         public static void exit(@Advice.Enter Object token, @Advice.Return(typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,

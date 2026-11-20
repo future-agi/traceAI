@@ -88,7 +88,7 @@ public final class TracedToolExecutor implements ToolExecutor {
             span.setStatus(StatusCode.OK);
             return result;
         } catch (Throwable error) {
-            tracer.setError(span, error);
+            tracer.setContentError(span, error);
             throw error;
         } finally {
             span.end();

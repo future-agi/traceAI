@@ -68,15 +68,20 @@ final class OtelBridge {
         return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
     }
     /**
-     * True when the application's active span is a TOOL span for this tool (what a traceai-java-langchain4j or
-     * traceai-java-spring-ai wrapper opens around the tool). The agent adds no second span under it. Only the
-     * active span is read.
+     * True when the application's active span already records this tool call: a TOOL span for this tool (what a
+     * traceai-java-langchain4j or traceai-java-spring-ai wrapper opens around the tool), or Spring AI's own tool_call
+     * observation span (the native observation path). The agent adds no second span under either. Only the active span is read.
+     *
+     * <p>The native span is recognised by what exists while the tool runs: Spring AI names it {@code framework <tool name>}
+     * (observation {@code spring.ai.tool}) and its {@code spring.ai.kind=tool_call} and {@code gen_ai.operation.name=framework}
+     * tags are copied to the span, and {@code SpringAIObservationFilter}'s TOOL kind added, only when the observation stops.
      */
     static boolean toolSpanActive(String tool) {
         try {
             Span current = Span.current();
-            if (current instanceof ReadableSpan readable && sameTool(readable.getAttribute(AttributeKey.stringKey("fi.span.kind")),
-                readable.getAttribute(AttributeKey.stringKey("gen_ai.operation.name")), readable.getAttribute(AttributeKey.stringKey("gen_ai.tool.name")), tool)) return true;
+            if (current instanceof ReadableSpan readable) return active(tool, readable.getName(), new String[] {
+                readable.getAttribute(AttributeKey.stringKey("fi.span.kind")), readable.getAttribute(AttributeKey.stringKey("gen_ai.operation.name")),
+                readable.getAttribute(AttributeKey.stringKey("gen_ai.tool.name")), readable.getAttribute(AttributeKey.stringKey("spring.ai.kind"))});
             ClassLoader loader = Thread.currentThread().getContextClassLoader();
             // Build the prefix dynamically so Maven Shade does not rewrite the application API name.
             String prefix = String.join(".", "io", "opentelemetry");
@@ -85,14 +90,18 @@ final class OtelBridge {
             Class<?> readable = Class.forName(prefix + ".sdk.trace.ReadableSpan", false, loader);
             if (!readable.isInstance(external)) return false;
             Class<?> keyApi = Class.forName(prefix + ".api.common.AttributeKey", false, loader);
-            String[] values = new String[3];
-            String[] names = {"fi.span.kind", "gen_ai.operation.name", "gen_ai.tool.name"};
-            for (int i = 0; i < 3; i++) {
+            String[] names = {"fi.span.kind", "gen_ai.operation.name", "gen_ai.tool.name", "spring.ai.kind"}, values = new String[names.length];
+            for (int i = 0; i < names.length; i++) {
                 Object value = readable.getMethod("getAttribute", keyApi).invoke(external, keyApi.getMethod("stringKey", String.class).invoke(null, names[i]));
                 values[i] = value == null ? null : String.valueOf(value);
             }
-            return sameTool(values[0], values[1], values[2], tool);
+            return active(tool, String.valueOf(readable.getMethod("getName").invoke(external)), values);
         } catch (Throwable ignored) { return false; }
+    }
+    /** values: fi.span.kind, gen_ai.operation.name, gen_ai.tool.name, spring.ai.kind. */
+    private static boolean active(String tool, String spanName, String[] values) {
+        if (sameTool(values[0], values[1], values[2], tool)) return true;
+        return "tool_call".equals(values[3]) || spanName != null && (spanName.equals("framework " + tool) || spanName.equals("tool_call " + tool) || spanName.equals("spring.ai.tool"));
     }
     private static boolean sameTool(String kind, String operation, String name, String tool) {
         return "TOOL".equalsIgnoreCase(kind) && "execute_tool".equals(operation) && tool.equals(name);
