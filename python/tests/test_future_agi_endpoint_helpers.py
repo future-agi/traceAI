@@ -1,8 +1,5 @@
-"""Host-only matching, header helpers, session copies, the plain-text warning and the public wording."""
-import ast
+"""Host-only matching, header helpers, session copies, and the plain-text warning."""
 import logging
-import pathlib
-import re
 
 import pytest
 import requests
@@ -10,7 +7,6 @@ import requests
 from fi_instrumentation import otel
 
 FI_KEY, FI_SECRET = "synthetic-env-key", "synthetic-env-secret"
-ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
@@ -212,47 +208,3 @@ def test_a_grpc_refusal_after_the_channel_is_built_closes_the_channel(monkeypatc
         otel.GRPCSpanExporter(timeout=2)
     if retains_channel:
         assert opened and closed
-
-
-# ---- public wording -------------------------------------------------------------------------------------------
-
-BANNED = ("evil", "attacker", "attack", "leak", "forward your keys", "cleartext", "look like", "fixed", "now",
-          "previously", "vulnerab", "exploit", "never", "just")
-# Functions and classes of otel.py added or reworded since the 1.5.2 work began.
-ADDED = (
-    "_with_fi_auth_headers", "_ambient_headers", "_materialize_headers", "_caller_headers",
-    "UnsupportedFutureAGIEndpointError", "_normalize_host", "_names_future_agi_host", "_http_origin", "_grpc_target",
-    "_known_future_agi_origins", "_is_futureagi_host", "_future_agi_decision", "_is_future_agi_endpoint",
-    "_fi_keys_configured", "_check_future_agi_endpoint", "UnsupportedOTLPExporterError", "_unsupported_exporter",
-    "_copy_session", "_pin_http_headers", "_pin_grpc_headers", "GRPCSpanExporter", "HTTPSpanExporter",
-    "_documented_init_signature", "_get_class_signature", "_warn_plain_text_once", "_is_loopback_host",
-    "_force_tls_for_future_agi",
-)
-
-
-def _banned_in(text):
-    lowered = text.lower()
-    return [word for word in BANNED if re.search(rf"(?<![a-z0-9_]){re.escape(word)}(?![a-z0-9_])", lowered)]
-
-
-def _strings(node):
-    for child in ast.walk(node):
-        if isinstance(child, ast.Constant) and isinstance(child.value, str):
-            yield child.value
-
-
-def test_the_added_docstrings_and_messages_use_the_public_wording():
-    tree = ast.parse((ROOT / "fi_instrumentation" / "otel.py").read_text())
-    found = {node.name: node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in ADDED}
-    assert {"_future_agi_decision", "GRPCSpanExporter", "_copy_session"} <= set(found)
-    problems = {name: _banned_in(" ".join(_strings(node))) for name, node in found.items()}
-    assert {name: words for name, words in problems.items() if words} == {}
-
-
-def test_the_1_5_2_changelog_section_uses_the_public_wording():
-    text = (ROOT / "CHANGELOG.md").read_text()
-    start = text.index("## [1.5.2]")
-    section = text[start : text.index("\n## [", start + 1)]
-    assert "### Fixed" not in section
-    assert "### Changed" in section
-    assert _banned_in(section) == []

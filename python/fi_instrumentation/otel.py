@@ -127,7 +127,7 @@ def register(
     """Configure and return a Future AGI `TracerProvider`.
 
     Span processors added later with `add_span_processor` run next to the Future AGI
-    exporter, never in place of it. To export somewhere else instead, pass `span_exporter`.
+    exporter, not in place of it. To export somewhere else instead, pass `span_exporter`.
 
     All tuning args below default to `None`, meaning the corresponding OpenTelemetry
     environment variable / upstream default applies (no behavior change when unset).
@@ -705,7 +705,7 @@ def _caller_headers(headers: Any) -> dict[str, Any]:
 
 
 class UnsupportedFutureAGIEndpointError(ValueError):
-    """An endpoint that resembles Future AGI's but cannot be verified, used with Future AGI credentials."""
+    """An endpoint that names Future AGI but cannot be verified, used with Future AGI credentials."""
 
 
 _HOST_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?")
@@ -850,7 +850,7 @@ def _is_futureagi_host(host: str) -> bool:
 
 
 def _future_agi_decision(endpoint: str | None, grpc: bool = False) -> str:
-    """``"fi"`` for a Future AGI endpoint, ``"refuse"`` for one that resembles it but cannot be
+    """``"fi"`` for a Future AGI endpoint, ``"refuse"`` for one that names Future AGI but cannot be
     verified, ``"other"`` for a collector of the user's own.
 
     ``endpoint`` is the URL (HTTP) or the target an exporter received or resolved (gRPC; either
@@ -864,15 +864,15 @@ def _future_agi_decision(endpoint: str | None, grpc: bool = False) -> str:
         target = _grpc_target(endpoint)
         host = target[1] if target else None
         origin = (target[1], target[2]) if target else None
-        clear_text = False
+        plain_http = False
     else:
         parsed = _http_origin(endpoint)
         host = parsed[1] if parsed else None
         origin = (parsed[1], parsed[2]) if parsed else None
-        clear_text = bool(parsed and parsed[0] == "http")
+        plain_http = bool(parsed and parsed[0] == "http")
     if origin is not None and origin in _known_future_agi_origins(grpc):
         # A futureagi.com HTTP host is reached over https; a self-hosted base the environment names may use http.
-        return "refuse" if clear_text and _is_futureagi_host(host or "") else "fi"
+        return "refuse" if plain_http and _is_futureagi_host(host or "") else "fi"
     if _names_future_agi_host(endpoint, grpc) or (host is not None and _is_futureagi_host(host)):
         return "refuse"
     return "other"
@@ -898,11 +898,11 @@ def _fi_keys_configured(caller_headers: Any = None) -> bool:
 
 
 def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers: Any = None) -> str:
-    """The decision for ``endpoint``; raises when it resembles Future AGI's and credentials are set."""
+    """The decision for ``endpoint``; raises when it names Future AGI and credentials are set."""
     decision = _future_agi_decision(endpoint, grpc)
     if decision == "refuse" and _fi_keys_configured(caller_headers):
         raise UnsupportedFutureAGIEndpointError(
-            "The exporter endpoint resembles a Future AGI endpoint but cannot be verified as one, so the Future AGI "
+            "The exporter endpoint names Future AGI but cannot be verified as a Future AGI endpoint, so the Future AGI "
             "credentials are not sent to it. Set FI_BASE_URL (or the endpoint option) to a plain https Future AGI URL "
             "with no userinfo and the default port, or remove the credentials."
         )
