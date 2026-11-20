@@ -6,7 +6,7 @@ Release history of `github.com/future-agi/traceAI/go/auto`. Each version is publ
 
 ### Added
 
-- `auto.Attach(name)` lets a dedicated module's blank-import package send its spans through the agent's route, at the application's global SDK provider or the agent's private one. The module is reported as `auto` instead of `manual` while the agent is active or armed, follows `FI_INSTRUMENTATIONS` and `OTEL_SDK_DISABLED` without activating the agent when it is not allowed, applies the wire rules (structural capture, hidden image references, every `FI_HIDE_*` switch) to the attributes, events, links and status of the copy the application's own provider exports, never replaces `http.DefaultTransport`, and can wait for its background spans for up to half of the shutdown budget. `go/eino/auto` uses it. No dependency was added.
+- `auto.Attach(name)` lets a dedicated module's blank-import package send its spans through the agent's route, at the application's global SDK provider or the agent's private one. The module is reported as `auto` instead of `manual` while the agent is active or armed, follows `FI_INSTRUMENTATIONS` and `OTEL_SDK_DISABLED` without activating the agent when it is not allowed, applies the wire rules (structural capture, hidden image references, every `FI_HIDE_*` switch) and the replacement of known credentials to the span name, attributes, events, links and status of the copy the application's own provider exports, including what a module writes through the span it reads back from the context, a rename and a late link, never replaces `http.DefaultTransport`, and can wait for its background spans for up to half of the shutdown budget. `go/eino/auto` uses it. No dependency was added.
 
 ## [0.2.0] - 2026-11-18
 

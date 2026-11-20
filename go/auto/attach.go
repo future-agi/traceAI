@@ -224,14 +224,22 @@ func (t *moduleTracer) Start(ctx context.Context, spanName string, opts ...trace
 	if cfg.NewRoot() {
 		masked = append(masked, trace.WithNewRoot())
 	}
-	ctx, span := s.provider.Tracer(t.name, t.opts...).Start(ctx, captureString(spanName, s.config), masked...)
-	return ctx, &maskedSpan{Span: span, m: m}
+	ctx, span := s.provider.Tracer(t.name, t.opts...).Start(ctx, m.text(captureString(spanName, s.config)), masked...)
+	// The context carries the masked span too, so a module that reads the span back from it writes through the same rules.
+	ms := &maskedSpan{Span: span, m: m}
+	return trace.ContextWithSpan(ctx, ms), ms
 }
 
 // moduleMask gives a module's span attributes exactly the treatment the agent's
 // wire attributes get: string values pass the structural capture (which removes
 // image references when they are hidden), then every FI_HIDE_* switch applies.
+// Credentials the agent knows are replaced in every string afterwards, with the
+// snapshot the export to Future AGI uses, so the application's exporters receive
+// the same replacement.
 type moduleMask struct{ cfg Config }
+
+// text replaces the agent's known credentials in s.
+func (m moduleMask) text(s string) string { return processSecrets.snapshot().replace(s) }
 
 func (m moduleMask) attribute(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	switch kv.Value.Type() {
@@ -244,7 +252,21 @@ func (m moduleMask) attribute(kv attribute.KeyValue) (attribute.KeyValue, bool) 
 		}
 		kv = attribute.StringSlice(string(kv.Key), values)
 	}
-	return m.cfg.TraceConfig.Mask(kv)
+	kv, keep := m.cfg.TraceConfig.Mask(kv)
+	if !keep {
+		return kv, false
+	}
+	switch kv.Value.Type() {
+	case attribute.STRING:
+		kv = attribute.String(string(kv.Key), m.text(kv.Value.AsString()))
+	case attribute.STRINGSLICE:
+		values := append([]string(nil), kv.Value.AsStringSlice()...)
+		for i, v := range values {
+			values[i] = m.text(v)
+		}
+		kv = attribute.StringSlice(string(kv.Key), values)
+	}
+	return kv, true
 }
 
 func (m moduleMask) attributes(kvs []attribute.KeyValue) []attribute.KeyValue {
@@ -262,7 +284,7 @@ func (m moduleMask) attributes(kvs []attribute.KeyValue) []attribute.KeyValue {
 // redaction marker: an event can carry anything the module put in it.
 func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attribute.KeyValue) {
 	if !hidesContent(m.cfg.TraceConfig) {
-		return captureString(name, m.cfg), m.attributes(kvs)
+		return m.text(captureString(name, m.cfg)), m.attributes(kvs)
 	}
 	if name != "exception" {
 		name = RedactedValue
@@ -271,13 +293,9 @@ func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attr
 	for _, kv := range kvs {
 		switch {
 		case kv.Key == "exception.type":
-			out = append(out, attribute.String("exception.type", captureString(kv.Value.Emit(), m.cfg)))
-		case kv.Value.Type() == attribute.STRING || kv.Value.Type() == attribute.STRINGSLICE:
-			out = append(out, attribute.String(string(kv.Key), RedactedValue))
+			out = append(out, attribute.String("exception.type", m.text(captureString(kv.Value.Emit(), m.cfg))))
 		default:
-			if masked, keep := m.attribute(kv); keep {
-				out = append(out, masked)
-			}
+			out = append(out, attribute.String(string(kv.Key), RedactedValue))
 		}
 	}
 	return name, out
@@ -315,7 +333,17 @@ func (s *maskedSpan) RecordError(err error, opts ...trace.EventOption) {
 // error type there, and the message is a masked attribute.
 func (s *maskedSpan) SetStatus(code codes.Code, description string) {
 	if code == codes.Error {
-		description = captureString(description, s.m.cfg)
+		description = s.m.text(captureString(description, s.m.cfg))
 	}
 	s.Span.SetStatus(code, description)
+}
+
+// SetName gives a rename the treatment the name given at start gets.
+func (s *maskedSpan) SetName(name string) {
+	s.Span.SetName(s.m.text(captureString(name, s.m.cfg)))
+}
+
+// AddLink gives a late link the treatment the links given at start get.
+func (s *maskedSpan) AddLink(link trace.Link) {
+	s.Span.AddLink(trace.Link{SpanContext: link.SpanContext, Attributes: s.m.attributes(link.Attributes)})
 }

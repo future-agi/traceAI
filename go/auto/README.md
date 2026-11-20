@@ -63,8 +63,9 @@ private provider that only its wire spans use. A tracer you cache at package
 level keeps working. To use options such as `auto.WithTracerProvider(tp)`, call
 `auto.Init(ctx, options...)` before the first AI call. When the agent attaches
 to your provider, its wire spans, with their captured content, also go to that
-provider's own exporters. `FI_HIDE_*` applies to both copies; known-secret
-replacement applies only to the copy sent to Future AGI.
+provider's own exporters. `FI_HIDE_*` applies to both copies. Known-secret
+replacement applies to both copies of an Eino span (see below) and, for a wire
+span, to the copy sent to Future AGI.
 
 **Eino needs one more import, and no provider.** For an Eino program, import
 the Eino blank-import package; it links this agent and registers the Eino
@@ -73,6 +74,8 @@ handler for you:
 ```go
 import _ "github.com/future-agi/traceAI/go/eino/auto"
 ```
+
+`go/eino/auto` is released after the next `go/auto` and `go/eino` releases.
 
 ```sh
 go get github.com/future-agi/traceAI/go/eino/auto@latest
