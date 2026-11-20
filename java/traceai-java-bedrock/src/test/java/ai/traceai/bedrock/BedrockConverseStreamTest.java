@@ -222,4 +222,28 @@ class BedrockConverseStreamTest {
         assertThat(data.getAttributes().get(AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)))
             .contains(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
     }
+
+    /** The sealed text sits inside the messages JSON; a longer secret learned after the capture is trimmed there at export. */
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 40})
+    void aSecretLearnedAfterTheCaptureLeavesNoPrefixInsideTheMessagesJson(int inside) {
+        String late = "PFX-BEDROCK-LATE-" + inside + "-" + "L".repeat(70);
+        var tracing = new BedrockTracing(tracer(false));
+        var span = tracing.start(request());
+        var output = new BedrockStreamOutput(tracing, span);
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text("a".repeat(32000 - inside)).build()).build());
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text(late + "tail").build()).build());
+        output.capture();
+        span.end();
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        var exported = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+        ai.traceai.privacy.SecretReplacingSpanExporter.wrap(exported).export(otel.getSpans());
+        String all = exported.getFinishedSpanItems().get(0).getAttributes().toString();
+        for (int k = 1; k < late.length(); k++) {
+            assertThat(all).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+        assertThat(all).doesNotContain("PFX-BEDROCK-LATE");
+    }
 }

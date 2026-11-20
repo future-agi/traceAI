@@ -107,4 +107,48 @@ class SpringAIMessageCaptureTest {
             }
         }
     }
+
+    /** Several short secrets seal a field; the sealed value must still fit, so the messages JSON parses and stays under the cap. */
+    @Test
+    void aSealedFieldStillFitsTheBudgetAndTheMessagesJsonParses() {
+        // Eight-character secrets become the ten-character placeholder, so sealing grows the text.
+        ai.traceai.privacy.KnownSecrets.process().register("SHORTSEC");
+        ai.traceai.privacy.KnownSecrets.process().register("SHORTSE2");
+        for (int pad = 0; pad < 40; pad += 3) {
+            String text = "x".repeat(pad) + "SHORTSEC SHORTSE2 \"".repeat(2_500);
+            var message = AssistantMessage.builder().content(text).build();
+            var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("synthetic").build();
+            context.setResponse(new ChatResponse(List.of(new Generation(message))));
+            new SpringAIObservationFilter(true, true).map(context);
+            for (String key : List.of("gen_ai.input.messages", "gen_ai.output.messages")) {
+                String json = context.getHighCardinalityKeyValue(key).getValue();
+                assertThat(json.length()).as("%s at pad %d", key, pad).isLessThanOrEqualTo(32_000);
+                assertThat(JsonParser.parseString(json).getAsJsonArray()).as("%s at pad %d", key, pad).hasSize(1);
+            }
+        }
+    }
+
+    /** Sealed cut text sits inside the JSON; a secret registered after the capture is trimmed there at export. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @ValueSource(ints = {1, 2, 40})
+    void aSecretLearnedAfterTheCaptureLeavesNoPrefixInsideTheMessagesJson(int inside) {
+        String late = "PFX-SPRING-LATE-" + inside + "-" + "L".repeat(70);
+        String filler = "a".repeat(31_000);
+        String text = filler + late + "tail".repeat(400);
+        var message = AssistantMessage.builder().content(text).build();
+        var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("synthetic").build();
+        context.setResponse(new ChatResponse(List.of(new Generation(message))));
+        new SpringAIObservationFilter(true, true).map(context);
+        // Slide the secret so that exactly `inside` characters of it precede the cut.
+        String json = context.getHighCardinalityKeyValue("gen_ai.output.messages").getValue();
+        int cut = json.indexOf(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        assertThat(cut).isPositive();
+        String shifted = json.substring(0, cut) + late.substring(0, inside) + json.substring(cut);
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        String exported = ai.traceai.privacy.KnownSecrets.process().snapshot().scrub(shifted);
+        for (int k = 1; k < late.length(); k++) {
+            assertThat(exported).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+        assertThat(exported).contains("<redacted>" + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+    }
 }

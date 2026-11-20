@@ -76,9 +76,61 @@ class KnownSecretsCapTest {
         for (int inside = 1; inside < SECRET.length(); inside++) {
             String cut = "a".repeat(100) + SECRET.substring(0, inside);
             assertThat(snapshot.sealCut(cut)).as("%d characters of the secret before the cut", inside)
-                .doesNotContain("PFX").doesNotContain("PFX-").endsWith(M);
+                .isEqualTo("a".repeat(100 + inside - (SECRET.length() - 1)) + M);
         }
         assertThat(snapshot.sealCut("see " + SECRET + " here")).startsWith("see " + R).endsWith(M);
+    }
+
+    /** Pins the drop of the last longest()-1 characters: without it more of the cut text would survive. */
+    @Test
+    void sealCutDropsExactlyTheCharactersThatCouldStartASecret() {
+        KnownSecrets.Snapshot snapshot = registry(SECRET).snapshot();
+        int drop = SECRET.length() - 1;
+        for (int inside : new int[] {1, 2, 3, 10, 24}) {
+            String cut = "a".repeat(100) + SECRET.substring(0, inside);
+            assertThat(snapshot.sealCut(cut)).as("%d characters of the secret", inside)
+                .isEqualTo("a".repeat(100 + inside - drop) + M);
+        }
+        // Nothing to drop when no secret is known.
+        assertThat(new KnownSecrets().snapshot().sealCut("abc")).isEqualTo("abc" + M);
+    }
+
+    @Test
+    void everyMarkerInAValueIsACutPointAtExport() {
+        String late = "PFX-LATE-LEARNED-LONGER-SECRET-0123456789";
+        KnownSecrets.Snapshot snapshot = registry(late).snapshot();
+        for (int inside : new int[] {1, 2, 5, 17}) {
+            String json = "[{\"content\":\"" + "a".repeat(30) + late.substring(0, inside) + M + "\",\"role\":\"user\"}]";
+            assertThat(snapshot.scrub(json)).as("%d characters before a marker inside JSON", inside)
+                .isEqualTo("[{\"content\":\"" + "a".repeat(30) + R + M + "\",\"role\":\"user\"}]");
+        }
+        String two = "x" + late.substring(0, 3) + M + "y" + late.substring(0, 6) + M + "z";
+        assertThat(snapshot.scrub(two)).isEqualTo("x" + R + M + "y" + R + M + "z");
+        // A prefix that is not directly before a marker is ordinary text.
+        assertThat(snapshot.scrub(late.substring(0, 6) + " and " + M)).startsWith(late.substring(0, 6));
+    }
+
+    @Test
+    void aSecretIsAlsoReplacedInItsJsonEscapedForm() {
+        String secret = "p<a>s&s'w\"o\\rd=";
+        String escaped = "p<a>s&s'w\\\"o\\\\rd=";
+        KnownSecrets.Snapshot snapshot = registry(secret).snapshot();
+        assertThat(snapshot.scrub("raw " + secret + " end")).isEqualTo("raw " + R + " end");
+        assertThat(snapshot.scrub("json " + escaped + " end")).isEqualTo("json " + R + " end");
+        String controls = "line1\nline2\ttab-secret-xyz";
+        assertThat(registry(controls).snapshot().scrub("v=line1\\nline2\\ttab-secret-xyz!")).isEqualTo("v=" + R + "!");
+    }
+
+    @Test
+    void capAndSealCutNeverThrow() {
+        KnownSecrets.Snapshot snapshot = registry(SECRET).snapshot();
+        assertThat(snapshot.sealCut(null)).isNull();
+        assertThat(snapshot.cap("x".repeat(100), 5)).isEmpty();
+        assertThat(snapshot.cap("x".repeat(100), 0)).isEmpty();
+        assertThat(snapshot.cap("x".repeat(100), -3)).isEmpty();
+        assertThat(snapshot.cap(null, 10)).isNull();
+        assertThat(KnownSecrets.sealCut(null)).isNull();
+        assertThat(KnownSecrets.cap("x".repeat(100), 3)).isEmpty();
     }
 
     @Test
@@ -179,6 +231,8 @@ class KnownSecretsCapTest {
             .containsExactly("t-" + R, "plain");
         assertThat(one.getInstrumentationScopeInfo().getName()).isEqualTo("scope-" + R);
         assertThat(one.getInstrumentationScopeInfo().getVersion()).isEqualTo("v-" + R);
+        assertThat(one.getInstrumentationLibraryInfo().getName()).isEqualTo("scope-" + R);
+        assertThat(one.getInstrumentationLibraryInfo().getVersion()).isEqualTo("v-" + R);
         assertThat(one.getLinks().get(0).getAttributes().get(AttributeKey.stringKey("link.attr"))).isEqualTo("l-" + R);
         assertThat(one.getLinks().get(0).getAttributes().get(AttributeKey.stringArrayKey("link.arr")))
             .containsExactly("a-" + R);

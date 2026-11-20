@@ -225,6 +225,29 @@ class ReactiveLifecycleTest {
             .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 2, 40})
+    void aSecretLearnedAfterTheStreamCaptureLeavesNoPrefixInAnyAttribute(int inside) {
+        String late = "PFX-SK-LATE-" + inside + "-" + "L".repeat(70);
+        ChatCompletionService chat = mock(ChatCompletionService.class);
+        StreamingChatContent<?> first = mock(StreamingChatContent.class);
+        StreamingChatContent<?> second = mock(StreamingChatContent.class);
+        when(first.getContent()).thenReturn("a".repeat(32000 - inside));
+        when(second.getContent()).thenReturn(late + "tail".repeat(10));
+        when(chat.getStreamingChatMessageContentsAsync(any(ChatHistory.class), isNull(), any()))
+            .thenReturn(Flux.just(first, second));
+        FITracer contentTracer = new FITracer(sdk.get("test"), TraceConfig.builder().build());
+        var traced = new TracedChatCompletionService(chat, "model", "test", contentTracer);
+        traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        var out = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+        ai.traceai.privacy.SecretReplacingSpanExporter.wrap(out).export(exporter.getFinishedSpanItems());
+        String all = out.getFinishedSpanItems().get(0).getAttributes().toString();
+        for (int k = 1; k < late.length(); k++) {
+            assertThat(all).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+    }
+
     @Test void customChatServiceRetainsUsageWithoutCountingSharedMetadataTwice() {
         var usage = java.util.Map.of("promptTokens", 7, "completionTokens", 3, "totalTokens", 10);
         var metadata = com.microsoft.semantickernel.orchestration.FunctionResultMetadata.build(
