@@ -177,7 +177,14 @@ internal sealed class AutoConfig
         return (allow.Length==0||allow.Contains(name,StringComparer.OrdinalIgnoreCase))&&!deny.Contains(name,StringComparer.OrdinalIgnoreCase)&&(name!="wire"||Bool("WIRE_CAPTURE"));
     }
     internal Dictionary<string,string> Masked() => Values.ToDictionary(p=>p.Key,p=>Wire.WirePrivacy.CredentialKey(p.Key)?"***":RedactSecrets(p.Value));
-    internal string RedactSecrets(string text) => Wire.WirePrivacy.ScrubString(text,CredentialValues.OrderByDescending(s=>s.Length));
+    /// <summary>Replaces every secret the agent knows: the FI credentials of this configuration and the process-wide registry
+    /// (registered secrets and credentials discovered in requests), the same set the Future AGI copy uses. When the registry is
+    /// unavailable the text is replaced entirely.</summary>
+    internal string RedactSecrets(string text)
+    {
+        try { return Wire.WirePrivacy.ScrubString(text,CredentialValues.Concat(KnownSecrets.Snapshot()).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length)); }
+        catch { return Wire.WirePrivacy.Redacted; }
+    }
     private static string DefaultProjectName()
     {
         if(Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") is { Length:>0 } service) return service;

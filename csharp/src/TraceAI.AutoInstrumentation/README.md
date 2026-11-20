@@ -280,7 +280,10 @@ the status code and `error.type` but drop the status description, `error.message
 span, including the provider's error text on HTTP client spans. Agent-created
 wire attributes are masked before Activity creation and attribute projection, even
 with only a supplied provider: its listeners/exporters never receive hidden wire
-content. Detached export sanitization remains a second pass on agent destinations;
+content. The same known secrets as on the Future AGI copy (the FI keys of this
+configuration and the process-wide registry below) are replaced in those wire spans
+for the application's own listeners and exporters too: in attributes, request-context
+values, the span name and the status description. Detached export sanitization remains a second pass on agent destinations;
 host-owned application/library spans keep their original host-export view.
 Invocation parameters obey `FI_HIDE_LLM_INVOCATION_PARAMETERS`. Native library
 `gen_ai.system_instructions` and `gen_ai.tool.call.arguments` obey input/input-text/
