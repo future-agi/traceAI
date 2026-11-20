@@ -12,6 +12,7 @@ import (
 
 	"github.com/future-agi/traceAI/go/auto"
 	collector "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -19,6 +20,19 @@ type exportedSpan struct {
 	name                    string
 	traceID, spanID, parent []byte
 	attrs                   map[string]string
+	events                  []exportedEvent
+	links                   []exportedLink
+}
+
+type exportedEvent struct {
+	name  string
+	time  uint64
+	attrs map[string]string
+}
+
+type exportedLink struct {
+	spanID []byte
+	attrs  map[string]string
 }
 
 // spanSink is a local OTLP/HTTP collector that records every span it receives.
@@ -47,7 +61,21 @@ func newSpanSink(t *testing.T) *spanSink {
 					for _, a := range span.Attributes {
 						attrs[a.Key] = a.Value.GetStringValue()
 					}
-					s.spans = append(s.spans, exportedSpan{name: span.Name, traceID: span.TraceId, spanID: span.SpanId, parent: span.ParentSpanId, attrs: attrs})
+					flat := func(kvs []*commonpb.KeyValue) map[string]string {
+						out := map[string]string{}
+						for _, a := range kvs {
+							out[a.Key] = a.Value.GetStringValue()
+						}
+						return out
+					}
+					exported := exportedSpan{name: span.Name, traceID: span.TraceId, spanID: span.SpanId, parent: span.ParentSpanId, attrs: attrs}
+					for _, e := range span.Events {
+						exported.events = append(exported.events, exportedEvent{name: e.Name, time: e.TimeUnixNano, attrs: flat(e.Attributes)})
+					}
+					for _, l := range span.Links {
+						exported.links = append(exported.links, exportedLink{spanID: l.SpanId, attrs: flat(l.Attributes)})
+					}
+					s.spans = append(s.spans, exported)
 				}
 			}
 		}
