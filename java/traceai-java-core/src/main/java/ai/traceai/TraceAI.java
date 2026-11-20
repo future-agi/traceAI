@@ -4,7 +4,6 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
@@ -70,6 +69,18 @@ public final class TraceAI {
                 return;
             }
 
+            // Keys leave only for an approved target and only as a complete pair; this refuses
+            // before any state is created.
+            KeyTransport.Target exportTarget = null;
+            if (config.getBaseUrl() != null && config.getApiKey() != null) {
+                boolean complete = !config.getApiKey().isBlank() && config.getSecretKey() != null && !config.getSecretKey().isBlank();
+                if (complete) {
+                    exportTarget = KeyTransport.check(config.getBaseUrl(), true, System.getenv(), config.isAllowInsecureHttp());
+                } else {
+                    logger.warn("TraceAI export is off: both the API key and the secret key are required");
+                }
+            }
+
             // One hook for all owned-provider lifetimes, not one per reinitialization.
             // Register before allocating resources, since registration can fail during JVM shutdown.
             if (!shutdownHookRegistered) {
@@ -102,23 +113,9 @@ public final class TraceAI {
                 .setResource(resource);
 
             // Add OTLP exporter if configured
-            if (config.getBaseUrl() != null && config.getApiKey() != null) {
-                String baseUrl = config.getBaseUrl().endsWith("/")
-                    ? config.getBaseUrl().substring(0, config.getBaseUrl().length() - 1)
-                    : config.getBaseUrl();
-                String endpoint = baseUrl + "/tracer/v1/traces";
-
-                var exporterBuilder = OtlpHttpSpanExporter.builder()
-                    .setEndpoint(endpoint)
-                    .addHeader("X-Api-Key", config.getApiKey())
-                    .addHeader("fi-project-name", config.getProjectName() != null ? config.getProjectName() : "")
-                    .setTimeout(Duration.ofSeconds(30));
-
-                if (config.getSecretKey() != null) {
-                    exporterBuilder.addHeader("X-Secret-Key", config.getSecretKey());
-                }
-
-                OtlpHttpSpanExporter otlpExporter = exporterBuilder.build();
+            if (exportTarget != null) {
+                var otlpExporter = new KeyedOtlpSpanExporter(exportTarget, config.getApiKey(), config.getSecretKey(),
+                    config.getProjectName() != null ? config.getProjectName() : "");
 
                 BatchSpanProcessor batchProcessor = BatchSpanProcessor.builder(otlpExporter)
                     .setMaxExportBatchSize(config.getBatchSize())
@@ -126,7 +123,7 @@ public final class TraceAI {
                     .build();
 
                 providerBuilder.addSpanProcessor(batchProcessor);
-                logger.info("TraceAI OTLP HTTP exporter configured for endpoint: {}", endpoint);
+                logger.info("TraceAI OTLP HTTP exporter configured");
             }
 
             // Add console exporter if enabled

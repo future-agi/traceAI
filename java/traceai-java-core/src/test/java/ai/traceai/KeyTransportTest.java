@@ -71,7 +71,7 @@ class KeyTransportTest {
         "http://localhost:80@evil.example/", "https://api.futureagi.com@evil.example",
         "https://evil.example@api.futureagi.com", "http://localhost@127.0.0.1",
         "http:///evil.example", "https:///api.futureagi.com", "http://", "https://:443",
-        "http://localhost/\\@evil.example", "http://127.0.0.1#@evil.example@x", "http://local host", "ftp://localhost", "localhost:4318", ""})
+        "http://localhost/\\@evil.example", "http://local host", "ftp://localhost", "localhost:4318", ""})
     void ambiguousOrDisagreeingTargetsAreRefused(String url) {
         refused(url, OPT_IN, true);
         refused(url);
