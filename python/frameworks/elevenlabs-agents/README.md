@@ -12,13 +12,6 @@ host. This package is that webhook: it runs in your environment, checks the
 exports it to Future AGI with your own keys. Future AGI never sees your ElevenLabs
 signing secret.
 
-Status: alpha. The `backfill` path (the `GET ...?format=opentelemetry` export) was verified
-on 2026-10-17 against a live ElevenLabs workspace and a local Future AGI. Webhook delivery
-was verified on 2026-10-19: a real ElevenLabs workspace POSTed signed
-`post_call_transcription_otel` deliveries to this forwarder on Cloud Run, and the traces
-were stored in Future AGI cloud. Not seen live: ElevenLabs retries, a duplicate delivery,
-a span with status ERROR, and a call longer than 2 minutes.
-
 ## Install
 
 ```bash
@@ -59,8 +52,9 @@ answers 200. Put HTTPS in front of it (your ingress or a reverse proxy) and regi
 | `FI_ELEVENLABS_STATE_PATH` | `~/.traceai-elevenlabs-agents/forwarded.sqlite3` | Idempotency record (one row per forwarded conversation). Keep it on a persistent volume |
 | `FI_ELEVENLABS_SIGNATURE_TOLERANCE_SECS` | `1800` | Replay window, the 30 minutes the ElevenLabs SDK uses |
 | `FI_ELEVENLABS_PAUSED` | off | `true` answers 503 to every delivery (ElevenLabs retries later) |
-| `ELEVENLABS_API_KEY` | only for `backfill` | API key with `CONVAI_READ` |
-| `FI_ELEVENLABS_API_BASE_URL` | `https://api.elevenlabs.io` | ElevenLabs API host for `backfill` (for example a data-residency host) |
+| `ELEVENLABS_API_KEY` | for `backfill` or RAG enrichment | API key with conversation read access; enrichment also needs read access to the referenced knowledge-base documents |
+| `FI_ELEVENLABS_API_BASE_URL` | `https://api.elevenlabs.io` | ElevenLabs API host for `backfill` and RAG enrichment (for example a data-residency host) |
+| `FI_ELEVENLABS_ENRICH_RAG` | `false` | Explicitly enable extra API reads to attach retrieved documents; see [RAG enrichment](#rag-enrichment) |
 
 ### Backfill one conversation
 
@@ -73,6 +67,45 @@ result through the same mapper. A conversation the webhook already forwarded is
 acknowledged as `duplicate` and not exported again: ElevenLabs keeps the trace id but
 mints new span ids on every export, so a second export would duplicate every turn and
 tool span. `--force` exports anyway; use it only when the first export never landed.
+
+### RAG enrichment
+
+To inspect retrieved documents alongside an agent's answer, explicitly enable extra
+ElevenLabs API reads before starting the receiver or running `backfill`:
+
+```bash
+export ELEVENLABS_API_KEY="..." # conversation and knowledge-base read access
+export FI_ELEVENLABS_ENRICH_RAG=true
+traceai-elevenlabs-agents --host 0.0.0.0 --port 8787
+```
+
+For a RAG-enabled turn, the forwarder reads the regular conversation JSON and the
+referenced knowledge-base chunks. It matches the native turn index, retrieval query
+and embedding model. Documents appear on that **existing agent turn** as
+`retrieval.documents.{i}.document.content`, `.id` and `.metadata`; the agent response
+remains `output.value`. No span is added, retyped or retimed. The native
+`elevenlabs.rag.retrieval_query`, `.embedding_model` and `.latency_ms` remain available.
+
+Document metadata identifies `source=elevenlabs.knowledge_base_api` and
+`snapshot=current`: the chunk API returns the current stored chunk, not a guaranteed
+snapshot of what the agent saw when the call ran. It also preserves the document ID,
+embedding model and reported vector distance. Do not treat that distance as a relevance
+score or the retrieved text as an immutable historical record.
+
+Extra reads are **off by default** and are also skipped when any input- or output-side
+`FI_HIDE_*` content switch is on. Enrichment uses the same PII, identity and stack-trace
+redaction policies as the forwarder. Duplicate deliveries cause no extra reads. Each
+conversation examines at most 16 chunk references, caches repeated document/chunk/model
+lookups, and exports at most 4 KiB of UTF-8 content per chunk. Each API response is capped
+at 4 MiB and each request has a 2-second socket timeout. Redirects are not followed.
+
+The turn's `elevenlabs.rag.enrichment.status` is `complete`, `limited` (reference budget),
+`partial` (one or more chunks unavailable), `unmatched` (no reliable turn match), or
+`unavailable` (conversation could not be read). `content_truncated` in each document's
+metadata indicates the content limit. Enrichment failures do not block the native trace
+or trigger another delivery: check permissions and the status when documents are
+missing. Do not use `--force` just to enrich an already exported call; it duplicates
+native spans.
 
 ## Responses
 
@@ -157,32 +190,11 @@ the transcript unless you set `FI_PII_REDACTION=true` or hide that side.
 - `call.talk_ratio` and per-turn audio durations: the OpenTelemetry payload has no
   per-side audio durations, so they are omitted rather than guessed.
 - Recordings (`post_call_audio`), the monitoring WebSocket (Enterprise-gated, a
-  different span shape), TTS-only API calls, RAG chunk text (not in the trace).
+  different span shape), TTS-only API calls, historical RAG chunk snapshots.
+- RAG chunk text unless you enable [RAG enrichment](#rag-enrichment).
 - A live in-progress view: a conversation appears after ElevenLabs finishes analysis.
 
-## What was tested
-
-- Unit and contract tests (`pytest tests`): 112 tests on Python 3.10, 3.12 and 3.13 with
-  `fi-instrumentation-otel` 1.1.0 (latest), and on 0.1.11 (the lowest allowed; the
-  `FI_PII_REDACTION` test is skipped there because that release has no such switch). The
-  HMAC check is tested against a hand-computed HMAC-SHA256 and against the real
-  `elevenlabs` SDK `construct_event` (2.73.0, the latest stable on 2026-10-15, and
-  2.70.0).
-- `examples/run_e2e.sh`: the real `traceai-elevenlabs-agents` process against a local
-  Future AGI collector, with ElevenLabs stood in by `examples/standin.py` (docs-shaped
-  deliveries signed with a local secret; a GET endpoint the real SDK client parses).
-  The webhook leg was also run live on 2026-10-19 (see Live below); this stand-in is for the failure cases a live workspace does not produce.
-- Live, 2026-10-17: a throwaway agent and three short text-only SDK conversations
-  (`elevenlabs` 2.73.0), exported with `backfill` against the real ElevenLabs API into a
-  local Future AGI (`fi_verify` PASS, privacy scan clean with `FI_HIDE_*` on). The real
-  attribute names matched. ElevenLabs sent status OK for failing tool calls (404, an
-  unanswered client tool), so no live ERROR span was produced; the ERROR mapping is
-  covered by fixtures only. `tests/fixtures/live_get_conversation_opentelemetry.json` is
-  one sanitized captured body, used by `tests/test_live_capture.py`.
-- The other fixtures follow the documented payload and the attribute names in the Langfuse
-  ElevenLabs cookbook (see `tests/fixtures/README.md`).
-
-## Sources (re-read 2026-10-15)
+## References
 
 - https://elevenlabs.io/docs/eleven-agents/customization/opentelemetry-traces
 - https://elevenlabs.io/docs/eleven-agents/workflows/post-call-webhooks

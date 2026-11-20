@@ -24,6 +24,7 @@ from . import store as store_mod
 from .config import ForwarderConfig
 from .exporter import ExportError, OTLPJsonExporter, traces_endpoint
 from .map import MappingInputError, map_otlp_traces
+from .rag import enrich_rag
 from .store import ForwardedStore
 from .verify import SignatureError, verify_signature
 
@@ -125,6 +126,10 @@ class Forwarder:
         if claim == store_mod.IN_FLIGHT:
             logger.info("delivery deferred: conversation_id=%s export in flight", key)
             return 503, {"error": "in_flight", "conversation_id": key}
+        try:
+            enrich_rag(export_request, original=otlp_traces, conversation_id=key, config=self.config)
+        except Exception:  # noqa: BLE001 - optional enrichment must not discard the native trace
+            logger.warning("RAG enrichment failed: conversation_id=%s", key)
         try:
             self.exporter.export(export_request)
         except ExportError as error:
