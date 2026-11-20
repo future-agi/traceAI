@@ -63,6 +63,12 @@ func (c TraceConfig) mask(kv attribute.KeyValue, operation string) (attribute.Ke
 		// contain arbitrary content. Keep typed numeric parameters separately,
 		// but never export the opaque blob when input content is hidden.
 		return kv, false
+	case (c.HideInputs || c.HideInputText || c.HideInputMessages) && k == "gen_ai.retrieval.query":
+		// A retriever's query is the input of its span (the go/eino handler writes it beside input.value).
+		return attribute.String(k, RedactedValue), true
+	case (c.HideOutputs || c.HideOutputText || c.HideOutputMessages) && strings.HasPrefix(k, "retrieval.documents.") && (strings.HasSuffix(k, ".document.content") || strings.Contains(k, ".document.metadata")):
+		// Retrieved text and metadata are the output of a retriever's span.
+		return attribute.String(k, RedactedValue), true
 	case (c.HideInputs || c.HideInputText || c.HideInputMessages) && input:
 		return attribute.String(k, RedactedValue), true
 	case (c.HideOutputs || c.HideOutputText || c.HideOutputMessages) && output:

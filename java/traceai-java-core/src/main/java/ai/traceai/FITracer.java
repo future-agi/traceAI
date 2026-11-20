@@ -323,8 +323,23 @@ public class FITracer {
      * @param error the error
      */
     public void setError(Span span, Throwable error) {
+        setError(span, error, config.isHideErrorDetails());
+    }
+
+    /**
+     * Records a failure of a call whose content is recorded: the exception message and stack trace may hold the call's
+     * arguments or result, so any content hide setting (hideInputs, hideOutputs, hideInputMessages, hideOutputMessages)
+     * withholds them, as {@code hideErrorDetails} does, matching the zero-code agent.
+     * @param span the span
+     * @param error the error
+     */
+    public void setContentError(Span span, Throwable error) {
+        setError(span, error, config.isHideErrorDetails() || hidesAnyContent());
+    }
+
+    private void setError(Span span, Throwable error, boolean hideDetails) {
         span.setAttribute(SemanticConventions.ERROR_TYPE, error.getClass().getName());
-        if (config.isHideErrorDetails()) {
+        if (hideDetails) {
             span.setStatus(StatusCode.ERROR);
             span.addEvent("exception", Attributes.of(
                 AttributeKey.stringKey("exception.type"), error.getClass().getName()));

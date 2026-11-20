@@ -74,7 +74,7 @@ public class KnownSecretRegistryTests : InitIsolation
         Assert.Contains("model=public",Encoding.UTF8.GetString(bytes));
         foreach(string name in names) Assert.Contains(secret,WirePrivacy.QuerySecrets("https://provider.test/?"+name+"="+secret));
         foreach(string header in new[] { "Authorization","x-api-key","api-key","xi-api-key","x-goog-api-key","anthropic-api-key","Ocp-Apim-Subscription-Key","x-amz-security-token" })
-            Assert.Equal(TraceConfig.RedactedValue,privacy.Mask("http.request.header."+header+".0",secret));
+            Assert.Equal(TraceConfig.RedactedValue,privacy.Mask("http.request.header."+header+".0",secret,true));
     }
     [Fact]
     public void RegistryIsBoundedLruLongestFirstAndSnapshotsAreImmutable()
@@ -242,17 +242,20 @@ public class KnownSecretRegistryTests : InitIsolation
         Assert.Equal(new object[] { "<redacted>","-<redacted>" },values);
     }
     [Fact]
-    public void FiKeysAreRefreshedAtExportEvenAfterLruChurn()
+    public void FiKeysArePinnedAtExportSoLruChurnNeverEvictsThem()
     {
         var privacy=new AutoProcessor(Config());
         for(int i=0;i<1024;i++) TraceAIAuto.RegisterSecret("CHURN_SECRET_"+i.ToString("D4"));
-        Assert.DoesNotContain("explicit-api-key",KnownSecrets.Snapshot());
         using var original=new Activity("FI churn").Start();
         original.SetStatus(ActivityStatusCode.Error,"explicit-api-key explicit-secret-key");
         original.AddEvent(new ActivityEvent("explicit-api-key",tags:new ActivityTagsCollection { ["note"]=new[] { "explicit-secret-key" } })); original.Stop();
         var batch=new Batch<Activity>([original],1); var safe=Assert.Single(privacy.PrepareExport(in batch,Resource.Empty).Spans);
         Assert.Equal("<redacted> <redacted>",safe.StatusDescription); Assert.Equal("<redacted>",Assert.Single(safe.Events).Name);
-        Assert.Equal(1024,KnownSecrets.Snapshot().Length);
+        // Pinned outside the LRU: the 1024 other secrets are all still there, and so are the FI keys, whatever is registered next.
+        for(int i=0;i<64;i++) TraceAIAuto.RegisterSecret("MORE_CHURN_"+i.ToString("D4"));
+        var snapshot=KnownSecrets.Snapshot();
+        Assert.Contains("explicit-api-key",snapshot); Assert.Contains("explicit-secret-key",snapshot);
+        Assert.Equal(1024+2,snapshot.Length);
     }
     [Theory]
     [InlineData("x-secret-key")] [InlineData("proxy-authorization")] [InlineData("x-auth-token")]
@@ -262,7 +265,7 @@ public class KnownSecretRegistryTests : InitIsolation
         const string secret="NAMED_HEADER_SECRET_9876";
         string value=header=="proxy-authorization"?"Bearer "+secret:secret;
         Assert.Contains(secret,WirePrivacy.HeaderSecrets(new Dictionary<string,string> { [header]=value }));
-        Assert.Equal(TraceConfig.RedactedValue,new AutoProcessor(Config()).Mask("http.request.header."+header+".0",new[] { secret }));
+        Assert.Equal(TraceConfig.RedactedValue,new AutoProcessor(Config()).Mask("http.request.header."+header+".0",new[] { secret },true));
     }
     [Fact]
     public void StructuralMediaIncludesIndexedAudioAndSmallMimeTaggedData()

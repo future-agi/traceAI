@@ -67,6 +67,103 @@ final class OtelBridge {
         } catch (Throwable ignored) { }
         return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
     }
+    /**
+     * True when the application already records this tool call: its active span is a TOOL span for this tool (what a
+     * traceai-java-langchain4j or traceai-java-spring-ai wrapper opens around the tool), or Spring AI's own tool_call
+     * observation is open (the native observation path). The agent adds no second span under either.
+     *
+     * <p>The native path is recognised by the open Micrometer observation: while a tool runs, Spring AI's
+     * {@code ToolCallingObservationContext} is the current observation's context. The tracing handler starts the span unnamed and
+     * applies its name ({@code framework <tool name>}), the {@code spring.ai.kind=tool_call} and {@code gen_ai.operation.name=framework}
+     * tags and the TOOL kind only when the observation stops, so the live span cannot tell; the span name and tag are still checked
+     * as an extra signal.
+     */
+    static boolean toolSpanActive(String tool) {
+        return spanRecordsTool(tool) || nativeToolObservationOpen(tool);
+    }
+    private static final String TOOL_CONTEXT = "org.springframework.ai.tool.observation.ToolCallingObservationContext";
+    private static final int OBSERVATION_DEPTH = 16;
+    /**
+     * The current Micrometer observation, or one of its parents, carries a Spring AI tool-calling context for this tool. Read
+     * reflectively, by class name, from the application's class loader: nothing here needs Micrometer or Spring AI, and any
+     * absence or failure means "not seen".
+     */
+    private static boolean nativeToolObservationOpen(String tool) {
+        try {
+            ClassLoader loader = Thread.currentThread().getContextClassLoader();
+            Class<?> accessor = Class.forName("io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor", false, loader);
+            Object value = accessor.getMethod("getValue").invoke(accessor.getMethod("getInstance").invoke(null));
+            Class<?> observationType = Class.forName("io.micrometer.observation.Observation", false, loader);
+            Object observation = observationType.isInstance(value) ? value : null;
+            for (int depth = 0; observation != null && depth < OBSERVATION_DEPTH; depth++) {
+                Object context = observationType.getMethod("getContextView").invoke(observation);
+                if (context != null && isToolContext(context)) {
+                    Object definition = ToolSpans.invoke(context, "getToolDefinition");
+                    Object name = definition == null ? null : ToolSpans.invoke(definition, "name");
+                    // A different tool's observation does not record this call; an unreadable name is treated as this one's.
+                    if ((name == null || tool.equals(String.valueOf(name))) && hasTracingSpan(context)) return true;
+                }
+                Object parent = context == null ? null : ToolSpans.invoke(context, "getParentObservation");
+                observation = observationType.isInstance(parent) ? parent : null;
+            }
+            return false;
+        } catch (Throwable ignored) { return false; }
+    }
+    private static final String TRACING_CONTEXT = "io.micrometer.tracing.handler.TracingObservationHandler$TracingContext";
+    /**
+     * A tracing handler (Micrometer Tracing's) attached a span to this observation: its {@code TracingContext} is in the observation
+     * context with a non-null span. A registry with only meter handlers (the common Spring Boot actuator setup) opens the observation
+     * but never makes a span, so the call is not traced and the agent must record it. Any absence or failure means "no span".
+     */
+    private static boolean hasTracingSpan(Object context) {
+        try {
+            Class<?> key = Class.forName(TRACING_CONTEXT, false, context.getClass().getClassLoader());
+            Class<?> view = Class.forName("io.micrometer.observation.Observation$ContextView", false, context.getClass().getClassLoader());
+            Object tracing = view.getMethod("get", Object.class).invoke(context, key);
+            return key.isInstance(tracing) && ToolSpans.invoke(tracing, "getSpan") != null;
+        } catch (Throwable ignored) { return false; }
+    }
+    private static boolean isToolContext(Object context) {
+        Deque<Class<?>> pending = new ArrayDeque<>(List.of(context.getClass()));
+        Set<Class<?>> seen = new HashSet<>();
+        while (!pending.isEmpty()) {
+            Class<?> type = pending.pop();
+            if (type == null || !seen.add(type)) continue;
+            if (TOOL_CONTEXT.equals(type.getName())) return true;
+            pending.add(type.getSuperclass()); pending.addAll(Arrays.asList(type.getInterfaces()));
+        }
+        return false;
+    }
+    private static boolean spanRecordsTool(String tool) {
+        try {
+            Span current = Span.current();
+            if (current instanceof ReadableSpan readable) return active(tool, readable.getName(), new String[] {
+                readable.getAttribute(AttributeKey.stringKey("fi.span.kind")), readable.getAttribute(AttributeKey.stringKey("gen_ai.operation.name")),
+                readable.getAttribute(AttributeKey.stringKey("gen_ai.tool.name")), readable.getAttribute(AttributeKey.stringKey("spring.ai.kind"))});
+            ClassLoader loader = Thread.currentThread().getContextClassLoader();
+            // Build the prefix dynamically so Maven Shade does not rewrite the application API name.
+            String prefix = String.join(".", "io", "opentelemetry");
+            Class<?> spanApi = Class.forName(prefix + ".api.trace.Span", false, loader);
+            Object external = spanApi.getMethod("current").invoke(null);
+            Class<?> readable = Class.forName(prefix + ".sdk.trace.ReadableSpan", false, loader);
+            if (!readable.isInstance(external)) return false;
+            Class<?> keyApi = Class.forName(prefix + ".api.common.AttributeKey", false, loader);
+            String[] names = {"fi.span.kind", "gen_ai.operation.name", "gen_ai.tool.name", "spring.ai.kind"}, values = new String[names.length];
+            for (int i = 0; i < names.length; i++) {
+                Object value = readable.getMethod("getAttribute", keyApi).invoke(external, keyApi.getMethod("stringKey", String.class).invoke(null, names[i]));
+                values[i] = value == null ? null : String.valueOf(value);
+            }
+            return active(tool, String.valueOf(readable.getMethod("getName").invoke(external)), values);
+        } catch (Throwable ignored) { return false; }
+    }
+    /** values: fi.span.kind, gen_ai.operation.name, gen_ai.tool.name, spring.ai.kind. */
+    private static boolean active(String tool, String spanName, String[] values) {
+        if (sameTool(values[0], values[1], values[2], tool)) return true;
+        return "tool_call".equals(values[3]) || spanName != null && (spanName.equals("framework " + tool) || spanName.equals("tool_call " + tool) || spanName.equals("spring.ai.tool"));
+    }
+    private static boolean sameTool(String kind, String operation, String name, String tool) {
+        return "TOOL".equalsIgnoreCase(kind) && "execute_tool".equals(operation) && tool.equals(name);
+    }
     static boolean library(String kind) { return kind != null && LIBRARY.contains(kind.toUpperCase(Locale.ROOT)); }
     private OtelBridge() {}
 }

@@ -106,14 +106,14 @@ internal static class WirePrivacy
     private static string AfterScheme(string value)
     { int split=value.IndexOfAny([' ','\t']); return split<0?value:value[(split+1)..].Trim(); }
     internal const int MaxAttributeNodes=4096;
-    internal static object Scrub(object value,IEnumerable<string>? secrets=null,string path="",Dictionary<string,PrivacyCatalog.Hint>? hints=null,bool framed=true)
+    internal static object Scrub(object value,IEnumerable<string>? secrets=null,string path="",Dictionary<string,PrivacyCatalog.Hint>? hints=null,bool framed=true,bool shapes=true)
     {
         try
         {
             int remaining=MaxAttributeNodes,characters=4*1024*1024;
             Inspect(value,0,new HashSet<object>(ReferenceEqualityComparer.Instance),ref remaining,ref characters);
             remaining=MaxAttributeNodes;
-            return ScrubValue(value,secrets,0,new HashSet<object>(ReferenceEqualityComparer.Instance),ref remaining,path,hints,framed)!;
+            return ScrubValue(value,secrets,0,new HashSet<object>(ReferenceEqualityComparer.Instance),ref remaining,path,hints,framed,shapes)!;
         }
         catch { return Redacted; }
     }
@@ -167,7 +167,7 @@ internal static class WirePrivacy
         }
     }
     private static object? ScrubValue(object? value,IEnumerable<string>? secrets,int depth,HashSet<object> ancestors,ref int remaining,
-        string path,Dictionary<string,PrivacyCatalog.Hint>? hints,bool framed=true)
+        string path,Dictionary<string,PrivacyCatalog.Hint>? hints,bool framed=true,bool shapes=true)
     {
         if(depth>PrivacyCatalog.MaxDepth || --remaining<0) throw new InvalidDataException("Privacy traversal limit");
         if(CredentialKey(path)) return Redacted;
@@ -181,7 +181,7 @@ internal static class WirePrivacy
                 for(int i=0;i<array.Length;i++)
                 {
                     var original=array.GetValue(i+array.GetLowerBound(0));
-                    values[i]=ScrubValue(original,secrets,depth+1,ancestors,ref remaining,path+"."+i,hints,framed);
+                    values[i]=ScrubValue(original,secrets,depth+1,ancestors,ref remaining,path+"."+i,hints,framed,shapes);
                     sameType&=original?.GetType()==values[i]?.GetType();
                 }
                 if(!sameType) return values;
@@ -193,14 +193,14 @@ internal static class WirePrivacy
         }
         return value switch {
             null=>null,
-            string text=>PrivacyCatalog.String(text,path,hints,secrets,framed),
-            JsonNode node when node.GetType().Assembly==typeof(JsonNode).Assembly=>WireCore.J(PrivacyCatalog.Scrub(SafeJson(node,depth,ref remaining),path,hints,secrets,framed)),
-            JsonElement element=>WireCore.J(PrivacyCatalog.Scrub(JsonNode.Parse(element.GetRawText()),path,hints,secrets,framed)),
-            double number when !double.IsFinite(number)=>PrivacyCatalog.String(number.ToString(System.Globalization.CultureInfo.InvariantCulture),path,hints,secrets,framed),
-            float number when !float.IsFinite(number)=>PrivacyCatalog.String(number.ToString(System.Globalization.CultureInfo.InvariantCulture),path,hints,secrets,framed),
+            string text=>PrivacyCatalog.String(text,path,hints,secrets,framed,shapes:shapes),
+            JsonNode node when node.GetType().Assembly==typeof(JsonNode).Assembly=>WireCore.J(PrivacyCatalog.Scrub(SafeJson(node,depth,ref remaining),path,hints,secrets,framed,shapes:shapes)),
+            JsonElement element=>WireCore.J(PrivacyCatalog.Scrub(JsonNode.Parse(element.GetRawText()),path,hints,secrets,framed,shapes:shapes)),
+            double number when !double.IsFinite(number)=>PrivacyCatalog.String(number.ToString(System.Globalization.CultureInfo.InvariantCulture),path,hints,secrets,framed,shapes:shapes),
+            float number when !float.IsFinite(number)=>PrivacyCatalog.String(number.ToString(System.Globalization.CultureInfo.InvariantCulture),path,hints,secrets,framed,shapes:shapes),
             bool or byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal=>PrivacyCatalog.Context(path,hints).Payload?PrivacyCatalog.OtherMedia:value,
             byte[]=>Redacted,
-            _=>PrivacyCatalog.String(value.GetType().FullName??value.GetType().Name,path,hints,secrets,framed)
+            _=>PrivacyCatalog.String(value.GetType().FullName??value.GetType().Name,path,hints,secrets,framed,shapes:shapes)
         };
     }
     private static bool IsNumericOrBool(object? value)=>value is bool or byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal;
@@ -245,12 +245,12 @@ internal static class WirePrivacy
         var type=value.GetType().GenericTypeArguments.FirstOrDefault();
         return JsonValue.Create(type?.FullName??Redacted);
     }
-    internal static string ScrubString(string value,IEnumerable<string>? secrets=null,string path="",Dictionary<string,PrivacyCatalog.Hint>? hints=null,bool framed=true)
+    internal static string ScrubString(string value,IEnumerable<string>? secrets=null,string path="",Dictionary<string,PrivacyCatalog.Hint>? hints=null,bool framed=true,bool shapes=true)
     {
         try
         {
             if(value.Length>PrivacyCatalog.MaxText) return Redacted;
-            return PrivacyCatalog.String(value,path,hints,secrets,framed);
+            return PrivacyCatalog.String(value,path,hints,secrets,framed,shapes:shapes);
         }
         catch { return Redacted; }
     }

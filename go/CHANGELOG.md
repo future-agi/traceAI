@@ -6,6 +6,7 @@ Released modules keep their release history in their own folder: `go/auto` in [`
 
 ### Added
 
+- Eino programs are traced from one blank import, `github.com/future-agi/traceAI/go/eino/auto`: agent, chain, tool and model spans reach Future AGI through the zero-code agent with or without a tracer provider of the application's own. Programs that do not import it download no Eino dependencies. `go/eino` adds `NewDefaultHandler`, `HandledManually`, `DefaultNeeded` and `RunTraced`, and its `Handler` implements `Needed`, so the blank import steps aside for exactly the runs an application handler handles. The `FI_HIDE_*` switches and the replacement of known credentials apply to the copy of a span the application's own provider exports as well as to the copy sent to Future AGI.
 - Go SDK index with module selection, installation, a complete OpenAI quickstart, privacy notes and the per-module release tag scheme.
 - Go CI for all five modules at the minimum and current stable Go versions: module identity, portable dependencies, tidy, vet, race tests, example builds and package documentation.
 

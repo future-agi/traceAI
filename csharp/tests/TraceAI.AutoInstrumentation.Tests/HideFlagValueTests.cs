@@ -66,7 +66,7 @@ public class HideFlagValueTests : InitIsolation
     {
         var reading=Read([("FI_HIDE_INPUTS",value)]);
         Assert.True(reading.Mask.HideInputs);
-        Assert.Equal(TraceConfig.RedactedValue,reading.Processor.Mask("input.value",Text));
+        Assert.Equal(TraceConfig.RedactedValue,reading.Processor.Mask("input.value",Text,true));
         Assert.Equal(0,reading.WarningsNaming("FI_HIDE_INPUTS"));
     }
     [Theory]
@@ -75,7 +75,7 @@ public class HideFlagValueTests : InitIsolation
     {
         var reading=Read([("FI_HIDE_INPUTS",value)]);
         Assert.False(reading.Mask.HideInputs);
-        Assert.NotEqual(TraceConfig.RedactedValue,reading.Processor.Mask("input.value",Text));
+        Assert.NotEqual(TraceConfig.RedactedValue,reading.Processor.Mask("input.value",Text,true));
         Assert.Equal(0,reading.WarningsNaming("FI_HIDE_INPUTS"));
     }
     [Theory]
