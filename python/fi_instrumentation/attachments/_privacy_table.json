@@ -1,0 +1,1352 @@
+{
+  "schema_version": 1,
+  "evaluation": "Validate context; invalid/unknown/missing facts deny. Evaluate every matching rule; any denial wins. The first matching rule supplies the safe reason. No allow rule overrides a denial. Re-evaluate before read/copy/hash/upload/retry/serve. On tightening discard owned bytes and revoke capability; never wait for re-enable.",
+  "context_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "enabled",
+      "endpoint_configured",
+      "policy_known",
+      "server_allowed",
+      "credential_allowed",
+      "integration_capture_content",
+      "integration_record_inputs",
+      "integration_record_outputs",
+      "muted",
+      "temporary_chat",
+      "hide_inputs",
+      "hide_outputs",
+      "hide_input_messages",
+      "hide_output_messages",
+      "hide_input_images",
+      "hide_input_text",
+      "hide_output_text",
+      "hide_error_details",
+      "pii_redaction",
+      "server_require_media_redaction",
+      "qualified_client_sanitizer",
+      "allow_unredacted_media_with_text_pii",
+      "server_allow_unredacted_media_with_text_pii",
+      "require_metadata_removal",
+      "qualified_client_metadata_removal",
+      "modality_allowed",
+      "source_authorized",
+      "call_requested",
+      "sampled",
+      "correlation_available",
+      "generation_current",
+      "source_available",
+      "budget_available",
+      "queue_available",
+      "direction",
+      "semantic_input",
+      "semantic_output",
+      "model_bound_image",
+      "opaque_text_possible",
+      "error_diagnostic",
+      "modality",
+      "source_kind",
+      "operation",
+      "record_audio",
+      "record_video",
+      "server_record_audio",
+      "server_record_video",
+      "browser_remote_fetch",
+      "remote_destination_approved",
+      "all_addresses_public",
+      "tls_ip_pinned",
+      "redirects_revalidated",
+      "ambient_credentials_absent",
+      "owned_session_bound",
+      "owned_file_lease_valid",
+      "provider_connection_authorized",
+      "provider_output_completed",
+      "explicit_partial_allowed"
+    ],
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "endpoint_configured": {
+        "type": "boolean"
+      },
+      "policy_known": {
+        "type": "boolean"
+      },
+      "server_allowed": {
+        "type": "boolean"
+      },
+      "credential_allowed": {
+        "type": "boolean"
+      },
+      "integration_capture_content": {
+        "type": "boolean"
+      },
+      "integration_record_inputs": {
+        "type": "boolean"
+      },
+      "integration_record_outputs": {
+        "type": "boolean"
+      },
+      "muted": {
+        "type": "boolean"
+      },
+      "temporary_chat": {
+        "type": "boolean"
+      },
+      "hide_inputs": {
+        "type": "boolean"
+      },
+      "hide_outputs": {
+        "type": "boolean"
+      },
+      "hide_input_messages": {
+        "type": "boolean"
+      },
+      "hide_output_messages": {
+        "type": "boolean"
+      },
+      "hide_input_images": {
+        "type": "boolean"
+      },
+      "hide_input_text": {
+        "type": "boolean"
+      },
+      "hide_output_text": {
+        "type": "boolean"
+      },
+      "hide_error_details": {
+        "type": "boolean"
+      },
+      "pii_redaction": {
+        "type": "boolean"
+      },
+      "server_require_media_redaction": {
+        "type": "boolean"
+      },
+      "qualified_client_sanitizer": {
+        "type": "boolean"
+      },
+      "allow_unredacted_media_with_text_pii": {
+        "type": "boolean"
+      },
+      "server_allow_unredacted_media_with_text_pii": {
+        "type": "boolean"
+      },
+      "require_metadata_removal": {
+        "type": "boolean"
+      },
+      "qualified_client_metadata_removal": {
+        "type": "boolean"
+      },
+      "modality_allowed": {
+        "type": "boolean"
+      },
+      "source_authorized": {
+        "type": "boolean"
+      },
+      "call_requested": {
+        "type": "boolean"
+      },
+      "sampled": {
+        "type": "boolean"
+      },
+      "correlation_available": {
+        "type": "boolean"
+      },
+      "generation_current": {
+        "type": "boolean"
+      },
+      "source_available": {
+        "type": "boolean"
+      },
+      "budget_available": {
+        "type": "boolean"
+      },
+      "queue_available": {
+        "type": "boolean"
+      },
+      "semantic_input": {
+        "type": "boolean"
+      },
+      "semantic_output": {
+        "type": "boolean"
+      },
+      "model_bound_image": {
+        "type": "boolean"
+      },
+      "opaque_text_possible": {
+        "type": "boolean"
+      },
+      "error_diagnostic": {
+        "type": "boolean"
+      },
+      "record_audio": {
+        "type": "boolean"
+      },
+      "record_video": {
+        "type": "boolean"
+      },
+      "server_record_audio": {
+        "type": "boolean"
+      },
+      "server_record_video": {
+        "type": "boolean"
+      },
+      "browser_remote_fetch": {
+        "type": "boolean"
+      },
+      "remote_destination_approved": {
+        "type": "boolean"
+      },
+      "all_addresses_public": {
+        "type": "boolean"
+      },
+      "tls_ip_pinned": {
+        "type": "boolean"
+      },
+      "redirects_revalidated": {
+        "type": "boolean"
+      },
+      "ambient_credentials_absent": {
+        "type": "boolean"
+      },
+      "owned_session_bound": {
+        "type": "boolean"
+      },
+      "owned_file_lease_valid": {
+        "type": "boolean"
+      },
+      "provider_connection_authorized": {
+        "type": "boolean"
+      },
+      "provider_output_completed": {
+        "type": "boolean"
+      },
+      "explicit_partial_allowed": {
+        "type": "boolean"
+      },
+      "direction": {
+        "enum": [
+          "input",
+          "output",
+          "mixed"
+        ]
+      },
+      "modality": {
+        "enum": [
+          "audio",
+          "image",
+          "video",
+          "document",
+          "file"
+        ]
+      },
+      "source_kind": {
+        "enum": [
+          "Bytes",
+          "Blob",
+          "RemoteUrl",
+          "LocalFile",
+          "OwnedRecordingFile",
+          "ProviderFile"
+        ]
+      },
+      "operation": {
+        "enum": [
+          "import_existing",
+          "observe_consumed",
+          "create_recording"
+        ]
+      }
+    }
+  },
+  "rules": [
+    {
+      "id": "disabled",
+      "reason": "disabled",
+      "deny_if": {
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "endpoint",
+      "reason": "endpoint_unconfigured",
+      "deny_if": {
+        "required": [
+          "endpoint_configured"
+        ],
+        "properties": {
+          "endpoint_configured": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "bootstrap",
+      "reason": "bootstrap_pending",
+      "deny_if": {
+        "required": [
+          "policy_known"
+        ],
+        "properties": {
+          "policy_known": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "server",
+      "reason": "policy_denied",
+      "deny_if": {
+        "required": [
+          "server_allowed"
+        ],
+        "properties": {
+          "server_allowed": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "credential",
+      "reason": "credential_scope_unsupported",
+      "deny_if": {
+        "required": [
+          "credential_allowed"
+        ],
+        "properties": {
+          "credential_allowed": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "capture-content",
+      "reason": "policy_denied",
+      "deny_if": {
+        "required": [
+          "integration_capture_content"
+        ],
+        "properties": {
+          "integration_capture_content": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "muted",
+      "reason": "policy_denied",
+      "deny_if": {
+        "anyOf": [
+          {
+            "required": [
+              "muted"
+            ],
+            "properties": {
+              "muted": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "temporary_chat"
+            ],
+            "properties": {
+              "temporary_chat": {
+                "const": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "input",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "semantic_input"
+                ],
+                "properties": {
+                  "semantic_input": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "input"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "mixed"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "model_bound_image"
+                ],
+                "properties": {
+                  "model_bound_image": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "integration_record_inputs"
+                ],
+                "properties": {
+                  "integration_record_inputs": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "hide_inputs"
+                ],
+                "properties": {
+                  "hide_inputs": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "hide_input_messages"
+                ],
+                "properties": {
+                  "hide_input_messages": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "output",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "semantic_output"
+                ],
+                "properties": {
+                  "semantic_output": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "output"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "mixed"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "integration_record_outputs"
+                ],
+                "properties": {
+                  "integration_record_outputs": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "hide_outputs"
+                ],
+                "properties": {
+                  "hide_outputs": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "hide_output_messages"
+                ],
+                "properties": {
+                  "hide_output_messages": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "input-image-ancestry",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "model_bound_image"
+                ],
+                "properties": {
+                  "model_bound_image": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "allOf": [
+                  {
+                    "required": [
+                      "modality"
+                    ],
+                    "properties": {
+                      "modality": {
+                        "const": "image"
+                      }
+                    }
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "semantic_input"
+                        ],
+                        "properties": {
+                          "semantic_input": {
+                            "const": true
+                          }
+                        }
+                      },
+                      {
+                        "required": [
+                          "direction"
+                        ],
+                        "properties": {
+                          "direction": {
+                            "const": "input"
+                          }
+                        }
+                      },
+                      {
+                        "required": [
+                          "direction"
+                        ],
+                        "properties": {
+                          "direction": {
+                            "const": "mixed"
+                          }
+                        }
+                      },
+                      {
+                        "required": [
+                          "model_bound_image"
+                        ],
+                        "properties": {
+                          "model_bound_image": {
+                            "const": true
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "required": [
+              "hide_input_images"
+            ],
+            "properties": {
+              "hide_input_images": {
+                "const": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "hidden-input-text",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "semantic_input"
+                ],
+                "properties": {
+                  "semantic_input": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "input"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "mixed"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "model_bound_image"
+                ],
+                "properties": {
+                  "model_bound_image": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "required": [
+              "opaque_text_possible"
+            ],
+            "properties": {
+              "opaque_text_possible": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "hide_input_text"
+            ],
+            "properties": {
+              "hide_input_text": {
+                "const": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "hidden-output-text",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "semantic_output"
+                ],
+                "properties": {
+                  "semantic_output": {
+                    "const": true
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "output"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "direction"
+                ],
+                "properties": {
+                  "direction": {
+                    "const": "mixed"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "required": [
+              "opaque_text_possible"
+            ],
+            "properties": {
+              "opaque_text_possible": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "hide_output_text"
+            ],
+            "properties": {
+              "hide_output_text": {
+                "const": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "error-details",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "error_diagnostic"
+            ],
+            "properties": {
+              "error_diagnostic": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "hide_error_details"
+            ],
+            "properties": {
+              "hide_error_details": {
+                "const": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "server-media-redaction",
+      "reason": "redaction_unavailable",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "server_require_media_redaction"
+            ],
+            "properties": {
+              "server_require_media_redaction": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "qualified_client_sanitizer"
+            ],
+            "properties": {
+              "qualified_client_sanitizer": {
+                "const": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "pii-intersection",
+      "reason": "redaction_unavailable",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "pii_redaction"
+            ],
+            "properties": {
+              "pii_redaction": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "qualified_client_sanitizer"
+            ],
+            "properties": {
+              "qualified_client_sanitizer": {
+                "const": false
+              }
+            }
+          },
+          {
+            "not": {
+              "allOf": [
+                {
+                  "required": [
+                    "allow_unredacted_media_with_text_pii"
+                  ],
+                  "properties": {
+                    "allow_unredacted_media_with_text_pii": {
+                      "const": true
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "server_allow_unredacted_media_with_text_pii"
+                  ],
+                  "properties": {
+                    "server_allow_unredacted_media_with_text_pii": {
+                      "const": true
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "metadata-before-egress",
+      "reason": "redaction_unavailable",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "require_metadata_removal"
+            ],
+            "properties": {
+              "require_metadata_removal": {
+                "const": true
+              }
+            }
+          },
+          {
+            "required": [
+              "qualified_client_metadata_removal"
+            ],
+            "properties": {
+              "qualified_client_metadata_removal": {
+                "const": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "modality",
+      "reason": "policy_denied",
+      "deny_if": {
+        "required": [
+          "modality_allowed"
+        ],
+        "properties": {
+          "modality_allowed": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "source",
+      "reason": "policy_denied",
+      "deny_if": {
+        "required": [
+          "source_authorized"
+        ],
+        "properties": {
+          "source_authorized": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "browser-remote",
+      "reason": "policy_denied",
+      "deny_if": {
+        "required": [
+          "browser_remote_fetch"
+        ],
+        "properties": {
+          "browser_remote_fetch": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "id": "remote-destination",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "source_kind"
+            ],
+            "properties": {
+              "source_kind": {
+                "const": "RemoteUrl"
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "remote_destination_approved"
+                ],
+                "properties": {
+                  "remote_destination_approved": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "all_addresses_public"
+                ],
+                "properties": {
+                  "all_addresses_public": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "tls_ip_pinned"
+                ],
+                "properties": {
+                  "tls_ip_pinned": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "redirects_revalidated"
+                ],
+                "properties": {
+                  "redirects_revalidated": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "ambient_credentials_absent"
+                ],
+                "properties": {
+                  "ambient_credentials_absent": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "owned-recording",
+      "reason": "policy_denied",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "source_kind"
+            ],
+            "properties": {
+              "source_kind": {
+                "const": "OwnedRecordingFile"
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "owned_session_bound"
+                ],
+                "properties": {
+                  "owned_session_bound": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "owned_file_lease_valid"
+                ],
+                "properties": {
+                  "owned_file_lease_valid": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "provider-connection",
+      "reason": "credential_scope_unsupported",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "source_kind"
+            ],
+            "properties": {
+              "source_kind": {
+                "const": "ProviderFile"
+              }
+            }
+          },
+          {
+            "required": [
+              "provider_connection_authorized"
+            ],
+            "properties": {
+              "provider_connection_authorized": {
+                "const": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "provider-not-complete",
+      "reason": "source_unavailable",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "source_kind"
+            ],
+            "properties": {
+              "source_kind": {
+                "const": "ProviderFile"
+              }
+            }
+          },
+          {
+            "required": [
+              "provider_output_completed"
+            ],
+            "properties": {
+              "provider_output_completed": {
+                "const": false
+              }
+            }
+          },
+          {
+            "required": [
+              "explicit_partial_allowed"
+            ],
+            "properties": {
+              "explicit_partial_allowed": {
+                "const": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "new-audio",
+      "reason": "recording_disabled",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "operation"
+            ],
+            "properties": {
+              "operation": {
+                "const": "create_recording"
+              }
+            }
+          },
+          {
+            "required": [
+              "modality"
+            ],
+            "properties": {
+              "modality": {
+                "const": "audio"
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "record_audio"
+                ],
+                "properties": {
+                  "record_audio": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "server_record_audio"
+                ],
+                "properties": {
+                  "server_record_audio": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "new-video",
+      "reason": "recording_disabled",
+      "deny_if": {
+        "allOf": [
+          {
+            "required": [
+              "operation"
+            ],
+            "properties": {
+              "operation": {
+                "const": "create_recording"
+              }
+            }
+          },
+          {
+            "required": [
+              "modality"
+            ],
+            "properties": {
+              "modality": {
+                "const": "video"
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "record_video"
+                ],
+                "properties": {
+                  "record_video": {
+                    "const": false
+                  }
+                }
+              },
+              {
+                "required": [
+                  "server_record_video"
+                ],
+                "properties": {
+                  "server_record_video": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "per-call",
+      "reason": "policy_denied",
+      "deny_if": {
+        "required": [
+          "call_requested"
+        ],
+        "properties": {
+          "call_requested": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "sampled",
+      "reason": "unsampled",
+      "deny_if": {
+        "required": [
+          "sampled"
+        ],
+        "properties": {
+          "sampled": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "correlation",
+      "reason": "correlation_unavailable",
+      "deny_if": {
+        "required": [
+          "correlation_available"
+        ],
+        "properties": {
+          "correlation_available": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "deletion-generation",
+      "reason": "deleted",
+      "deny_if": {
+        "required": [
+          "generation_current"
+        ],
+        "properties": {
+          "generation_current": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "source-available",
+      "reason": "source_unavailable",
+      "deny_if": {
+        "required": [
+          "source_available"
+        ],
+        "properties": {
+          "source_available": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "budget",
+      "reason": "too_large",
+      "deny_if": {
+        "required": [
+          "budget_available"
+        ],
+        "properties": {
+          "budget_available": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "reason": "queue_full",
+      "deny_if": {
+        "required": [
+          "queue_available"
+        ],
+        "properties": {
+          "queue_available": {
+            "const": false
+          }
+        }
+      }
+    }
+  ],
+  "allow": {
+    "decision": "allow",
+    "reason": "queued",
+    "effects": [
+      "read",
+      "copy",
+      "hash",
+      "upload",
+      "reference"
+    ]
+  },
+  "deny_effects": [],
+  "defaults": {
+    "FI_ATTACHMENTS_ENABLED": false,
+    "FI_ATTACHMENTS_RECORD_AUDIO": false,
+    "FI_ATTACHMENTS_RECORD_VIDEO": false,
+    "inline_base64_image_bytes": 0,
+    "LocalFile": false,
+    "RemoteUrl": false,
+    "disk_spool": false,
+    "public_link_media": false,
+    "evaluation_reuse": false,
+    "backfill": false
+  }
+}

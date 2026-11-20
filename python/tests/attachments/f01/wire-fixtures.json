@@ -1,0 +1,4166 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "valid-BootstrapRequest",
+      "schema": "BootstrapRequest",
+      "value": {
+        "schema_versions": [
+          1
+        ],
+        "project_name": "synthetic-voice",
+        "project_type": "observe",
+        "capture_session_id": "00000004-0000-0000-0000-000000000001",
+        "correlation_nonce": "00000005-0000-0000-0000-000000000001"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-BootstrapResponse",
+      "schema": "BootstrapResponse",
+      "value": {
+        "schema_version": 1,
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "capture_session_id": "00000004-0000-0000-0000-000000000001",
+        "policy": {
+          "version": "policy_v1",
+          "enabled": true,
+          "allowed_sources": [
+            "Bytes",
+            "OwnedRecordingFile",
+            "ProviderFile"
+          ],
+          "allowed_modalities": [
+            "audio"
+          ],
+          "require_media_redaction": false,
+          "require_metadata_removal": false,
+          "allow_unredacted_media_with_text_pii": false,
+          "record_audio": false,
+          "record_video": false
+        },
+        "limits": {
+          "max_upload_bytes": 52428800,
+          "segment_bytes": 8388608,
+          "segment_duration_ms": 30000,
+          "recording_bytes": 1073741824,
+          "recording_duration_ms": 7200000,
+          "active_transfers": 16,
+          "active_recordings": 4,
+          "reserved_bytes": 1073741824,
+          "validation_jobs": 1024,
+          "initializations_per_minute": 120,
+          "links_per_minute": 1000,
+          "upload_bytes_per_second": 1048576,
+          "playback_bytes_per_second": 1048576,
+          "transfer_timeout_seconds": 120,
+          "grant_ttl_seconds": 60,
+          "revocation_check_seconds": 5
+        },
+        "expires_at": "2030-01-01T00:10:00Z",
+        "transfer_modes": [
+          "authenticated_stream"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-UploadRequest",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-UploadResponse",
+      "schema": "UploadResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "state": "pending_upload",
+        "reserved_bytes": 48044,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "transfer_mode": "authenticated_stream",
+        "write_capability": "SYNTHETIC_WRITE_CAPABILITY_NOT_A_CREDENTIAL"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-CompleteRequest",
+      "schema": "CompleteRequest",
+      "value": {
+        "policy_version": "policy_v1",
+        "deletion_generation": 0
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-StatusResponse",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-ImportRequest",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-ImportResponse",
+      "schema": "ImportResponse",
+      "value": {
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-LinkRequest",
+      "schema": "LinkRequest",
+      "value": {
+        "source_occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "source_parent": {
+          "trace_id": "0123456789abcdef0123456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "target_parent": {
+          "trace_id": "0123456789abcdef0123456789abcdef",
+          "span_id": "abcdef0123456789"
+        },
+        "occurrence_id": "0000000e-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-Reference",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-References",
+      "schema": "References",
+      "value": [
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        }
+      ],
+      "valid": true
+    },
+    {
+      "id": "valid-SpanAttributes",
+      "schema": "SpanAttributes",
+      "value": {
+        "fi.attachment.schema_version": 1,
+        "fi.attachment.refs": "[{\"attachment_id\":\"00000006-0000-0000-0000-000000000001\",\"occurrence_id\":\"00000007-0000-0000-0000-000000000001\",\"direction\":\"mixed\",\"modality\":\"audio\",\"mime_type\":\"audio/wav\",\"purpose\":\"conversation_recording\"}]",
+        "fi.attachment.capture_session_id": "00000004-0000-0000-0000-000000000001",
+        "fi.attachment.correlation_nonce": "00000005-0000-0000-0000-000000000001"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-MessageURI",
+      "schema": "MessageURI",
+      "value": {
+        "type": "uri",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "uri": "fi-attachment:00000007-0000-0000-0000-000000000001"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-Occurrence",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-OccurrencePage",
+      "schema": "OccurrencePage",
+      "value": {
+        "items": [
+          {
+            "reference": {
+              "attachment_id": "00000006-0000-0000-0000-000000000001",
+              "occurrence_id": "00000007-0000-0000-0000-000000000001",
+              "direction": "mixed",
+              "modality": "audio",
+              "mime_type": "audio/wav",
+              "purpose": "conversation_recording"
+            },
+            "scope": {
+              "organization_id": "00000001-0000-0000-0000-000000000001",
+              "workspace_id": "00000002-0000-0000-0000-000000000001",
+              "project_id": "00000003-0000-0000-0000-000000000001"
+            },
+            "parent": {
+              "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+              "span_id": "0123456789abcdef"
+            },
+            "state": "ready",
+            "binding": "bound",
+            "capture_complete": false,
+            "policy_version": "policy_v1",
+            "deletion_generation": 0,
+            "expires_at": "2030-01-01T00:10:00Z"
+          }
+        ],
+        "next_cursor": null
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-ResolveRequest",
+      "schema": "ResolveRequest",
+      "value": {
+        "items": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            },
+            "representation": "playable"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-ResolveResponse",
+      "schema": "ResolveResponse",
+      "value": {
+        "items": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "status": "ready",
+            "gateway_path": "/tracer/v1/attachment-media/00000007-0000-0000-0000-000000000001/synthetic_grant",
+            "expires_at": "2030-01-01T00:10:00Z"
+          },
+          {
+            "occurrence_id": "0000000e-0000-0000-0000-000000000001",
+            "status": "not_found"
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-WriteCapabilityClaims",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "create",
+          "upload",
+          "complete",
+          "abort",
+          "status"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-PlaybackGrantClaims",
+      "schema": "PlaybackGrantClaims",
+      "value": {
+        "audience": "fi-attachment-playback",
+        "viewer_id": "0000000f-0000-0000-0000-000000000001",
+        "application_session_id": "00000010-0000-0000-0000-000000000001",
+        "media_session_id": "00000011-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "representation": "playable",
+        "methods": [
+          "GET",
+          "HEAD"
+        ],
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-RecordingManifest",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-OperationRegistryEntry",
+      "schema": "OperationRegistryEntry",
+      "value": {
+        "package": "traceai-pipecat",
+        "language": "python",
+        "operation": "bound_audio_processor",
+        "upstream_version": null,
+        "source_kind": "Bytes",
+        "direction": "mixed",
+        "modality": "audio",
+        "lifecycle": "explicit_session_binding",
+        "span_capability": "unqualified",
+        "attachment_capability": "unqualified",
+        "policy_requirements": [
+          "enabled",
+          "source_authorized",
+          "pii_intersection"
+        ],
+        "component_test_state": "not_run",
+        "integrated_gate": "integrated_not_run"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-Error",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001"
+      },
+      "valid": true
+    },
+    {
+      "id": "forbidden-Reference-source_url",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-local_path",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-provider_credential",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-object_key",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-content_hash",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-filename",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-speaker_name",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-exif",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Reference-playback_signature",
+      "schema": "Reference",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "direction": "mixed",
+        "modality": "audio",
+        "mime_type": "audio/wav",
+        "purpose": "conversation_recording",
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-source_url",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-local_path",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-provider_credential",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-object_key",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-content_hash",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-filename",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-speaker_name",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-exif",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Occurrence-playback_signature",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-source_url",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-local_path",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-provider_credential",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-object_key",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-content_hash",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-filename",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-speaker_name",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-exif",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-UploadRequest-playback_signature",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 48044,
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-source_url",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-local_path",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-provider_credential",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-object_key",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-content_hash",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-filename",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-speaker_name",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-exif",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-ImportRequest-playback_signature",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-source_url",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-local_path",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-provider_credential",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-object_key",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-content_hash",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-filename",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-speaker_name",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-exif",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-StatusResponse-playback_signature",
+      "schema": "StatusResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending",
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-source_url",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-local_path",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-provider_credential",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-object_key",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-content_hash",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-filename",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-speaker_name",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-exif",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-RecordingManifest-playback_signature",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000,
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-source_url",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "source_url": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-local_path",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "local_path": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-provider_credential",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "provider_credential": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-object_key",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "object_key": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-content_hash",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "content_hash": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-filename",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "filename": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-speaker_name",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "speaker_name": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-exif",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "exif": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbidden-Error-playback_signature",
+      "schema": "Error",
+      "value": {
+        "code": "not_found",
+        "request_id": "00000013-0000-0000-0000-000000000001",
+        "playback_signature": "SYNTHETIC_CANARY_DO_NOT_EXPORT"
+      },
+      "valid": false
+    },
+    {
+      "id": "write-capability-forbids-list",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "list"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "write-capability-forbids-resolve",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "resolve"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "write-capability-forbids-download",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "download"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "write-capability-forbids-delete",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "delete"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "write-capability-forbids-relink",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "relink"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "write-capability-forbids-provider_connection",
+      "schema": "WriteCapabilityClaims",
+      "value": {
+        "audience": "fi-attachment-write",
+        "actor_id": "0000000f-0000-0000-0000-000000000001",
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "reserved_bytes": 48044,
+        "operations": [
+          "provider_connection"
+        ],
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-null-scope",
+      "schema": "Scope",
+      "value": {
+        "organization_id": "00000001-0000-0000-0000-000000000001",
+        "workspace_id": null,
+        "project_id": "00000003-0000-0000-0000-000000000001"
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-raw-import-url",
+      "schema": "ImportSource",
+      "value": {
+        "kind": "RemoteUrl",
+        "url": "https://example.invalid/SYNTHETIC_SECRET"
+      },
+      "valid": false
+    },
+    {
+      "id": "accept-private-envelope-reference",
+      "schema": "ImportSource",
+      "value": {
+        "kind": "RemoteUrlEnvelope",
+        "envelope_id": "0000000b-0000-0000-0000-000000000001"
+      },
+      "valid": true
+    },
+    {
+      "id": "forbid-public-playback",
+      "schema": "ResolveResponse",
+      "value": {
+        "items": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "status": "ready",
+            "gateway_path": "https://example.invalid/audio.wav",
+            "expires_at": "2030-01-01T00:10:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "id": "forbid-provider-query-playback",
+      "schema": "ResolveResponse",
+      "value": {
+        "items": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "status": "ready",
+            "gateway_path": "/tracer/v1/attachment-media/00000007-0000-0000-0000-000000000001/grant?token=secret",
+            "expires_at": "2030-01-01T00:10:00Z"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "id": "forbid-unknown-reference-version",
+      "schema": "SpanAttributes",
+      "value": {
+        "fi.attachment.schema_version": 2,
+        "fi.attachment.refs": "[{\"attachment_id\":\"00000006-0000-0000-0000-000000000001\",\"occurrence_id\":\"00000007-0000-0000-0000-000000000001\",\"direction\":\"mixed\",\"modality\":\"audio\",\"mime_type\":\"audio/wav\",\"purpose\":\"conversation_recording\"}]",
+        "fi.attachment.capture_session_id": "00000004-0000-0000-0000-000000000001",
+        "fi.attachment.correlation_nonce": "00000005-0000-0000-0000-000000000001"
+      },
+      "valid": false
+    },
+    {
+      "id": "forbid-65-references",
+      "schema": "References",
+      "value": [
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "forbid-unbounded-upload",
+      "schema": "UploadRequest",
+      "value": {
+        "schema_version": 1,
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "modality": "audio",
+        "direction": "mixed",
+        "source_kind": "Bytes",
+        "declared_bytes": 52428801
+      },
+      "valid": false
+    },
+    {
+      "id": "no-capture-badge-without-evidence",
+      "schema": "OperationRegistryEntry",
+      "value": {
+        "package": "traceai-pipecat",
+        "language": "python",
+        "operation": "bound_audio_processor",
+        "upstream_version": null,
+        "source_kind": "Bytes",
+        "direction": "mixed",
+        "modality": "audio",
+        "lifecycle": "explicit_session_binding",
+        "span_capability": "unqualified",
+        "attachment_capability": "capture",
+        "policy_requirements": [
+          "enabled",
+          "source_authorized",
+          "pii_intersection"
+        ],
+        "component_test_state": "not_run",
+        "integrated_gate": "integrated_not_run"
+      },
+      "valid": false
+    },
+    {
+      "id": "complete-without-any-media",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [],
+        "gaps": [],
+        "playout": [],
+        "capture_complete": true,
+        "duration_ms": 2000
+      },
+      "valid": false
+    },
+    {
+      "id": "unmarked-capture-gap",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000
+      },
+      "valid": false
+    },
+    {
+      "id": "overlapping-gap-and-media",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 1,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "mixed",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "mixed",
+            "role": "mixed"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 500,
+            "duration_ms": 1500,
+            "reason": "queue_full"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000
+      },
+      "valid": false
+    },
+    {
+      "id": "nested-page-mime-mismatch",
+      "schema": "OccurrencePage",
+      "value": {
+        "items": [
+          {
+            "reference": {
+              "attachment_id": "00000006-0000-0000-0000-000000000001",
+              "occurrence_id": "00000007-0000-0000-0000-000000000001",
+              "direction": "mixed",
+              "modality": "audio",
+              "mime_type": "image/png",
+              "purpose": "conversation_recording"
+            },
+            "scope": {
+              "organization_id": "00000001-0000-0000-0000-000000000001",
+              "workspace_id": "00000002-0000-0000-0000-000000000001",
+              "project_id": "00000003-0000-0000-0000-000000000001"
+            },
+            "parent": {
+              "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+              "span_id": "0123456789abcdef"
+            },
+            "state": "ready",
+            "binding": "bound",
+            "capture_complete": false,
+            "policy_version": "policy_v1",
+            "deletion_generation": 0,
+            "expires_at": "2030-01-01T00:10:00Z"
+          }
+        ],
+        "next_cursor": null
+      },
+      "valid": false
+    },
+    {
+      "id": "response-parent-must-be-canonical",
+      "schema": "Occurrence",
+      "value": {
+        "reference": {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        "scope": {
+          "organization_id": "00000001-0000-0000-0000-000000000001",
+          "workspace_id": "00000002-0000-0000-0000-000000000001",
+          "project_id": "00000003-0000-0000-0000-000000000001"
+        },
+        "parent": {
+          "trace_id": "0123456789abcdef0123456789abcdef",
+          "span_id": "0123456789abcdef"
+        },
+        "state": "ready",
+        "binding": "bound",
+        "capture_complete": false,
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "expires_at": "2030-01-01T00:10:00Z"
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-path-must-match-occurrence",
+      "schema": "ResolveResponse",
+      "value": {
+        "items": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "status": "ready",
+            "gateway_path": "/tracer/v1/attachment-media/ffffffff-ffff-ffff-ffff-ffffffffffff/synthetic_grant",
+            "expires_at": "2030-01-01T00:10:00Z"
+          },
+          {
+            "occurrence_id": "0000000e-0000-0000-0000-000000000001",
+            "status": "not_found"
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "id": "missing-upload-capability",
+      "schema": "UploadResponse",
+      "value": {
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "occurrence_id": "00000007-0000-0000-0000-000000000001",
+        "state": "pending_upload",
+        "reserved_bytes": 48044,
+        "expires_at": "2030-01-01T00:10:00Z",
+        "transfer_mode": "authenticated_stream"
+      },
+      "valid": false
+    },
+    {
+      "id": "safe-attachment-metadata",
+      "schema": "AttachmentMetadata",
+      "value": {
+        "attachment_id": "00000006-0000-0000-0000-000000000001",
+        "modality": "audio",
+        "source_kind": "Bytes",
+        "provider": "pipecat",
+        "purpose": "conversation_recording",
+        "policy_version": "policy_v1",
+        "state": "pending_upload",
+        "created_at": "2030-01-01T00:00:00Z"
+      },
+      "valid": true
+    },
+    {
+      "id": "separate-tracks-have-independent-timelines",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 2,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "separate_tracks",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "output",
+            "role": "assistant"
+          },
+          {
+            "track_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            "channels": [
+              1
+            ],
+            "direction": "input",
+            "role": "user"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "track_id": "0000000a-0000-0000-0000-000000000001"
+          },
+          {
+            "occurrence_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            "index": 1,
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "track_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full",
+            "track_id": "0000000a-0000-0000-0000-000000000001"
+          },
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full",
+            "track_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000
+      },
+      "valid": true
+    },
+    {
+      "id": "separate-track-needs-track-identity",
+      "schema": "RecordingManifest",
+      "value": {
+        "schema_version": 1,
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "timebase": "session_relative_ms",
+        "sample_format": "s16le",
+        "sample_rate_hz": 24000,
+        "channels": 2,
+        "codec": "pcm",
+        "container": "wav",
+        "layout": "separate_tracks",
+        "tracks": [
+          {
+            "track_id": "0000000a-0000-0000-0000-000000000001",
+            "channels": [
+              0
+            ],
+            "direction": "output",
+            "role": "assistant"
+          },
+          {
+            "track_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            "channels": [
+              1
+            ],
+            "direction": "input",
+            "role": "user"
+          }
+        ],
+        "segments": [
+          {
+            "occurrence_id": "00000007-0000-0000-0000-000000000001",
+            "index": 0,
+            "start_ms": 0,
+            "duration_ms": 1000,
+            "track_id": "0000000a-0000-0000-0000-000000000001"
+          },
+          {
+            "occurrence_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            "index": 1,
+            "start_ms": 0,
+            "duration_ms": 1000
+          }
+        ],
+        "gaps": [
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full",
+            "track_id": "0000000a-0000-0000-0000-000000000001"
+          },
+          {
+            "start_ms": 1000,
+            "duration_ms": 1000,
+            "reason": "queue_full",
+            "track_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        ],
+        "playout": [
+          {
+            "start_ms": 0,
+            "duration_ms": 2000,
+            "evidence": "unknown"
+          }
+        ],
+        "capture_complete": false,
+        "duration_ms": 2000
+      },
+      "valid": false
+    },
+    {
+      "id": "same-occurrence-with-different-metadata",
+      "schema": "References",
+      "value": [
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "conversation_recording"
+        },
+        {
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "direction": "mixed",
+          "modality": "audio",
+          "mime_type": "audio/wav",
+          "purpose": "turn_recording"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "id": "completed-provider-recording-over-50-mib",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-RecordingImportRequest",
+      "schema": "RecordingImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-CompletedRecordingImport",
+      "schema": "CompletedRecordingImport",
+      "value": {
+        "schema_version": 1,
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "direction": "mixed",
+        "source_kind": "ProviderFile",
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "modality": "audio",
+        "declared_bytes": 172800044,
+        "declared_duration_ms": 3600000
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-RecordingImportResponse",
+      "schema": "RecordingImportResponse",
+      "value": {
+        "mode": "completed_recording",
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
+    },
+    {
+      "id": "completed-recording-import-response",
+      "schema": "ImportResponse",
+      "value": {
+        "mode": "completed_recording",
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-ImportStatusResponse",
+      "schema": "ImportStatusResponse",
+      "value": {
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending"
+      },
+      "valid": true
+    },
+    {
+      "id": "completed-five-minute-recording-over-8-mib",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 14400044,
+          "declared_duration_ms": 300000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "completed-private-envelope-recording",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "RemoteUrl",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "RemoteUrlEnvelope",
+          "envelope_id": "00000009-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "reject-completed-declared_bytes-1073741825",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 1073741825,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-declared_duration_ms-7200001",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 7200001
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-declared_bytes-0",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 0,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-declared_duration_ms-0",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 0
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-segment_index-0",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000,
+          "segment_index": 0
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-attachment_id-00000006-0000-0000-0000-000000000001",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000,
+          "attachment_id": "00000006-0000-0000-0000-000000000001"
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-occurrence_id-00000007-0000-0000-0000-000000000001",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000,
+          "occurrence_id": "00000007-0000-0000-0000-000000000001"
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-modality-video",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "video",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source_kind-LocalFile",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "LocalFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-mime_type-image/png",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "image/png",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-source_url",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001",
+          "source_url": "SYNTHETIC_CANARY"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-provider_credential",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001",
+          "provider_credential": "SYNTHETIC_CANARY"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-filename",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001",
+          "filename": "SYNTHETIC_CANARY"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-ambiguous-import-mode",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-kind-mismatch",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "RemoteUrlEnvelope",
+          "envelope_id": "00000009-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-single-import-unchanged-ceiling-8388609",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 8388609,
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "segment_index": 0
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-single-import-unchanged-ceiling-52428801",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 52428801
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-single-import-unchanged-ceiling-172800044",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 172800044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "single-attachment-import-still-supported",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "single-attachment-import-response-still-supported",
+      "schema": "ImportResponse",
+      "value": {
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
+    }
+  ]
+}
