@@ -553,6 +553,8 @@ module TraceAI
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
+          # Prove the hooks on this SDK now; on an unproven SDK AI spans export metadata only.
+          MediaAdmission.verify!
           # A provider the agent attached to before (a provisional start that
           # an explicit init replaced) keeps its marker processor; never add a
           # second one.
@@ -1296,7 +1298,11 @@ module TraceAI
           if @sdk_records
             # The internal FI serializer uses OTLP status numbers; application
             # SDK exporters expect the SDK API's different OK/UNSET numbering.
-            copy = OpenTelemetry::SDK::Trace::SpanData.new(*copy.to_a)
+            # Build with exactly the members this SDK's SpanData has: older releases lack
+            # parent_span_is_remote, and a member this agent does not know stays nil.
+            known = copy.members
+            sdk_members = OpenTelemetry::SDK::Trace::SpanData.members
+            copy = OpenTelemetry::SDK::Trace::SpanData.new(*sdk_members.map { |member| known.include?(member) ? copy[member] : nil })
             copy.trace_flags = OpenTelemetry::Trace::TraceFlags.from_byte(copy.trace_flags)
             copy.tracestate = OpenTelemetry::Trace::Tracestate.from_string(copy.tracestate)
             copy.links = copy.links.map do |link|

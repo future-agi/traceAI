@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 require_relative 'test_helper'
 class EndToEndTest < Minitest::Test
+  include SkipWhenMediaHooksUnproven
   include ChildHelper
   CHAT = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini', choices: [{index: 0, message: {role: 'assistant', content: 'Hello from Ruby'}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5}).freeze
   STREAM = ["data: #{JSON.generate(id: 'c', model: 'gpt-4o-mini', choices: [{index: 0, delta: {role: 'assistant', content: 'one'}}])}\n\n",
