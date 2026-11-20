@@ -338,16 +338,23 @@ type maskedSpan struct {
 }
 
 // spanCaps are the application provider's limits that decide what the SDK keeps of a span: the attribute value length
-// (runes), and the event and link counts (-1: unlimited, or not readable, in which case nothing is bounded).
-type spanCaps struct{ value, events, links int }
+// (runes), the event and link counts, and the attribute counts of one event and one link (-1: unlimited, or not readable, in
+// which case nothing is bounded).
+type spanCaps struct{ value, events, links, eventAttrs, linkAttrs int }
 
 func readSpanCaps(provider *sdktrace.TracerProvider) spanCaps {
-	caps := spanCaps{value: spanLimit(reflect.ValueOf(provider).Elem(), "AttributeValueLengthLimit"), events: -1, links: -1}
+	caps := spanCaps{value: spanLimit(reflect.ValueOf(provider).Elem(), "AttributeValueLengthLimit"), events: -1, links: -1, eventAttrs: -1, linkAttrs: -1}
 	if n, ok := spanLimitIfReadable(provider, "EventCountLimit"); ok {
 		caps.events = n
 	}
 	if n, ok := spanLimitIfReadable(provider, "LinkCountLimit"); ok {
 		caps.links = n
+	}
+	if n, ok := spanLimitIfReadable(provider, "AttributePerEventCountLimit"); ok {
+		caps.eventAttrs = n
+	}
+	if n, ok := spanLimitIfReadable(provider, "AttributePerLinkCountLimit"); ok {
+		caps.linkAttrs = n
 	}
 	return caps
 }
@@ -417,7 +424,11 @@ func (s *maskedSpan) addEvent(name string, kvs []attribute.KeyValue, at time.Tim
 			raw[i].Value = attribute.StringValue(capStackTo(kv.Value.AsString(), maxBufferedStack))
 		}
 	}
+	raw = limitAttributes(raw, s.caps.eventAttrs)
 	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
+		if r.ending {
+			return
+		}
 		r.events = append(r.events, rawEvent{name: rawName, attrs: raw, time: at})
 		// Like the SDK's queue: past the count limit the oldest event goes.
 		if over := len(r.events) - s.caps.events; s.caps.events >= 0 && over > 0 {
@@ -486,12 +497,16 @@ func (s *maskedSpan) SetName(name string) {
 func (s *maskedSpan) AddLink(link trace.Link) { s.addLink(link) }
 
 func (s *maskedSpan) addLink(link trace.Link) {
-	// The SDK refuses a link that is invalid, has no attributes and no trace state.
-	if !link.SpanContext.IsValid() && len(link.Attributes) == 0 && link.SpanContext.TraceState().Len() == 0 {
+	raw := s.m.captured(link.Attributes)
+	// The SDK refuses a link that is invalid, has no attributes and no trace state: it sees the attributes after masking.
+	if !link.SpanContext.IsValid() && len(raw) == 0 && link.SpanContext.TraceState().Len() == 0 {
 		return
 	}
-	raw := s.m.captured(link.Attributes)
+	raw = limitAttributes(raw, s.caps.linkAttrs)
 	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
+		if r.ending {
+			return
+		}
 		r.links = append(r.links, rawLink{sc: link.SpanContext, attrs: raw})
 		if over := len(r.links) - s.caps.links; s.caps.links >= 0 && over > 0 {
 			r.links = append([]rawLink(nil), r.links[over:]...)
@@ -548,17 +563,17 @@ func (s *maskedSpan) End(opts ...trace.SpanEndOption) {
 		if raw.status != nil {
 			s.Span.SetStatus(raw.status.code, s.m.text(raw.status.description))
 		}
-		// Restoration is 1:1: the record keeps exactly the newest events and links the SDK kept.
+		// Restoration is 1:1: the record keeps exactly the newest events and links the SDK kept of the snapshot this End
+		// replayed. The record stopped taking additions when the snapshot was taken, so it is that snapshot.
 		if current, ok := s.Span.(sdktrace.ReadOnlySpan); ok {
 			keptEvents, keptLinks := len(current.Events()), len(current.Links())
-			s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
-				if keptEvents < len(r.events) {
-					r.events = r.events[len(r.events)-keptEvents:]
-				}
-				if keptLinks < len(r.links) {
-					r.links = r.links[len(r.links)-keptLinks:]
-				}
-			})
+			if keptEvents < len(raw.events) {
+				raw.events = raw.events[len(raw.events)-keptEvents:]
+			}
+			if keptLinks < len(raw.links) {
+				raw.links = raw.links[len(raw.links)-keptLinks:]
+			}
+			s.reg.update(s.Span.SpanContext(), func(r *spanRecord) { r.events, r.links = raw.events, raw.links })
 		}
 	}
 	s.Span.End(opts...)

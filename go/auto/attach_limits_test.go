@@ -93,7 +93,7 @@ func TestARefusedLinkDoesNotShiftTheOthers(t *testing.T) {
 	}
 }
 
-// What the SDK keeps of an event's and a link's attributes (its per-event and per-link limits, and the last of duplicate keys)
+// What the SDK keeps of an event's and a link's attributes (its per-event and per-link limits, the first ones in order, duplicate keys included)
 // is what the copy for Future AGI carries, with the value each was written with.
 func TestEventAttributesFollowTheSDKLimitsOnBothCopies(t *testing.T) {
 	tracer, flush := limitedCopiesWith(t, sdktrace.SpanLimits{AttributeValueLengthLimit: 4096, AttributeCountLimit: 128, EventCountLimit: 128, LinkCountLimit: 128,
@@ -163,5 +163,117 @@ func TestManyEventsAndLinksKeepTheNewestAndTheDroppedCounts(t *testing.T) {
 	}
 	if fiSpan.droppedEvents != 872 || fiSpan.droppedLinks != 872 {
 		t.Fatalf("Future AGI copy reports %d events and %d links dropped, want 872 each", fiSpan.droppedEvents, fiSpan.droppedLinks)
+	}
+}
+
+// The record held while a span is open never exceeds the provider's limits.
+func TestRecordNeverExceedsTheProviderLimits(t *testing.T) {
+	tracer, flush := limitedCopies(t, 4096)
+	_, span := tracer.Start(context.Background(), "step", traceStart(attribute.String("gen_ai.span.kind", "CHAIN")))
+	for i := 0; i < 600; i++ {
+		span.AddEvent(fmt.Sprintf("event-%04d", i))
+		span.AddLink(spanIDLink(i+1, attribute.String("n", "x")))
+		if events, links := auto.RecordSizesForTest(span); events > 128 || links > 128 || events < 0 || links < 0 {
+			t.Fatalf("after %d adds the record holds %d events and %d links, the limit is 128", i+1, events, links)
+		}
+	}
+	if events, links := auto.RecordSizesForTest(span); events != 128 || links != 128 {
+		t.Fatalf("record holds %d events and %d links, want 128 each", events, links)
+	}
+	span.End()
+	flush()
+}
+
+// AddEvent and AddLink from another goroutine while the span ends cannot shift what the Future AGI copy holds against the
+// application's copy: what End replayed is what the record keeps.
+func TestConcurrentAddsDuringEndKeepBothCopiesAligned(t *testing.T) {
+	tracer, flush := limitedCopies(t, 4096)
+	const spans = 40
+	for n := 0; n < spans; n++ {
+		_, span := tracer.Start(context.Background(), fmt.Sprintf("step-%02d", n), traceStart(attribute.String("gen_ai.span.kind", "CHAIN")))
+		for i := 0; i < 128; i++ {
+			span.AddEvent(fmt.Sprintf("seed-%03d", i))
+			span.AddLink(spanIDLink(i+1, attribute.String("n", "seed")))
+		}
+		stop, done := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				span.AddEvent(fmt.Sprintf("late-%06d", i))
+				span.AddLink(spanIDLink(1000+i, attribute.String("n", "late")))
+			}
+		}()
+		time.Sleep(time.Duration(n%5) * 50 * time.Microsecond)
+		span.End()
+		close(stop)
+		<-done
+	}
+	fi, app := flush()
+	appSpans, _ := app.snapshot()
+	fiSpans, _ := fi.snapshot()
+	if len(appSpans) != spans || len(fiSpans) != spans {
+		t.Fatalf("spans: application %d, Future AGI %d, want %d", len(appSpans), len(fiSpans), spans)
+	}
+	byName := map[string]exportedSpan{}
+	for _, s := range fiSpans {
+		byName[s.name] = s
+	}
+	for _, a := range appSpans {
+		f, ok := byName[a.name]
+		if !ok {
+			t.Fatalf("Future AGI copy lacks %s", a.name)
+		}
+		if !reflect.DeepEqual(f.events, a.events) || !reflect.DeepEqual(f.links, a.links) {
+			t.Fatalf("%s: events/links of the Future AGI copy differ from the application's (events %d vs %d, links %d vs %d)", a.name, len(f.events), len(a.events), len(f.links), len(a.links))
+		}
+	}
+}
+
+// The SDK's refusal test sees the attributes after masking: a link with an invalid context whose attributes are all hidden is
+// refused, on both copies, and leaves no placeholder in either.
+func TestLinkRefusedAfterMaskingLeavesNothing(t *testing.T) {
+	t.Setenv("FI_HIDE_INPUTS", "true")
+	tracer, flush := limitedCopies(t, 4096)
+	_, span := tracer.Start(context.Background(), "step", traceStart(attribute.String("gen_ai.span.kind", "CHAIN")),
+		trace.WithLinks(trace.Link{Attributes: []attribute.KeyValue{attribute.String("gen_ai.input.messages", "hidden")}}))
+	for i := 0; i < 300; i++ {
+		span.AddLink(trace.Link{Attributes: []attribute.KeyValue{attribute.String("gen_ai.input.messages", "hidden")}})
+	}
+	if _, links := auto.RecordSizesForTest(span); links != 0 {
+		t.Fatalf("record holds %d links of a refused kind, want 0", links)
+	}
+	span.AddLink(spanIDLink(1, attribute.String("n", "kept")))
+	span.End()
+	fi, app := flush()
+	appSpan, fiSpan := onlyModuleSpan(t, "application", app), onlyModuleSpan(t, "Future AGI", fi)
+	if len(appSpan.links) != 1 || appSpan.droppedLinks != 0 || len(fiSpan.links) != 1 || fiSpan.droppedLinks != 0 {
+		t.Fatalf("application: %d links, %d dropped; Future AGI: %d links, %d dropped; want 1 and 0 on both", len(appSpan.links), appSpan.droppedLinks, len(fiSpan.links), fiSpan.droppedLinks)
+	}
+}
+
+// The SDK keeps the FIRST attributes of an event or a link up to its limit, in order, duplicate keys included: the copy for
+// Future AGI carries the value of each one it kept, and nothing the SDK never stored.
+func TestAttributesPastThePerEventLimitFollowTheSDKFirstN(t *testing.T) {
+	tracer, flush := limitedCopiesWith(t, sdktrace.SpanLimits{AttributeValueLengthLimit: 4096, AttributeCountLimit: 128, EventCountLimit: 128, LinkCountLimit: 128,
+		AttributePerEventCountLimit: 2, AttributePerLinkCountLimit: 2, AttributeValueDepthLimit: -1})
+	_, span := tracer.Start(context.Background(), "step", traceStart(attribute.String("gen_ai.span.kind", "CHAIN")))
+	span.AddEvent("noted", trace.WithTimestamp(time.Unix(1_700_000_000, 0)), trace.WithAttributes(attribute.String("k", "first"), attribute.String("a", "second"), attribute.String("k", "third-past-the-limit")))
+	span.AddLink(spanIDLink(1, attribute.String("k", "first"), attribute.String("a", "second"), attribute.String("k", "third-past-the-limit")))
+	span.End()
+	fi, app := flush()
+	appSpan, fiSpan := onlyModuleSpan(t, "application", app), onlyModuleSpan(t, "Future AGI", fi)
+	if appSpan.events[0].attrs["k"] != "first" || appSpan.links[0].attrs["k"] != "first" {
+		t.Fatalf("application copy: %+v %+v", appSpan.events, appSpan.links)
+	}
+	if !reflect.DeepEqual(fiSpan.events, appSpan.events) || !reflect.DeepEqual(fiSpan.links, appSpan.links) {
+		t.Fatalf("Future AGI events %+v links %+v, application events %+v links %+v", fiSpan.events, fiSpan.links, appSpan.events, appSpan.links)
+	}
+	if _, raw := fi.snapshot(); bytes.Contains(raw, []byte("past-the-limit")) {
+		t.Error("Future AGI copy carries a value the SDK never stored")
 	}
 }

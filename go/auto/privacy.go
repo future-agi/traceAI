@@ -49,6 +49,9 @@ type spanRecord struct {
 	// the SDK does); the span gets that many placeholders when it ends so its dropped counts stay the SDK's.
 	eventsDropped, linksDropped int
 	status                      *rawStatus
+	// ending is set by the update that takes End's snapshot: what is added after it is ignored, so the record stays the
+	// snapshot the span replayed.
+	ending bool
 }
 
 // Live dedup ancestry is process-local and removed at OnEnd. Credentials are
@@ -154,7 +157,7 @@ func (p *processorRegistration) update(span trace.SpanContext, change func(*span
 	}
 }
 
-// rawSnapshot copies the module span's raw values.
+// rawSnapshot copies the module span's raw values and marks the record as ending: later events and links are ignored.
 func (p *processorRegistration) rawSnapshot(span trace.SpanContext) (out rawSpan) {
 	p.update(span, func(r *spanRecord) {
 		out.attrs = make(map[attribute.Key]attribute.Value, len(r.raw))
@@ -166,6 +169,7 @@ func (p *processorRegistration) rawSnapshot(span trace.SpanContext) (out rawSpan
 		out.links = append([]rawLink(nil), r.links...)
 		out.status = r.status
 		out.eventsDropped, out.linksDropped = r.eventsDropped, r.linksDropped
+		r.ending = true
 	})
 	return out
 }
@@ -225,30 +229,31 @@ func (s rawSpan) Name() string {
 	return s.ReadOnlySpan.Name()
 }
 
-// restoreAttributes puts the value the module wrote on each attribute the SDK kept (it applies its own per-event and per-link
-// limits and keeps the last of duplicate keys): by key, so what is kept is the SDK's and what it holds is the raw value.
+// restoreAttributes puts the value the module wrote on each attribute the SDK kept. The SDK keeps the first attributes of an
+// event or a link up to its per-event or per-link limit, in order and without removing duplicate keys, and the record holds
+// the same first attributes (see limitAttributes), so entry i of what the SDK kept is entry i of the record. An entry whose
+// key differs is left as the SDK holds it.
 func restoreAttributes(kept, raw []attribute.KeyValue) []attribute.KeyValue {
-	written := map[attribute.Key][]attribute.Value{}
-	for _, kv := range raw {
-		written[kv.Key] = append(written[kv.Key], kv.Value)
-	}
-	keptCount := map[attribute.Key]int{}
-	for _, kv := range kept {
-		keptCount[kv.Key]++
-	}
-	seen := map[attribute.Key]int{}
 	out := make([]attribute.KeyValue, len(kept))
 	for i, kv := range kept {
-		if values := written[kv.Key]; len(values) > 0 {
-			// The n-th kept entry of a key is the n-th written one; when the SDK kept fewer of a key than were written (it keeps
-			// the last of duplicates), the kept ones are the last written ones.
-			n := seen[kv.Key] + max(len(values)-keptCount[kv.Key], 0)
-			kv.Value = values[min(n, len(values)-1)]
+		if i < len(raw) && raw[i].Key == kv.Key {
+			kv.Value = raw[i].Value
 		}
-		seen[kv.Key]++
 		out[i] = kv
 	}
 	return out
+}
+
+// limitAttributes keeps the first attributes of an event or a link up to the provider's limit, as the SDK does (-1: unlimited,
+// or not readable, in which case nothing is cut; 0: none).
+func limitAttributes(kvs []attribute.KeyValue, limit int) []attribute.KeyValue {
+	switch {
+	case limit < 0 || len(kvs) <= limit:
+		return kvs
+	case limit == 0:
+		return nil
+	}
+	return append([]attribute.KeyValue(nil), kvs[:limit]...)
 }
 
 // Events are the module's, in the order they were added when the span ended. When the span ended the record was trimmed to
