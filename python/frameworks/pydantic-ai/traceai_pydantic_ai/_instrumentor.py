@@ -13,7 +13,14 @@ from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 
-from ._agent_wrapper import _record_output_value, wrap_agent_run, wrap_legacy_usage_incr
+from ._agent_wrapper import (
+    _OperationUsage,
+    _record_output_value,
+    _record_usage,
+    _run_attributes,
+    wrap_agent_run,
+    wrap_legacy_usage_incr,
+)
 from ._attributes import PydanticAIAttributes, PydanticAISpanKind
 from ._privacy import _PydanticTraceConfig
 from ._execution_wrappers import wrap_model_request, wrap_tool_call
@@ -257,48 +264,14 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         import functools
         import inspect
         import time
-        import uuid
         from contextlib import asynccontextmanager
-
-        from ._agent_wrapper import (
-            extract_model_info,
-            safe_serialize,
-        )
 
         tracer = self._tracer
 
         @functools.wraps(original_method)
         @asynccontextmanager
         async def wrapper(self, *args, **kwargs):
-            from ._attributes import PydanticAIAttributes, PydanticAISpanKind
-
-            run_id = str(uuid.uuid4())
-
-            # Extract prompt
-            prompt = ""
-            if args:
-                prompt = safe_serialize(args[0])
-            elif "user_prompt" in kwargs:
-                prompt = safe_serialize(kwargs["user_prompt"])
-
-            # Get model info
-            model_info = extract_model_info(self)
-
-            attributes = {
-                PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.STREAM.value,
-                PydanticAIAttributes.GEN_AI_SPAN_KIND: "AGENT",
-                PydanticAIAttributes.RUN_ID: run_id,
-                PydanticAIAttributes.RUN_METHOD: "run_stream",
-                PydanticAIAttributes.RUN_PROMPT: prompt,
-                PydanticAIAttributes.INPUT_VALUE: prompt,
-                PydanticAIAttributes.INPUT_MIME_TYPE: "text/plain",
-            }
-
-            if model_info.get("model_name"):
-                attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-            if model_info.get("model_provider"):
-                attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
-
+            attributes = _stream_attributes(self, args, kwargs)
             start_time = time.time()
 
             # Keep the span current through entry, consumption, and cleanup.
@@ -317,12 +290,13 @@ class PydanticAIInstrumentor(BaseInstrumentor):
                     if inspect.isawaitable(manager):
                         manager = await manager
                     async with manager as stream:
-                        traced_stream = _TracedStream(stream)
+                        traced_stream = _TracedStream(stream, kwargs.get("usage"))
                         yield traced_stream
                 except BaseException as e:
                     # Cancellation must also close the span without changing
                     # the exception delivered by the native context manager.
                     span.set_attribute(PydanticAIAttributes.IS_ERROR, True)
+                    span.set_attribute(PydanticAIAttributes.ERROR_TYPE, type(e).__name__)
                     span.set_attribute(PydanticAIAttributes.ERROR_MESSAGE, str(e))
                     span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(e)))
                     span.record_exception(e)
@@ -338,7 +312,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
                         traced_stream._chunk_count if traced_stream is not None else 0,
                     )
                     if traced_stream is not None:
-                        traced_stream._record_final_output(span)
+                        traced_stream._record_result(span)
 
         if not inspect.iscoroutinefunction(original_method):
             return wrapper
@@ -347,23 +321,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         # Native factories above never become coroutines.
         @functools.wraps(original_method)
         async def coroutine_wrapper(self, *args, **kwargs):
-            prompt = safe_serialize(args[0]) if args else safe_serialize(
-                kwargs.get("user_prompt", "")
-            )
-            attributes = {
-                PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.STREAM.value,
-                PydanticAIAttributes.GEN_AI_SPAN_KIND: "AGENT",
-                PydanticAIAttributes.RUN_ID: str(uuid.uuid4()),
-                PydanticAIAttributes.RUN_METHOD: "run_stream",
-                PydanticAIAttributes.RUN_PROMPT: prompt,
-                PydanticAIAttributes.INPUT_VALUE: prompt,
-                PydanticAIAttributes.INPUT_MIME_TYPE: "text/plain",
-            }
-            model_info = extract_model_info(self)
-            if model_info.get("model_name"):
-                attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-            if model_info.get("model_provider"):
-                attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
+            attributes = _stream_attributes(self, args, kwargs)
             start_time = time.time()
             span = tracer.start_span(
                 "pydantic_ai.agent.run_stream",
@@ -372,7 +330,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
             )
             try:
                 stream = await original_method(self, *args, **kwargs)
-                return _AwaitableTracedStream(stream, span, start_time)
+                return _AwaitableTracedStream(stream, span, start_time, kwargs.get("usage"))
             except BaseException as error:
                 _AwaitableTracedStream(None, span, start_time)._finish(error)
                 raise
@@ -413,6 +371,18 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         return self._is_instrumented
 
 
+def _stream_attributes(agent, args, kwargs):
+    """Start a streamed run with the attributes a run of the same agent has."""
+    attributes = _run_attributes(agent, args, kwargs, "run_stream")
+    # The framework's own kind for streamed runs is unchanged.
+    attributes[PydanticAIAttributes.SPAN_KIND] = PydanticAISpanKind.STREAM.value
+    if not isinstance(getattr(agent, "instructions", None), str):
+        # Current SDKs expose instructions as a decorator method; its text is
+        # the agent's repr (including its model), not the instructions.
+        attributes.pop(PydanticAIAttributes.AGENT_INSTRUCTIONS, None)
+    return attributes
+
+
 # Result methods that hand the run's final output to the caller. They are only
 # observed: consuming or re-validating a stream here would repeat validators and
 # message-history updates, so a stream the caller never finishes has no output.
@@ -421,11 +391,37 @@ _OUTPUT_GETTERS = ("get_output", "get_data")
 _NO_OUTPUT = object()
 
 
+def _is_complete(stream):
+    try:
+        return getattr(stream, "is_complete", None) is True
+    except Exception:
+        return False
+
+
+def _stream_usage(stream, budget):
+    # The same run-local counters a run records, read from the finished result.
+    try:
+        return _OperationUsage(budget).extract(stream)
+    except Exception:
+        # Usage is observation only; never fail the application's stream.
+        return None
+
+
+def _settled_output(stream, default):
+    # Recent SDKs settle a finished stream into the result run() would return,
+    # from the output they already validated; nothing is consumed again.
+    try:
+        return stream.result.output
+    except Exception:
+        return default
+
+
 class _TracedStream:
     """Proxy the entered result; its original manager owns stream cleanup."""
 
-    def __init__(self, stream):
+    def __init__(self, stream, budget=None):
         self._stream = stream
+        self._budget = budget
         self._chunk_count = 0
         self._final_output = _NO_OUTPUT
 
@@ -492,16 +488,21 @@ class _TracedStream:
         self._final_output = output
         return output
 
-    def _record_final_output(self, span):
-        if self._final_output is not _NO_OUTPUT:
-            _record_output_value(span, self._final_output)
+    def _record_result(self, span):
+        output = self._final_output
+        if _is_complete(self._stream):
+            # Only a finished stream has the run's usage and final output.
+            _record_usage(span, _stream_usage(self._stream, self._budget))
+            output = _settled_output(self._stream, output)
+        if output is not _NO_OUTPUT:
+            _record_output_value(span, output)
 
 
 class _AwaitableTracedStream(_TracedStream):
     """Manage cleanup for coroutine factories without changing native streams."""
 
-    def __init__(self, stream, span, start_time):
-        super().__init__(stream)
+    def __init__(self, stream, span, start_time, budget=None):
+        super().__init__(stream, budget)
         self._context_manager = stream
         self._span = span
         self._start_time = start_time
@@ -536,13 +537,14 @@ class _AwaitableTracedStream(_TracedStream):
         self._span.set_attribute(PydanticAIAttributes.STREAM_CHUNK_COUNT, self._chunk_count)
         if error is not None:
             self._span.set_attribute(PydanticAIAttributes.IS_ERROR, True)
+            self._span.set_attribute(PydanticAIAttributes.ERROR_TYPE, type(error).__name__)
             self._span.set_attribute(PydanticAIAttributes.ERROR_MESSAGE, str(error))
             self._span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(error)))
             self._span.record_exception(error)
         else:
             self._span.set_attribute(PydanticAIAttributes.IS_ERROR, False)
             self._span.set_status(trace_api.Status(trace_api.StatusCode.OK))
-        self._record_final_output(self._span)
+        self._record_result(self._span)
         self._span.end()
 
 
