@@ -14,3 +14,5 @@ export { projectAttributes, tracerAttributeLimit, DROPPED_CONTENT_COUNT } from "
 export * from "./awsLambda";
 
 export { rememberProviderResponse } from "./privacy-runtime";
+
+export * from "./attachments";

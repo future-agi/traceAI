@@ -16,3 +16,13 @@ for (const dir of ['dist/esm', 'dist/esnext']) {
     fs.writeFileSync(`${dir}/${name}.js`, `export { ${runtimeExports.join(', ')} } from "../src/privacy-runtime.js";\n`);
   }
 }
+
+// A provider and an adapter may import different module formats. Keep correlation
+// class identity (and its private span references) identical across those imports.
+for (const name of ['index', 'manager', 'correlation', 'policy', 'transport-v1', 'node', 'disabled', 'admission', 'stream', 'recording', 'imports', 'owned', 'node-sources', 'wire']) {
+  const exports = Object.keys(require(`../dist/src/attachments/${name}.js`));
+  if (!exports.every(key => /^[A-Za-z_$][\w$]*$/.test(key))) throw new Error('postbuild: unexpected attachment export');
+  for (const dir of ['dist/esm', 'dist/esnext']) {
+    fs.writeFileSync(`${dir}/attachments/${name}.js`, `export { ${exports.join(', ')} } from "../../src/attachments/${name}.js";\n`);
+  }
+}
