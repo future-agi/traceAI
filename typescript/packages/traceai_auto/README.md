@@ -201,7 +201,7 @@ The most-used settings are below. Set them **before** loading the agent; later `
 | --- | --- | --- |
 | `FI_API_KEY` + `FI_SECRET_KEY` | Unset | Complete pair for the default Future AGI destination |
 | `FI_PROJECT_NAME` | See full reference | Project in Observe; set explicitly for stable routing |
-| `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL or full traces endpoint |
+| `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL or full traces endpoint, including a self-hosted one. The FI keys are sent only to this endpoint; an application-owned destination uses only the headers configured for it |
 | `FI_INSTRUMENTATIONS` | All eligible integrations, except `http` | Comma-separated allowlist, e.g. `openai,wire`; incoming HTTP spans need `http` listed here |
 | `FI_DISABLED_INSTRUMENTATIONS` | Empty | Denylist; takes precedence over the allowlist |
 | `FI_WIRE_CAPTURE` | `true` | Enable global-fetch capture and transport credential observation |

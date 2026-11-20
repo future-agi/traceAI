@@ -1,7 +1,10 @@
-## Unreleased
+## [0.4.2] - 2026-11-20
 
 ### Added
 - `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
+
+### Changed
+- Uses `@traceai/fi-core` 1.4.2.
 
 ## [0.4.1] - 2026-11-19
 
