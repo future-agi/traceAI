@@ -201,4 +201,25 @@ class BedrockConverseStreamTest {
             assertThat(data.getAttributes().get(AttributeKey.stringKey(SemanticConventions.RAW_OUTPUT))).hasSizeLessThanOrEqualTo(32000);
         }
     }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 7, 12, 24})
+    void aKnownSecretStraddlingTheCharacterCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-BEDROCK-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        var tracing = new BedrockTracing(tracer(false));
+        var span = tracing.start(request());
+        var output = new BedrockStreamOutput(tracing, span);
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text("a".repeat(32000 - inside)).build()).build());
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text(secret + "tail").build()).build());
+        output.capture();
+        span.end();
+        var data = otel.getSpans().get(0);
+        assertThat(data.getAttributes().get(AttributeKey.booleanKey("gen_ai.bedrock.output_truncated"))).isTrue();
+        assertThat(data.getAttributes().toString()).doesNotContain("PFX");
+        assertThat(data.getAttributes().get(AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)))
+            .contains(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+    }
 }
