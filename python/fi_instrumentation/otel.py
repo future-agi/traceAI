@@ -1103,16 +1103,38 @@ def _is_loopback_host(host: str | None) -> bool:
     return False
 
 
-def _force_tls_for_future_agi(endpoint: str | None, insecure: Any) -> bool:
+def _plain_text_requested(target: tuple[str, str, int], insecure: Any) -> bool:
+    """True when the settings ask for a plain gRPC channel to ``target``, in the order the exporter reads them:
+    the ``insecure`` argument, ``OTEL_EXPORTER_OTLP_TRACES_INSECURE``, ``OTEL_EXPORTER_OTLP_INSECURE``, then an
+    ``http`` scheme. An ``https`` scheme is TLS."""
+    if target[0] == "https":
+        return False
+    if insecure is not None:
+        return bool(insecure)
+    for name in ("OTEL_EXPORTER_OTLP_TRACES_INSECURE", "OTEL_EXPORTER_OTLP_INSECURE"):
+        value = os.environ.get(name)
+        if value is not None:
+            return value.lower() == "true"
+    return target[0] == "http"
+
+
+def _force_tls_for_future_agi(endpoint: str | None, insecure: Any, allow: bool = False) -> bool:
     """True when a gRPC exporter for this Future AGI target is built with TLS whatever the plain-text settings say.
 
-    Every Future AGI target other than loopback uses TLS, whatever its scheme, ``OTEL_EXPORTER_OTLP_INSECURE`` and
-    ``OTEL_EXPORTER_OTLP_TRACES_INSECURE`` say. Asking for plain text with the ``insecure`` argument raises
-    UnsupportedFutureAGIEndpointError, which names the argument.
+    A futureagi.com target always uses TLS, whatever its scheme, ``OTEL_EXPORTER_OTLP_INSECURE`` and
+    ``OTEL_EXPORTER_OTLP_TRACES_INSECURE`` say; asking for plain text with the ``insecure`` argument raises
+    UnsupportedFutureAGIEndpointError, which names the argument. Loopback keeps the configured channel. Any other
+    host uses TLS unless the settings ask for plain text, which needs the opt-in (see ``_authorize_plain_text``);
+    with it, the configured plain channel is kept.
     """
     target = _grpc_target(endpoint)
     if target is None or _is_loopback_host(target[1]):
         return False
+    if not _is_futureagi_host(target[1]):
+        if _plain_text_requested(target, insecure):
+            _authorize_plain_text(target[1], target[2], allow)
+            return False
+        return True
     if insecure:
         raise UnsupportedFutureAGIEndpointError(
             "A Future AGI gRPC endpoint is reached over TLS, so the insecure option cannot be turned on for it. "
@@ -1197,9 +1219,12 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         headers: Headers to send when exporting. For a Future AGI endpoint, the
             `FI_API_KEY` and `FI_SECRET_KEY` environment variables are added when no
             credential header is given.
+        allow_insecure_http (bool): Allow Future AGI keys over a plain channel to a self-hosted host other
+            than loopback, like ``FI_ALLOW_INSECURE_HTTP=1``. It does not apply to a Future AGI host, or
+            when the request goes through a proxy.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args: Any, allow_insecure_http: bool = False, **kwargs: Any):
         bound_args = _get_class_signature(_GRPCSpanExporter, "grpc").bind_partial(*args, **kwargs)
         # Read once; gRPC metadata names are lower case.
         caller_headers = _materialize_headers(bound_args.arguments.get("headers"), lower=True)
@@ -1213,18 +1238,23 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         # and only when the exporter resolved a Future AGI endpoint.
         decision = _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers)
         forced = False
-        if decision == "fi" and _force_tls_for_future_agi(bound_args.arguments["endpoint"], bound_args.arguments.get("insecure")):
+        if decision == "fi" and _force_tls_for_future_agi(
+            bound_args.arguments["endpoint"], bound_args.arguments.get("insecure"), allow_insecure_http
+        ):
             # TLS for a Future AGI target: the argument and both OTEL_EXPORTER_OTLP*_INSECURE variables are not read.
             bound_args.arguments["insecure"] = False
             forced = True
         super().__init__(*bound_args.args, **bound_args.kwargs)
         try:
             resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers)
-            if resolved == "fi" and not forced and not _is_loopback_host((_grpc_target(self._endpoint) or ("", ""))[1]):
-                raise UnsupportedFutureAGIEndpointError(
-                    "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
-                    "credentials are not sent to it. Set FI_GRPC_URL to the Future AGI gRPC target, or remove the credentials."
-                )
+            resolved_target = _grpc_target(getattr(self, "_endpoint", None))
+            if resolved == "fi" and not forced and resolved_target and not _is_loopback_host(resolved_target[1]):
+                if _is_futureagi_host(resolved_target[1]):
+                    raise UnsupportedFutureAGIEndpointError(
+                        "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
+                        "credentials are not sent to it. Set FI_GRPC_URL to the Future AGI gRPC target, or remove the credentials."
+                    )
+                _authorize_plain_text(resolved_target[1], resolved_target[2], allow_insecure_http)
         except UnsupportedFutureAGIEndpointError:
             _close_after_refusal(self, _GRPCSpanExporter)
             raise
