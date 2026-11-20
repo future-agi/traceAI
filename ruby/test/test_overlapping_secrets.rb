@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 require_relative 'test_helper'
+require_relative '../lib/traceai/auto/privacy'
+require_relative '../lib/traceai/auto/secrets'
 
 # Known secrets that overlap never leave a fragment of the longer one beside the placeholder. A secret learned after a
 # span was captured can still be replaced in the copy sent to Future AGI, which scrubs at export with the registry as it
@@ -194,8 +196,8 @@ class OverlappingSecretsTest < Minitest::Test
     assert_includes registry.snapshot, seeded
     assert_equal 501, registry.snapshot.length
     assert registry.snapshot.none? { |value| value.include?(PLACEHOLDER) }
-    registry.register('TAIL-OF-SEEDED-ENV-VALUE-12345678'[5..])
-    assert_equal PLACEHOLDER, TraceAI::Auto::Privacy.clean_string('TAIL-OF-' + seeded, registry.snapshot)
+    registry.register('LONGER-PREFIX-' + seeded)
+    assert_equal PLACEHOLDER, TraceAI::Auto::Privacy.clean_string("LONGER-PREFIX-#{PLACEHOLDER}", registry.snapshot)
   end
 
   # A cap that lands inside the placeholder never leaves half of it.
