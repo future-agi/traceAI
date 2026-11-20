@@ -72,18 +72,105 @@ const rowsPath = path.resolve(process.env.FI_FIXTURE_ROWS || path.join(__dirname
 const sums = fs.readFileSync(path.join(path.dirname(rowsPath), 'SHA256SUMS'), 'utf8').split('\n').filter(Boolean)
   .map(line => /^([0-9a-f]{64}) [ *](.+)$/.exec(line)).filter(Boolean);
 const bytes = fs.readFileSync(rowsPath);
+const json = zlib.gunzipSync(bytes);
+const sumOf = name => { const entry = sums.find(([, , entryName]) => entryName === name); return entry && entry[1]; };
+const sha256 = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
 
-test('the fixture file matches its sidecar sum', () => {
-  const entry = sums.find(([, , name]) => name === path.basename(rowsPath));
-  assert.ok(entry, `SHA256SUMS has no entry for ${path.basename(rowsPath)}`);
-  assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), entry[1]);
+// Both sums come from the sidecar: the .gz bytes under their own name, and the decompressed JSON under the name without .gz.
+test('the fixture file matches its sidecar sums: the .gz bytes and the JSON after gunzip', () => {
+  const name = path.basename(rowsPath);
+  assert.ok(sumOf(name), `SHA256SUMS has no entry for ${name}`);
+  assert.equal(sha256(bytes), sumOf(name));
+  const jsonName = name.replace(/\.gz$/, '');
+  assert.notEqual(jsonName, name, 'the fixture is a .gz file');
+  assert.ok(sumOf(jsonName), `SHA256SUMS has no entry for ${jsonName}`);
+  assert.equal(sha256(json), sumOf(jsonName));
 });
 
-const document = JSON.parse(zlib.gunzipSync(bytes).toString('utf8'));
+const document = JSON.parse(json.toString('utf8'));
 test('the header names the format', () => {
   assert.equal(document.header.format, 'fi-plaintext-rule-rows');
   assert.ok(Array.isArray(document.rows) && document.rows.length > 0);
 });
 for (const row of document.rows) {
   test(row.id, () => { assert.deepEqual(evaluateRow(row.input), row.expect); });
+}
+
+// ---- Key bytes at the sink are MEASURED, not read from a row ---------------------------------------------------------------
+// A refused row's expected key_bytes_at_sink of 0 is a value the oracle states. Here the same decision is run for real, with a marker key of
+// this test's own, against a loopback sink that counts the marker bytes it receives, and the count must be 0 for a refused row and positive
+// for an allowed one. A deliberately unguarded send (a raw fetch) must make the same counter non-zero: that is the check that the counter counts.
+const net = require('node:net');
+const dns = require('node:dns');
+const MARKER = { 'x-api-key': 'MARKER-KEY-7f3a91c2-api', 'x-secret-key': 'MARKER-KEY-7f3a91c2-secret' };
+async function markerSink(port = 0) {
+  const state = { port: 0, markerBytes: 0, bytes: 0, connections: 0 };
+  const sockets = new Set();
+  const server = net.createServer(socket => {
+    state.connections++; sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket));
+    let tail = '';
+    socket.on('data', chunk => {
+      state.bytes += chunk.length;
+      const text = tail + chunk.toString('latin1');
+      for (const value of Object.values(MARKER)) { let at = text.indexOf(value); while (at >= 0) { state.markerBytes += value.length; at = text.indexOf(value, at + value.length); } }
+      tail = text.slice(-64);
+      // answer, so an allowed send completes
+      if (/\r\n\r\n/.test(text) && !socket.destroyed) socket.end('HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}');
+    });
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  state.port = server.address().port;
+  state.close = () => new Promise(done => { for (const socket of sockets) socket.destroy(); server.close(() => done()); });
+  return state;
+}
+/** Every host name resolves to this machine for the duration of one measured send. */
+function allHostsAreLoopback() {
+  const original = dns.lookup;
+  dns.lookup = (host, options, callback) => { const done = typeof options === 'function' ? options : callback; const wantsAll = options && options.all; process.nextTick(() => wantsAll ? done(null, [{ address: '127.0.0.1', family: 4 }]) : done(null, '127.0.0.1', 4)); };
+  return () => { dns.lookup = original; };
+}
+function scoped(row, run) {
+  const saved = {};
+  for (const name of SCOPED) { saved[name] = process.env[name]; delete process.env[name]; }
+  try {
+    Object.assign(process.env, row.proxyEnv);
+    if (row.optIn === 'env') process.env.FI_ALLOW_INSECURE_HTTP = '1';
+    if (row.keys === 'env') { process.env.FI_API_KEY = MARKER['x-api-key']; process.env.FI_SECRET_KEY = MARKER['x-secret-key']; }
+    return run();
+  } finally { for (const name of SCOPED) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } }
+}
+/** The row's send for real: the decision, then the guarded fetch, to a sink on the row's own port. Returns whether the send was refused. */
+async function sendForReal(row) {
+  return scoped(row, async () => {
+    const headers = row.keys === 'explicit' ? { ...MARKER } : row.keys === 'none' ? {} : undefined;
+    try {
+      const decision = policy.decideFiRequest({ target: row.target, transport: 'http', headers, allowInsecureHttp: row.optIn === 'option' ? true : undefined });
+      await guard.guardedFetch({ url: row.target, init: { method: 'POST', headers: decision.headers, body: '{}' }, intended: guard.intendedFrom(decision), allowInsecureHttp: row.optIn === 'option' ? true : undefined });
+      return false;
+    } catch (error) { if (error && error.name === 'FiKeyRefusal') return true; return false; }
+  });
+}
+const measurable = row => !row.target.includes('[') && row.transport === 'http' && row.dispatcher === 'none' && row.keys !== 'none' && /^http:\/\/[^/?#\\@]*:(\d{4,5})(?:[/?#]|$)/.test(row.target)
+  && Number(/:(\d{4,5})(?:[/?#]|$)/.exec(row.target)[1]) >= 1024;
+test('a deliberately unguarded send makes the counter non-zero', async () => {
+  const sink = await markerSink();
+  try {
+    await fetch(`http://127.0.0.1:${sink.port}/x`, { method: 'POST', headers: MARKER, body: '{}' }).catch(() => {});
+    assert.ok(sink.markerBytes > 0, 'the counter counts the marker key bytes of a raw fetch');
+  } finally { await sink.close(); }
+});
+for (const row of document.rows.filter(candidate => measurable(candidate.input))) {
+  test(`measured at the sink: ${row.id}`, async () => {
+    const input = row.input;
+    const port = Number(/:(\d{4,5})(?:[/?#]|$)/.exec(input.target)[1]);
+    let sink;
+    try { sink = await markerSink(port); } catch { return; /* the row's port is taken on this machine */ }
+    const restore = allHostsAreLoopback();
+    try {
+      const refused = await sendForReal(input);
+      await new Promise(done => setTimeout(done, 100));
+      if (row.expect.decision === 'refuse') { assert.equal(refused, true); assert.equal(sink.markerBytes, 0, 'a refused row put key bytes on the wire'); assert.equal(sink.bytes, 0); }
+      else { assert.equal(refused, false); assert.ok(sink.markerBytes > 0, 'an allowed row sent its keys'); }
+    } finally { restore(); await sink.close(); }
+  });
 }

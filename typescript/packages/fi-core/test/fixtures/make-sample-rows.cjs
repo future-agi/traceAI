@@ -82,5 +82,6 @@ const file = path.join(__dirname, 'plaintext-rule-SAMPLE.rows.json.gz');
 const body = zlib.gzipSync(Buffer.from(JSON.stringify({ header, rows }, null, 1)), { level: 9 });
 body.writeUInt32LE(0, 4);
 fs.writeFileSync(file, body);
-fs.writeFileSync(path.join(__dirname, 'SHA256SUMS'), `${crypto.createHash('sha256').update(body).digest('hex')}  ${path.basename(file)}\n`);
+const sha = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
+fs.writeFileSync(path.join(__dirname, 'SHA256SUMS'), `${sha(body)}  ${path.basename(file)}\n${sha(zlib.gunzipSync(body))}  ${path.basename(file).replace(/\.gz$/, '')}\n`);
 console.log(`${rows.length} rows -> ${file}`);
