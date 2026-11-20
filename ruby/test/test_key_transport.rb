@@ -166,6 +166,13 @@ class KeyTransportTest < Minitest::Test
     proxy&.stop; collector&.stop
   end
 
+  # An https export is never refused or broken because a proxy variable is set.
+  def test_https_export_is_not_refused_when_proxy_variables_are_set
+    ENV['HTTPS_PROXY'] = ENV['https_proxy'] = ENV['HTTP_PROXY'] = ENV['http_proxy'] = 'http://127.0.0.1:9'
+    _, attempts, = export_to('https://api.futureagi.com')
+    assert_equal [['api.futureagi.com', 443]], attempts
+  end
+
   # Rule 6: a 3xx answer is a refusal; the redirect target is never contacted.
   def test_redirect_is_a_refusal_and_the_target_is_never_contacted
     target = MockHTTP.new { |_| [200, {}, ''] }
