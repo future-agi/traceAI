@@ -127,7 +127,15 @@ func keyTransport(written string, u *url.URL) error {
 
 // requestTransport applies keyTransport to a request about to be sent.
 func requestTransport(req *http.Request) error {
-	return keyTransport(req.URL.Scheme+"://"+req.URL.Host, req.URL)
+	host := req.URL.Host
+	// The parser decoded the zone escape once already; written as it was configured, the host carries it encoded, so that
+	// the decision reads the zone exactly once here as well (a zone starting with "25" is written %2525x).
+	if strings.HasPrefix(host, "[") {
+		if end := strings.Index(host, "]"); end > 0 {
+			host = strings.Replace(host[:end], "%", "%25", 1) + host[end:]
+		}
+	}
+	return keyTransport(req.URL.Scheme+"://"+host, req.URL)
 }
 
 // exporterProxy is the exporter transport's proxy choice, read from the environment per request. A plaintext
@@ -179,12 +187,15 @@ func ambientHeaderKeys(c Config) error {
 			forms = append(forms, d)
 		}
 		for _, pair := range strings.Split(raw, ",") {
-			key, _, _ := strings.Cut(pair, "=")
+			key, value, _ := strings.Cut(pair, "=")
 			for _, n := range []string{key, unescapeHeader(key)} {
 				if l := strings.ToLower(strings.TrimSpace(n)); l == "x-api-key" || l == "x-secret-key" {
 					return refuse("ambient OTLP headers name a Future AGI key header")
 				}
 			}
+			// Each pair is decoded on its own, as the OpenTelemetry environment parser does: an escape that cannot be
+			// decoded in one pair does not hide a key value in another.
+			forms = append(forms, value, strings.TrimSpace(value), unescapeHeader(value), unescapeHeader(strings.TrimSpace(value)))
 		}
 		for _, form := range forms {
 			for _, key := range keys {
