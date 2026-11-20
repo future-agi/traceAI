@@ -316,10 +316,14 @@ module TraceAI
         end.join('&') + hashmark + fragment
         candidate != value && URL_VALUE.match?(candidate)
       end
-      # The most the fragment matcher may do for one value: rounds over every secret, and automaton steps in total.
+      # The most the fragment matcher may do for one value: rounds over every secret, automaton steps, and (MATCH_WORK)
+      # everything scanned.
       # Past either limit the whole value becomes the placeholder; a fragment is never left behind.
       MATCH_ROUNDS = 8
       MATCH_STEPS = 200_000
+      # One budget for the whole value: every character scanned in any round, rescan or candidate pass, and every
+      # automaton step, counts against it. Past it the value is replaced whole.
+      MATCH_WORK = 8_000_000
       class MatchLimit < StandardError; end
 
       # A secret learned after a span was captured, or one that overlaps another, can leave part of itself next to a
@@ -335,27 +339,34 @@ module TraceAI
       # value that reaches either is replaced whole.
       def close_fragments(text, secrets)
         return text unless text.include?(REDACTED)
-        steps = [0]
+        work = [0, 0] # characters and candidates scanned, automaton steps
         MATCH_ROUNDS.times do
           changed = false
-          scan = fragment_scan(text)
+          scan = fragment_scan(text, work)
           secrets.each do |secret|
-            replaced = replace_fragments(scan, secret, steps)
+            replaced = replace_fragments(scan, secret, work)
             next if replaced.nil?
             text = replaced; changed = true
-            return text unless text.include?(REDACTED) # (a replacement always leaves its placeholder)
-            scan = fragment_scan(text)
+            scan = fragment_scan(text, work)
           end
           return text unless changed
         end
-        REDACTED
+        # The last round still changed something: if one more pass would too, the value is not settled.
+        scan = fragment_scan(text, work)
+        secrets.any? { |secret| replace_fragments(scan, secret, work) } ? REDACTED : text
       rescue MatchLimit
         REDACTED
       end
 
+      def spend(work, amount)
+        work[0] += amount
+        raise MatchLimit if work[0] > MATCH_WORK
+      end
+
       # The text as items (a character, or nil for a placeholder), the placeholder positions, and the positions of
       # each character, so that one secret finds its candidate starts without reading the whole text.
-      def fragment_scan(text)
+      def fragment_scan(text, work)
+        spend(work, text.length + 1)
         items = []
         parts = text.split(REDACTED, -1)
         parts.each_with_index do |part, index|
@@ -371,9 +382,10 @@ module TraceAI
       end
 
       # `text` with every match of `secret` beside a placeholder replaced by one, or nil when there is none.
-      def replace_fragments(scan, secret, steps)
+      def replace_fragments(scan, secret, work)
         items, tokens, positions = scan
         size = secret.length
+        spend(work, tokens.length + 1)
         listed = positions.fetch(secret[0], nil)
         starts = []
         second = secret[1]
@@ -391,6 +403,7 @@ module TraceAI
           end
         end
         return nil if starts.empty?
+        spend(work, starts.length + size)
         table = Hash.new(0)
         secret.each_char.with_index { |char, index| table[char] |= 1 << index }
         full = (1 << (size + 1)) - 1
@@ -398,21 +411,24 @@ module TraceAI
         output = []; cursor = 0; found = false
         starts.uniq.sort.each do |start|
           next if start < cursor
-          stop = match_end(items, start, table, full, accept, steps)
+          stop = match_end(items, start, table, full, accept, work)
           next unless stop
           output.concat(items[cursor...start]); output << nil
           cursor = stop; found = true
         end
         return nil unless found
+        spend(work, items.length)
         output.concat(items[cursor..])
         output.map { |item| item.nil? ? REDACTED : item }.join
       end
 
       # The end of the longest match of the automaton from `start` that holds a placeholder and a literal, or nil.
-      def match_end(items, start, table, full, accept, steps)
+      def match_end(items, start, table, full, accept, work)
         mask = 1; position = start; best = nil; token = false; literal = false
         while mask != 0 && position < items.length
-          raise MatchLimit if (steps[0] += 1) > MATCH_STEPS
+          work[1] += 1
+          raise MatchLimit if work[1] > MATCH_STEPS
+          spend(work, 1)
           item = items[position]
           if item.nil?
             lowest = mask & -mask
