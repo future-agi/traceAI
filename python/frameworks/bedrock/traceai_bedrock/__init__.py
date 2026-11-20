@@ -67,7 +67,7 @@ from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtect
 try:
     from fi.evals import Protect
 except ImportError:
-    logger.warning("ai-evaluation is not installed, please install it to trace protect")
+    logger.warning("Optional fi.evals.Protect is unavailable; Protect calls will not be traced.")
     Protect = None
     pass
 

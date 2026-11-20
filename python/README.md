@@ -22,6 +22,17 @@ with Python 3.15. Use Python 3.14 or earlier for
 silently omitted, and it does not restrict core-only or `[grpc]` installs.
 Framework instrumentors have their own runtime constraints.
 
+**New Python evaluation projects:** use Agent Learning Kit in a fresh virtual
+environment (`python -m pip install agent-learning-kit==0.3.7`). It provides
+`fi.alk.evals` and depends on the **base** tracing distribution. Normal HTTP
+or gRPC tracing does not require the standalone `ai-evaluation` wheel.
+
+The `[evaluation]` extra of `fi-instrumentation-otel==1.5.0` still declares
+both `ai-evaluation` and the platform SDK `futureagi`. Keep existing pinned
+environments separate; do not add that extra to your kit environment, and do
+not install the kit over `futureagi==0.7.0`. Those two wheels overwrite some
+of the same `fi/` files, even when their dependencies resolve successfully.
+
 ## Quickstart
 
 Use Python 3.10–3.13 for this OpenAI example.
