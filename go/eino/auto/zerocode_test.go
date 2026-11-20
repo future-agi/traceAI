@@ -243,6 +243,14 @@ func TestApplicationHandlersAndTheImportTraceEachRunOnce(t *testing.T) {
 	}
 }
 
+// Concurrent runs are traced separately and completely.
+func TestConcurrentRunsAreTracedOnceEach(t *testing.T) {
+	reference := runApp(t)
+	each := len(inScope(reference.fi, einoScope))
+	r := runApp(t, "APP_MODE=concurrent")
+	sameCounts(t, "Future AGI", perTrace(r.fi), 8, each)
+}
+
 // An application with its own global provider keeps receiving the Eino spans,
 // and Future AGI receives them too.
 func TestOwnGlobalProviderStillReceivesEinoSpans(t *testing.T) {

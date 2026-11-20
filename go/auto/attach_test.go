@@ -165,3 +165,28 @@ func TestShutdownHookThatBlocksStillFlushes(t *testing.T) {
 		t.Fatalf("collector received %d queued spans, want 1", len(spans))
 	}
 }
+
+// A concurrent Shutdown honours its own context while another caller's hooks
+// are still running.
+func TestConcurrentShutdownIsNotHeldByTheHooksOfAnother(t *testing.T) {
+	_ = auto.Shutdown(context.Background())
+	auto.ResetModulesForTest()
+	t.Setenv("FI_CONFIG_FILE", filepath.Join(t.TempDir(), "absent.toml"))
+	if _, err := auto.InitForTest(context.Background(), auto.WithSpanProcessor(tracetest.NewSpanRecorder())); err != nil {
+		t.Fatal(err)
+	}
+	block := make(chan struct{})
+	defer close(block)
+	auto.Attach("eino").OnShutdown(func(context.Context) error { <-block; return nil })
+	first := make(chan struct{})
+	go func() { _ = auto.Shutdown(context.Background()); close(first) }()
+	time.Sleep(200 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_ = auto.Shutdown(ctx)
+	if took := time.Since(start); took > 1500*time.Millisecond {
+		t.Fatalf("a Shutdown with a 400ms deadline took %v behind another caller's hooks", took)
+	}
+	<-first
+}

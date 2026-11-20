@@ -43,11 +43,12 @@ func main() {
 //	unregistered ownprovider, and builds a handler it never uses
 //	perrun       ownprovider; the first question runs with its own handler
 //	midrun       ownprovider; a tool registers a global handler during the first question
+//	concurrent   plain; eight questions run at once
 func run(ctx context.Context) error {
 	mode := os.Getenv("APP_MODE")
 	var manual []*traceaieino.Handler
 	var tp *sdktrace.TracerProvider
-	if mode != "plain" && mode != "" {
+	if mode != "plain" && mode != "concurrent" && mode != "" {
 		exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(os.Getenv("APP_COLLECTOR")+"/v1/traces"))
 		if err != nil {
 			return err
@@ -83,7 +84,21 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := ask(ctx, agent, runOpts...); err != nil { // question A
+	if mode == "concurrent" {
+		var wg sync.WaitGroup
+		errs := make(chan error, 8)
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); errs <- ask(ctx, agent) }()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				return err
+			}
+		}
+	} else if err := ask(ctx, agent, runOpts...); err != nil { // question A
 		return err
 	}
 	if mode == "perrun" || mode == "midrun" {
