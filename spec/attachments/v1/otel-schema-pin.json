@@ -1,0 +1,16 @@
+{
+  "repository": "open-telemetry/semantic-conventions",
+  "revision": "aec6e9d3e86754683dab7c707655d69d953b2768",
+  "tag": "v1.37.0",
+  "projection": "GenericPart extension; fi-attachment is not a standardized OTel upload or provider-readable protocol",
+  "schemas": [
+    {
+      "path": "docs/gen-ai/gen-ai-input-messages.json",
+      "sha256": "ea8840ce42bbbbf067840db2404931ac78b8993ede3ca9d6730829ff89d6921e"
+    },
+    {
+      "path": "docs/gen-ai/gen-ai-output-messages.json",
+      "sha256": "589490c7cd7f201a29f70ad66df0b27cd8965ce4a48ceb7ace8a050056562af5"
+    }
+  ]
+}
