@@ -1,10 +1,13 @@
 package auto
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -38,6 +41,10 @@ func TestKeyTransportAmbientHeadersCarryingKeysAreRefused(t *testing.T) {
 		{"secret value under an unrelated name", "OTEL_EXPORTER_OTLP_HEADERS", "x-trace-token=" + ambientSecret},
 		{"api value inside a longer value", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-trace-token=prefix-" + ambientAPI + "-suffix"},
 		{"percent-encoded value", "OTEL_EXPORTER_OTLP_HEADERS", "x-trace-token=" + strings.ReplaceAll(ambientSecret, "-", "%2D")},
+		{"encoded value in a pair beside a malformed escape", "OTEL_EXPORTER_OTLP_HEADERS", "x-a=50%,x-trace-token=" + strings.ReplaceAll(ambientSecret, "-", "%2D")},
+		{"encoded value, malformed escape in the pair after it", "OTEL_EXPORTER_OTLP_HEADERS", "x-trace-token=" + strings.ReplaceAll(ambientAPI, "-", "%2D") + ",x-b=%zz"},
+		{"encoded value with padding beside a malformed escape", "OTEL_EXPORTER_OTLP_HEADERS", "x-a=50%, x-trace-token =  " + strings.ReplaceAll(ambientSecret, "-", "%2D") + " "},
+		{"encoded key name beside a malformed escape", "OTEL_EXPORTER_OTLP_HEADERS", "x-a=50%,X%2DApi%2DKey=v"},
 		{"name and value split by whitespace", "OTEL_EXPORTER_OTLP_HEADERS", "x-ok=1 , x-trace-token = " + ambientAPI},
 	}
 	for _, c := range cases {
@@ -115,4 +122,53 @@ func mustRequest(t *testing.T, u *url.URL) *http.Request {
 		t.Fatal(err)
 	}
 	return req
+}
+
+// Package initialization runs the same check: a complete pair with wire capture on and ambient headers that name
+// X-Api-Key arms nothing, reports the wire integration as failed, leaves http.DefaultTransport alone and warns once.
+func TestKeyTransportArmRefusesAmbientKeyHeadersWithOneValueFreeWarning(t *testing.T) {
+	ownedRegressionSetup(t)
+	clearAmbient(t)
+	t.Setenv("FI_BASE_URL", "https://api.futureagi.com")
+	t.Setenv("FI_API_KEY", ambientAPI)
+	t.Setenv("FI_SECRET_KEY", ambientSecret)
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "X-Api-Key=other-value-0004")
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	baseTransport := http.DefaultTransport
+	agent.Lock()
+	agent.armed = nil
+	warning = sync.Once{}
+	agent.Unlock()
+	t.Cleanup(func() { log.SetOutput(previous); http.DefaultTransport = baseTransport; warning = sync.Once{} })
+	arm()
+	arm()
+	agent.Lock()
+	armed, last := agent.armed, agent.last
+	agent.Unlock()
+	if armed != nil {
+		t.Fatal("package initialization armed wire capture despite ambient key headers")
+	}
+	if http.DefaultTransport != baseTransport {
+		t.Fatal("http.DefaultTransport was replaced")
+	}
+	status := ""
+	for _, integration := range last.Integrations {
+		if integration.Name == "wire" {
+			status = integration.Status
+		}
+	}
+	if status != "failed" {
+		t.Fatalf("wire integration reported %q, want the failed status", status)
+	}
+	out := logs.String()
+	if n := strings.Count(out, "instrumentation unavailable"); n != 1 {
+		t.Fatalf("want exactly one warning, got %d: %q", n, out)
+	}
+	for _, secret := range []string{ambientAPI, ambientSecret, "other-value-0004"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("warning not value-free: %q", out)
+		}
+	}
 }

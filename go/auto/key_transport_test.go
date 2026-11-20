@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -226,5 +227,31 @@ func TestKeyTransportInitRefusedSendsNothing(t *testing.T) {
 	}
 	if strings.Contains(string(report), "DUMMY_FI_API_KEY") || strings.Contains(string(report), "DUMMY_FI_SECRET_KEY") {
 		t.Fatalf("report carries a key: %s", report)
+	}
+}
+
+// A zone whose name starts with "25" is written %2525x. The decision is the same when the exporter is configured and
+// on every export: the zone is decoded once in both places.
+func TestKeyTransportZoneDecodedOnceAtInitAndAtExport(t *testing.T) {
+	for _, base := range []string{"https://[fe80::1%2525x]:4318", "https://[fe80::1%25en0]:4318", "https://[fe80::1%2525]:4318"} {
+		t.Run(base, func(t *testing.T) {
+			clearAmbient(t)
+			_, initErr := collectorEndpoint(Config{BaseURL: base})
+			u, err := url.Parse(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := http.NewRequest("POST", u.String()+"/tracer/v1/traces", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exportErr := requestTransport(req)
+			if (initErr == nil) != (exportErr == nil) {
+				t.Fatalf("Init decided %v, export decided %v", initErr, exportErr)
+			}
+			if initErr != nil {
+				t.Fatalf("an https target with a zone should be allowed at both, got %v", initErr)
+			}
+		})
 	}
 }
