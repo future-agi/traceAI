@@ -16,20 +16,22 @@ import { convertLegacyHttpOptions, createOtlpHttpExportDelegate } from "@opentel
 import { convertLegacyOtlpGrpcOptions, createOtlpGrpcExportDelegate } from "@opentelemetry/otlp-grpc-exporter-base";
 import { JsonTraceSerializer, ProtobufTraceSerializer } from "@opentelemetry/otlp-transformer";
 
-/** Version of the installed HTTP trace exporter, for the User-Agent it sets itself; absent when it cannot be read. */
-function installedExporterVersion(): string | undefined {
+/** Headers the OTLP HTTP exporter always sets itself, other than its User-Agent (taken from the exporter, see ownUserAgent). */
+const HTTP_CONTENT_TYPE = "Content-Type";
+const USER_AGENT_PREFIX = /^OTel-OTLP-Exporter-JavaScript\//;
+/**
+ * The User-Agent the freshly built exporter set itself, read from its own header provider before
+ * that is replaced, so the version it reports is the installed one in every module format. Only a
+ * value of the exporter's own form is used; when it cannot be read the version is simply omitted.
+ */
+function ownUserAgent(exporter: any): string {
   try {
-    if (typeof require !== "function") return undefined;
-    const version = require("@opentelemetry/exporter-trace-otlp-http/package.json")?.version;
-    return typeof version === "string" && /^[\w.+-]+$/.test(version) ? version : undefined;
-  } catch { return undefined; }
+    const headers = exporter?._delegate?._transport?._transport?._parameters?.headers?.();
+    const value = headers?.["User-Agent"] ?? headers?.["user-agent"];
+    if (typeof value === "string" && USER_AGENT_PREFIX.test(value) && /^[\x20-\x7e]+$/.test(value)) return value;
+  } catch { /* fall through */ }
+  return "OTel-OTLP-Exporter-JavaScript";
 }
-/** Headers the OTLP HTTP exporter always sets itself (the JSON trace exporter's own set). */
-const exporterVersion = installedExporterVersion();
-const HTTP_REQUIRED: Record<string, string> = {
-  "User-Agent": exporterVersion ? `OTel-OTLP-Exporter-JavaScript/${exporterVersion}` : "OTel-OTLP-Exporter-JavaScript",
-  "Content-Type": "application/json",
-};
 /** Thrown without header names or values. */
 export const UNSUPPORTED_EXPORTER_LAYOUT = "Unsupported OTLP exporter layout: the exporter's header configuration cannot be pinned, so no exporter was created. Use a supported @opentelemetry/exporter-trace-otlp package version.";
 
@@ -45,17 +47,6 @@ function envHeaderNames(): Set<string> {
   return names;
 }
 
-/**
- * Only an object that is provably a jest stand-in for the exporter may skip isolation: a plain mock
- * object (no `_delegate`) built while running under jest. Whatever else reaches here is treated as an
- * OTLP exporter and must pass the layout check, whichever copy of the exporter base class it was
- * built from; outside jest nothing is skipped.
- */
-function isJestStandIn(exporter: any): boolean {
-  if (process.env.JEST_WORKER_ID === undefined) return false;
-  return exporter === null || typeof exporter !== "object" || !("_delegate" in exporter);
-}
-
 function checkDelegate(exporter: any): void {
   const delegate = exporter._delegate;
   if (!delegate || typeof delegate.export !== "function" || typeof delegate.forceFlush !== "function" || typeof delegate.shutdown !== "function") refuse();
@@ -67,9 +58,9 @@ function checkDelegate(exporter: any): void {
  */
 export function isolateHttpExporterHeaders(exporter: unknown, config: { url?: string; [key: string]: unknown }, explicit: Record<string, string> | undefined): void {
   try {
-    if (isJestStandIn(exporter)) return;
     checkDelegate(exporter);
     if (typeof convertLegacyHttpOptions !== "function" || typeof createOtlpHttpExportDelegate !== "function" || !JsonTraceSerializer) refuse();
+    const HTTP_REQUIRED: Record<string, string> = { "User-Agent": ownUserAgent(exporter), [HTTP_CONTENT_TYPE]: "application/json" };
     const resolved = convertLegacyHttpOptions(config, "TRACES", "v1/traces", { ...HTTP_REQUIRED }) as { headers?: unknown };
     if (typeof resolved?.headers !== "function") refuse();
     const probe = (resolved.headers as () => Record<string, unknown>)();
@@ -92,7 +83,6 @@ export function isolateHttpExporterHeaders(exporter: unknown, config: { url?: st
  */
 export function isolateGrpcExporterHeaders(exporter: unknown, config: { metadata?: grpc.Metadata; [key: string]: unknown }): void {
   try {
-    if (isJestStandIn(exporter)) return;
     checkDelegate(exporter);
     if (typeof convertLegacyOtlpGrpcOptions !== "function" || typeof createOtlpGrpcExportDelegate !== "function" || !ProtobufTraceSerializer) refuse();
     const resolved = convertLegacyOtlpGrpcOptions(config as any, "TRACES") as { metadata?: unknown };

@@ -1,7 +1,8 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
+import { getAttributesFromContext, ProjectType, register, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
+import { createFiRouteSpanExporter } from "@traceai/fi-core/fi-route";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
 import { createOutgoingPrivacy, noteOutgoingSpanStart } from "./outgoing-privacy";
@@ -285,7 +286,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
       rememberAutoSpanSink(processor, supplied);
     }
     else if (options.exporter || fiCredentials) {
-      const exporter = guardedExporter(options.exporter ?? createSpanExporter({ endpoint: config.baseUrl, fiEndpoint: true,
+      const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl,
         headers: { "x-api-key": config.apiKey!, "x-secret-key": config.secretKey! }, verbose: false, traceConfig: config.traceConfig,
         resourceAttributes: { project_name: config.projectName, project_type: config.projectType } }), agent, options, failedCaptures);
       processor = new BatchSpanProcessor(exporter);

@@ -28,6 +28,7 @@ import {
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
+import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -292,9 +293,10 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
-  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; fiEndpoint?: boolean; [key: string]: any }) {
-    const { endpoint, verbose = false, traceConfig, resourceAttributes, fiEndpoint, ...restOptions } = options;
-    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, options.headers, fiEndpoint === true);
+  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
+    const { endpoint, verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
+    delete restOptions.fiEndpoint; // never an option: only the SDK's own FI route (fi-route.ts) declares an FI endpoint
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, options.headers, isFiRouteDeclared(options));
     const headers = resolvedHeaders ?? {};
     delete restOptions.headers;
     const auth_header = headers;
@@ -392,12 +394,16 @@ const hostOf = (endpoint: string): string => {
 /** Scheme, host case, default port and trailing slash do not make two spellings of an endpoint different. */
 function normalizeEndpoint(endpoint: string, grpcTransport: boolean): string {
   const text = endpoint.trim();
+  const schemeless = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
   try {
+    if (grpcTransport) {
+      // gRPC targets are host:port; the scheme, on either side, only selects credentials, and the exporter dials 443 by default.
+      const url = new URL(`https://${schemeless}`);
+      return `${url.hostname}:${url.port || "443"}`;
+    }
     const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
     const port = url.port || (url.protocol === "http:" ? "80" : "443");
-    const path = url.pathname.replace(/\/+$/, "");
-    // gRPC targets are host:port; the scheme only selects the credentials, not the destination.
-    return grpcTransport ? `${url.hostname}:${port}` : `${url.protocol}//${url.hostname}:${port}${path}`;
+    return `${url.protocol}//${url.hostname}:${port}${url.pathname.replace(/\/+$/, "")}`;
   } catch { return text; }
 }
 /**
@@ -474,9 +480,9 @@ function constructFullEndpoint(customEndpoint?: string): string {
 /** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders; fiEndpoint?: boolean } = {}) {
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders } = {}) {
     const url = constructFullEndpoint(options.endpoint);
-    const { headers, fiBound } = headersForEndpoint(url, false, options.headers, options.fiEndpoint === true);
+    const { headers, fiBound } = headersForEndpoint(url, false, options.headers, isFiRouteDeclared(options));
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);
@@ -492,15 +498,15 @@ export function createSpanExporter(options: ExportPrivacyOptions & {
   headers?: FIHeaders;
   transport?: Transport;
   verbose?: boolean;
-  /**
-   * @internal For the SDK's own wiring: the endpoint is the FI endpoint (the auto package resolves its
-   * base URL from options, a config file, the environment or the default). Headers never set this.
-   */
-  fiEndpoint?: boolean;
 } = {}): SpanExporter {
+  // Whether the endpoint is the FI route is the SDK's own wiring (see fi-route.ts), carried by the
+  // identity of the options object; no property of a caller's options can say so.
+  const declared = isFiRouteDeclared(options);
+  const { fiEndpoint: _ignored, ...rest } = options as typeof options & { fiEndpoint?: unknown };
+  const mark = <T extends object>(built: T): T => (declared ? declareFiRoute(built) : built);
   return options.transport === Transport.GRPC
-    ? new GRPCSpanExporter({ ...options, endpoint: options.endpoint ?? getEnvGrpcCollectorEndpoint() })
-    : new OTLPHTTPSpanExporter(options);
+    ? new GRPCSpanExporter(mark({ ...rest, endpoint: options.endpoint ?? getEnvGrpcCollectorEndpoint() }))
+    : new OTLPHTTPSpanExporter(mark({ ...rest }));
 }
 
 // --- TracerProvider ---
