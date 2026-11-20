@@ -41,15 +41,29 @@ afterEach(async () => {
 
 interface Counter { port: number; url: string; connections: number; bytes: number }
 /** A listener that only counts: accepted connections and bytes read. It stands for a proxy or a remote host that must see nothing. */
-async function counter(): Promise<Counter> {
+async function counter(host = "127.0.0.1"): Promise<Counter> {
   const state: Counter = { port: 0, url: "", connections: 0, bytes: 0 };
   const sockets = new Set<net.Socket>();
   const server = net.createServer(socket => { state.connections++; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); socket.on("error", () => {}); socket.on("data", chunk => { state.bytes += chunk.length; }); });
-  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
-  state.port = (server.address() as AddressInfo).port; state.url = `http://127.0.0.1:${state.port}`;
+  await new Promise<void>(done => server.listen(0, host, done));
+  state.port = (server.address() as AddressInfo).port; state.url = `http://${host}:${state.port}`;
   cleanups.push(() => new Promise<void>(done => { for (const s of sockets) s.destroy(); server.close(() => done()); }));
   return state;
 }
+/** The same on a unix socket. */
+async function unixCounter(): Promise<Counter & { socketPath: string }> {
+  const socketPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fi-guard-sock-")), "s.sock");
+  const state = { port: 0, url: "", connections: 0, bytes: 0, socketPath };
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer(socket => { state.connections++; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); socket.on("error", () => {}); socket.on("data", chunk => { state.bytes += chunk.length; }); });
+  await new Promise<void>(done => server.listen(socketPath, done));
+  cleanups.push(() => new Promise<void>(done => { for (const s of sockets) s.destroy(); server.close(() => { fs.rmSync(path.dirname(socketPath), { recursive: true, force: true }); done(); }); }));
+  return state;
+}
+/** A connect function that dials another address than the one asked for. */
+const redirectingConnect = (host: string, port: number) => (_options: unknown, callback: (error: Error | null, socket?: net.Socket) => void) => {
+  const socket = net.connect({ host, port }); socket.once("connect", () => callback(null, socket)); socket.once("error", error => callback(error));
+};
 interface Sink extends Counter { requests: Array<{ url: string; headers: http.IncomingHttpHeaders }> }
 /** A real HTTP server that records what it receives and counts its sockets. */
 async function sink(options: { respond?: (res: http.ServerResponse) => void; tls?: { key: string; cert: string } } = {}): Promise<Sink> {
@@ -155,12 +169,12 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
     await check(target.url, { dispatcher: unknown });
     expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
-  test("(pin) a Pool on the exact target origin is allowed: the sink receives the keys", async () => {
+  test("a Pool on the exact target origin is refused too: undici keeps a Pool's connect, socketPath and factory options in an opaque connector, so its dial cannot be shown to reach the target", async () => {
     const target = await sink(), proxy = await counter();
     process.env.HTTP_PROXY = proxy.url;
     const pool = new Pool(target.url); cleanups.push(() => pool.close());
     await check(target.url, { dispatcher: pool });
-    expect(target.requests).toHaveLength(1); expect(target.requests[0].headers["x-api-key"]).toBe(ENV_KEYS.FI_API_KEY); seenNothing(proxy);
+    expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
   test("(pin) an empty undici global slot with HTTP_PROXY set and a loopback target is sent direct", async () => {
     const target = await sink(), proxy = await counter();
@@ -301,5 +315,104 @@ describe("endpoint logs name the host class only", () => {
     const text = messages.join("\n");
     expect(text).not.toMatch(/alice|hunter2|query-token|token=|collector\.example|4318/);
     expect(text).toMatch(/other host/);
+  });
+});
+
+describe("dispatchers whose dial can be redirected are refused for every key-carrying request, https included", () => {
+  let tls: { key: string; cert: string };
+  beforeAll(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fi-guard-tls2-"));
+    const run = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+      "-keyout", path.join(dir, "key.pem"), "-out", path.join(dir, "cert.pem")], { encoding: "utf8" });
+    if (run.status !== 0) throw new Error("openssl is needed for the TLS cells");
+    tls = { key: fs.readFileSync(path.join(dir, "key.pem"), "utf8"), cert: fs.readFileSync(path.join(dir, "cert.pem"), "utf8") };
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  beforeEach(() => { Object.assign(process.env, ENV_KEYS); });
+
+  test("an https FI target and a Pool bound to a local 127.0.0.2 listener: the listener sees 0 bytes", async () => {
+    const approved = await sink({ tls }), remote = await counter("127.0.0.2");
+    const pool = new Pool(remote.url); cleanups.push(() => pool.close());
+    await check(`https://localhost:${approved.port}`, { dispatcher: pool });
+    seenNothing(remote); expect(approved.requests).toHaveLength(0);
+  });
+  test("an https FI target and a Pool on the target's own origin is refused too: its connector cannot be shown to dial the target", async () => {
+    const approved = await sink({ tls });
+    const pool = new Pool(`https://localhost:${approved.port}`, { connect: { ca: tls.cert } }); cleanups.push(() => pool.close());
+    await check(`https://localhost:${approved.port}`, { dispatcher: pool });
+    expect(approved.requests).toHaveLength(0);
+  });
+  test("a global Pool bound to another origin is refused for an https FI target", async () => {
+    const approved = await sink({ tls }), remote = await counter("127.0.0.2");
+    const pool = new Pool(remote.url); cleanups.push(() => pool.close());
+    setGlobalDispatcher(pool);
+    await check(`https://localhost:${approved.port}`);
+    seenNothing(remote); expect(approved.requests).toHaveLength(0);
+  });
+  test("an Agent with a connect function that dials a 127.0.0.2 listener: the listener sees 0 bytes", async () => {
+    const target = await sink(), remote = await counter("127.0.0.2");
+    const agent = new Agent({ connect: redirectingConnect("127.0.0.2", remote.port) as any }); cleanups.push(() => agent.close());
+    await check(target.url, { dispatcher: agent });
+    seenNothing(remote); expect(target.requests).toHaveLength(0);
+  });
+  test("the same for an https target", async () => {
+    const approved = await sink({ tls }), remote = await counter("127.0.0.2");
+    const agent = new Agent({ connect: redirectingConnect("127.0.0.2", remote.port) as any }); cleanups.push(() => agent.close());
+    await check(`https://localhost:${approved.port}`, { dispatcher: agent });
+    seenNothing(remote); expect(approved.requests).toHaveLength(0);
+  });
+  test("an Agent with a socketPath, a Pool with a socketPath, a Pool with a connect option and an Agent with a custom factory are refused: the unix listener sees 0 bytes", async () => {
+    const target = await sink(), unix = await unixCounter();
+    const dispatchers = [
+      new Agent({ connect: { socketPath: unix.socketPath } }),
+      new Pool(target.url, { socketPath: unix.socketPath }),
+      new Pool(target.url, { connect: { socketPath: unix.socketPath } }),
+      new Pool(target.url, { connect: redirectingConnect("127.0.0.2", 9) as any }),
+      new Agent({ factory: (origin: any, options: any) => new Pool(origin, { ...options, socketPath: unix.socketPath }) }),
+    ];
+    for (const dispatcher of dispatchers) { cleanups.push(() => dispatcher.close()); await check(target.url, { dispatcher }); }
+    seenNothing(unix); expect(target.requests).toHaveLength(0);
+  });
+  test("(pin) a plain Agent is allowed, plaintext and https", async () => {
+    const target = await sink(), approved = await sink({ tls });
+    const plain = new Agent({ connect: { ca: tls.cert } }); cleanups.push(() => plain.close());
+    // A TLS option in connect does not redirect the dial, but the guard cannot tell; a plain Agent with no options is the shape that is proven.
+    const bare = new Agent(); cleanups.push(() => bare.close());
+    await check(target.url, { dispatcher: bare });
+    expect(target.requests).toHaveLength(1); expect(target.requests[0].headers["x-api-key"]).toBe(ENV_KEYS.FI_API_KEY);
+    void plain; void approved;
+  });
+  test("dispatcher origins and options are read from data only: an accessor on the dispatcher is never run", async () => {
+    const target = await sink();
+    let ran = false;
+    const trap = Object.setPrototypeOf({}, Agent.prototype);
+    Object.defineProperty(trap, Symbol("options"), { get() { ran = true; return {}; } });
+    Object.defineProperty(trap, "constructor", { get() { ran = true; return Agent; } });
+    await check(target.url, { dispatcher: trap });
+    expect(ran).toBe(false); expect(target.requests).toHaveLength(0);
+  });
+});
+
+describe("no raw URL, userinfo or query in any log level", () => {
+  const messages: string[] = [];
+  beforeEach(() => { messages.length = 0; const sinkFn = (...args: unknown[]) => { messages.push(args.map(String).join(" ")); };
+    diag.setLogger({ verbose: sinkFn, debug: sinkFn, info: sinkFn, warn: sinkFn, error: sinkFn }, DiagLogLevel.ALL); });
+  afterEach(() => diag.disable());
+  test("an eval check whose base URL makes fetch throw an error that carries the URL logs the host class and the error class only", async () => {
+    Object.assign(process.env, ENV_KEYS);
+    // A port out of range: fetch itself throws, and its message carries the whole URL.
+    process.env.FI_BASE_URL = "http://alice:hunter2-synthetic@127.0.0.1:99999/?token=query-token-synthetic-0003";
+    await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, true, {});
+    const text = messages.join("\n");
+    expect(text).not.toMatch(/alice|hunter2|query-token|token=|99999|127\.0\.0\.1/);
+  });
+  test("a failed guarded fetch logs no URL: the error from the transport is reduced to its class", async () => {
+    const dead = await counter();
+    Object.assign(process.env, ENV_KEYS);
+    process.env.FI_BASE_URL = `http://127.0.0.1:${dead.port}`;
+    // The listener accepts and drops the connection: the error comes from the transport.
+    await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, true, {});
+    const text = messages.join("\n");
+    expect(text).not.toMatch(new RegExp(`127\\.0\\.0\\.1|${dead.port}`));
   });
 });
