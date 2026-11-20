@@ -113,4 +113,24 @@ class KeyTransportTest {
             assertThatThrownBy(() -> KeyTransport.checkStatus(status)).isInstanceOf(KeyTransport.Refused.class);
         KeyTransport.checkStatus(200); KeyTransport.checkStatus(204); KeyTransport.checkStatus(500);
     }
+
+    /**
+     * Loopback is the host as written: these spellings are never loopback, whatever a URL parser makes of them. Without the opt-in each is
+     * refused. With it, a spelling this JDK's URL parser reads as a host (2130706433, 0177.0.0.1) is a plaintext non-loopback target, and one
+     * it cannot read as a host (127.1, 0x7f.0.0.1, 127.0.0.1.) stays refused as ambiguous. A refusal names no value.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"http://127.1:4318", "http://0x7f.0.0.1:4318", "http://2130706433:4318", "http://0177.0.0.1:4318", "http://127.0.0.1.:4318"})
+    void numericAndTrailingDotLoopbackSpellingsAreOtherHosts(String url) {
+        refused(url);
+        refused(url, Map.of("FI_ALLOW_INSECURE_HTTP", "true"), false);
+        boolean readAsHost = url.contains("2130706433") || url.contains("0177.0.0.1");
+        if (readAsHost) {
+            assertThat(KeyTransport.check(url, true, OPT_IN, false).plaintext()).isTrue();
+            assertThat(KeyTransport.check(url, true, NONE, true).plaintext()).isTrue();
+        } else {
+            refused(url, OPT_IN, false);
+            refused(url, NONE, true);
+        }
+    }
 }

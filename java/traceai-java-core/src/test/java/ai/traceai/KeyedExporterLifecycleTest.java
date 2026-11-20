@@ -147,4 +147,22 @@ class KeyedExporterLifecycleTest {
         assertThat(connections).hasValue(0);
     }
     private static void restore(String key, String value) { if (value == null) System.clearProperty(key); else System.setProperty(key, value); }
+
+    @Test void shutdownCalledFromTheCompletionCallbackReturnsPromptly() throws Exception {
+        AtomicInteger hits = new AtomicInteger();
+        HttpServer server = collector(false, hits);
+        KeyedOtlpSpanExporter exporter = exporter(server, Duration.ofSeconds(3));
+        long[] millis = {-1}; boolean[] ok = {false};
+        CountDownLatch called = new CountDownLatch(1);
+        CompletableResultCode result = exporter.export(spans("probe"));
+        result.whenComplete(() -> {
+            long start = System.nanoTime();
+            ok[0] = exporter.shutdown().join(10, TimeUnit.SECONDS).isSuccess();
+            millis[0] = (System.nanoTime() - start) / 1_000_000;
+            called.countDown();
+        });
+        assertThat(called.await(15, TimeUnit.SECONDS)).isTrue();
+        assertThat(millis[0]).as("shutdown from the completion callback waited out its own send (ms)").isLessThan(1000);
+        assertThat(ok[0]).as("shutdown from the callback reports success: nothing else was in flight").isTrue();
+    }
 }

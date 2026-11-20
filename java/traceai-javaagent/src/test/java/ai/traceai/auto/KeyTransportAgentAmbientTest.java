@@ -67,4 +67,31 @@ class KeyTransportAgentAmbientTest {
         assertTrue(String.valueOf(TraceAIAuto.statusOf("wire")).startsWith("disabled"), String.valueOf(TraceAIAuto.statusOf("wire")));
         for (String value : List.of(API, SECRET, "other")) assertFalse(err.toString().contains(value));
     }
+
+    @Test void numericAndTrailingDotLoopbackSpellingsAreOtherHostsInTheAgentToo() {
+        for (String host : List.of("127.1", "0x7f.0.0.1", "2130706433", "0177.0.0.1", "127.0.0.1.")) {
+            String base = "http://" + host + ":4318";
+            refused(config(base, Map.of(), Map.of()));
+            refused(config(base, Map.of(), Map.of("FI_ALLOW_INSECURE_HTTP", "true")));
+            boolean readAsHost = host.equals("2130706433") || host.equals("0177.0.0.1");
+            if (readAsHost) {
+                assertDoesNotThrow(() -> config(base, Map.of("allow_insecure_http", "1"), Map.of()).checkKeyTransport(), host);
+                assertDoesNotThrow(() -> config(base, Map.of(), Map.of("FI_ALLOW_INSECURE_HTTP", "1")).checkKeyTransport(), host);
+            } else {
+                refused(config(base, Map.of("allow_insecure_http", "1"), Map.of()));
+                refused(config(base, Map.of(), Map.of("FI_ALLOW_INSECURE_HTTP", "1")));
+            }
+        }
+    }
+
+    /** The environment variable is exactly "1"; the explicit option is a boolean true, or the string "1" or "true". */
+    @Test void theExplicitOptInAcceptsTrueOneAndTheStringTrueAndNothingElse() {
+        String base = "http://collector.internal:4318";
+        for (Object accepted : List.of(Boolean.TRUE, "1", "true"))
+            assertDoesNotThrow(() -> config(base, Map.of("allow_insecure_http", accepted), Map.of()).checkKeyTransport(), String.valueOf(accepted));
+        for (Object rejected : List.of(Boolean.FALSE, "0", "false", "yes", "", "2", 1))
+            refused(config(base, Map.of("allow_insecure_http", rejected), Map.of()));
+        for (String value : List.of("true", "TRUE", "yes", "0", ""))
+            refused(config(base, Map.of(), Map.of("FI_ALLOW_INSECURE_HTTP", value)));
+    }
 }
