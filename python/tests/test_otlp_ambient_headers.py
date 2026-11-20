@@ -341,3 +341,75 @@ def test_a_grpc_exporter_without_keys_or_environment_headers_is_built(monkeypatc
 
     assert len(seen) == 1
     assert "x-api-key" not in seen[0]
+
+
+def _wrap_parent_init(monkeypatch, base):
+    """Wrap the parent exporter __init__ with a bare (self, *args, **kwargs) function."""
+    original = base.__init__
+
+    def wrapper(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(base, "__init__", wrapper)
+
+
+def _exporter_classes(transport):
+    if transport == "grpc":
+        return otel._GRPCSpanExporter, otel.GRPCSpanExporter
+    return otel._HTTPSpanExporter, otel.HTTPSpanExporter
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_init_pointed_at_the_users_collector_is_built(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    # Future AGI is configured in the environment, but the exporter is given the user's own collector.
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+    base, cls = _exporter_classes(transport)
+    _wrap_parent_init(monkeypatch, base)
+
+    exporter = cls(endpoint=url, headers={"x-user-header": "1"}, timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-user-header") == "1"
+    assert "x-api-key" not in seen[0] and "x-secret-key" not in seen[0], seen
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_init_pointed_at_future_agi_sends_only_sdk_headers(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    _set_env(monkeypatch, "both")
+    base, cls = _exporter_classes(transport)
+    _wrap_parent_init(monkeypatch, base)
+
+    _export_one_span(cls(timeout=5))
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-api-key") == "synthetic-env-key"
+    assert all(name not in seen[0] for name in AMBIENT_NAMES), seen
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_of_unknown_shape_pointed_at_future_agi_is_refused(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    _set_env(monkeypatch, "both")
+    base, cls = _exporter_classes(transport)
+
+    def unknown_layout(self, endpoint=None, *args, **kwargs):
+        self._endpoint = endpoint
+
+    monkeypatch.setattr(base, "__init__", unknown_layout)
+    _wrap_parent_init(monkeypatch, base)
+
+    with pytest.raises(otel.UnsupportedOTLPExporterError):
+        cls()
+    assert seen == []
