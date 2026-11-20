@@ -1,0 +1,58 @@
+name: Prompt Flow native tracing
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/promptflow/**'
+      - 'python/pyproject.toml'
+      - '.github/workflows/promptflow-tests.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/promptflow/**'
+      - 'python/pyproject.toml'
+      - '.github/workflows/promptflow-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - promptflow: '1.18.0'
+            otel: '1.29.0'
+            openai: '1.109.1'
+          - promptflow: '1.18.5'
+            otel: '1.38.0'
+            openai: '3.42.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install released framework and local core
+        env:
+          PF_VERSION: ${{ matrix.promptflow }}
+          OTEL_VERSION: ${{ matrix.otel }}
+          OPENAI_VERSION: ${{ matrix.openai }}
+        run: |
+          pip install ./python "promptflow==$PF_VERSION" "openai==$OPENAI_VERSION" \
+            "opentelemetry-sdk==$OTEL_VERSION" "opentelemetry-exporter-otlp-proto-http==$OTEL_VERSION" \
+            pytest pytest-asyncio
+      - name: Test native topology, privacy and loopback OTLP without outbound access
+        run: |
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            env -i PATH="$PATH" HOME="$RUNNER_TEMP" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            "$(command -v python)" -I -m pytest -p pytest_asyncio.plugin \
+            python/tests/promptflow -q -o addopts=
