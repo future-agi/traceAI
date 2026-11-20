@@ -20,8 +20,9 @@ final class OtelBridge {
     private static final Set<String> LIBRARY = Set.of("LLM", "EMBEDDING", "RERANKER", "GUARDRAIL");
     static Snapshot snapshot() { return snapshot(true); }
     /**
-     * @param wire true for a request about to be captured by the wire layer: while an ADK model call is in flight, a request
-     *             from a thread with no valid span (a client's own executor thread carries no OpenTelemetry context) belongs to it.
+     * @param wire true for a request about to be captured by the wire layer: under an ADK span, a request that belongs to an ADK model
+     *             call in flight under that span's agent is not captured twice. A request from a thread with no span at all is always
+     *             captured: the in-flight registry has no URL or model to tell whose request it is, so it never drops one.
      */
     static Snapshot snapshot(boolean wire) {
         boolean validSpan = false;
@@ -86,9 +87,8 @@ final class OtelBridge {
             } catch (ReflectiveOperationException ignored) { }
         } catch (Throwable ignored) { }
         if (wire && !suppressed) {
-            // An ADK span is current: only a model call that is its child can own this request. No span at all: any open model call.
+            // An ADK span is current: only a model call that is its child can own this request. No span at all: fail open, traced.
             if (adkSpan != null) suppressed = GoogleAdk.modelCallInFlightNear(adkSpan);
-            else if (!validSpan) suppressed = GoogleAdk.modelCallInFlight();
         }
         return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
     }

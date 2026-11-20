@@ -21,6 +21,8 @@ class GoogleAdkE2ETest {
 
     /** ADK 1.0.0 ends the invocation span before the agent span it contains, so that span cannot carry what the agent span reports. */
     boolean adkVersion100;
+    /** A directory added to the child's class path, or null. */
+    Path extraClasspath;
     HttpServer server;
     ExecutorService executor;
     final java.util.concurrent.atomic.AtomicInteger modelCalls = new java.util.concurrent.atomic.AtomicInteger();
@@ -61,6 +63,7 @@ class GoogleAdkE2ETest {
         Path classpath = module.resolve("adk-app.classpath");
         assertTrue(Files.isRegularFile(classpath), "build the traceai-java-google-adk module first (mvn -pl traceai-javaagent -am verify): " + classpath);
         String cp = module.resolve("test-classes") + File.pathSeparator + Files.readString(classpath).trim();
+        if (extraClasspath != null) cp = extraClasspath + File.pathSeparator + cp;
         adkVersion100 = cp.contains("google-adk-1.0.0.jar");
         Path output = Files.createTempFile(Path.of("target"), "adk-e2e-", ".log");
         List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-javaagent:" + agent,
@@ -151,17 +154,25 @@ class GoogleAdkE2ETest {
         assertTrue(spans.stream().noneMatch(s -> String.valueOf(s.get("name")).startsWith("chat ")), spans.toString());
     }
 
-    /** The model client may send the HTTP call while ADK assembles the request, or on a thread of its own executor. */
-    @Test void theModelsHttpCallIsNotTracedASecondTimeWhereverTheClientSendsIt() throws Exception {
-        for (String send : List.of("assembly", "executor")) {
-            spans.clear(); modelCalls.set(0);
-            run("plain", PROMPT, Map.of(), send);
-            assertEquals(2, modelCalls.get(), send + ": the model stub made its two HTTP calls");
-            assertEquals(2, named("call_llm").size(), send + ": exactly one LLM span per model call: " + spans);
-            assertEquals(List.of(), byLayer("wire"), send + ": no wire span for the model's HTTP call: " + spans);
-            assertTrue(spans.stream().noneMatch(s -> String.valueOf(s.get("name")).startsWith("chat ")), send + ": " + spans);
-            assertEquals(5, spans.size(), send + ": " + spans);
-        }
+    /** The model client may send the HTTP call while ADK assembles the request: still not traced a second time. */
+    @Test void theModelsHttpCallIsNotTracedASecondTimeWhenSentWhileAdkAssemblesTheRequest() throws Exception {
+        run("plain", PROMPT, Map.of(), "assembly");
+        assertEquals(2, modelCalls.get(), "the model stub made its two HTTP calls");
+        assertEquals(2, named("call_llm").size(), "exactly one LLM span per model call: " + spans);
+        assertEquals(List.of(), byLayer("wire"), "no wire span for the model's HTTP call: " + spans);
+        assertEquals(5, spans.size(), spans.toString());
+    }
+
+    /**
+     * The documented limit: a client that hops the model's request to a thread of its own executor sends it from a thread with no span, which
+     * is never dropped (the registry cannot tell whose request it is). Each such request is a wire span beside the LLM span, with its own context.
+     */
+    @Test void aModelRequestHoppedToAnExecutorThreadIsRecordedAsAWireSpanBesideTheLlmSpan() throws Exception {
+        run("plain", PROMPT, Map.of(), "executor");
+        assertEquals(2, modelCalls.get(), "the model stub made its two HTTP calls");
+        assertEquals(2, named("call_llm").size(), "exactly one LLM span per model call: " + spans);
+        assertEquals(2, byLayer("wire").size(), "the documented duplicate: " + spans);
+        for (Map<String, Object> wire : byLayer("wire")) assertNull(wire.get("parentSpanId"), "its own context: " + wire);
     }
 
     /** A call_llm open in an unrelated session must never drop an LLM call made under another span. */
@@ -299,6 +310,21 @@ class GoogleAdkE2ETest {
         assertTrue(log.lines().filter(l -> l.startsWith("OWN ")).anyMatch(l -> l.contains("parent=true")), log);
         assertEquals(5, spans.size(), "the agent's own spans reach Future AGI as well: " + spans);
         assertEquals(List.of(), byLayer("wire"));
+    }
+
+    /** Beside the OpenTelemetry Java agent (found by its premain class on the class path) this agent stays off, and the doctor says so. */
+    @Test void doctorBesideTheOpenTelemetryJavaAgentSaysGoogleAdkAndWireAreOffAndNothingIsExported() throws Exception {
+        Path other = Files.createTempDirectory(Path.of("target"), "otel-agent-marker-");
+        Path marker = other.resolve("io/opentelemetry/javaagent/OpenTelemetryAgent.class");
+        Files.createDirectories(marker.getParent()); Files.write(marker, new byte[0]);
+        extraClasspath = other;
+        try {
+            String log = run("plain", PROMPT, Map.of());
+            String doctor = log.lines().filter(l -> l.startsWith("DOCTOR ")).findFirst().orElseThrow();
+            assertTrue(doctor.contains("\"google-adk\":\"disabled (OpenTelemetry Java agent detected)\""), doctor);
+            assertTrue(doctor.contains("\"wire\":\"disabled (OpenTelemetry Java agent detected)\""), doctor);
+            assertEquals(List.of(), spans, "nothing is exported beside the other agent");
+        } finally { extraClasspath = null; }
     }
 
     @Test void doctorListsTheIntegration() throws Exception {

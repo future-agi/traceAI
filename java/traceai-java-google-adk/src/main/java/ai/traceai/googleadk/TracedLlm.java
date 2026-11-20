@@ -44,7 +44,7 @@ public final class TracedLlm extends BaseLlm {
     public Flowable<LlmResponse> generateContent(LlmRequest llmRequest, boolean stream) {
         return Flowable.defer(() -> {
             Span span = tracer.startSpan("call_llm", FISpanKind.LLM);
-            Map<String, Object> request = AdkJson.request(llmRequest);
+            Map<String, Object> request = serialized(() -> AdkJson.request(llmRequest));
             AtomicReference<Map<String, Object>> last = new AtomicReference<>(Map.of());
             Flowable<LlmResponse> upstream;
             try (Scope ignored = span.makeCurrent()) {
@@ -62,11 +62,20 @@ public final class TracedLlm extends BaseLlm {
                 }
             };
             return scoped
-                .doOnNext(response -> last.set(AdkJson.response(response)))
+                .doOnNext(response -> last.set(serialized(() -> AdkJson.response(response))))
                 .doOnError(error -> finish(span, request, last.get(), error))
                 .doOnComplete(() -> finish(span, request, last.get(), null))
                 .doOnCancel(() -> finish(span, request, last.get(), null));
         });
+    }
+
+    /** Serializing for the span never fails the call, whatever it throws. */
+    private static Map<String, Object> serialized(java.util.function.Supplier<Map<String, Object>> shape) {
+        try {
+            return shape.get();
+        } catch (Throwable ignored) {
+            return Map.of();
+        }
     }
 
     private void finish(Span span, Map<String, Object> request, Map<String, Object> response, Throwable error) {

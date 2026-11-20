@@ -62,18 +62,34 @@ public final class AdkAttributes {
             double d = n.doubleValue();
             return Double.isNaN(d) || Double.isInfinite(d) ? (Object) String.valueOf(d) : value;
         }
+        // Kept as their values, as Gson wrote them.
+        if (value instanceof Enum<?> e) return e.name();
+        if (value instanceof Character || value instanceof java.util.UUID) return String.valueOf(value);
         boolean container = value instanceof Map || value instanceof Iterable || value.getClass().isArray();
         if (!container) return "<unserializable: " + value.getClass().getName() + ">";
         if (path.put(value, Boolean.TRUE) != null) return "<cycle>";
         try {
             if (value instanceof Map<?, ?> map) {
                 Map<String, Object> out = new LinkedHashMap<>();
-                for (Map.Entry<?, ?> e : map.entrySet()) out.put(String.valueOf(e.getKey()), plain(e.getValue(), depth + 1, budget, path));
+                for (Map.Entry<?, ?> e : map.entrySet()) {
+                    // Once the budget is spent the rest is never walked: one placeholder stands for it.
+                    if (budget[0] <= 0) { out.put("<truncated>", "<truncated>"); break; }
+                    out.put(String.valueOf(e.getKey()), plain(e.getValue(), depth + 1, budget, path));
+                }
                 return out;
             }
             List<Object> out = new ArrayList<>();
-            if (value instanceof Iterable<?> items) for (Object item : items) out.add(plain(item, depth + 1, budget, path));
-            else for (int i = 0, n = java.lang.reflect.Array.getLength(value); i < n; i++) out.add(plain(java.lang.reflect.Array.get(value, i), depth + 1, budget, path));
+            if (value instanceof Iterable<?> items) {
+                for (Object item : items) {
+                    if (budget[0] <= 0) { out.add("<truncated>"); break; }
+                    out.add(plain(item, depth + 1, budget, path));
+                }
+            } else {
+                for (int i = 0, n = java.lang.reflect.Array.getLength(value); i < n; i++) {
+                    if (budget[0] <= 0) { out.add("<truncated>"); break; }
+                    out.add(plain(java.lang.reflect.Array.get(value, i), depth + 1, budget, path));
+                }
+            }
             return out;
         } finally {
             path.remove(value);

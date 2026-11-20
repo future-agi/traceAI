@@ -322,11 +322,24 @@ public final class GoogleAdk {
             if (!ended.compareAndSet(false, true)) return;
             IN_FLIGHT_LLM.remove(flight);
             try {
-                Map<String, Object> mapped = mapped();
+                Map<String, Object> mapped = withheld(mapped());
                 if (parent != null) parent.child(this, mapped);
                 if (shadow == null || state == null || !state.startFinalizing()) return;
                 try { emit(mapped, endEpochNanos); } finally { state.endFinalizing(); }
             } catch (Throwable ignored) { }
+        }
+
+        /**
+         * A failed call's output can carry the error's own text. Under hide-error-details it is withheld from the span, from every output
+         * message, and from what this span tells its ancestors (their input and output text).
+         */
+        private Map<String, Object> withheld(Map<String, Object> attrs) {
+            boolean fails = failed || failure() != null;
+            if (!fails || state == null || !TraceAIAuto.hidesErrorText(state.config())) return attrs;
+            Map<String, Object> out = new LinkedHashMap<>(attrs);
+            out.keySet().removeIf(key -> key.equals("output.value") || key.equals("output.mime_type") || key.startsWith("gen_ai.output."));
+            outputText = null;
+            return out;
         }
 
         /** What a finished child tells its ancestors: the session, the first prompt and the last answer. */
@@ -531,16 +544,6 @@ public final class GoogleAdk {
         List<Object> ancestors = new ArrayList<>();
         for (AdkSpan up = parent; up != null && ancestors.size() < 16; up = up.parent) ancestors.add(up.flight);
         IN_FLIGHT_LLM.put(flight, new Flight(System.nanoTime(), ancestors.toArray()));
-    }
-
-    /**
-     * True while an ADK model call the agent records is waiting for its answer, for a request from a thread with no span of its own
-     * (no application span, no ADK span), such as a model client's own executor thread, which carries no OpenTelemetry context.
-     */
-    static boolean modelCallInFlight() {
-        if (IN_FLIGHT_LLM.isEmpty()) return false;
-        prune();
-        return !IN_FLIGHT_LLM.isEmpty();
     }
 
     /**
