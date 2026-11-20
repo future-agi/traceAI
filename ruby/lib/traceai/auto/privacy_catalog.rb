@@ -339,9 +339,16 @@ module TraceAI
             end
           end
         end
-        secrets.each do |secret|
+        # Secrets first, none matching across a placeholder; then the variants the registry derives for secrets that
+        # overlap (they contain the placeholder: what is left of a longer secret once a shorter one was replaced in it).
+        variants, plain = secrets.partition { |secret| Codec.type(secret) == String && secret.include?(REDACTED) }
+        plain.each do |secret|
           next unless Codec.type(secret) == String && secret.length >= 8 && secret != REDACTED
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
+        end
+        variants.each do |variant|
+          next if variant.length < 8 || variant == REDACTED
+          text = text.gsub(variant, REDACTED)
         end
         VALUE_SHAPES.each { |shape| text = text.gsub(shape, REDACTED) }
         text

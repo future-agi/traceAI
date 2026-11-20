@@ -5,6 +5,10 @@ module TraceAI
   module Auto
     class SecretRegistry
       CAPACITY = 1024
+      # What a replaced secret becomes (the privacy catalog's credential replacement, Privacy::REDACTED).
+      PLACEHOLDER = '<redacted>'
+      # The shortest edge overlap between two secrets that is derived from.
+      MIN_EDGE = 4
       ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH/i
       class Unavailable < StandardError; end
 
@@ -31,6 +35,7 @@ module TraceAI
             @values[secret] = true
             @values.shift if @values.length > CAPACITY
             @snapshot = nil
+            derive_variants(secret)
           end
         end
         true
@@ -61,6 +66,49 @@ module TraceAI
       end
 
       def inspect = '#<TraceAI::Auto::SecretRegistry>'
+
+      private
+
+      # A secret learned after a span was captured with an overlapping secret already replaced leaves the rest of
+      # the longer one next to the placeholder ("PFX-LONGPART-<redacted>"). For every registered secret that
+      # overlaps the new one, register the text that remains once the overlapping part is the placeholder, in both
+      # directions, so the export replaces what is left as well. Variants carry the placeholder and are applied
+      # after the secrets themselves (see Privacy.clean_string); they are not derived from again.
+      def derive_variants(secret)
+        return if secret.include?(PLACEHOLDER)
+        variants = []
+        @values.each_key do |other|
+          next if other == secret || other.include?(PLACEHOLDER)
+          variants.concat(variants_between(secret, other))
+        end
+        variants.uniq.each do |variant|
+          next if variant.length < 8 || variant == PLACEHOLDER || @values.key?(variant)
+          @values[variant.freeze] = true
+          @values.shift if @values.length > CAPACITY
+        end
+      end
+
+      def variants_between(left, right)
+        found = []
+        [[left, right], [right, left]].each do |inner, outer|
+          found << outer.gsub(inner, PLACEHOLDER) if outer.include?(inner)
+        end
+        [[left, right], [right, left]].each do |first, second|
+          edge = edge_overlap(first, second)
+          next unless edge
+          found << first[0, first.length - edge] + PLACEHOLDER
+          found << PLACEHOLDER + second[edge..]
+        end
+        found
+      end
+
+      # The longest part of `second`'s beginning that `first` ends with, at least MIN_EDGE long, or nil.
+      def edge_overlap(first, second)
+        limit = [first.length, second.length].min - 1
+        return nil if limit < MIN_EDGE || !first.include?(second[0, MIN_EDGE])
+        limit.downto(MIN_EDGE) { |length| return length if first.end_with?(second[0, length]) }
+        nil
+      end
     end
 
     SECRET_REGISTRY = SecretRegistry.new
