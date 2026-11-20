@@ -1296,7 +1296,9 @@ module TraceAI
           if @sdk_records
             # The internal FI serializer uses OTLP status numbers; application
             # SDK exporters expect the SDK API's different OK/UNSET numbering.
-            copy = OpenTelemetry::SDK::Trace::SpanData.new(*copy.to_a)
+            # Build with exactly the members this SDK's SpanData has (older releases lack parent_span_is_remote).
+            sdk_members = OpenTelemetry::SDK::Trace::SpanData.members
+            copy = OpenTelemetry::SDK::Trace::SpanData.new(*sdk_members.map { |member| copy[member] })
             copy.trace_flags = OpenTelemetry::Trace::TraceFlags.from_byte(copy.trace_flags)
             copy.tracestate = OpenTelemetry::Trace::Tracestate.from_string(copy.tracestate)
             copy.links = copy.links.map do |link|

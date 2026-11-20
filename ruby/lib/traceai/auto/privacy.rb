@@ -36,6 +36,11 @@ module TraceAI
       module_function
       def ivar(value, name) = Object.instance_method(:instance_variable_get).bind_call(value, name)
       def field(value, name) = Struct.instance_method(:[]).bind_call(value, name)
+      def record_member?(value, name)
+        Struct.instance_method(:members).bind_call(value).include?(name)
+      rescue StandardError
+        false
+      end
       def safe_string(value)
         Codec.type(value) == String ? value : Codec.type_name(value)
       end
@@ -519,7 +524,9 @@ module TraceAI
         # Identity and timing are copied separately, so an error anywhere in the
         # sanitizer cannot drop a span/batch or allow unsanitized content through.
         copy = ExportRecord.new
-        %i[kind parent_span_id start_timestamp end_timestamp span_id trace_id trace_flags parent_span_is_remote].each { |key| copy[key] = field(record, key) }
+        %i[kind parent_span_id start_timestamp end_timestamp span_id trace_id trace_flags].each { |key| copy[key] = field(record, key) }
+        # SDK releases before 1.10 have no parent_span_is_remote member; their spans report a local parent.
+        copy.parent_span_is_remote = record_member?(record, :parent_span_is_remote) ? field(record, :parent_span_is_remote) : false
         flags = copy.trace_flags
         flags = ivar(flags, :@flags) unless Codec.type(flags) == Integer
         copy.trace_flags = Codec.type(flags) == Integer ? flags & 255 : 0
