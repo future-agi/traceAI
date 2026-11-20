@@ -64,3 +64,12 @@ TypeScript compiler API to assert the exact set of functions that mention the ke
 - `assertNoKeysInAmbientHeaders` (`fi-request-policy.ts`) runs in the constructors of the exporters for another collector, where
   the OTLP exporter reads `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS`: it refuses a key header name or a known
   secret in those variables. It reads the key values only to refuse them; it sends nothing.
+
+## Send-level guard
+
+The sites above assemble what is sent. `fi-send-guard.ts` judges what is actually sent: `guardSend` takes the final URL and the final
+headers or metadata of one send and the set the decision allowed, and refuses a key header the decision did not add, an FI key value under
+another name, a plaintext send the rules refuse, a plaintext send through a proxy, and (for `fetch`) a redirect answer. Its callers are
+`guardedFetch` (the deprecated HTTP exporter and the two eval checks), `guardOtlpHttpExporter` (the OTLP HTTP exporter's transport send,
+wrapped in the exporter's constructor) and `guardOtlpGrpcExporter` (the gRPC client, built with an interceptor, in the gRPC exporter's
+constructor). `fiSendGuardPin.test.ts` pins that every transport primitive in these modules is inside those three functions.

@@ -3,6 +3,9 @@
 ### Breaking
 - A self-hosted `http://` `FI_BASE_URL` (or `baseUrl`) that sent FI keys in 0.4.1 gets its FI keys refused, so no traces are exported, unless `FI_ALLOW_INSECURE_HTTP=1` or `allowInsecureHttp: true` is set. Literal loopback (`localhost`, `127.0.0.1`, `::1`) keeps working with no setting. A Future AGI host (`futureagi.com`) always needs `https://`; no setting changes that.
 
+### Changed
+- The Future AGI route sends through the guard in `@traceai/fi-core` 1.4.2: the final URL and headers of every export are judged at the send, an export that cannot be proven direct for a plaintext request is refused with a value-free message, and endpoint logs name the host class only.
+
 ### Added
 - `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
 
