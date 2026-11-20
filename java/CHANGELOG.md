@@ -1,11 +1,17 @@
 # Changelog
 
-## 1.4.1 (2026-11-19)
+## Unreleased
 
 ### Changes
 
 * **langchain4j, spring-ai:** add `TracedToolExecutor` and `TracedToolCallback`, which record one `execute_tool <name>` TOOL span per tool execution (LangChain4j AiServices tools, Spring AI `ToolCallback.call`, both overloads) with the tool name, call id where the framework provides it, description, arguments (`input.value`) and result (`output.value`). The hide settings apply to arguments and results, and a failure is recorded and rethrown unchanged.
-* **javaagent:** the agent adds the same `execute_tool` span, with no code change, for classes that implement LangChain4j `ToolExecutor` or Spring AI `ToolCallback`. `FI_DISABLED_INSTRUMENTATIONS=langchain4j` or `spring-ai` turns each off. A call that already runs under a TOOL span for that tool, such as one of the wrappers above, is not traced a second time.
+* **javaagent:** the agent adds the same `execute_tool` span, with no code change, for classes that implement LangChain4j `ToolExecutor` or Spring AI `ToolCallback`. `FI_DISABLED_INSTRUMENTATIONS=langchain4j` or `spring-ai` turns each off. It does not advise the traceai libraries' own `TracedToolExecutor` and `TracedToolCallback` (any `ai.traceai` class except the agent's), and a call under a TOOL span for that tool or under Spring AI's native `tool_call` observation span is not traced a second time. A call to another overload of the same tool callee with the same arguments (`call(String)` delegating to `call(String, ToolContext)`) is one execution; a tool that calls itself is traced at every level. The tool name (`gen_ai.tool.name`) is not withheld by the hide switches; the description, arguments and result are. With wire capture off, the `langchain4j` and `spring-ai` integration status no longer says chat calls go through wire.
+* **java-core, langchain4j, spring-ai:** add `FITracer.setContentError`; `TracedToolExecutor` and `TracedToolCallback` use it, so any content hide setting (`hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`), as well as `hideErrorDetails`, keeps the exception message and stack trace out of a tool span, as the agent does.
+
+## 1.4.1 (2026-11-19)
+
+### Changes
+
 * **java-core:** raw input and raw output are not recorded while any content hide setting is on.
 * **java-core:** number and boolean values (and arrays of them) written through `FITracer` on content keys are masked by key under the hide settings, like text values.
 * **cohere:** tool-call arguments go through the masker; chat, embed and rerank raw responses are not recorded while any content hide setting is on.

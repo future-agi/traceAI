@@ -4,7 +4,7 @@ Future AGI tracing for [LangChain4j](https://docs.langchain4j.dev): `TracedChatL
 
 ## Tool execution spans
 
-`TracedToolExecutor` wraps a `ToolExecutor` and records one `execute_tool <tool name>` span per execution: an INTERNAL span, child of the current span and current while the tool runs, with `fi.span.kind=TOOL`, `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.call.id` (the model's call id), `gen_ai.tool.description` (when the `ToolSpecification` is known), the arguments as `input.value` and the result as `output.value`. A failure is recorded with status `ERROR` and the original exception is rethrown.
+`TracedToolExecutor` wraps a `ToolExecutor` and records one `execute_tool <tool name>` span per execution: an INTERNAL span, child of the current span and current while the tool runs, with `fi.span.kind=TOOL`, `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.call.id` (the model's call id), `gen_ai.tool.description` (when the `ToolSpecification` is known), the arguments as `input.value` and the result as `output.value`. A failure is recorded with status `ERROR` and the original exception is rethrown; the exception message and stack trace are kept out under `hideErrorDetails` and under any content hide setting (`hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`).
 
 AiServices builds its own executors for `tools(Object...)`, so pass it the traced map instead:
 

@@ -31,11 +31,12 @@ import java.util.function.Supplier;
  * {@code gen_ai.operation.name=execute_tool}, {@code gen_ai.tool.name}, {@code gen_ai.tool.description}, the
  * tool arguments as {@code input.value} and the result as {@code output.value}. Spring AI does not pass a call id
  * to a callback, so {@code gen_ai.tool.call.id} is not set. Content goes through {@link FITracer}, so the TraceConfig
- * hide settings apply. A failure is recorded and the original exception is rethrown unchanged.</p>
+ * hide settings apply. A failure is recorded and the original exception is rethrown unchanged; its message and stack trace are
+ * withheld by {@code hideErrorDetails} and by any content hide setting.</p>
  *
  * <p>This wrapper is for applications that do not use the native observation path
  * ({@link SpringAIObservationFilter}), which records tool calls itself. With the zero-code agent also attached there
- * is still one span: the agent skips a call that already runs under a TOOL span named for the same tool.</p>
+ * is still one span: the agent does not advise this class and skips a call that already runs under a TOOL span named for the same tool.</p>
  */
 public class TracedToolCallback implements ToolCallback {
 

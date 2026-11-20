@@ -37,10 +37,11 @@ import java.util.Objects;
  * tool arguments as {@code input.value} and the result as {@code output.value}. Content goes through
  * {@link FITracer}, so the TraceConfig hide settings apply: arguments and the description under
  * {@code hideInputs} / {@code hideInputMessages}, the result under {@code hideOutputs} /
- * {@code hideOutputMessages}. A failure is recorded and the original exception is rethrown unchanged.</p>
+ * {@code hideOutputMessages}. A failure is recorded and the original exception is rethrown unchanged; its message and stack trace are
+ * withheld by {@code hideErrorDetails} and by any content hide setting.</p>
  *
- * <p>Wrap a tool only once. With the zero-code agent also attached there is still one span: the agent skips a
- * call that already runs under a TOOL span named for the same tool.</p>
+ * <p>Wrap a tool only once. With the zero-code agent also attached there is still one span: the agent does not advise this
+ * class and skips a call that already runs under a TOOL span named for the same tool.</p>
  */
 public final class TracedToolExecutor implements ToolExecutor {
 
