@@ -43,6 +43,17 @@ public final class AnnotatedApp {
             }
             case "mono" -> System.out.println("RESULT=" + service.mono("m").block(java.time.Duration.ofSeconds(10)));
             case "flux" -> System.out.println("RESULT=" + service.flux(3).collectList().block(java.time.Duration.ofSeconds(10)));
+            case "own_span" -> System.out.println("RESULT=" + service.withOwnSpan(args[1]));
+            case "bridge" -> System.out.println("RESULT=" + ((java.util.function.Function<String, String>) new Doubler()).apply("ab"));
+            case "default_method" -> System.out.println("RESULT=" + new Greeter().greet("g"));
+            case "chars" -> System.out.println("RESULT=" + service.login("user", System.getenv("FI_API_KEY").toCharArray(), System.getenv("FI_API_KEY").getBytes()));
+            case "single_use" -> {
+                java.util.concurrent.atomic.AtomicInteger iterators = new java.util.concurrent.atomic.AtomicInteger();
+                Iterable<String> once = () -> { iterators.incrementAndGet(); return List.of("a", "b", "c").iterator(); };
+                System.out.println("RESULT=" + service.consume(once) + ";iterators=" + iterators.get());
+            }
+            case "cyclic" -> System.out.println("RESULT=" + service.walk(Service.cyclic(), Service.huge()));
+            case "flux_take" -> System.out.println("RESULT=" + service.flux(10).take(2).collectList().block(java.time.Duration.ofSeconds(10)));
             case "late_class_load" -> {
                 // The annotated class is loaded and used before initialization; a later init() still traces it.
                 service.count(1);
@@ -85,6 +96,19 @@ public final class AnnotatedApp {
             return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
         }
 
+        /** An annotated method whose body starts the application's own OpenTelemetry span and makes a provider call inside it. */
+        @Chain(name = "own_span_chain")
+        public String withOwnSpan(String endpoint) throws Exception {
+            io.opentelemetry.api.trace.Span own = io.opentelemetry.sdk.trace.SdkTracerProvider.builder().build().get("app").spanBuilder("app-inner").startSpan();
+            System.out.println("APP_SPAN=" + own.getSpanContext().getSpanId());
+            try (io.opentelemetry.context.Scope scope = own.makeCurrent()) {
+                var client = java.net.http.HttpClient.newHttpClient();
+                var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(endpoint))
+                    .header("Content-Type", "application/json").POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}")).build();
+                return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+            } finally { own.end(); }
+        }
+
         @Span(kind = " ")
         public String blank() { return "b"; }
 
@@ -122,6 +146,36 @@ public final class AnnotatedApp {
 
         @Chain
         public Flux<Integer> flux(int n) { return Flux.range(1, n); }
+
+        @Tool(name = "login")
+        public String login(String user, char[] chars, byte[] bytes) { return user + chars.length + bytes.length; }
+
+        /** Reads the iterable itself: it is single use, so the span must not have consumed it. */
+        @Chain
+        public int consume(Iterable<String> items) { int n = 0; for (String ignored : items) n++; return n; }
+
+        public record Cell(String label, List<Object> peers) { }
+        private static final class Hidden { private final String apiToken = "private-field-token"; }
+        static Cell cyclic() { List<Object> peers = new java.util.ArrayList<>(); Cell cell = new Cell("c", peers); peers.add(cell); peers.add(new Hidden()); return cell; }
+        static List<Object> huge() {
+            List<Object> rows = new java.util.ArrayList<>(); String big = "lorem ipsum dolor sit amet ".repeat(40_000);
+            for (int i = 0; i < 10; i++) rows.add(big);
+            return rows;
+        }
+        @Chain
+        public int walk(Cell cell, List<Object> rows) { return cell.peers().size() + rows.size(); }
     }
+
+    /** A generic override: javac adds a bridge apply(Object) that carries the same annotation. */
+    public static final class Doubler implements java.util.function.Function<String, String> {
+        @Tool(name = "doubler")
+        @Override public String apply(String value) { return value + value; }
+    }
+
+    public interface Hello {
+        @Tool(name = "greeter")
+        default String greet(String who) { return "hello " + who; }
+    }
+    public static final class Greeter implements Hello { }
     private AnnotatedApp() { }
 }

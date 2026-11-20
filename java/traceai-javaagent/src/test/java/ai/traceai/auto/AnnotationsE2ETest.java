@@ -57,6 +57,15 @@ class AnnotationsE2ETest {
             }).toList());
             app.add(0, agent.toString());
         }
+        if (mode.equals("isolated")) {
+            // The system class path holds only the launcher; the agent jar is in the loader the application runs in.
+            List<String> inner = new ArrayList<>(app.stream().filter(p -> {
+                String name = Path.of(p).getFileName().toString();
+                return name.equals("test-classes") || name.startsWith("traceai-java-annotations") || name.startsWith("reactor-core") || name.startsWith("reactive-streams");
+            }).toList());
+            inner.add(0, agent.toString());
+            command.addAll(List.of("-XX:+EnableDynamicAgentLoading", "-cp", Path.of("target", "test-classes").toAbsolutePath().toString(), "ai.traceai.apptest.IsolatedLauncher", scenario, String.join(File.pathSeparator, inner)));
+        } else
         command.addAll(List.of("-XX:+EnableDynamicAgentLoading", "-cp", String.join(File.pathSeparator, app), APP, scenario));
         command.addAll(extra);
         Path output = Files.createTempFile(Path.of("target"), "annotations-e2e-", ".log");
@@ -215,5 +224,61 @@ class AnnotationsE2ETest {
         String log = run("agent", "sync", Map.of("FI_DISABLED_INSTRUMENTATIONS", "annotations"));
         assertTrue(log.contains("RESULT=docs1|The answer is 4|"), log);
         assertTrue(spans.isEmpty(), "no span: " + names(spans));
+    }
+    @Test void aGenericOverrideWithAToolAnnotationIsOneSpan() throws Exception {
+        String log = run("agent", "bridge", Map.of());
+        assertTrue(log.contains("RESULT=abab"), log);
+        assertEquals(List.of("doubler"), names(spans), "the compiler's bridge method must not add a second, nested span");
+    }
+    @Test void aDefaultInterfaceMethodIsTraced() throws Exception {
+        String log = run("agent", "default_method", Map.of());
+        assertTrue(log.contains("RESULT=hello g"), log);
+        assertEquals(List.of("greeter"), names(spans));
+        assertEquals("TOOL", attrs(span("greeter")).get("fi.span.kind"));
+    }
+    @Test void charAndByteArrayArgumentsAreAPlaceholderAndNeverTheirContent() throws Exception {
+        run("agent", "chars", Map.of("FI_API_KEY", AnnotatedAppSecret.KEY));
+        assertEquals(Map.of("user", "user", "chars", "<char[" + AnnotatedAppSecret.KEY.length() + "]>", "bytes", "<byte[" + AnnotatedAppSecret.KEY.length() + "]>"), json(attrs(span("login")).get("input.value")));
+        assertFalse(spans.toString().contains(AnnotatedAppSecret.KEY));
+    }
+    @Test void aSingleUseIterableArgumentIsStillFullyReadableByTheMethod() throws Exception {
+        String log = run("agent", "single_use", Map.of());
+        assertTrue(log.contains("RESULT=3;iterators=1"), "the method read all three items, the span did not iterate: " + log);
+        assertTrue(String.valueOf(((Map<?, ?>)json(attrs(span("consume")).get("input.value"))).get("items")).startsWith("<"), "a type placeholder");
+        assertFalse(String.valueOf(attrs(span("consume")).get("input.value")).contains("\"a\""));
+    }
+    @Test void aCyclicOrHugeArgumentIsBoundedAndPrivateFieldsAreNotExported() throws Exception {
+        String log = run("agent", "cyclic", Map.of());
+        assertTrue(log.contains("RESULT=12"), log);
+        String input = String.valueOf(attrs(span("walk")).get("input.value"));
+        assertTrue(input.contains("<cycle>"), input);
+        assertFalse(input.contains("private-field-token"), "private fields are not reflected: " + input);
+        assertTrue(input.length() <= 65_536 + 32, "input length " + input.length());
+    }
+    @Test void aCancelledFluxEndsItsSpanWithWhatWasEmittedAndACancelledMarker() throws Exception {
+        String log = run("agent", "flux_take", Map.of());
+        assertTrue(log.contains("RESULT=[1, 2]"), log);
+        Map<String, Object> flux = span("flux");
+        assertEquals(List.of(1L, 2L), json(attrs(flux).get("output.value")));
+        assertEquals("true", String.valueOf(attrs(flux).get("traceai.cancelled")));
+    }
+    @Test void hideInputsAlsoWithholdsTheToolDescription() throws Exception {
+        run("agent", "sync", Map.of("FI_HIDE_INPUTS", "true"));
+        assertNull(attrs(span("calculator")).get("gen_ai.tool.description"));
+    }
+    @Test void anAgentJarOnlyInTheApplicationsOwnClassLoaderStillTracesAnnotatedMethods() throws Exception {
+        String log = run("isolated", "init_first", Map.of());
+        assertFalse(log.contains("AGENT_ON_SYSTEM_CLASS_PATH"), "the premise: the jar is not on the system class path: " + log);
+        assertTrue(log.contains("RESULT=docs1|The answer is 4|"), log);
+        assertEquals(List.of("calculator", "count", "fetch_docs", "generate", "noArguments", "planner"), names(spans));
+    }
+    @Test void anApplicationSpanStartedInsideAnAnnotatedMethodIsTheParentOfTheWireCall() throws Exception {
+        String log = run("agent", "own_span", Map.of(), List.of("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions"));
+        String own = java.util.Arrays.stream(log.split("\\R")).filter(l -> l.startsWith("APP_SPAN=")).findFirst().orElseThrow().substring("APP_SPAN=".length());
+        Map<String, Object> chain = span("own_span_chain");
+        List<Map<String, Object>> wire = spans.stream().filter(s -> !"own_span_chain".equals(s.get("name"))).toList();
+        assertEquals(1, wire.size(), names(spans).toString());
+        assertEquals(own, wire.get(0).get("parentSpanId"), "the application's current span wins over the enclosing annotated span");
+        assertNull(chain.get("parentSpanId"));
     }
 }
