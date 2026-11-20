@@ -245,6 +245,9 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
+      undici:
+        specifier: 6.29.0
+        version: 6.29.0
 
   packages/fi-semantic-conventions:
     dependencies:

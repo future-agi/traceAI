@@ -46,6 +46,13 @@ const ROWS: Row[] = [
   A("http loopback localhost", "http://localhost:4318", "explicit", ok("localhost", false)),
   A("https self-hosted", "https://collector.example:4318", "explicit", ok("collector.example", true)),
   A("http self-hosted, no keys", "http://collector.example:4318", "none", ok("collector.example", false, false)),
+  // loopback is decided on the host as written: these spellings are other hosts, whatever the URL parser normalises them to
+  A("127.1 is not loopback", "http://127.1:4318", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
+  A("0x7f.0.0.1 is not loopback", "http://0x7f.0.0.1:4318", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
+  A("2130706433 is not loopback", "http://2130706433:4318", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
+  A("0177.0.0.1 is not loopback", "http://0177.0.0.1:4318", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
+  A("127.0.0.1. (trailing dot) is not loopback", "http://127.0.0.1.:4318", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
+  A("a Future AGI host with a trailing dot over plaintext fails closed", "http://api.futureagi.com.", "explicit", no("FI_PLAINTEXT_FI_HOST"), { optIn: "env" }),
   // plaintext opt-in
   A("http self-hosted, no opt-in", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
   A("http self-hosted, env opt-in", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env" }),
