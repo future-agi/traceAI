@@ -48,7 +48,7 @@ class AnnotationsE2ETest {
             .filter(p -> !Path.of(p).toAbsolutePath().normalize().toString().equals(classes)).toList());
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("traceai.test.java.home", System.getProperty("java.home")), "bin", "java").toString());
-        if (mode.equals("agent")) command.add("-javaagent:" + agent);
+        if (mode.equals("agent") || mode.equals("agent_isolated")) command.add("-javaagent:" + agent);
         if (mode.equals("init")) {
             // Only what an application using the agent jar as a library has: the jar, its own classes, the annotations, Reactor.
             app = new ArrayList<>(app.stream().filter(p -> {
@@ -57,7 +57,7 @@ class AnnotationsE2ETest {
             }).toList());
             app.add(0, agent.toString());
         }
-        if (mode.equals("isolated")) {
+        if (mode.equals("isolated") || mode.equals("agent_isolated")) {
             // The system class path holds only the launcher; the agent jar is in the loader the application runs in.
             List<String> inner = new ArrayList<>(app.stream().filter(p -> {
                 String name = Path.of(p).getFileName().toString();
@@ -280,5 +280,23 @@ class AnnotationsE2ETest {
         assertEquals(1, wire.size(), names(spans).toString());
         assertEquals(own, wire.get(0).get("parentSpanId"), "the application's current span wins over the enclosing annotated span");
         assertNull(chain.get("parentSpanId"));
+    }
+
+    /** -javaagent plus a separate-loader copy of the engine calling init(): one transformer per JVM, so one span per call. */
+    @Test void anAgentFlagPlusAnIsolatedCopyThatInitializesStillGivesOneSpanPerCall() throws Exception {
+        String log = run("agent_isolated", "init_first", Map.of());
+        assertTrue(log.contains("RESULT=docs1|The answer is 4|"), log);
+        assertEquals(List.of("calculator", "count", "fetch_docs", "generate", "noArguments", "planner"), names(spans), "no method is traced twice");
+    }
+    @Test void aNestedAnnotatedCallRecordsTheApplicationSpanCurrentAtItsOwnEntry() throws Exception {
+        String log = run("agent", "nested_own_span", Map.of(), List.of("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions"));
+        Map<String, Object> tool = span("nested_tool");
+        List<Map<String, Object>> wire = spans.stream().filter(s -> !List.of("outer_agent", "nested_tool").contains(s.get("name"))).toList();
+        assertEquals(1, wire.size(), names(spans).toString() + log);
+        assertSame(tool, parentOf(wire.get(0)), "the provider call nests under the @Tool span, not under the application span around it");
+    }
+    @Test void theFiInstrumentationsAllowlistAppliesToAnnotations() throws Exception {
+        run("agent", "sync", Map.of("FI_INSTRUMENTATIONS", "okhttp"));
+        assertTrue(spans.isEmpty(), "annotations are not on the allowlist: " + names(spans));
     }
 }

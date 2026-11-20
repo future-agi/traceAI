@@ -43,6 +43,7 @@ public final class AnnotatedApp {
             }
             case "mono" -> System.out.println("RESULT=" + service.mono("m").block(java.time.Duration.ofSeconds(10)));
             case "flux" -> System.out.println("RESULT=" + service.flux(3).collectList().block(java.time.Duration.ofSeconds(10)));
+            case "nested_own_span" -> System.out.println("RESULT=" + service.outerWithOwnSpan(args[1]));
             case "own_span" -> System.out.println("RESULT=" + service.withOwnSpan(args[1]));
             case "bridge" -> System.out.println("RESULT=" + ((java.util.function.Function<String, String>) new Doubler()).apply("ab"));
             case "default_method" -> System.out.println("RESULT=" + new Greeter().greet("g"));
@@ -107,6 +108,24 @@ public final class AnnotatedApp {
                     .header("Content-Type", "application/json").POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}")).build();
                 return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
             } finally { own.end(); }
+        }
+
+        /** @Agent, then the application's own span Y, then a @Tool that makes the provider call: the wire span belongs under the tool. */
+        @Agent(name = "outer_agent")
+        public String outerWithOwnSpan(String endpoint) throws Exception {
+            io.opentelemetry.api.trace.Span own = io.opentelemetry.sdk.trace.SdkTracerProvider.builder().build().get("app").spanBuilder("app-middle").startSpan();
+            System.out.println("APP_SPAN=" + own.getSpanContext().getSpanId());
+            try (io.opentelemetry.context.Scope scope = own.makeCurrent()) { return nestedTool(endpoint); } finally { own.end(); }
+        }
+
+        @Tool(name = "nested_tool")
+        public String nestedTool(String endpoint) throws Exception { return callModelPlain(endpoint); }
+
+        private String callModelPlain(String endpoint) throws Exception {
+            var client = java.net.http.HttpClient.newHttpClient();
+            var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(endpoint))
+                .header("Content-Type", "application/json").POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}")).build();
+            return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
         }
 
         @Span(kind = " ")
