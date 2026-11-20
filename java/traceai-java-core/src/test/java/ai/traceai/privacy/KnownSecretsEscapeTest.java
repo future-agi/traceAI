@@ -117,17 +117,88 @@ class KnownSecretsEscapeTest {
         assertThat(GSON.fromJson(scrubbed, Map.class).get("v")).isEqualTo("path\\" + KnownSecrets.PLACEHOLDER);
     }
 
-    @Test
-    void textCutAtACapDoesNotEndInAHalfEscapeOrLeaveASecretStart() {
-        KnownSecrets.Snapshot snapshot = snapshot("nCAP-ESCAPE-SECRET-1234");
-        // A raw newline sits right before the cut point; the sealed text goes into JSON, where the newline is written as \n.
-        for (int tail = 0; tail < 30; tail++) {
-            String value = "x".repeat(31_900) + "\n" + "nCAP-ESCAPE-SECRET-1234".substring(0, Math.min(tail, 22)) + "z".repeat(400);
-            String capped = snapshot.cap(value, 32_000);
-            assertThat(capped).hasSizeLessThanOrEqualTo(32_000).endsWith(M);
-            String scrubbed = snapshot.scrub(GSON.toJson(Map.of("v", capped)));
-            assertSafe(scrubbed, "nCAP-ESCAPE-SECRET-1234");
+    private static boolean hasLoneSurrogate(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 >= text.length() || !Character.isLowSurrogate(text.charAt(i + 1))) return true;
+                i++;
+            } else if (Character.isLowSurrogate(c)) return true;
         }
+        return false;
+    }
+
+    /**
+     * A registered secret really straddles the cut: the kept text ends with its first {@code k} characters, so its start lies within
+     * {@code longest() - 1} of the cut. The sealed text then goes into a JSON string, where a control character before the secret is an
+     * escape. No secret character may be left at the cut, in the raw attribute or the decoded value, and the JSON must parse.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"QCAPSECRET-VALUE-9988", "nQCAPSECRET-VALUE-9988", "u0001QCAPSECRET-VAL"})
+    void textCutInsideASecretLeavesNoPartOfItAtTheCap(String secret) {
+        KnownSecrets.Snapshot snapshot = snapshot(secret);
+        for (String control : new String[] {"", "\n", "\u0001"}) {
+            for (int k = 1; k < secret.length(); k++) {
+                String cutText = "x".repeat(300) + control + secret.substring(0, k);
+                String sealed = snapshot.sealCut(cutText, 400);
+                assertThat(sealed).endsWith(M).hasSizeLessThanOrEqualTo(400);
+                String scrubbed = snapshot.scrub(GSON.toJson(Map.of("v", sealed)));
+                assertSafe(scrubbed, secret);
+                String decoded = String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v"));
+                String left = decoded.replace(M, "").replace(KnownSecrets.PLACEHOLDER, "").replace("x", "").replace("\n", "").replace("\u0001", "");
+                assertThat(left).as("k=%d control=%s: part of the secret is left at the cut in %s", k, control.length(), scrubbed).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void aFullValueWhoseCutLandsInsideTheSecretIsReplacedFirstEverywhere() {
+        KnownSecrets.Snapshot snapshot = snapshot("QCAPSECRET-VALUE-9988");
+        for (int offset = 0; offset < 21; offset++) {
+            String value = "x".repeat(399 - offset) + "\n" + "QCAPSECRET-VALUE-9988" + "z".repeat(50);
+            String capped = snapshot.cap(value, 400);
+            String scrubbed = snapshot.scrub(GSON.toJson(Map.of("v", capped)));
+            assertSafe(scrubbed, "QCAPSECRET-VALUE-9988");
+            assertThat(String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v")).replace(KnownSecrets.PLACEHOLDER, "")).doesNotContain("Q");
+        }
+    }
+
+    @Test
+    void anEscapedSurrogatePairIsOneUnitWhenASecretEndsAfterItsHighHalf() {
+        String secret = "ABCDEFGH\\ud83d";
+        String json = "{\"v\":\"pre ABCDEFGH\\ud83d\\ude00 post\"}";
+        String scrubbed = snapshot(secret).scrub(json);
+        assertThat(illegalEscape(scrubbed)).isEqualTo(-1);
+        parse(scrubbed);
+        String decoded = String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v"));
+        assertThat(hasLoneSurrogate(decoded)).as("a lone surrogate in %s", scrubbed).isFalse();
+        assertThat(decoded).isEqualTo("pre " + KnownSecrets.PLACEHOLDER + " post");
+    }
+
+    @Test
+    void anEscapedSurrogatePairIsOneUnitWhenASecretStartsAtItsLowHalf() {
+        String secret = "\\ude00TAIL-OF-SECRET";
+        String json = "{\"v\":\"pre \\ud83d\\ude00TAIL-OF-SECRET post\"}";
+        String scrubbed = snapshot(secret).scrub(json);
+        parse(scrubbed);
+        String decoded = String.valueOf(GSON.fromJson(scrubbed, Map.class).get("v"));
+        assertThat(hasLoneSurrogate(decoded)).as("a lone surrogate in %s", scrubbed).isFalse();
+        assertThat(decoded).doesNotContain("TAIL-OF-SECRET");
+    }
+
+    @Test
+    void aPartialSecretEndingInABackslashBeforeAMarkerKeepsTheWholeMarker() {
+        String scrubbed = snapshot("abcdefg\\").scrub("xx abcdefg\\" + M);
+        assertThat(scrubbed).isEqualTo("xx " + KnownSecrets.PLACEHOLDER + M);
+    }
+
+    @Test
+    void anAllBackslashSecretIsReplacedInLinearTime() {
+        String secret = "\\".repeat(16);
+        KnownSecrets.Snapshot snapshot = snapshot(secret);
+        String text = "\\".repeat(200_000) + "end";
+        String scrubbed = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> snapshot.scrub(text));
+        assertThat(scrubbed).doesNotContain(secret);
     }
 
     @Test
