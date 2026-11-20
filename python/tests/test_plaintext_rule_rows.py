@@ -19,7 +19,7 @@ def test_the_fixture_covers_every_transport_host_group_source_opt_in_and_proxy_c
     assert {row["host_group"] for row in ROWS} == set(rows_module.HOSTS["grpc"]) | set(rows_module.HOSTS["http"])
     assert {row["source"] for row in ROWS if row["transport"] == "grpc"} == set(rows_module.GRPC_SOURCES)
     assert {row["opt_in"] for row in ROWS} == {None, "1", "true"}
-    assert {row["proxy"] for row in ROWS} == set(rows_module.PROXIES)
+    assert {row["proxy"] for row in ROWS} == set(rows_module.PROXIES) | set(rows_module.GRPC_PROXIES)
     assert [row["id"] for row in ROWS] == [spec["id"] for spec in rows_module.row_specs()]
 
 

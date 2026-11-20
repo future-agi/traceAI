@@ -1192,7 +1192,7 @@ def _force_tls_for_future_agi(endpoint: str | None, insecure: Any, allow: bool =
         return False
     if not _is_futureagi_host(target[1]):
         if _plain_text_requested(target, insecure):
-            _authorize_plain_text(_written_host(endpoint) or target[1], target[2], allow)
+            _authorize_plain_text(_written_host(endpoint) or target[1], target[2], allow, grpc=True)
             return False
         return True
     if insecure:
@@ -1207,16 +1207,69 @@ _PLAIN_TEXT_WARNED: set[str] = set()
 _ALLOW_INSECURE_HTTP = "FI_ALLOW_INSECURE_HTTP"
 
 
-def _proxy_applies(host: str, port: int, session: Any = None) -> bool:
+def _grpc_bypassed(host: str, no_proxy: str) -> bool:
+    """True when ``host`` is on the ``no_grpc_proxy``/``no_proxy`` list as grpcio reads it (measured on grpcio 1.63, 1.70 and 1.85).
+
+    Entries are comma separated and trimmed, matched without regard to case: an exact host, a whole-label suffix (``internal``
+    or ``.internal``), an exact address, or a network range for an address host. An entry with a port, ``*`` and a partial
+    label do not match. Only matches that every measured release agrees on are counted.
+    """
+    import ipaddress
+
+    host = host.strip("[]").lower()
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    for entry in (item.strip().lower() for item in no_proxy.split(",")):
+        if not entry or "*" in entry:
+            continue
+        if address is not None:
+            try:
+                if "/" in entry:
+                    if address in ipaddress.ip_network(entry, strict=False):
+                        return True
+                elif address == ipaddress.ip_address(entry):
+                    return True
+                continue
+            except ValueError:
+                continue
+        if ":" in entry or "/" in entry:
+            continue
+        if entry.startswith("."):
+            if host.endswith(entry):
+                return True
+        elif host == entry or host.endswith("." + entry):
+            return True
+    return False
+
+
+def _grpc_proxy_applies(host: str) -> bool:
+    """True when grpcio routes a plain channel to ``host`` through a proxy.
+
+    grpcio reads only lower-case names, in this order: ``grpc_proxy``, ``https_proxy``, ``http_proxy``; the first one that is
+    set decides, and an empty one means no proxy. ``no_grpc_proxy``, when set (even empty), is the bypass list; otherwise
+    ``no_proxy``. ``ALL_PROXY`` and the upper-case names are not read. Any non-empty proxy value counts as a proxy.
+    """
+    proxy = next((os.environ[name] for name in ("grpc_proxy", "https_proxy", "http_proxy") if name in os.environ), "")
+    if not proxy.strip():
+        return False
+    bypass = os.environ["no_grpc_proxy"] if "no_grpc_proxy" in os.environ else os.environ.get("no_proxy", "")
+    return not _grpc_bypassed(host, bypass)
+
+
+def _proxy_applies(host: str, port: int, session: Any = None, grpc: bool = False) -> bool:
     """True when a plain (http or non-TLS gRPC) request to ``host:port`` would go through a proxy.
 
-    One rule: ``HTTP_PROXY`` or ``ALL_PROXY`` (upper or lower case, non-empty) routes it unless ``NO_PROXY`` bypasses the
+    HTTP: ``HTTP_PROXY`` or ``ALL_PROXY`` (upper or lower case, non-empty) routes it unless ``NO_PROXY`` bypasses the
     host, read as the standard library reads it (``urllib.request.proxy_bypass_environment``: a host or a suffix, with or
     without a leading dot, ``*``, ``host:port``; no network ranges). ``HTTPS_PROXY`` alone does not route a plain request.
-    A caller session with proxies of its own always counts.
+    A caller session with proxies of its own always counts. gRPC: the rule grpcio reads (see ``_grpc_proxy_applies``).
     """
     import urllib.request
 
+    if grpc:
+        return _grpc_proxy_applies(host)
     if session is not None and any((getattr(session, "proxies", None) or {}).values()):
         return True
     proxies = urllib.request.getproxies_environment()
@@ -1225,7 +1278,7 @@ def _proxy_applies(host: str, port: int, session: Any = None) -> bool:
     return not urllib.request.proxy_bypass_environment(f"{host}:{port}")
 
 
-def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None) -> None:
+def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None, grpc: bool = False) -> None:
     """Allow Future AGI keys on a plain (not TLS) channel to ``host:port``, or raise UnsupportedFutureAGIEndpointError.
 
     Loopback needs no opt-in. Any other host needs ``FI_ALLOW_INSECURE_HTTP=1`` or the ``allow_insecure_http`` option;
@@ -1239,10 +1292,12 @@ def _authorize_plain_text(host: str, port: int, allow: bool = False, session: An
             "Future AGI keys are not sent over a plain channel to a host other than loopback. Use https (or TLS), or set "
             f"{_ALLOW_INSECURE_HTTP}=1 (or the allow_insecure_http option) to allow it for your own self-hosted collector."
         )
-    if _proxy_applies(host, port, session):
+    if _proxy_applies(host, port, session, grpc):
+        names = "grpc_proxy, https_proxy or http_proxy, unless no_grpc_proxy or no_proxy lists the host" if grpc else (
+            "HTTP_PROXY or ALL_PROXY, unless NO_PROXY lists the host")
         raise UnsupportedFutureAGIEndpointError(
-            f"{_ALLOW_INSECURE_HTTP} does not apply when the request goes through a proxy (HTTP_PROXY, HTTPS_PROXY or "
-            "ALL_PROXY, unless NO_PROXY lists the host). Use https (or TLS), or remove the proxy for this host."
+            f"{_ALLOW_INSECURE_HTTP} does not apply when the request goes through a proxy ({names}). "
+            "Use https (or TLS), or remove the proxy for this host."
         )
     if _PLAIN_TEXT_WARNED:
         return
@@ -1322,7 +1377,7 @@ class GRPCSpanExporter(_GRPCSpanExporter):
                         "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
                         "credentials are not sent to it. Set FI_GRPC_URL to the Future AGI gRPC target, or remove the credentials."
                     )
-                _authorize_plain_text(written or resolved_target[1], resolved_target[2], allow_insecure_http)
+                _authorize_plain_text(written or resolved_target[1], resolved_target[2], allow_insecure_http, grpc=True)
         except UnsupportedFutureAGIEndpointError:
             _close_after_refusal(self, _GRPCSpanExporter)
             raise

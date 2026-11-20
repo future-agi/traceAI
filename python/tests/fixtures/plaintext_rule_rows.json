@@ -4269,14 +4269,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4286,14 +4286,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4303,14 +4303,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4320,14 +4320,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4337,14 +4337,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4354,14 +4354,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4371,14 +4371,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4388,14 +4388,14 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4405,14 +4405,133 @@
    }
   },
   {
-   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "futureagi-plain-scheme",
    "endpoint": "http://grpc.futureagi.com",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "grpc.futureagi.com",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://grpc.futureagi.com'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "futureagi-plain-scheme",
+   "endpoint": "http://grpc.futureagi.com",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4626,14 +4745,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4643,14 +4762,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4660,14 +4779,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4677,14 +4796,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4694,14 +4813,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4711,14 +4830,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4728,14 +4847,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4745,14 +4864,14 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4762,14 +4881,133 @@
    }
   },
   {
-   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -4983,14 +5221,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -5000,14 +5238,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -5017,31 +5255,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
-   "expect": {
-    "decision": "fi",
-    "error": null,
-    "dialed": "collector.internal:50051",
-    "tls": "plain",
-    "keys": true
-   }
-  },
-  {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
-   "transport": "grpc",
-   "host_group": "self-hosted",
-   "endpoint": "http://collector.internal:50051",
-   "via": "env",
-   "source": "scheme-or-none",
-   "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -5051,14 +5272,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5068,14 +5289,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5085,14 +5306,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5102,14 +5323,14 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5119,14 +5340,150 @@
    }
   },
   {
-   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "http://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "http://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -5340,14 +5697,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5357,14 +5714,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5374,14 +5731,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5391,14 +5748,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5408,14 +5765,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5425,14 +5782,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5442,14 +5799,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5459,14 +5816,14 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5476,14 +5833,133 @@
    }
   },
   {
-   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "self-hosted",
    "endpoint": "https://collector.internal:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "collector.internal:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'https://collector.internal:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "self-hosted",
+   "endpoint": "https://collector.internal:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5697,14 +6173,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5714,14 +6190,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5731,14 +6207,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5748,14 +6224,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5765,14 +6241,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5782,14 +6258,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5799,14 +6275,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5816,14 +6292,14 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -5833,14 +6309,133 @@
    }
   },
   {
-   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6054,14 +6649,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6071,14 +6666,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6088,14 +6683,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6105,14 +6700,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6122,14 +6717,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6139,14 +6734,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6156,14 +6751,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6173,14 +6768,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6190,14 +6785,133 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6411,14 +7125,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6428,14 +7142,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6445,14 +7159,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6462,14 +7176,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6479,14 +7193,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6496,14 +7210,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6513,14 +7227,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6530,14 +7244,14 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6547,14 +7261,133 @@
    }
   },
   {
-   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "[::1]:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "[::1]:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'[::1]:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "[::1]:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6768,14 +7601,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6785,14 +7618,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6802,14 +7635,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6819,14 +7652,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6836,14 +7669,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6853,14 +7686,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6870,14 +7703,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6887,14 +7720,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -6904,14 +7737,133 @@
    }
   },
   {
-   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "literal-loopback",
    "endpoint": "http://127.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "literal-loopback",
+   "endpoint": "http://127.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7125,14 +8077,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7142,14 +8094,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7159,14 +8111,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7176,14 +8128,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7193,14 +8145,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7210,14 +8162,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7227,14 +8179,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7244,14 +8196,14 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7261,14 +8213,133 @@
    }
   },
   {
-   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "127.0.0.1.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.0.0.1.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'127.0.0.1.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "127.0.0.1.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7482,14 +8553,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "http://127.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -7499,14 +8570,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "http://127.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -7516,14 +8587,31 @@
    }
   },
   {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "http://127.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7533,82 +8621,14 @@
    }
   },
   {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "http://127.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
-   "expect": {
-    "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
-   }
-  },
-  {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
-   "transport": "grpc",
-   "host_group": "written-not-loopback",
-   "endpoint": "http://127.1:50051",
-   "via": "env",
-   "source": "scheme-or-none",
-   "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
-   "expect": {
-    "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
-   }
-  },
-  {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
-   "transport": "grpc",
-   "host_group": "written-not-loopback",
-   "endpoint": "http://127.1:50051",
-   "via": "env",
-   "source": "scheme-or-none",
-   "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
-   "expect": {
-    "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
-   }
-  },
-  {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
-   "transport": "grpc",
-   "host_group": "written-not-loopback",
-   "endpoint": "http://127.1:50051",
-   "via": "env",
-   "source": "scheme-or-none",
-   "opt_in": "1",
-   "proxy": "NO_PROXY-port",
-   "expect": {
-    "decision": "fi",
-    "error": "UnsupportedFutureAGIEndpointError",
-    "dialed": null,
-    "tls": null,
-    "keys": false
-   }
-  },
-  {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
-   "transport": "grpc",
-   "host_group": "written-not-loopback",
-   "endpoint": "http://127.1:50051",
-   "via": "env",
-   "source": "scheme-or-none",
-   "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7618,14 +8638,184 @@
    }
   },
   {
-   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "http://127.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "ALL_PROXY-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "127.1:50051",
+    "tls": "plain",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": "UnsupportedFutureAGIEndpointError",
+    "dialed": null,
+    "tls": null,
+    "keys": false
+   }
+  },
+  {
+   "id": "grpc|'http://127.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "http://127.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": "UnsupportedFutureAGIEndpointError",
@@ -7839,14 +9029,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7856,14 +9046,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7873,14 +9063,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7890,14 +9080,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7907,14 +9097,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7924,14 +9114,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7941,14 +9131,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7958,14 +9148,14 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -7975,14 +9165,133 @@
    }
   },
   {
-   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "0x7f.0.0.1:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "0x7f.0.0.1:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'0x7f.0.0.1:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "0x7f.0.0.1:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8196,14 +9505,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8213,14 +9522,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8230,14 +9539,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8247,14 +9556,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8264,14 +9573,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8281,14 +9590,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8298,14 +9607,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8315,14 +9624,14 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8332,14 +9641,133 @@
    }
   },
   {
-   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "2130706433:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "2130706433:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'2130706433:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "2130706433:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8553,14 +9981,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8570,14 +9998,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8587,14 +10015,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8604,14 +10032,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8621,14 +10049,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8638,14 +10066,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8655,14 +10083,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8672,14 +10100,14 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8689,14 +10117,133 @@
    }
   },
   {
-   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "localhost.:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "localhost.:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'localhost.:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "localhost.:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8910,14 +10457,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=grpc_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTP_PROXY",
+   "proxy": "grpc_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8927,14 +10474,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "http_proxy",
+   "proxy": "https_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8944,14 +10491,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-alone",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=http_proxy-lower",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "HTTPS_PROXY-alone",
+   "proxy": "http_proxy-lower",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8961,14 +10508,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTPS_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "ALL_PROXY",
+   "proxy": "HTTPS_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8978,14 +10525,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-exact",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=HTTP_PROXY-upper-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-exact",
+   "proxy": "HTTP_PROXY-upper-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -8995,14 +10542,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-suffix",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=ALL_PROXY-ignored",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-suffix",
+   "proxy": "ALL_PROXY-ignored",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -9012,14 +10559,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-port",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=https_proxy-empty-shadows-http_proxy",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-port",
+   "proxy": "https_proxy-empty-shadows-http_proxy",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -9029,14 +10576,14 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-star",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-exact",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-star",
+   "proxy": "no_proxy-exact",
    "expect": {
     "decision": "fi",
     "error": null,
@@ -9046,14 +10593,133 @@
    }
   },
   {
-   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-cidr",
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-suffix",
    "transport": "grpc",
    "host_group": "written-not-loopback",
    "endpoint": "app.localhost:50051",
    "via": "env",
    "source": "scheme-or-none",
    "opt_in": "1",
-   "proxy": "NO_PROXY-cidr",
+   "proxy": "no_proxy-suffix",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-port-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-port-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-star-does-not-bypass",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-star-does-not-bypass",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_proxy-cidr",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_proxy-cidr",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=NO_PROXY-upper-ignored",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "NO_PROXY-upper-ignored",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-exact",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-exact",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-over-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-over-no_proxy",
+   "expect": {
+    "decision": "fi",
+    "error": null,
+    "dialed": "app.localhost:50051",
+    "tls": "tls",
+    "keys": true
+   }
+  },
+  {
+   "id": "grpc|'app.localhost:50051'|via=env|scheme-or-none|opt-in=1|proxy=no_grpc_proxy-empty-shadows-no_proxy",
+   "transport": "grpc",
+   "host_group": "written-not-loopback",
+   "endpoint": "app.localhost:50051",
+   "via": "env",
+   "source": "scheme-or-none",
+   "opt_in": "1",
+   "proxy": "no_grpc_proxy-empty-shadows-no_proxy",
    "expect": {
     "decision": "fi",
     "error": null,

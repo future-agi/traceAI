@@ -38,7 +38,37 @@ PROXIES = {
     "NO_PROXY-cidr": {"HTTP_PROXY": "http://proxy.internal:3128", "NO_PROXY": "10.0.0.0/8"},
     "caller-proxies": {},
 }
-PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
+# gRPC channels are routed by what grpcio reads (measured on grpcio 1.63.2, 1.70.0 and 1.85.3): the lower-case names grpc_proxy,
+# https_proxy and http_proxy (the first one set decides), the bypass list no_grpc_proxy (when set) or no_proxy; never ALL_PROXY or
+# an upper-case name; a bypass entry with a port or "*" does not bypass; a network range bypasses an address, not a name.
+GRPC_PROXIES = {
+    "none": {},
+    "grpc_proxy": {"grpc_proxy": "http://proxy.internal:3128"},
+    "https_proxy-lower": {"https_proxy": "http://proxy.internal:3128"},
+    "http_proxy-lower": {"http_proxy": "http://proxy.internal:3128"},
+    "HTTPS_PROXY-upper-ignored": {"HTTPS_PROXY": "http://proxy.internal:3128"},
+    "HTTP_PROXY-upper-ignored": {"HTTP_PROXY": "http://proxy.internal:3128"},
+    "ALL_PROXY-ignored": {"ALL_PROXY": "http://proxy.internal:3128"},
+    "https_proxy-empty-shadows-http_proxy": {"https_proxy": "", "http_proxy": "http://proxy.internal:3128"},
+    "no_proxy-exact": {"grpc_proxy": "http://proxy.internal:3128", "no_proxy": "collector.internal"},
+    "no_proxy-suffix": {"grpc_proxy": "http://proxy.internal:3128", "no_proxy": ".internal"},
+    "no_proxy-port-does-not-bypass": {"grpc_proxy": "http://proxy.internal:3128", "no_proxy": "collector.internal:50051"},
+    "no_proxy-star-does-not-bypass": {"grpc_proxy": "http://proxy.internal:3128", "no_proxy": "*"},
+    "no_proxy-cidr": {"grpc_proxy": "http://proxy.internal:3128", "no_proxy": "10.0.0.0/8"},
+    "NO_PROXY-upper-ignored": {"grpc_proxy": "http://proxy.internal:3128", "NO_PROXY": "collector.internal"},
+    "no_grpc_proxy-exact": {"grpc_proxy": "http://proxy.internal:3128", "no_grpc_proxy": "collector.internal"},
+    "no_grpc_proxy-over-no_proxy": {"grpc_proxy": "http://proxy.internal:3128", "no_grpc_proxy": "other.example", "no_proxy": "collector.internal"},
+    "no_grpc_proxy-empty-shadows-no_proxy": {"grpc_proxy": "http://proxy.internal:3128", "no_grpc_proxy": "", "no_proxy": "collector.internal"},
+}
+PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy",
+                   "grpc_proxy", "GRPC_PROXY", "no_grpc_proxy", "NO_GRPC_PROXY")
+# Proxy settings that route a plain request whatever the host is, per transport.
+ALWAYS_ROUTED = {
+    "http": ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "caller-proxies"),
+    "eval-config": ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "caller-proxies"),
+    "grpc": ("grpc_proxy", "https_proxy-lower", "http_proxy-lower", "no_proxy-port-does-not-bypass", "no_proxy-star-does-not-bypass",
+             "NO_PROXY-upper-ignored", "no_grpc_proxy-over-no_proxy", "no_grpc_proxy-empty-shadows-no_proxy", "no_proxy-cidr"),
+}
 OPT_INS = {"unset": None, "1": "1", "true": "true"}
 GRPC_SOURCES = {
     "scheme-or-none": ({}, {}),
@@ -102,7 +132,7 @@ def row_specs():
                         for opt_name in (OPT_INS if plain else ("unset",)):
                             specs.append(_spec(transport, group, endpoint, source, opt_name, "none", via))
                 if group in PLAIN_PROXY_GROUPS and plain:
-                    for proxy in PROXIES:
+                    for proxy in (GRPC_PROXIES if transport == "grpc" else PROXIES):
                         if proxy == "none" or (proxy == "caller-proxies" and transport != "http"):
                             continue
                         specs.append(_spec(transport, group, endpoint, "scheme-or-none", "1", proxy, "env"))
@@ -154,11 +184,12 @@ def run_row(spec):
 
     otel = _otel
 
+    transport = spec["transport"]
     env = {name: None for name in PROXY_VARIABLES}
     env.update({"FI_API_KEY": KEY, "FI_SECRET_KEY": SECRET, "FI_BASE_URL": "http://127.0.0.1:9", "FI_GRPC_URL": "127.0.0.1:9",
                 "FI_TRACES_URL": None, "FI_ALLOW_INSECURE_HTTP": spec["opt_in"], "OTEL_EXPORTER_OTLP_HEADERS": None,
                 "OTEL_EXPORTER_OTLP_TRACES_HEADERS": None, "OTEL_EXPORTER_OTLP_INSECURE": None, "OTEL_EXPORTER_OTLP_TRACES_INSECURE": None})
-    env.update(PROXIES[spec["proxy"]])
+    env.update(GRPC_PROXIES[spec["proxy"]] if transport == "grpc" else PROXIES[spec["proxy"]])
     transport, endpoint = spec["transport"], spec["endpoint"]
     kwargs = {}
     if transport == "grpc":
@@ -258,8 +289,10 @@ def check_invariants(spec, outcome):
         problems.append("keys to a disputed or empty authority")
     if outcome["keys"] and outcome["tls"] == "plain":
         loopback = group == "literal-loopback"
-        if not loopback and not (opt_in == "1" and spec["proxy"] in ("none", "HTTPS_PROXY-alone", "NO_PROXY-exact", "NO_PROXY-suffix", "NO_PROXY-port", "NO_PROXY-star", "NO_PROXY-cidr") and group in ("self-hosted", "written-not-loopback")):
+        if not loopback and not (opt_in == "1" and group in ("self-hosted", "written-not-loopback")):
             problems.append("keys on a plain channel without a literal loopback host or the opt-in")
+        if not loopback and spec["proxy"] in ALWAYS_ROUTED[spec["transport"]]:
+            problems.append("keys on a plain channel that a proxy setting routes")
     if opt_in in (None, "true") and group in ("self-hosted", "written-not-loopback") and outcome["tls"] == "plain" and outcome["keys"]:
         problems.append("keys on a plain channel without the exact opt-in")
     return problems
