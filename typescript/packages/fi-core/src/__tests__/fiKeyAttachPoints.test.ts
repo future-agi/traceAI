@@ -99,7 +99,7 @@ function loopbackDeciders(): string[] {
     const fns = functions(text, file);
     text.forEach((line, i) => {
       const code = line.replace(/\/\/.*$/, "");
-      if (/^\s*(\*|\/\*)/.test(code) || !/LOOPBACK_HOSTS|isLiteralLoopback\(|isLoopbackTarget\(|isLoopbackHost\(/.test(code)) return;
+      if (/^\s*(\*|\/\*)/.test(code) || /^const LOOPBACK_HOSTS\b/.test(code) || !/LOOPBACK_HOSTS|isLiteralLoopback\(|isLoopbackTarget\(|isLoopbackHost\(/.test(code)) return;
       found.add([...fns].reverse().find(f => f.start <= i)?.site ?? `${file}::<top level>`);
     });
   }

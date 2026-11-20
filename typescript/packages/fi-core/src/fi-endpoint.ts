@@ -49,7 +49,9 @@ export function endpointTarget(endpoint: string, transport: EndpointTransport): 
 /** True when the endpoint's dialled host is futureagi.com or one of its subdomains. */
 export function isFiEndpoint(endpoint: string, transport: EndpointTransport): boolean {
   const target = endpointTarget(endpoint, transport);
-  return target !== undefined && FI_HOST.test(fiHostname(target.hostname));
+  if (target === undefined) return false;
+  const written = writtenHost(endpoint, transport);
+  return FI_HOST.test(fiHostname(target.hostname)) || (written !== undefined && FI_HOST.test(fiHostname(written)));
 }
 
 /** True when both spellings dial the same host and port. */
@@ -58,15 +60,32 @@ export function sameEndpointTarget(a: string, b: string, transport: EndpointTran
   return left !== undefined && right !== undefined && left.origin === right.origin;
 }
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-/** True when the gRPC target dials exactly localhost, 127.0.0.1 or ::1 (decided on the parsed host, not on the text). */
-export function isLoopbackTarget(endpoint: string): boolean {
-  const target = grpcTarget(endpoint);
-  return target !== undefined && LOOPBACK_HOSTS.has(target.hostname.toLowerCase());
+/**
+ * The host as written in the URL or target, before any parser rewrites it (userinfo, port, path, query and fragment
+ * removed, lower case, IPv6 brackets kept), or undefined when there is none. A WHATWG URL turns 127.1, 0x7f.0.0.1 and
+ * 2130706433 into 127.0.0.1 and drops a trailing dot after an IPv4 address; loopback is decided on what was written.
+ */
+export function writtenHost(endpoint: string, transport: EndpointTransport): string | undefined {
+  let text = endpoint.trim();
+  // gRPC reads a scheme of at most eight word characters, else the whole text is the target; HTTP needs a scheme.
+  const scheme = (transport === "grpc" ? /^\w{1,8}:\/\// : /^[A-Za-z][A-Za-z0-9+.-]*:\/\//).exec(text);
+  if (scheme) text = text.slice(scheme[0].length);
+  else if (transport === "http") return undefined;
+  const end = text.search(/[/?#\\]/);
+  const authority = end === -1 ? text : text.slice(0, end);
+  const hostport = authority.slice(authority.lastIndexOf("@") + 1);
+  if (hostport.startsWith("[")) { const close = hostport.indexOf("]"); return close === -1 ? undefined : hostport.slice(0, close + 1).toLowerCase(); }
+  const colon = hostport.lastIndexOf(":");
+  const host = colon === -1 ? hostport : hostport.slice(0, colon);
+  return host === "" ? undefined : host.toLowerCase();
 }
 
-/** True when the host is exactly localhost, 127.0.0.1 or ::1 (the parsed host, not the text). */
-export function isLoopbackHost(hostname: string): boolean { return LOOPBACK_HOSTS.has(hostname.toLowerCase()); }
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+/** True only for the literal loopback spellings localhost, 127.0.0.1 and ::1 / [::1], as written. */
+export function isLiteralLoopback(endpoint: string, transport: EndpointTransport): boolean {
+  const host = writtenHost(endpoint, transport);
+  return host !== undefined && LOOPBACK_HOSTS.has(host);
+}
 
 const PROXY_ENV = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "GRPC_PROXY", "grpc_proxy"];
 /** Whether a request to `hostname:port` would go through a proxy named by the environment, honouring NO_PROXY. */
@@ -107,8 +126,9 @@ export function guardFiKeys(endpoint: string, transport: EndpointTransport, opti
   const plaintext = transport === "http" ? target.protocol === "http:" : options.plaintext === true;
   if (!plaintext) return;
   const host = fiHostname(target.hostname);
-  if (FI_HOST.test(host)) throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
-  if (LOOPBACK_HOSTS.has(host)) return;
+  const written = writtenHost(endpoint, transport);
+  if (FI_HOST.test(host) || (written !== undefined && FI_HOST.test(fiHostname(written)))) throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
+  if (isLiteralLoopback(endpoint, transport)) return;
   if (options.allowInsecureHttp !== true && process.env.FI_ALLOW_INSECURE_HTTP !== "1") {
     throw new Error("Future AGI keys are sent over a plaintext channel only to loopback. For a self-hosted collector without TLS, set FI_ALLOW_INSECURE_HTTP=1 or pass allowInsecureHttp: true.");
   }

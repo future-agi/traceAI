@@ -29,7 +29,7 @@ import { Resource, ResourceDetector, resourceFromAttributes, detectResources, de
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
-import { guardFiKeys, isFiEndpoint, isLoopbackTarget, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
+import { guardFiKeys, isFiEndpoint, isLiteralLoopback, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
 import { credentialSecrets } from "./privacy-runtime";
 import { hasCompleteKeyPair } from "./fi-key-pair";
 import { seedSecrets } from "./secrets";
@@ -330,7 +330,7 @@ function copyMetadata(metadata: unknown, target: grpc.Metadata): void {
  */
 function grpcChannelCredentials(endpoint: string, fiBound: boolean, keys: boolean, callerCredentials: unknown, allowInsecureHttp: unknown): grpc.ChannelCredentials | undefined {
   if (isFiEndpoint(endpoint, "grpc")) return grpc.credentials.createSsl();
-  const loopback = isLoopbackTarget(endpoint);
+  const loopback = isLiteralLoopback(endpoint, "grpc");
   if (loopback && (fiBound || callerCredentials === undefined)) return grpc.credentials.createInsecure();
   const supplied = callerCredentials as grpc.ChannelCredentials | undefined;
   if (!keys) return supplied ?? undefined;
@@ -534,6 +534,14 @@ export function resolveTraceEndpoint(endpoint?: string): string {
     return url.toString();
   } catch { return resolved; }
 }
+/**
+ * The scheme and authority of a URL as written (userinfo removed), so the host the exporter dials, and every
+ * decision about it, is the host the configuration names rather than the one a URL parser rewrites it to.
+ */
+function writtenOrigin(text: string, parsed: URL): string {
+  const authority = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#\\]*)/.exec(text.trim())?.[1];
+  return `${parsed.protocol}//${authority === undefined ? parsed.host : authority.slice(authority.lastIndexOf("@") + 1)}`;
+}
 function constructFullEndpoint(customEndpoint?: string): string {
   if (customEndpoint) {
     try {
@@ -544,7 +552,7 @@ function constructFullEndpoint(customEndpoint?: string): string {
         diag.warn(`Using custom endpoint as full URL: ${loggable(customEndpoint)}`);
         return customEndpoint;
       } else {
-        return `${parsedCustom.protocol}//${parsedCustom.host}${FI_COLLECTOR_PATH}`;
+        return `${writtenOrigin(customEndpoint, parsedCustom)}${FI_COLLECTOR_PATH}`;
       }
     } catch (e) {
       diag.warn(`Custom endpoint '${loggable(customEndpoint)}' is not a valid URL. Falling back to environment or default.`);
@@ -953,7 +961,7 @@ function evalCheckBase(name: string, checkPath: string, customEndpoint: string |
         if (verbose) diag.info(`${name}: Using custom full endpoint: ${customEndpoint}`);
         candidate = customEndpoint.substring(0, customEndpoint.lastIndexOf(checkPath));
       } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") {
-        candidate = `${parsedCustom.protocol}//${parsedCustom.host}`;
+        candidate = writtenOrigin(customEndpoint, parsedCustom);
       } else {
         candidate = customEndpoint;
       }
