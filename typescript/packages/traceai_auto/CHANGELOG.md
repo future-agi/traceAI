@@ -4,7 +4,7 @@
 - `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
 
 ### Changed
-- Uses `@traceai/fi-core` 1.4.2.
+- Uses `@traceai/fi-core` 1.4.2. `baseUrl` (or `FI_BASE_URL`) is the Future AGI route and gets only the Future AGI headers; a collector of your own goes through `init({ provider })` and gets only the headers configured on its exporter.
 
 ## [0.4.1] - 2026-11-19
 

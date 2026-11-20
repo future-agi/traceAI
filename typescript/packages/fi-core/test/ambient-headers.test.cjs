@@ -190,3 +190,48 @@ test('esm entry (no duplicate): ambient headers do not reach the FI endpoint', a
   for (const name of AMBIENT) assert.equal(sink.received[0][name], undefined, `${name} reached the sink`);
   assert.equal(sink.received[0]['x-api-key'], FI['x-api-key']);
 });
+
+// ---- Nothing environment-dependent changes the outcome ------------------------------------------------
+const { spawnSync } = require('node:child_process');
+const coreDist = path.join(coreRoot, 'dist', 'src', 'index.js');
+function child(script, env) {
+  const r = spawnSync(process.execPath, ['-e', script], { cwd: coreRoot, encoding: 'utf8', timeout: 30000,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env } });
+  return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+const { spawn } = require('node:child_process');
+const childAsync = (script, env) => new Promise(done => {
+  const proc = spawn(process.execPath, ['-e', script], { cwd: coreRoot, timeout: 30000, env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env } });
+  proc.on('close', () => done());
+});
+for (const worker of [undefined, '1']) {
+  const env = worker ? { JEST_WORKER_ID: worker, NODE_ENV: 'test' } : {};
+  test(`JEST_WORKER_ID=${worker}: a stand-in-shaped exporter on the FI route is refused, with no value in the error`, () => {
+    // The HTTP exporter class is replaced by an object with no OTLP delegate before the SDK loads.
+    const script = `
+      const resolved = require.resolve('@opentelemetry/exporter-trace-otlp-http');
+      require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: { OTLPTraceExporter: class { export() {} shutdown() { return Promise.resolve(); } forceFlush() { return Promise.resolve(); } } } };
+      const core = require(${JSON.stringify(coreDist)});
+      try { core.createSpanExporter({ headers: { 'x-api-key': 'synthetic-fi-key', 'x-secret-key': 'synthetic-fi-secret' } }); console.log('BUILT'); }
+      catch (e) { console.log('REFUSED ' + e.message); }`;
+    const r = child(script, { ...env, FI_BASE_URL: 'http://127.0.0.1:9' });
+    assert.match(r.out, /REFUSED Unsupported OTLP exporter layout: /);
+    assert.doesNotMatch(r.out, /BUILT|synthetic/);
+  });
+  test(`JEST_WORKER_ID=${worker}: a real exporter on the FI route keeps ambient headers off the sink`, async () => {
+    const sink = await httpSink();
+    const script = `
+      const core = require(${JSON.stringify(coreDist)});
+      (async () => { const p = core.register({ projectName: 'x', setGlobalTracerProvider: false, batch: false });
+        p.getTracer('t').startSpan('one').end(); await p.forceFlush(); await p.shutdown(); })();`;
+    await childAsync(script, { ...env, FI_BASE_URL: sink.endpoint, FI_API_KEY: 'synthetic-fi-key', FI_SECRET_KEY: 'synthetic-fi-secret', ...CASES.both });
+    assert.equal(sink.received.length, 1);
+    for (const name of AMBIENT) assert.equal(sink.received[0][name], undefined);
+    assert.equal(sink.received[0]['x-api-key'], 'synthetic-fi-key');
+  });
+}
+test('the published type surface has no fiEndpoint, and no shipped source reads JEST variables', () => {
+  const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]);
+  for (const file of walk(path.join(coreRoot, 'dist')).filter(f => f.endsWith('.d.ts'))) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /fiEndpoint/, file);
+  for (const file of walk(path.join(coreRoot, 'dist', 'src')).filter(f => f.endsWith('.js'))) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /JEST_WORKER_ID/, file);
+});

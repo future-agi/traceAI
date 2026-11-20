@@ -1,7 +1,8 @@
 import { createServer, IncomingHttpHeaders, Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as grpc from "@grpc/grpc-js";
-import { FITracerProvider, register, Transport } from "../otel";
+import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { createSpanExporter, FITracerProvider, register, Transport } from "../otel";
 
 // Offline: a capture server bound to 127.0.0.1 only; synthetic header values only.
 const AMBIENT_AUTH = "Bearer SYNTHETIC-OTHER-BACKEND";
@@ -50,15 +51,15 @@ describe.each(ENV_CASES)("ambient %s with the HTTP exporter", (name, value) => {
   });
 });
 
-async function withGrpcSink(run: (endpoint: string) => Promise<void>): Promise<grpc.Metadata[]> {
+async function withGrpcSink(run: (endpoint: string) => Promise<void>, host = "127.0.0.1"): Promise<grpc.Metadata[]> {
   const metadata: grpc.Metadata[] = [];
   const grpcServer = new grpc.Server();
   const id = (b: Buffer) => b;
   grpcServer.addService({ Export: { path: "/opentelemetry.proto.collector.trace.v1.TraceService/Export", requestStream: false, responseStream: false,
     requestSerialize: id, requestDeserialize: id, responseSerialize: id, responseDeserialize: id } } as any,
     { Export: (call: any, cb: any) => { metadata.push(call.metadata); cb(null, Buffer.alloc(0)); } } as any);
-  const port = await new Promise<number>((ok, bad) => grpcServer.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (e, p) => e ? bad(e) : ok(p)));
-  try { await run(`127.0.0.1:${port}`); } finally { grpcServer.forceShutdown(); }
+  const port = await new Promise<number>((ok, bad) => grpcServer.bindAsync(`${host}:0`, grpc.ServerCredentials.createInsecure(), (e, p) => e ? bad(e) : ok(p)));
+  try { await run(`${host}:${port}`); } finally { grpcServer.forceShutdown(); }
   return metadata;
 }
 
@@ -215,4 +216,67 @@ describe("FI endpoint spelled differently", () => {
       expect(metadata[0].get("authorization")).toEqual([]);
       expect(metadata[0].get("x-synthetic-ambient-marker")).toEqual([]);
     });
+});
+
+// `fiEndpoint` is not an option: whatever a caller puts on its options, an endpoint that is not the
+// FI endpoint is classified as another collector's.
+describe("a caller-supplied fiEndpoint changes nothing", () => {
+  beforeEach(() => {
+    Object.assign(process.env, { FI_API_KEY: "synthetic-env-key", FI_SECRET_KEY: "synthetic-env-secret", OTEL_EXPORTER_OTLP_HEADERS: `authorization=${AMBIENT_AUTH.replace(" ", "%20")}` });
+  });
+  function expectOtherCollector(headers: IncomingHttpHeaders) {
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["x-secret-key"]).toBeUndefined();
+    expect(headers["authorization"]).toBe(AMBIENT_AUTH); // its own OTLP environment still applies
+  }
+  const viaExporter = (options: Record<string, unknown>) => async () => {
+    const exporter = createSpanExporter({ endpoint: base, ...options } as any);
+    const provider = new FITracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] } as any);
+    provider.getTracer("t").startSpan("one").end();
+    await provider.forceFlush(); await provider.shutdown();
+  };
+  test.each([["createSpanExporter", viaExporter({ fiEndpoint: true })],
+    ["createSpanExporter with a headers-free caller", viaExporter({ fiEndpoint: true, headers: { "x-api-key": "own" } })],
+    ["FITracerProvider", () => exportOneSpan(undefined, base, null).then(undefined)],
+  ] as Array<[string, () => Promise<void>]>)("HTTP via %s", async (_label, run) => {
+    await (_label === "FITracerProvider" ? (async () => {
+      const provider = new FITracerProvider({ projectName: "x", endpoint: base, fiEndpoint: true, batch: false } as any);
+      provider.getTracer("t").startSpan("one").end(); await provider.forceFlush(); await provider.shutdown();
+    })() : run());
+    expect(received).toHaveLength(1);
+    if (_label.includes("headers-free")) expect(received[0]["x-api-key"]).toBe("own"); else expectOtherCollector(received[0]);
+    expect(received[0]["x-secret-key"]).toBeUndefined();
+    expect(received[0]["authorization"]).toBe(AMBIENT_AUTH);
+  });
+  test("HTTP via register()", async () => {
+    const provider = register({ projectName: "x", endpoint: base, fiEndpoint: true, setGlobalTracerProvider: false, batch: false } as any);
+    provider.getTracer("t").startSpan("one").end(); await provider.forceFlush(); await provider.shutdown();
+    expect(received).toHaveLength(1); expectOtherCollector(received[0]);
+  });
+  test("gRPC via FITracerProvider and register()", async () => {
+    const md = await withGrpcSink(async endpoint => {
+      for (const build of [() => new FITracerProvider({ projectName: "x", endpoint, transport: Transport.GRPC, fiEndpoint: true, batch: false } as any),
+        () => register({ projectName: "x", endpoint, transport: Transport.GRPC, fiEndpoint: true, setGlobalTracerProvider: false, batch: false } as any)]) {
+        const provider = build(); provider.getTracer("t").startSpan("one").end(); await provider.forceFlush(); await provider.shutdown();
+      }
+    });
+    expect(md).toHaveLength(2);
+    for (const m of md) { expect(m.get("x-api-key")).toEqual([]); expect(m.get("x-secret-key")).toEqual([]); expect(m.get("authorization")).toEqual([AMBIENT_AUTH]); }
+  });
+});
+
+describe("gRPC FI endpoint comparison ignores the scheme on either side", () => {
+  beforeEach(() => { Object.assign(process.env, BOTH); });
+  test.each([
+    ["scheme on the caller's endpoint only", (e: string) => e, (e: string) => `http://${e}`],
+    ["scheme on the environment value only", (e: string) => `http://${e}`, (e: string) => e],
+    ["scheme on both", (e: string) => `https://${e}`, (e: string) => `http://${e}`],
+    ["host case (env LOCALHOST, caller localhost)", (e: string) => e.toUpperCase(), (e: string) => e],
+  ] as Array<[string, (e: string) => string, (e: string) => string]>)("%s", async (_label, envSpell, callerSpell) => {
+    const host = _label.startsWith("host case") ? "localhost" : "127.0.0.1";
+    const md = await withGrpcSink(endpoint => { FI_GRPC(envSpell(endpoint)); return exportOneSpan(Transport.GRPC, callerSpell(endpoint), null); }, host);
+    expect(md).toHaveLength(1);
+    expect(md[0].get("authorization")).toEqual([]);
+    expect(md[0].get("x-synthetic-ambient-marker")).toEqual([]);
+  });
 });

@@ -2,6 +2,10 @@ import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals
 import { userInfo } from 'node:os';
 import { FITracerProvider } from '../otel';
 
+// These tests replace the exporter class with a plain stand-in that has no OTLP delegate. Shipped
+// isolation classifies every exporter the same way whatever the environment, so the stand-in is
+// exempted here, in the test, by stubbing the isolation step.
+jest.mock("../otlp-header-isolation", () => ({ ...(jest.requireActual("../otlp-header-isolation") as object), isolateHttpExporterHeaders: jest.fn(), isolateGrpcExporterHeaders: jest.fn() }));
 jest.mock('@opentelemetry/exporter-trace-otlp-http', () => ({
   OTLPTraceExporter: jest.fn().mockImplementation(() => ({
     export: jest.fn((_spans: any, callback: any) => callback({ code: 0 })),
