@@ -137,4 +137,43 @@ public class OverlappingKnownSecretsTests : InitIsolation
         }
         finally { foreach (var (name, value) in saved) Environment.SetEnvironmentVariable(name, value); }
     }
+
+    public static IEnumerable<object[]> Chains => new[]
+    {
+        new object[] { "one character", new[] { "AAAAAAA1", "1BBBBBBB" }, "AAAAAAA1BBBBBBB", new[] { "AAAA", "BBBB" } },
+        new object[] { "two characters", new[] { "CCCCCC12", "12DDDDDD" }, "CCCCCC12DDDDDD", new[] { "CCCC", "DDDD" } },
+        new object[] { "three characters", new[] { "EEEEE123", "123FFFFF" }, "EEEEE123FFFFF", new[] { "EEEE", "FFFF" } },
+        new object[] { "three-secret chain", new[] { "GGGGGG-A", "A-HHHH-B", "B-IIIIII" }, "GGGGGG-A-HHHH-B-IIIIII", new[] { "GGGG", "HHHH", "IIII" } },
+        new object[] { "two inner secrets in one outer", new[] { "OUT-INNERONE-mid-INNERTWO-END", "INNERONE", "INNERTWO" }, "pre OUT-INNERONE-mid-INNERTWO-END post", new[] { "INNER", "-mid-", "-END" } },
+        new object[] { "four-secret chain", new[] { "WWWWWWW1", "1XXXXXX2", "2YYYYYY3", "3ZZZZZZZ" }, "WWWWWWW1XXXXXX2YYYYYY3ZZZZZZZ", new[] { "WWWW", "XXXX", "YYYY", "ZZZZ" } },
+    };
+
+    [Theory]
+    [MemberData(nameof(Chains))]
+    public async Task OverlappingSecretsOfEveryShapeLeaveNoFragmentOnEitherCopy(string shape, string[] secrets, string value, string[] fragments)
+    {
+        foreach (var order in new[] { secrets, secrets.Reverse().ToArray() })
+        {
+            TraceAIAuto.Shutdown(); ResetForAnotherRun();
+            var copies = await Capture(order, value, []);
+            foreach (var text in new[] { copies.Application, copies.FutureAgi }) foreach (var fragment in fragments) Assert.False(text.Contains(fragment), shape + ": " + fragment + " in " + text);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Chains))]
+    public async Task SecretsLearnedAfterCaptureLeaveNoFragmentOnTheFutureAgiCopy(string shape, string[] secrets, string value, string[] fragments)
+    {
+        var copies = await Capture([], value, secrets);
+        foreach (var fragment in fragments) Assert.False(copies.FutureAgi.Contains(fragment), shape + ": " + fragment + " in " + copies.FutureAgi);
+    }
+
+    private static void ResetForAnotherRun()
+    {
+        const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
+        ResetSecrets();
+        typeof(TraceAIAuto).GetField("s_initialized", flags)!.SetValue(null, false);
+        AppDomain.CurrentDomain.SetData("TraceAI.AutoInstrumentation.InitState", null);
+        typeof(TraceAIAuto).GetField("s_config", flags)!.SetValue(null, null);
+    }
 }
