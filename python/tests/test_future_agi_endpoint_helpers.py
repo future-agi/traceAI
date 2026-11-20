@@ -183,26 +183,37 @@ def test_an_argument_and_fi_grpc_url_are_held_to_one_port_rule(monkeypatch, env,
     assert otel._future_agi_decision(env, grpc=True) in ("fi", "other")  # the environment's own target is its own rule
 
 
-@pytest.mark.parametrize("host, resolves_to, loopback", [
-    ("localhost", None, True),
-    ("127.0.0.1", None, True),
-    ("[::1]", None, True),
-    ("app.localhost", "127.0.0.1", True),
-    ("app.localhost", "93.184.216.34", False),
-    ("localhost.", "127.0.0.1", True),
-    ("localhost.", "10.0.0.5", False),
-    ("collector.example", "127.0.0.1", False),
+@pytest.mark.parametrize("host, loopback", [
+    ("localhost", True),
+    ("LOCALHOST", True),
+    ("127.0.0.1", True),
+    ("::1", True),
+    ("[::1]", True),
+    ("127.0.0.1.", False),
+    ("localhost.", False),
+    ("app.localhost", False),
+    ("127.1", False),
+    ("0x7f.0.0.1", False),
+    ("2130706433", False),
+    ("127.0.0.2", False),
+    ("collector.example", False),
 ])
-def test_a_name_is_loopback_when_it_is_localhost_or_resolves_only_to_loopback(monkeypatch, host, resolves_to, loopback):
-    import socket as socket_module
-
-    def resolve(name, *args, **kwargs):
-        if resolves_to is None:
-            raise AssertionError("no lookup is needed")
-        return [(socket_module.AF_INET, socket_module.SOCK_STREAM, 6, "", (resolves_to, 0))]
-
-    monkeypatch.setattr(socket_module, "getaddrinfo", resolve)
+def test_only_the_literal_loopback_forms_count_as_loopback(host, loopback):
     assert otel._is_loopback_host(host) is loopback
+
+
+@pytest.mark.parametrize("endpoint, host", [
+    ("http://127.0.0.1./x", "127.0.0.1."),
+    ("http://127.1:4318", "127.1"),
+    ("http://0x7f.0.0.1:4318/v1", "0x7f.0.0.1"),
+    ("2130706433:50051", "2130706433"),
+    ("http://user@Localhost:80", "localhost"),
+    ("http://[::1]:4318", "::1"),
+    ("[::1]:50051", "::1"),
+    ("localhost:50051", "localhost"),
+])
+def test_the_written_host_is_read_before_any_normalisation(endpoint, host):
+    assert otel._written_host(endpoint) == host
 
 
 @pytest.fixture

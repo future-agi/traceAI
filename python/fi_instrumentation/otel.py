@@ -1075,32 +1075,36 @@ def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_head
     exporter._headers = tuple(kept) + tuple(sdk.items())
 
 
-def _is_loopback_host(host: str | None) -> bool:
-    """True for ``localhost``, loopback addresses and names that resolve only to loopback addresses.
+def _written_host(endpoint: str | None) -> str | None:
+    """The host of a URL or gRPC target as written, lower-cased and without brackets, before any normalisation.
 
-    ``localhost`` is loopback by name. A name ending in ``.localhost``, or ``localhost`` written with a trailing dot, is
-    loopback only when it resolves, and only to loopback addresses. One trailing dot is read as absent.
+    One trailing dot stays on the host, and forms a parser rewrites (``127.1``, ``0x7f.0.0.1``, ``2130706433``) stay as
+    written. Every loopback decision reads this host.
     """
-    import ipaddress
-
-    if not host:
-        return False
-    host = host.strip("[]").lower()
-    dotted = host.endswith(".")
-    host = host.removesuffix(".")
+    if not endpoint:
+        return None
     try:
-        return ipaddress.ip_address(host).is_loopback
+        split = urlsplit(endpoint)
+        text = split.netloc if split.netloc else endpoint
+        text = text.rsplit("@", 1)[-1]
+        if text.startswith("["):
+            return text[1 : text.index("]")].lower() if "]" in text else None
+        return text.split(":", 1)[0].lower() or None
     except ValueError:
-        pass
-    if host == "localhost" and not dotted:
-        return True
-    if host == "localhost" or host.endswith(".localhost"):
-        try:
-            addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
-            return bool(addresses) and all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addresses)
-        except (OSError, ValueError):
-            return False
-    return False
+        return None
+
+
+_LOOPBACK_FORMS = ("localhost", "127.0.0.1", "::1")
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """True only for the literal forms ``localhost``, ``127.0.0.1`` and ``::1`` (``[::1]``), as written.
+
+    A form a parser rewrites into loopback (``127.1``, ``0x7f.0.0.1``, ``2130706433``), a trailing dot
+    (``127.0.0.1.``, ``localhost.``) and a name that merely ends in ``.localhost`` are not loopback: they are treated
+    like any other self-hosted host.
+    """
+    return bool(host) and host.strip("[]").lower() in _LOOPBACK_FORMS
 
 
 def _plain_text_requested(target: tuple[str, str, int], insecure: Any) -> bool:
@@ -1128,11 +1132,11 @@ def _force_tls_for_future_agi(endpoint: str | None, insecure: Any, allow: bool =
     with it, the configured plain channel is kept.
     """
     target = _grpc_target(endpoint)
-    if target is None or _is_loopback_host(target[1]):
+    if target is None or _is_loopback_host(_written_host(endpoint)):
         return False
     if not _is_futureagi_host(target[1]):
         if _plain_text_requested(target, insecure):
-            _authorize_plain_text(target[1], target[2], allow)
+            _authorize_plain_text(_written_host(endpoint) or target[1], target[2], allow)
             return False
         return True
     if insecure:
@@ -1193,7 +1197,7 @@ def _authorize_http_endpoint(endpoint: str | None, allow: bool = False, session:
     """The plain-channel rule for an HTTP endpoint that carries Future AGI keys (see ``_authorize_plain_text``)."""
     origin = _http_origin(endpoint)
     if origin is not None and origin[0] == "http":
-        _authorize_plain_text(origin[1], origin[2], allow, session)
+        _authorize_plain_text(_written_host(endpoint) or origin[1], origin[2], allow, session)
 
 
 def _close_after_refusal(exporter: Any, base: Any) -> None:
@@ -1248,13 +1252,14 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         try:
             resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers)
             resolved_target = _grpc_target(getattr(self, "_endpoint", None))
-            if resolved == "fi" and not forced and resolved_target and not _is_loopback_host(resolved_target[1]):
+            written = _written_host(getattr(self, "_endpoint", None))
+            if resolved == "fi" and not forced and resolved_target and not _is_loopback_host(written):
                 if _is_futureagi_host(resolved_target[1]):
                     raise UnsupportedFutureAGIEndpointError(
                         "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
                         "credentials are not sent to it. Set FI_GRPC_URL to the Future AGI gRPC target, or remove the credentials."
                     )
-                _authorize_plain_text(resolved_target[1], resolved_target[2], allow_insecure_http)
+                _authorize_plain_text(written or resolved_target[1], resolved_target[2], allow_insecure_http)
         except UnsupportedFutureAGIEndpointError:
             _close_after_refusal(self, _GRPCSpanExporter)
             raise

@@ -7,6 +7,12 @@ import pytest
 from fi_instrumentation import otel
 
 
+@pytest.fixture(autouse=True)
+def _allow_plain_self_hosted(monkeypatch):
+    """These tests name self-hosted http endpoints to check header handling, not the channel."""
+    monkeypatch.setenv("FI_ALLOW_INSECURE_HTTP", "1")
+
+
 def _emulate_parent(exporter, captured):
     """Set what the real OpenTelemetry parent sets: the resolved endpoint and a header layout.
 

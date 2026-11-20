@@ -336,3 +336,54 @@ def test_a_plaintext_grpc_server_on_a_non_loopback_address_receives_spans_with_t
     finally:
         server.stop(None)
     assert seen and seen[0].get("x-api-key") == FI_KEY
+
+
+# ---- hosts a parser rewrites into loopback are not loopback ---------------------------------------------------
+
+WRITTEN_HOSTS = ["127.0.0.1.", "127.1", "0x7f.0.0.1", "2130706433", "localhost.", "app.localhost"]
+
+
+@pytest.mark.parametrize("host", WRITTEN_HOSTS)
+@pytest.mark.parametrize("site", list(HTTP_SITES))
+def test_a_written_host_that_is_not_literal_loopback_is_refused_over_http_by_default(site, host, monkeypatch, sent):
+    _set_base(monkeypatch, f"http://{host}:4318")
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        HTTP_SITES[site]()
+    assert OPT_IN in str(raised.value)
+    assert sent == []
+
+
+@pytest.mark.parametrize("host", WRITTEN_HOSTS)
+@pytest.mark.parametrize("site", list(HTTP_SITES))
+def test_a_written_host_that_is_not_literal_loopback_is_self_hosted_with_the_opt_in(site, host, monkeypatch, sent, caplog):
+    _set_base(monkeypatch, f"http://{host}:4318")
+    monkeypatch.setenv(OPT_IN, "1")
+    with caplog.at_level(logging.WARNING, logger=otel.logger.name):
+        HTTP_SITES[site]()
+        HTTP_SITES[site]()
+    warnings = [r.getMessage() for r in caplog.records if OPT_IN in r.getMessage()]
+    assert len(warnings) == 1 and f"http://{host}:4318" in warnings[0]
+
+
+@pytest.mark.parametrize("host", WRITTEN_HOSTS)
+@pytest.mark.parametrize("site", list(HTTP_SITES))
+def test_a_written_host_that_is_not_literal_loopback_is_refused_through_a_proxy_even_with_the_opt_in(site, host, monkeypatch, sent):
+    _set_base(monkeypatch, f"http://{host}:4318")
+    monkeypatch.setenv(OPT_IN, "1")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:3128")
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
+        HTTP_SITES[site]()
+    assert sent == []
+
+
+@pytest.mark.parametrize("host", WRITTEN_HOSTS)
+def test_a_written_host_that_is_not_literal_loopback_follows_the_same_grpc_cells(host, monkeypatch):
+    monkeypatch.setenv("FI_GRPC_URL", f"http://{host}:50051")
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        _grpc()
+    assert OPT_IN in str(raised.value)
+    monkeypatch.setenv(OPT_IN, "1")
+    _grpc()
+    monkeypatch.setenv("http_proxy", "http://proxy.internal:3128")
+    with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
+        _grpc()
