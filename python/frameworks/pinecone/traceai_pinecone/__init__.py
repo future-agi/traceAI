@@ -1,22 +1,10 @@
-"""
-TraceAI Pinecone Instrumentation
+"""OpenTelemetry instrumentation for Pinecone vector operations.
 
-Provides OpenTelemetry instrumentation for Pinecone vector database operations.
-
-Usage:
-    from fi_instrumentation import register
-    from traceai_pinecone import PineconeInstrumentor
-
-    trace_provider = register(project_name="my-rag-app")
-    PineconeInstrumentor().instrument(tracer_provider=trace_provider)
-
-    # Now all Pinecone operations are automatically traced
-    import pinecone
-    pc = pinecone.Pinecone(api_key="...")
-    index = pc.Index("my-index")
-    results = index.query(vector=[0.1] * 1536, top_k=10)
+Use ``PineconeInstrumentor().instrument(tracer_provider=provider)`` before
+creating sync REST, async REST or gRPC indexes. See the README for coverage.
 """
 
+import inspect
 import logging
 from importlib import import_module
 from typing import Any, Collection
@@ -28,6 +16,7 @@ from wrapt import wrap_function_wrapper
 from traceai_pinecone.version import __version__
 from traceai_pinecone.package import _instruments
 from traceai_pinecone._wrappers import (
+    AsyncWrapper,
     QueryWrapper,
     UpsertWrapper,
     DeleteWrapper,
@@ -39,109 +28,73 @@ from traceai_pinecone._wrappers import (
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_MODULE = "pinecone"
+_OPERATIONS = {
+    "query": QueryWrapper,
+    "upsert": UpsertWrapper,
+    "delete": DeleteWrapper,
+    "fetch": FetchWrapper,
+    "update": UpdateWrapper,
+    "describe_index_stats": DescribeIndexStatsWrapper,
+}
+
+
+def _index_classes():
+    # Concrete classes, not Pinecone.Index / Pinecone.IndexAsyncio factories.
+    # SDK 7 moved Index; SDK 10 renamed the asyncio and gRPC classes.
+    seen = set()
+    for module_name, names in (
+        ("pinecone", ("Index", "AsyncIndex")),
+        ("pinecone.db_data", ("Index", "IndexAsyncio")),
+        ("pinecone.grpc", ("GRPCIndex", "GrpcIndex")),
+    ):
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            # Older versions and installations without the optional extras
+            # must keep working; importing this instrumentor requires no extras.
+            continue
+        for name in names:
+            cls = getattr(module, name, None)
+            if isinstance(cls, type) and cls not in seen:
+                seen.add(cls)
+                yield cls
 
 
 class PineconeInstrumentor(BaseInstrumentor):
-    """
-    OpenTelemetry instrumentor for Pinecone vector database.
+    """Trace query, upsert, delete, fetch, update and describe_index_stats.
 
-    Instruments the following operations:
-    - query: Vector similarity search
-    - upsert: Insert or update vectors
-    - delete: Delete vectors
-    - fetch: Retrieve vectors by ID
-    - update: Update vector metadata
-    - describe_index_stats: Get index statistics
+    Supports sync REST, async REST and synchronous gRPC index methods exposed
+    by the installed Pinecone SDK. Optional SDK extras remain optional.
     """
-
-    __slots__ = (
-        "_index_class",
-        "_original_query",
-        "_original_upsert",
-        "_original_delete",
-        "_original_fetch",
-        "_original_update",
-        "_original_describe_index_stats",
-    )
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-
         tracer = trace_api.get_tracer(
-            __name__,
-            __version__,
-            tracer_provider,
+            __name__, __version__, kwargs.get("tracer_provider")
         )
-
-        pinecone = import_module(_MODULE)
-
-        # SDK 7 removed the top-level Index re-export; its factory still
-        # returns pinecone.db_data.Index. Wrap that class, not the factory.
-        index_class = getattr(pinecone, "Index", None)
-        if index_class is None:
-            from pinecone.db_data import Index
-            index_class = Index
-        self._index_class = index_class
-
-        # Store original methods
-        self._original_query = index_class.query
-        self._original_upsert = index_class.upsert
-        self._original_delete = index_class.delete
-        self._original_fetch = index_class.fetch
-        self._original_update = index_class.update
-        self._original_describe_index_stats = index_class.describe_index_stats
-
-        # Wrap methods
-        wrap_function_wrapper(
-            module=index_class,
-            name="query",
-            wrapper=QueryWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module=index_class,
-            name="upsert",
-            wrapper=UpsertWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module=index_class,
-            name="delete",
-            wrapper=DeleteWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module=index_class,
-            name="fetch",
-            wrapper=FetchWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module=index_class,
-            name="update",
-            wrapper=UpdateWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module=index_class,
-            name="describe_index_stats",
-            wrapper=DescribeIndexStatsWrapper(tracer=tracer),
-        )
-
-        logger.debug("Pinecone instrumentation enabled")
+        self._originals = []
+        try:
+            for cls in _index_classes():
+                for name, wrapper_class in _OPERATIONS.items():
+                    original = getattr(cls, name, None)
+                    if not callable(original):
+                        continue
+                    wrapper = wrapper_class(tracer=tracer)
+                    if inspect.iscoroutinefunction(inspect.unwrap(original)):
+                        wrapper = AsyncWrapper(wrapper)
+                    wrap_function_wrapper(cls, name, wrapper)
+                    self._originals.append((cls, name, original))
+        except Exception:
+            # Never leave a partially installed instrumentor behind.
+            self._uninstrument()
+            raise
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        index_class = self._index_class
-
-        # Restore original methods
-        index_class.query = self._original_query
-        index_class.upsert = self._original_upsert
-        index_class.delete = self._original_delete
-        index_class.fetch = self._original_fetch
-        index_class.update = self._original_update
-        index_class.describe_index_stats = self._original_describe_index_stats
-
-        logger.debug("Pinecone instrumentation disabled")
+        for cls, name, original in reversed(self._originals):
+            setattr(cls, name, original)
+        self._originals.clear()
 
 
 __all__ = ["PineconeInstrumentor", "__version__"]
