@@ -708,7 +708,7 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
     """The error for an exporter bound for Future AGI whose headers cannot be pinned.
 
     The message names the exporter class, the package version and the setting
-    that could leak, never a header or environment value.
+    that could leak, and no header or environment value.
     """
     try:
         from importlib.metadata import version
