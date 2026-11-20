@@ -301,8 +301,9 @@ every tool execution, so one RubyLLM call gives:
   `error.type` and the exception reaches your code unchanged.
 - No second wire span for the HTTP request inside a chat span.
 - A streaming span ends once: when the stream finishes, when it fails, or when
-  your block leaves early (`break`, `throw`, an exception). An early exit is
-  marked `traceai.ruby_llm.incomplete`.
+  your block leaves early (`break`, `throw`, an exception). Leaving with
+  `break` or `throw` marks the span `traceai.ruby_llm.incomplete`; an exception
+  sets it to ERROR with `error.type`.
 
 The spans nest under the span that is current when you call RubyLLM, including
 across RubyLLM's concurrent tool threads (RubyLLM 2.1 and later). There is no
