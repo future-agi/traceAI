@@ -93,7 +93,9 @@ func (h *handler) target() *traceaieino.Handler {
 		}
 		in := traceaieino.NewDefaultHandler(
 			traceaieino.WithTracerProvider(h.att.TracerProvider()),
-			traceaieino.WithTraceConfig(traceaieino.TraceConfig(h.att.TraceConfig())),
+			// The route applies the agent's privacy rules to every span attribute once (see auto.Attachment.TracerProvider),
+			// so the handler applies no hide switch of its own; it keeps only the size cap for inline images.
+			traceaieino.WithTraceConfig(traceaieino.TraceConfig{Base64ImageMaxLength: h.att.TraceConfig().Base64ImageMaxLength}),
 		)
 		h.inner.Store(in)
 		return in

@@ -92,9 +92,13 @@ jobs:
           go test -race -count=1 ./...
 
   eino-auto-import:
-    name: eino/auto / one-import Eino tracing
+    name: eino/auto / one-import Eino tracing / Go ${{ matrix.go }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.26.0', stable]
     defaults:
       run:
         # A separate module: go/auto and go/eino never require each other. It
@@ -108,8 +112,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
-          cache-dependency-path: go/eino/auto/go.sum
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: |
+            go/eino/auto/go.sum
+            go/eino/auto/zerocode/go.sum
       - name: Check module identity and in-repo replaces
         # Unlike the matrix modules this one is developed against the working
         # tree of go/auto and go/eino, so it carries exactly those two replaces.
@@ -129,8 +135,20 @@ jobs:
         run: python3 "$GITHUB_WORKSPACE/.github/release/release_plan.py" --root "$GITHUB_WORKSPACE" --go-gate go/eino/auto || echo "not taggable yet (expected until go/auto and go/eino are released)"
       - name: Check tidy
         run: go mod tidy -diff
+      - name: The releasable module needs no Eino extension package
+        run: |
+          if go list -deps ./... | grep -q 'cloudwego/eino-ext'; then echo "go/eino/auto needs an Eino extension package"; exit 1; fi
+          if grep -q 'cloudwego/eino-ext' go.mod; then echo "go.mod requires an Eino extension package"; exit 1; fi
       - name: Vet and race tests through the blank import
         run: |
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: Test the zero-code program through the blank import
+        # The test program uses Eino extension packages, so it lives in its own
+        # unpublished module and the releasable one does not require them.
+        working-directory: go/eino/auto/zerocode
+        run: |
+          go mod tidy -diff
           go vet ./...
           go test -race -count=1 ./...
       - name: A program that imports only go/auto downloads no Eino

@@ -42,18 +42,18 @@ provider and no handler registration of your own. It links the zero-code agent
 import _ "github.com/future-agi/traceAI/go/eino/auto"
 ```
 
+`go/eino/auto` is released after the next `go/auto` and `go/eino` releases.
+
 ```sh
 go get github.com/future-agi/traceAI/go/eino/auto@latest
 export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service
 ```
 
-`go/eino/auto` ships with the next `go/auto` and `go/eino` releases.
-
 Spans leave through the agent's route: your global SDK tracer provider if you install one (your exporters
 get them too), else the agent's private provider. `FI_INSTRUMENTATIONS` without `eino` and
 `OTEL_SDK_DISABLED=true` record nothing. `FI_HIDE_*` applies to both copies of a span, the one Future AGI
 receives and the one your own provider exports, exactly as for the agent's wire spans; known-secret
-replacement applies only to the copy sent to Future AGI.
+replacement applies to both copies as well, so a credential the agent knows is replaced in your own provider's exporters too.
 If you also use `traceaieino.NewHandler()` yourself, registered globally or given to one run, each run it
 handles gets its spans from your handler only, and every other run is still traced by the import. A handler
 that is built and never used changes nothing. Call `auto.Shutdown(ctx)` before `main` returns. Only programs

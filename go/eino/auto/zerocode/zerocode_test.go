@@ -1,4 +1,4 @@
-package auto_test
+package zerocode_test
 
 import (
 	"bytes"
@@ -113,8 +113,8 @@ func buildApp(t *testing.T) string {
 			return
 		}
 		appBin = filepath.Join(dir, "app")
-		cmd := exec.Command("go", "build", "-o", appBin, "./internal/zerocodeapp")
-		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
+		cmd := exec.Command("go", "build", "-o", appBin, "./app")
+		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=readonly")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			buildErr = fmt.Errorf("build: %v\n%s", err, out)
 		}

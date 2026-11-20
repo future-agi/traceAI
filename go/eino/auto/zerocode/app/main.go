@@ -1,4 +1,4 @@
-// Command zerocodeapp is an Eino agent program whose only tracing code is the
+// Command app is an Eino agent program whose only tracing code is the
 // blank import of this module. The tests build and run it against fake
 // Future AGI and model endpoints.
 package main
