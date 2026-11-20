@@ -334,7 +334,10 @@ func TestKeyTransportDialGuardIsWiredIntoTheExporter(t *testing.T) {
 	if time.Since(started) > 4*time.Second {
 		t.Fatalf("the refusal waited for a connection attempt: %v", time.Since(started))
 	}
-	if strings.Contains(err.Error(), proxyTestKey) {
-		t.Fatalf("error not value-free: %v", err)
+	// Value-free: no key, and not the address the name resolved to.
+	for _, leaked := range []string{proxyTestKey, "10.255.255.1"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("error not value-free: %v", err)
+		}
 	}
 }
