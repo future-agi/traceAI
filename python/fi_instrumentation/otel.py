@@ -3,7 +3,6 @@ import inspect
 import json
 import logging
 import os
-import sys
 import threading
 import uuid
 import warnings
@@ -808,7 +807,7 @@ class GRPCSpanExporter(_GRPCSpanExporter):
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        sig = _get_class_signature(_GRPCSpanExporter)
+        sig = _get_class_signature(_GRPCSpanExporter, "grpc")
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
@@ -819,11 +818,12 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args.arguments["headers"] = sdk_headers or None
 
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        # Decide on the endpoint the exporter resolved, not only the argument.
+        # Decide on the endpoint the exporter resolved; the guess above only chose the headers to pass in.
         if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
             _pin_grpc_headers(self, sdk_headers)
         elif future_agi:
-            raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-grpc")
+            # The exporter resolved a collector the user chose: build it as asked, without Future AGI keys.
+            super().__init__(*args, **kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -853,7 +853,7 @@ class HTTPSpanExporter(_HTTPSpanExporter):
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        bound_args = _get_class_signature(_HTTPSpanExporter).bind_partial(*args, **kwargs)
+        bound_args = _get_class_signature(_HTTPSpanExporter, "http").bind_partial(*args, **kwargs)
         endpoint = bound_args.arguments.get("endpoint")
         headers = bound_args.arguments.get("headers")
 
@@ -866,11 +866,12 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         bound_args.arguments["headers"] = sdk_headers or None
 
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        # Decide on the endpoint the exporter resolved, not only the argument.
+        # Decide on the endpoint the exporter resolved; the guess above only chose the headers to pass in.
         if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
             _pin_http_headers(self, sdk_headers)
         elif future_agi:
-            raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-http")
+            # The exporter resolved a collector the user chose: build it as asked, without Future AGI keys.
+            super().__init__(*args, **kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -914,16 +915,56 @@ def _normalized_endpoint(endpoint: Optional[str]) -> Tuple[ParseResult, str]:
     return parsed, parsed.geturl()
 
 
-def _get_class_signature(fn: Type[Any]) -> inspect.Signature:
-    if sys.version_info >= (3, 9):
-        return inspect.signature(fn)
-    elif sys.version_info >= (3, 8):
-        init_signature = inspect.signature(fn.__init__)
-        new_params = list(init_signature.parameters.values())[1:]  # Skip 'self'
-        new_sig = init_signature.replace(parameters=new_params)
-        return new_sig
-    else:
-        raise RuntimeError("Unsupported Python version")
+def _documented_init_signature(kind: str) -> inspect.Signature:
+    """The ``__init__`` parameters the OTLP span exporters document, without ``self``.
+
+    Used when the class's ``__init__`` is wrapped by a bare ``(self, *args, **kwargs)``
+    function, so its own signature names none of them. Only parameters every supported
+    release has are named; later ones (``channel_options`` and so on) pass through
+    ``**kwargs`` unchanged.
+    """
+    P = inspect.Parameter
+    names = {
+        "http": (
+            "endpoint",
+            "certificate_file",
+            "client_key_file",
+            "client_certificate_file",
+            "headers",
+            "timeout",
+            "compression",
+            "session",
+        ),
+        "grpc": (
+            "endpoint",
+            "insecure",
+            "credentials",
+            "headers",
+            "timeout",
+            "compression",
+        ),
+    }[kind]
+    params = [P(n, P.POSITIONAL_OR_KEYWORD, default=None) for n in names]
+    params.append(P("kwargs", P.VAR_KEYWORD))
+    return inspect.Signature(params)
+
+
+def _get_class_signature(fn: Type[Any], kind: str | None = None) -> inspect.Signature:
+    """The signature callers of ``fn`` bind against, following any ``__wrapped__`` chain.
+
+    When what remains is only ``*args``/``**kwargs`` (a wrapper that does not expose
+    the function it wraps), ``kind`` ("http" or "grpc") selects the exporter's
+    documented parameters instead.
+    """
+    sig = inspect.signature(fn, follow_wrapped=True)
+    named = [
+        p
+        for p in sig.parameters.values()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    if kind is not None and not named:
+        return _documented_init_signature(kind)
+    return sig
 
 
 def check_custom_eval_config_exists(
