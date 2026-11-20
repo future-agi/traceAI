@@ -5,9 +5,9 @@
  * One trailing dot is part of the same host in every decision. Only the host decides; no environment
  * is consulted here.
  */
-import { diag } from "@opentelemetry/api";
-
 const FI_HOST = /(?:^|\.)futureagi\.com$/i;
+/** Whether `hostname` (any case, one trailing dot allowed) is futureagi.com or one of its subdomains. */
+export function isFiHostName(hostname: string): boolean { return FI_HOST.test(fiHostname(hostname)); }
 
 /** The host in the one form every Future AGI host decision compares: lower case, one trailing dot removed. */
 export function fiHostname(hostname: string): string {
@@ -60,83 +60,86 @@ export function sameEndpointTarget(a: string, b: string, transport: EndpointTran
   return left !== undefined && right !== undefined && left.origin === right.origin;
 }
 
+/** Schemes for which the WHATWG URL parser treats a backslash like a slash. Every other scheme keeps it as an ordinary character. */
+const SPECIAL_SCHEMES = /^(?:https?|wss?|ftp|file)$/i;
+
+interface WrittenParts {
+  /** The effective scheme the parser applies (a scheme-less gRPC target is read as https). */
+  scheme: string | undefined;
+  /** The authority as written: from after the scheme up to the first separator for that scheme. */
+  authority: string;
+  /** The text after the authority. */
+  rest: string;
+  /** The text between the scheme and the first / ? # of any kind: where a backslash or %5C can hide a second host. */
+  rawAuthority: string;
+}
+function writtenParts(endpoint: string, transport: EndpointTransport): WrittenParts | undefined {
+  let text = endpoint.trim();
+  // gRPC reads a scheme of at most eight word characters, else the whole text is the target; HTTP needs a scheme.
+  const match = (transport === "grpc" ? /^(\w{1,8}):\/\// : /^([A-Za-z][A-Za-z0-9+.-]*):\/\//).exec(text);
+  let scheme: string | undefined;
+  if (match) { scheme = match[1]; text = text.slice(match[0].length); }
+  else if (transport === "http") return undefined;
+  else scheme = "https";
+  const special = SPECIAL_SCHEMES.test(scheme);
+  const end = text.search(special ? /[/?#\\]/ : /[/?#]/);
+  const authority = end === -1 ? text : text.slice(0, end);
+  const raw = text.search(/[/?#]/);
+  return { scheme, authority, rest: end === -1 ? "" : text.slice(end), rawAuthority: raw === -1 ? text : text.slice(0, raw) };
+}
+
 /**
  * The host as written in the URL or target, before any parser rewrites it (userinfo, port, path, query and fragment
  * removed, lower case, IPv6 brackets kept), or undefined when there is none. A WHATWG URL turns 127.1, 0x7f.0.0.1 and
  * 2130706433 into 127.0.0.1 and drops a trailing dot after an IPv4 address; loopback is decided on what was written.
+ * The authority ends at a backslash only for the schemes in which a URL parser treats a backslash as a separator
+ * (http, https, ws, wss, ftp, file); for any other scheme a backslash is an ordinary character of the userinfo.
  */
 export function writtenHost(endpoint: string, transport: EndpointTransport): string | undefined {
-  let text = endpoint.trim();
-  // gRPC reads a scheme of at most eight word characters, else the whole text is the target; HTTP needs a scheme.
-  const scheme = (transport === "grpc" ? /^\w{1,8}:\/\// : /^[A-Za-z][A-Za-z0-9+.-]*:\/\//).exec(text);
-  if (scheme) text = text.slice(scheme[0].length);
-  else if (transport === "http") return undefined;
-  const end = text.search(/[/?#\\]/);
-  const authority = end === -1 ? text : text.slice(0, end);
-  const hostport = authority.slice(authority.lastIndexOf("@") + 1);
+  const parts = writtenParts(endpoint, transport);
+  if (!parts) return undefined;
+  const hostport = parts.authority.slice(parts.authority.lastIndexOf("@") + 1);
   if (hostport.startsWith("[")) { const close = hostport.indexOf("]"); return close === -1 ? undefined : hostport.slice(0, close + 1).toLowerCase(); }
   const colon = hostport.lastIndexOf(":");
   const host = colon === -1 ? hostport : hostport.slice(0, colon);
   return host === "" ? undefined : host.toLowerCase();
 }
 
+/** A host in the one form two spellings of the same host are compared in: lower case, no brackets, one trailing dot removed. */
+export function comparableHost(host: string): string { return fiHostname(host.replace(/^\[|\]$/g, "")); }
+
+export interface TargetShape {
+  /** The scheme is present (or implied for gRPC) but the authority is empty: `https:///host/` and `https://\\host/` are not re-read from the path. */
+  emptyAuthority: boolean;
+  /**
+   * A second host can hide in the text: a backslash or percent-encoded backslash before the end of the authority, or an `@` after it.
+   * Parsers disagree about these, so no decision may rest on one parser's reading.
+   */
+  ambiguous: boolean;
+  /** The written host and the host the exporter dials differ in a Future AGI decision (one is a Future AGI host, the other is not). */
+  fiDisagreement: boolean;
+}
+/** How the target's two readings (as written, as parsed) relate. Both are consulted; neither alone classifies a target. */
+export function targetShape(endpoint: string, transport: EndpointTransport): TargetShape {
+  const parts = writtenParts(endpoint, transport);
+  if (!parts) return { emptyAuthority: false, ambiguous: false, fiDisagreement: false };
+  const unix = parts.scheme?.toLowerCase() === "unix";
+  const emptyAuthority = !unix && parts.authority === "";
+  const ambiguous = /\\|%5c/i.test(parts.rawAuthority) || (parts.rest.includes("@"));
+  const written = writtenHost(endpoint, transport), parsed = endpointTarget(endpoint, transport)?.hostname;
+  const fiDisagreement = written !== undefined && parsed !== undefined && isFiHostName(written) !== isFiHostName(parsed);
+  return { emptyAuthority, ambiguous, fiDisagreement };
+}
+
+/** True when the written host and the host the exporter dials are the same host (modulo case, brackets and a trailing dot). */
+export function hostsAgree(endpoint: string, transport: EndpointTransport): boolean {
+  const written = writtenHost(endpoint, transport), parsed = endpointTarget(endpoint, transport)?.hostname;
+  return written !== undefined && parsed !== undefined && comparableHost(written) === comparableHost(parsed);
+}
+
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
-/** True only for the literal loopback spellings localhost, 127.0.0.1 and ::1 / [::1], as written. */
+/** True only for the literal loopback spellings localhost, 127.0.0.1 and ::1 / [::1], as written, when the host the exporter dials is the same host. */
 export function isLiteralLoopback(endpoint: string, transport: EndpointTransport): boolean {
   const host = writtenHost(endpoint, transport);
-  return host !== undefined && LOOPBACK_HOSTS.has(host);
-}
-
-const PROXY_ENV = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "GRPC_PROXY", "grpc_proxy"];
-/** Whether a request to `hostname:port` would go through a proxy named by the environment, honouring NO_PROXY. */
-function viaProxy(hostname: string, port: string): boolean {
-  const env = process.env;
-  if (!PROXY_ENV.some(name => (env[name] ?? "").trim() !== "")) return false;
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  for (const raw of (env.NO_PROXY ?? env.no_proxy ?? "").split(",")) {
-    const entry = raw.trim().toLowerCase();
-    if (!entry) continue;
-    if (entry === "*") return false;
-    const colon = entry.lastIndexOf(":");
-    const [name, entryPort] = colon > 0 && !entry.endsWith("]") ? [entry.slice(0, colon), entry.slice(colon + 1)] : [entry, ""];
-    if (entryPort && entryPort !== port) continue;
-    const domain = name.replace(/^\*?\./, "").replace(/^\[|\]$/g, "");
-    if (host === domain || host.endsWith(`.${domain}`)) return false;
-  }
-  return true;
-}
-
-export interface FiKeyGuardOptions {
-  /** Set for a gRPC target whose channel is not TLS; an HTTP target is plaintext when its scheme is http. */
-  plaintext?: boolean;
-  /** The `allowInsecureHttp` option; the environment's FI_ALLOW_INSECURE_HTTP=1 is read here. */
-  allowInsecureHttp?: unknown;
-}
-
-let warnedInsecure = false;
-/**
- * The one rule for a request that carries Future AGI keys. Over TLS anything goes. In plaintext: loopback is
- * allowed; a Future AGI host (one trailing dot stripped) never is; any other host only with
- * FI_ALLOW_INSECURE_HTTP=1 (exactly) or `allowInsecureHttp: true`, never through a proxy, with one warning per
- * process. Throws, naming no value, when the request is refused.
- */
-export function guardFiKeys(endpoint: string, transport: EndpointTransport, options: FiKeyGuardOptions = {}): void {
-  const target = endpointTarget(endpoint, transport);
-  if (target === undefined) return;
-  const plaintext = transport === "http" ? target.protocol === "http:" : options.plaintext === true;
-  if (!plaintext) return;
-  const host = fiHostname(target.hostname);
-  const written = writtenHost(endpoint, transport);
-  if (FI_HOST.test(host) || (written !== undefined && FI_HOST.test(fiHostname(written)))) throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
-  if (isLiteralLoopback(endpoint, transport)) return;
-  if (options.allowInsecureHttp !== true && process.env.FI_ALLOW_INSECURE_HTTP !== "1") {
-    throw new Error("Future AGI keys are sent over a plaintext channel only to loopback. For a self-hosted collector without TLS, set FI_ALLOW_INSECURE_HTTP=1 or pass allowInsecureHttp: true.");
-  }
-  if (viaProxy(target.hostname, target.port)) {
-    throw new Error("FI_ALLOW_INSECURE_HTTP and allowInsecureHttp do not apply when the request would go through an HTTP or HTTPS proxy; list the collector in NO_PROXY or use TLS.");
-  }
-  if (!warnedInsecure) {
-    warnedInsecure = true;
-    diag.warn(`Sending Future AGI keys in plaintext to ${transport === "http" ? target.protocol : "grpc:"}//${target.hostname}:${target.port} because FI_ALLOW_INSECURE_HTTP or allowInsecureHttp is set.`);
-  }
+  return host !== undefined && LOOPBACK_HOSTS.has(host) && hostsAgree(endpoint, transport);
 }

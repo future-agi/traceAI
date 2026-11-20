@@ -476,7 +476,10 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // collector has not failed.
     agent.removeSignals = chainSigterm(forceFlush, () => !agent.collectorFailed && (agent.unsent > 0 || (agent.fetch?.pending.size ?? 0) > 0));
     if (config.debug) console.info(JSON.stringify(report(), null, 2));
-  } catch {
+  } catch (error) {
+    // A refusal of the Future AGI route (a plaintext base URL, an ambiguous host) names no value and says what to change: show it.
+    const refusal = error as { name?: unknown; code?: unknown; message?: unknown } | null;
+    if (refusal?.name === "FiKeyRefusal" && typeof refusal.code === "string" && refusal.code.startsWith("FI_") && typeof refusal.message === "string") warn("fi-route", refusal.message);
     warn("init", "Auto-instrumentation could not initialize; the application will continue.");
     const failed = state;
     if (failed) {

@@ -12,7 +12,7 @@
 import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { createSpanExporter } from "./otel";
 import { declareFiRoute } from "./fi-route-registry";
-import { hasCompleteKeyPair } from "./fi-key-pair";
+import { hasCompleteKeyPair } from "./fi-request-policy";
 
 export const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory.v1");
 
@@ -29,7 +29,7 @@ export function createFiRouteSpanExporter(options: Parameters<typeof createSpanE
   const copy = { ...options };
   const headers = snapshotHeaders(copy.headers);
   if (!headers || !hasCompleteKeyPair(headers)) {
-    throw new Error("The Future AGI route needs an explicit x-api-key and x-secret-key pair; it does not read them from the environment.");
+    throw new Error("The Future AGI route needs an explicit complete key pair; it does not read them from the environment.");
   }
   return createSpanExporter(declareFiRoute({ ...copy, headers }));
 }
