@@ -273,6 +273,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Area | Integration | Artifact |
 | --- | --- | --- |
 | Core | Tracer, configuration, semantic attributes | `traceai-java-core` |
+| Core | Method annotations (`@Agent`, `@Chain`, `@LLM`, `@Tool`, `@Span`, `@ExcludeFromSpan`) | `traceai-java-annotations` |
 | LLM | OpenAI | `traceai-java-openai` |
 | LLM | Azure OpenAI | `traceai-java-azure-openai` |
 | LLM | Anthropic | `traceai-java-anthropic` |
@@ -304,6 +305,54 @@ For Anthropic Java 3.2.0–3.4.0, prefer the [native OpenTelemetry example](exam
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
+
+### Trace your own methods
+
+Annotate application methods and the agent turns each call into a typed span, with no tracing code:
+
+```java
+import ai.traceai.annotations.*;
+
+public class Assistant {
+    @Agent(name = "planner")
+    public String answer(String question, @ExcludeFromSpan String apiKey) {
+        String facts = lookup(question);
+        return generate("Answer using: " + facts);
+    }
+
+    @Tool(name = "search", description = "Searches the knowledge base")
+    String lookup(String query) { ... }
+
+    @LLM
+    String generate(String prompt) { ... }
+
+    @Span(kind = "retriever", name = "fetch_docs")
+    List<String> fetch(String query) { ... }
+}
+```
+
+Add the annotations (they have no dependencies; the BOM manages the version) and run with the agent:
+
+```xml
+<dependency>
+    <groupId>com.futureagi</groupId>
+    <artifactId>traceai-java-annotations</artifactId>
+</dependency>
+```
+
+```bash
+java -javaagent:traceai-javaagent-<version>.jar -jar app.jar
+```
+
+Without `-javaagent`, put `traceai-javaagent` on the class path and call `TraceAIAuto.init()` once at startup; it attaches itself to the JVM and also instruments classes that are already loaded. Calling it with the agent attached changes nothing, so no method is traced twice.
+
+* **Kinds:** `@Agent` is `AGENT`, `@Chain` is `CHAIN`, `@LLM` is `LLM`, `@Tool` is `TOOL` (`gen_ai.tool.name` / `tool.name` and `gen_ai.tool.description`), and `@Span(kind = "...")` takes any other kind (`RETRIEVER`, `EMBEDDING`, `RERANKER`, `GUARDRAIL`, `WORKFLOW`; blank means `CHAIN`). If a method carries several, the first of `@Agent`, `@Chain`, `@LLM`, `@Tool`, `@Span` is used and it gets one span. The span name is the annotation's `name`, else the method name.
+* **Input and output:** `input.value` is a JSON object of the arguments by parameter name (compile with `-parameters` for real names, otherwise `arg0`, `arg1`), without any `@ExcludeFromSpan` parameter. `output.value` is the JSON of the return value, omitted for `void`. Values are bounded in depth, item count and length.
+* **Errors:** an exception sets the error status, `error.type` and the exception event, and is rethrown unchanged.
+* **Async:** a method returning `CompletableFuture` (any `CompletionStage`) or a Reactor `Mono` / `Flux` (found by name, so Reactor is not required) ends its span when the result completes, fails or is cancelled; `output.value` of a `Flux` is the list of its first 100 items. A `Mono` or `Flux` that is never subscribed never ends its span, and code that runs on another thread after the method returns does not see the annotated span as its parent.
+* **Nesting:** an annotated call inside another is its child; an AI provider call made inside an annotated method is traced as before, as a child of the annotated span, even in an `@LLM` method. With no enclosing annotated span, your own active OpenTelemetry span is the parent.
+* **Privacy:** the agent's hide switches apply (`FI_HIDE_INPUTS` drops `input.value`, `FI_HIDE_OUTPUTS` drops `output.value`, `FI_HIDE_ERROR_DETAILS` keeps only the exception type), known credentials are replaced on export, and the tool name is never withheld.
+* **Scope:** only methods that carry the annotation are traced; an overriding method needs its own annotation. Constructors and abstract methods are not traced. `FI_DISABLED_INSTRUMENTATIONS=annotations` turns it off. Like the rest of the agent, it stays off when the OpenTelemetry Java agent is also running.
 
 ### AWS Bedrock
 
