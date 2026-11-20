@@ -38,7 +38,7 @@ module TraceAI
         def report_unverified
           return if @reported
           @reported = true
-          warn 'traceai-auto: this OpenTelemetry SDK could not be verified for media handling; media is omitted from exported spans'
+          warn 'traceai-auto: the media hooks could not be verified on this OpenTelemetry SDK; AI spans export only identity, timing and usage metadata, and their content, events and links are not exported'
         rescue StandardError
           nil
         end
@@ -133,7 +133,7 @@ module TraceAI
       def to_span_data
         record = super
         if traceai_media_enabled? && !MediaAdmission.verified?
-          # Hooks unproven on this SDK: the record exports without media.
+          # Hooks unproven on this SDK: the record exports metadata only (no content, events or links).
           record.instance_variable_set(:@traceai_media, {attributes: nil, events: {}, links: {}, failed: true})
         elsif traceai_media_enabled?
           record.instance_variable_set(:@traceai_media, {

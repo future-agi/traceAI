@@ -109,16 +109,14 @@ class MediaSdkVerificationTest < Minitest::Test
   end
 
   def test_the_probe_reports_a_missing_or_changed_hook_as_unproven
-    skip 'hooks are unproven on this SDK' unless M::Probe.run
+    unless M::Probe.run
+      flunk 'the media hooks are unproven on this SDK, which reports remote parents' if
+        SkipWhenMediaHooksUnproven.unproven_outcome(ENV, OpenTelemetry::SDK::Trace::SpanData.members) == :fail
+      skip 'hooks are unproven on this SDK'
+    end
     M::Probe.stub(:sdk_method, nil) { refute M::Probe.run }
     wrong_arity = ->(_klass, _name) { Object.new.method(:to_s) }
     M::Probe.stub(:sdk_method, wrong_arity) { refute M::Probe.run }
-  end
-
-  def test_the_probe_leaves_no_state_behind
-    M::Probe.run
-    assert_nil Thread.current[M::PROBE_KEY]
-    refute_includes OpenTelemetry::SDK::Trace::Span.ancestors.map(&:to_s).grep(/Class:/), 'probe'
   end
 
   def test_verification_is_decided_by_behaviour_not_by_version

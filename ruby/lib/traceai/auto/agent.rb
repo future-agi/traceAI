@@ -553,7 +553,7 @@ module TraceAI
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
-          # Prove the hooks on this SDK now; unproven SDKs export without media.
+          # Prove the hooks on this SDK now; on an unproven SDK AI spans export metadata only.
           MediaAdmission.verify!
           # A provider the agent attached to before (a provisional start that
           # an explicit init replaced) keeps its marker processor; never add a
