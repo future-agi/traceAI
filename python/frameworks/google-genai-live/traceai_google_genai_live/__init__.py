@@ -19,6 +19,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from traceai_google_genai_live._connect import (
     ClientContentWrapper,
     ConnectWrapper,
+    ContextUpdateWrapper,
     RealtimeInputWrapper,
     ReceiveWrapper,
     ToolResponseWrapper,
@@ -41,6 +42,7 @@ PATCHED = (
     ("AsyncSession", "send_client_content"),
     ("AsyncSession", "send_realtime_input"),
     ("AsyncSession", "send_tool_response"),
+    ("AsyncSession", "send_context_update"),  # optional on older supported SDKs
     ("AsyncSession", "receive"),
 )
 
@@ -93,10 +95,13 @@ class GoogleGenAILiveInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             ("AsyncSession", "send_client_content"): ClientContentWrapper(),
             ("AsyncSession", "send_realtime_input"): RealtimeInputWrapper(),
             ("AsyncSession", "send_tool_response"): ToolResponseWrapper(),
+            ("AsyncSession", "send_context_update"): ContextUpdateWrapper(),
             ("AsyncSession", "receive"): ReceiveWrapper(),
         }
         for (cls_name, method), wrapper in wrappers.items():
             cls = getattr(live, cls_name)
+            if method == "send_context_update" and not hasattr(cls, method):
+                continue  # e.g. google-genai 2.28: keep all existing tracing working
             self._originals[(cls_name, method)] = cls.__dict__[method]
             wrap_function_wrapper(_MODULE, f"{cls_name}.{method}", wrapper)
         # Sessions still waiting for a resume are closed before the provider shuts down
