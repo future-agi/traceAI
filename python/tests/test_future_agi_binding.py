@@ -1,4 +1,5 @@
 """Which endpoints are Future AGI: only a host every parser agrees on, over https, at an exact target."""
+import contextlib
 import http.server
 import socket
 import threading
@@ -189,7 +190,7 @@ _NO_KEY_FORMS = [f for f in FORMS if f[3] != "fi" and f[0] != "grpc-ipv6"]  # th
 
 @pytest.mark.parametrize("form", _NO_KEY_FORMS, ids=[f[0] for f in _NO_KEY_FORMS])
 def test_a_form_that_is_not_future_agi_is_built_without_keys(form, monkeypatch):
-    _, transport, template, decision = form
+    _, transport, template, _ = form
     monkeypatch.delenv("FI_API_KEY")
     monkeypatch.delenv("FI_SECRET_KEY")
     exporter = _cls(transport)(endpoint=template.replace("{port}", "50051"), timeout=2)
@@ -210,20 +211,16 @@ _GRPC_EVIL = [f for f in FORMS if f[1] == "grpc" and "{port}" in f[2]]
 @pytest.mark.parametrize("form", _HTTP_EVIL, ids=[f[0] for f in _HTTP_EVIL])
 def test_no_future_agi_key_reaches_the_host_an_http_client_dials(form, evil_http):
     port, seen = evil_http
-    try:
+    with contextlib.suppress(Exception):  # refusing is acceptable; leaking is not
         _export_one_span(otel.HTTPSpanExporter(endpoint=form[2].replace("{port}", str(port)), timeout=2))
-    except Exception:  # noqa: BLE001 - refusing is acceptable; leaking is not
-        pass
     assert all("x-api-key" not in h and "x-secret-key" not in h for h in seen), seen
 
 
 @pytest.mark.parametrize("form", _GRPC_EVIL, ids=[f[0] for f in _GRPC_EVIL])
 def test_no_future_agi_key_reaches_the_target_grpc_dials(form, evil_grpc):
     port, seen = evil_grpc
-    try:
+    with contextlib.suppress(Exception):  # refusing is acceptable; leaking is not
         _export_one_span(otel.GRPCSpanExporter(endpoint=form[2].replace("{port}", str(port)), timeout=2))
-    except Exception:  # noqa: BLE001 - refusing is acceptable; leaking is not
-        pass
     assert all("x-api-key" not in h and "x-secret-key" not in h for h in seen), seen
 
 

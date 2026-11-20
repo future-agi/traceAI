@@ -717,9 +717,7 @@ def _normalize_host(host: str | None) -> str | None:
     """
     if not host or not host.isascii():
         return None
-    host = host.lower()
-    if host.endswith("."):
-        host = host[:-1]
+    host = host.lower().removesuffix(".")
     if host.startswith("[") and host.endswith("]"):
         return host if re.fullmatch(r"\[[0-9a-f:.]+\]", host) else None
     labels = host.split(".")
@@ -757,7 +755,7 @@ def _http_origin(endpoint: str | None) -> tuple[str, str, int] | None:
         if split.port != parsed.port:
             return None
         return scheme, host, split.port or (80 if scheme == "http" else 443)
-    except Exception:  # an endpoint the parsers cannot read matches nothing
+    except (ValueError, ImportError):  # an endpoint the parsers cannot read matches nothing
         return None
 
 
