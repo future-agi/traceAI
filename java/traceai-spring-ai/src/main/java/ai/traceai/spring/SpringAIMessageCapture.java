@@ -1,5 +1,6 @@
 package ai.traceai.spring;
 
+import ai.traceai.privacy.KnownSecrets;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -83,7 +84,10 @@ final class SpringAIMessageCapture {
         }
         if (low > 0 && low < value.length() && Character.isHighSurrogate(value.charAt(low - 1))
                 && Character.isLowSurrogate(value.charAt(low))) low--;
-        String captured = value.substring(0, low);
+        String captured = low < value.length()
+            ? (low < KnownSecrets.TRUNCATION_MARKER.length() ? ""
+                : KnownSecrets.sealCut(value.substring(0, low - KnownSecrets.TRUNCATION_MARKER.length())))
+            : value;
         remaining -= overhead + JSON.toJson(captured).length();
         object.addProperty(key, captured);
     }

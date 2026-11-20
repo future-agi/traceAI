@@ -112,7 +112,23 @@ class TracingPrivacyTest {
                 .expectComplete()
                 .verify(TIMEOUT);
             String captured = support.single().getAttributes().get(OUTPUT_VALUE);
-            assertThat(captured).hasSize(32_000).endsWith("...[truncated]");
+            assertThat(captured).hasSizeBetween(28_000, 32_000).endsWith("...[truncated]");
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 9, 20, 31})
+    void aKnownSecretStraddlingTheStreamCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-SPRING-STREAM-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            ChatResponse first = SpanTestSupport.response("a".repeat(32_000 - inside));
+            ChatResponse second = SpanTestSupport.response(secret + "tail".repeat(20));
+            StepVerifier.create(new TracedChatModel(SpanTestSupport.streamModel(() -> Flux.just(first, second)), support.tracer, "synthetic")
+                    .stream(new Prompt("hi")))
+                .expectNextCount(2).expectComplete().verify(TIMEOUT);
+            assertThat(support.single().getAttributes().toString()).doesNotContain("PFX");
+            assertThat(support.single().getAttributes().get(OUTPUT_VALUE)).endsWith("...[truncated]");
         }
     }
 }

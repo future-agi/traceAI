@@ -1,5 +1,6 @@
 package ai.traceai.spring;
 
+import ai.traceai.privacy.KnownSecrets;
 import ai.traceai.FITracer;
 import ai.traceai.TraceConfig;
 import ai.traceai.SemanticConventions;
@@ -86,7 +87,7 @@ final class StreamOutputCapture {
             return;
         }
         String text = overflow
-            ? buffer.substring(0, MAX_CHARS - TRUNCATION_SUFFIX.length()) + TRUNCATION_SUFFIX
+            ? KnownSecrets.sealCut(buffer.substring(0, MAX_CHARS - TRUNCATION_SUFFIX.length()))
             : buffer.toString();
         tracer.setOutputValue(span, text);
         tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", text)));

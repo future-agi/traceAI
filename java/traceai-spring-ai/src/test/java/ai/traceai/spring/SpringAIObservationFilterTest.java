@@ -20,8 +20,8 @@ class SpringAIObservationFilterTest {
         context.setResponse(response);
         var filter = new SpringAIObservationFilter(true, true);
         assertThat(filter.map(context)).isSameAs(context);
-        assertThat(context.getHighCardinalityKeyValue("input.value").getValue()).hasSize(32_000);
-        assertThat(context.getHighCardinalityKeyValue("output.value").getValue()).hasSize(32_000);
+        assertThat(context.getHighCardinalityKeyValue("input.value").getValue()).hasSizeBetween(28_000, 32_000);
+        assertThat(context.getHighCardinalityKeyValue("output.value").getValue()).hasSizeBetween(28_000, 32_000);
         assertThat(context.getResponse()).isSameAs(response);
         assertThat(response.getResult().getOutput().getText()).hasSize(50_000);
         filter.map(context);
@@ -37,5 +37,23 @@ class SpringAIObservationFilterTest {
         filter.map(second);
         assertThat(second.getHighCardinalityKeyValue("input.value").getValue()).isEqualTo("second-input");
         assertThat(second.getHighCardinalityKeyValue("output.value")).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 9, 20, 31})
+    void aKnownSecretStraddlingTheContentCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-SPRING-FILTER-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        String text = "a".repeat(32_000 - inside) + secret + "tail".repeat(50);
+        var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("openai").build();
+        context.setResponse(SpanTestSupport.response(text));
+        new SpringAIObservationFilter(true, true).map(context);
+        for (String key : new String[] {"input.value", "output.value"}) {
+            assertThat(context.getHighCardinalityKeyValue(key).getValue()).as(key).doesNotContain("PFX")
+                .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+        for (String key : new String[] {"gen_ai.input.messages", "gen_ai.output.messages"}) {
+            assertThat(context.getHighCardinalityKeyValue(key).getValue()).as(key).doesNotContain("PFX");
+        }
     }
 }

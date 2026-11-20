@@ -41,8 +41,11 @@ class SpringAIMessageCaptureTest {
         assertThat(captured.get("id").getAsString()).isEqualTo("call-1");
         String arguments = captured.getAsJsonObject("function").get("arguments").getAsString();
         assertThat(arguments).isNotEmpty().isNotEqualTo(large);
-        assertThat(large).startsWith(arguments);
-        assertThat(Character.isHighSurrogate(arguments.charAt(arguments.length() - 1))).isFalse();
+        assertThat(arguments).endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        String kept = arguments.substring(0, arguments.length() - ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER.length());
+        assertThat(large).startsWith(kept);
+        assertThat(kept).isNotEmpty();
+        assertThat(Character.isHighSurrogate(kept.charAt(kept.length() - 1))).isFalse();
         assertThat(context.getRequest().getContents()).isEqualTo(large);
         assertThat(context.getResponse()).isSameAs(response);
         assertThat(message.getText()).isEqualTo(large);
@@ -87,5 +90,21 @@ class SpringAIMessageCaptureTest {
     private static void assertBoundedJson(SpringAIMessageCapture capture) {
         assertThat(capture.json().length()).isLessThanOrEqualTo(32_000);
         assertThat(JsonParser.parseString(capture.json()).getAsJsonArray().isEmpty()).isFalse();
+    }
+
+    @Test
+    void aKnownSecretStraddlingTheMessageBudgetLeavesNoPrefix() {
+        String secret = "PFX-SPRING-MESSAGE-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        for (int pad = 31_700; pad <= 32_000; pad += 7) {
+            String text = "a".repeat(pad) + secret + "tail".repeat(100);
+            var message = AssistantMessage.builder().content(text).build();
+            var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("synthetic").build();
+            context.setResponse(new ChatResponse(List.of(new Generation(message))));
+            new SpringAIObservationFilter(true, true).map(context);
+            for (String key : List.of("gen_ai.input.messages", "gen_ai.output.messages")) {
+                assertThat(context.getHighCardinalityKeyValue(key).getValue()).as("%s at pad %d", key, pad).doesNotContain("PFX");
+            }
+        }
     }
 }

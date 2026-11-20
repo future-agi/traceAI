@@ -212,6 +212,9 @@ public final class KnownSecrets {
          */
         public String sealCut(String cutText) {
             int keep = Math.max(0, cutText.length() - Math.max(0, longest() - 1));
+            if (keep > 0 && Character.isHighSurrogate(cutText.charAt(keep - 1))) {
+                keep--;
+            }
             // Scrubbed with the marker in place, so a secret that is cut off here also loses its trailing prefix.
             return scrubOrRaw(cutText.substring(0, keep) + TRUNCATION_MARKER);
         }
