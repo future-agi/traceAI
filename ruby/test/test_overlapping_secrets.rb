@@ -102,4 +102,110 @@ class OverlappingSecretsTest < Minitest::Test
     app_copy, fi = run_app(before: [secret], after: [], text: text, limit: 64)
     [[app_copy, 'application copy'], [fi, 'Future AGI copy']].each { |copy, where| refute_any(%w[STRADD ADDLE-S -ABCDEF], copy, where) }
   end
+
+  def both_clean(before, text, parts)
+    app_copy, fi = run_app(before: before, after: [], text: text)
+    [[app_copy, 'application copy'], [fi, 'Future AGI copy']].each { |copy, where| refute_any(parts, copy, where) }
+  end
+
+  # An overlap of one, two or three characters at the edges, both known before the call.
+  def test_one_character_edge_overlap_both_copies
+    both_clean(%w[AAAAAAAAAAAAX XYYYYYYYYYYYY], 'AAAAAAAAAAAAXYYYYYYYYYYYY', %w[AAAA YYYY])
+  end
+
+  def test_two_character_edge_overlap_both_copies
+    both_clean(%w[AAAAAAAAAAAXZ XZYYYYYYYYYYY], 'AAAAAAAAAAAXZYYYYYYYYYYY', %w[AAAA YYYY])
+  end
+
+  def test_three_character_edge_overlap_both_copies
+    both_clean(%w[AAAAAAAAAAXZW XZWYYYYYYYYYY], 'AAAAAAAAAAXZWYYYYYYYYYY', %w[AAAA YYYY])
+  end
+
+  # Two overlaps of different lengths between the same pair: the text holds the longer one.
+  def test_a_pair_that_overlaps_at_two_lengths_both_copies
+    both_clean(%w[QQQQQQQQabcabc abcabcWWWWWWWW], 'QQQQQQQQabcabcWWWWWWWW', %w[QQQQ WWWW])
+  end
+
+  # The middle secret is overlapped at both ends by longer secrets, so replacing those leaves its middle between two
+  # placeholders.
+  THREE = ['AAAAAAAAAAAAAAAAAAAAAAAA-BBBBBBBB', 'BBBBBBBB-MIDDLEONE-CCCCCCCC', 'CCCCCCCC-DDDDDDDDDDDDDDDDDDDDDDDD'].freeze
+  THREE_TEXT = 'AAAAAAAAAAAAAAAAAAAAAAAA-BBBBBBBB-MIDDLEONE-CCCCCCCC-DDDDDDDDDDDDDDDDDDDDDDDD'
+  FOUR = ['AAAAAAAAAAAAAAAAAAAAAAAA-BBBBBBBB', 'BBBBBBBB-MIDONE-CCCCCCCC', 'CCCCCCCC-MIDTWO-DDDDDDDD', 'DDDDDDDD-EEEEEEEEEEEEEEEEEEEEEEEE'].freeze
+  FOUR_TEXT = 'AAAAAAAAAAAAAAAAAAAAAAAA-BBBBBBBB-MIDONE-CCCCCCCC-MIDTWO-DDDDDDDD-EEEEEEEEEEEEEEEEEEEEEEEE'
+
+  def test_a_chain_of_three_edge_overlapping_secrets_both_copies
+    both_clean(THREE, THREE_TEXT, %w[AAAA BBBB MIDDLEONE CCCC DDDD])
+  end
+
+  def test_a_chain_of_four_edge_overlapping_secrets_in_any_registration_order_both_copies
+    [FOUR, FOUR.reverse, [FOUR[1], FOUR[3], FOUR[0], FOUR[2]]].each do |order|
+      both_clean(order, FOUR_TEXT, %w[AAAA BBBB MIDONE CCCC MIDTWO DDDD EEEE])
+    end
+  end
+
+  # The outer secret is learned after the call, when both inner secrets are already placeholders in the capture.
+  def test_two_inner_secrets_inside_one_outer_secret_learned_later_fi_copy
+    outer = 'OUTERPFX-innerone1-MIDDLEPART-innertwo2-OUTERSFX'
+    _app, fi = run_app(before: %w[innerone1 innertwo2], after: [outer], text: outer)
+    refute_any(%w[OUTERPFX MIDDLEPART OUTERSFX], fi, 'Future AGI copy')
+  end
+
+  def test_two_inner_secrets_inside_one_outer_secret_known_first_both_copies
+    outer = 'OUTERPFX-innerone1-MIDDLEPART-innertwo2-OUTERSFX'
+    both_clean(['innerone1', 'innertwo2', outer], outer, %w[OUTERPFX MIDDLEPART OUTERSFX])
+  end
+
+  def clean(text, secrets) = TraceAI::Auto::Privacy.clean_string(text, secrets.sort_by { |s| -s.length })
+
+  def with_limits(rounds: nil, steps: nil)
+    privacy = TraceAI::Auto::Privacy
+    saved = [privacy::MATCH_ROUNDS, privacy::MATCH_STEPS]
+    privacy.send(:remove_const, :MATCH_ROUNDS); privacy.const_set(:MATCH_ROUNDS, rounds || saved[0])
+    privacy.send(:remove_const, :MATCH_STEPS); privacy.const_set(:MATCH_STEPS, steps || saved[1])
+    yield
+  ensure
+    privacy.send(:remove_const, :MATCH_ROUNDS); privacy.const_set(:MATCH_ROUNDS, saved[0])
+    privacy.send(:remove_const, :MATCH_STEPS); privacy.const_set(:MATCH_STEPS, saved[1])
+  end
+
+  CHAIN = FOUR
+  CHAIN_TEXT = FOUR_TEXT
+
+  def test_the_matcher_cleans_the_chain_within_its_default_limits
+    cleaned = clean("see #{CHAIN_TEXT} here", CHAIN)
+    assert_equal "see #{PLACEHOLDER} here", cleaned
+  end
+
+  def test_hitting_the_round_cap_replaces_the_whole_value
+    with_limits(rounds: 1) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+  end
+
+  def test_hitting_the_step_cap_replaces_the_whole_value
+    with_limits(steps: 1) { assert_equal PLACEHOLDER, clean("see #{CHAIN_TEXT} here", CHAIN) }
+  end
+
+  # Nothing derived is stored: a flood of overlapping registrations never evicts a seeded secret beyond ordinary
+  # capacity, and a secret is replaced in full by the very next snapshot (no derivation can be pending).
+  def test_overlapping_registrations_never_evict_a_seeded_secret_and_are_effective_at_once
+    registry = TraceAI::Auto::SecretRegistry.new
+    seeded = 'SEEDED-ENV-VALUE-12345678'
+    registry.register(seeded)
+    500.times { |i| registry.register(format('overlap-%04d-', i) + seeded[0, 12]) }
+    assert_includes registry.snapshot, seeded
+    assert_equal 501, registry.snapshot.length
+    assert registry.snapshot.none? { |value| value.include?(PLACEHOLDER) }
+    registry.register('TAIL-OF-SEEDED-ENV-VALUE-12345678'[5..])
+    assert_equal PLACEHOLDER, TraceAI::Auto::Privacy.clean_string('TAIL-OF-' + seeded, registry.snapshot)
+  end
+
+  # A cap that lands inside the placeholder never leaves half of it.
+  def test_a_length_limit_never_leaves_part_of_the_placeholder
+    secret = 'STRADDLE-SECRET-ABCDEF'
+    (57..62).each do |pad|
+      app_copy, fi = run_app(before: [secret], after: [], text: ('a' * pad) + secret + ' tail', limit: 64)
+      [[app_copy, 'application copy'], [fi, 'Future AGI copy']].each do |copy, where|
+        refute_match(/<(?:r|re|red|reda|redac|redact|redacte)["\\]/, copy, "#{where}: partial placeholder at pad #{pad}")
+      end
+    end
+  end
 end
