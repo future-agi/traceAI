@@ -68,15 +68,59 @@ final class OtelBridge {
         return new Snapshot(parent, attrs, suppressed || TraceAIAuto.IN_FLIGHT.get(), instant.getEpochSecond() * 1_000_000_000L + instant.getNano(), startNanos, attributeLimit, resource);
     }
     /**
-     * True when the application's active span already records this tool call: a TOOL span for this tool (what a
+     * True when the application already records this tool call: its active span is a TOOL span for this tool (what a
      * traceai-java-langchain4j or traceai-java-spring-ai wrapper opens around the tool), or Spring AI's own tool_call
-     * observation span (the native observation path). The agent adds no second span under either. Only the active span is read.
+     * observation is open (the native observation path). The agent adds no second span under either.
      *
-     * <p>The native span is recognised by what exists while the tool runs: Spring AI names it {@code framework <tool name>}
-     * (observation {@code spring.ai.tool}) and its {@code spring.ai.kind=tool_call} and {@code gen_ai.operation.name=framework}
-     * tags are copied to the span, and {@code SpringAIObservationFilter}'s TOOL kind added, only when the observation stops.
+     * <p>The native path is recognised by the open Micrometer observation: while a tool runs, Spring AI's
+     * {@code ToolCallingObservationContext} is the current observation's context. The tracing handler starts the span unnamed and
+     * applies its name ({@code framework <tool name>}), the {@code spring.ai.kind=tool_call} and {@code gen_ai.operation.name=framework}
+     * tags and the TOOL kind only when the observation stops, so the live span cannot tell; the span name and tag are still checked
+     * as an extra signal.
      */
     static boolean toolSpanActive(String tool) {
+        return spanRecordsTool(tool) || nativeToolObservationOpen(tool);
+    }
+    private static final String TOOL_CONTEXT = "org.springframework.ai.tool.observation.ToolCallingObservationContext";
+    private static final int OBSERVATION_DEPTH = 16;
+    /**
+     * The current Micrometer observation, or one of its parents, carries a Spring AI tool-calling context for this tool. Read
+     * reflectively, by class name, from the application's class loader: nothing here needs Micrometer or Spring AI, and any
+     * absence or failure means "not seen".
+     */
+    private static boolean nativeToolObservationOpen(String tool) {
+        try {
+            ClassLoader loader = Thread.currentThread().getContextClassLoader();
+            Class<?> accessor = Class.forName("io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor", false, loader);
+            Object value = accessor.getMethod("getValue").invoke(accessor.getMethod("getInstance").invoke(null));
+            Class<?> observationType = Class.forName("io.micrometer.observation.Observation", false, loader);
+            Object observation = observationType.isInstance(value) ? value : null;
+            for (int depth = 0; observation != null && depth < OBSERVATION_DEPTH; depth++) {
+                Object context = observationType.getMethod("getContextView").invoke(observation);
+                if (context != null && isToolContext(context)) {
+                    Object definition = ToolSpans.invoke(context, "getToolDefinition");
+                    Object name = definition == null ? null : ToolSpans.invoke(definition, "name");
+                    // A different tool's observation does not record this call; an unreadable name is treated as this one's.
+                    if (name == null || tool.equals(String.valueOf(name))) return true;
+                }
+                Object parent = context == null ? null : ToolSpans.invoke(context, "getParentObservation");
+                observation = observationType.isInstance(parent) ? parent : null;
+            }
+            return false;
+        } catch (Throwable ignored) { return false; }
+    }
+    private static boolean isToolContext(Object context) {
+        Deque<Class<?>> pending = new ArrayDeque<>(List.of(context.getClass()));
+        Set<Class<?>> seen = new HashSet<>();
+        while (!pending.isEmpty()) {
+            Class<?> type = pending.pop();
+            if (type == null || !seen.add(type)) continue;
+            if (TOOL_CONTEXT.equals(type.getName())) return true;
+            pending.add(type.getSuperclass()); pending.addAll(Arrays.asList(type.getInterfaces()));
+        }
+        return false;
+    }
+    private static boolean spanRecordsTool(String tool) {
         try {
             Span current = Span.current();
             if (current instanceof ReadableSpan readable) return active(tool, readable.getName(), new String[] {

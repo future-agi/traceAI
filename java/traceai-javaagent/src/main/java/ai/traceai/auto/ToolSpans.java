@@ -48,14 +48,25 @@ public final class ToolSpans {
     private static final String CALLBACK = "org.springframework.ai.tool.ToolCallback";
     private static final String LIBRARY_PREFIX = "ai.traceai.", AGENT_PREFIX = "ai.traceai.auto.";
     /** One traced call on this thread: the callee object, the method entered, and the tool and arguments. */
-    private record Frame(Object callee, String method, int arity, String integration, String name, String input) {}
+    private record Frame(Object callee, String method, int arity, String integration, String name, String input, boolean delegate) {
+        // Frames are compared by identity: the callee's own equals() is application code and must never run here.
+        @Override public boolean equals(Object other) { return this == other; }
+        @Override public int hashCode() { return System.identityHashCode(this); }
+    }
     /** The traced calls running on this thread, innermost first. Calls that were not traced are not on it. */
     private static final ThreadLocal<Deque<Frame>> ACTIVE = ThreadLocal.withInitial(ArrayDeque::new);
     private record Token(Frame frame, String name, String callId, String description, OtelBridge.Snapshot context, TraceAIAuto.RuntimeState state) {
+        /** A delegation to another overload: it is on the stack so the call it makes is judged against it, but it records nothing. */
+        boolean delegation() { return frame.delegate(); }
         String input() { return frame.input(); }
     }
     /** A class of the traceai libraries (their own tool wrappers open their own TOOL span); the agent's classes are not. */
     static boolean libraryType(String name) { return name.startsWith(LIBRARY_PREFIX) && !name.startsWith(AGENT_PREFIX); }
+    /** The class, or any class it extends, belongs to the traceai libraries: an application subclass of a library wrapper is still the wrapper. */
+    private static boolean libraryInstance(Object callee) {
+        for (Class<?> type = callee.getClass(); type != null; type = type.getSuperclass()) if (libraryType(type.getName())) return true;
+        return false;
+    }
 
     static void install(Instrumentation instrumentation) {
         AutoConfig config = TraceAIAuto.config();
@@ -78,14 +89,19 @@ public final class ToolSpans {
                         TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                     }
                 });
-            if (langchain4j) builder = builder.type(hasSuperType(named(EXECUTOR)).and(not(isInterface())).and(not(nameStartsWith(LIBRARY_PREFIX)).or(nameStartsWith(AGENT_PREFIX))))
+            if (langchain4j) builder = builder.type(hasSuperType(named(EXECUTOR)).and(not(isInterface())).and(notLibraryType()))
                 .transform((b, type, loader, module, domain) -> b.visit(Advice.to(LangChain4jAdvice.class)
                     .on(namedOneOf("execute", "executeWithContext").and(takesArguments(2)).and(takesArgument(0, named(REQUEST))))));
-            if (springAi) builder = builder.type(hasSuperType(named(CALLBACK)).and(not(isInterface())).and(not(nameStartsWith(LIBRARY_PREFIX)).or(nameStartsWith(AGENT_PREFIX))))
+            if (springAi) builder = builder.type(hasSuperType(named(CALLBACK)).and(not(isInterface())).and(notLibraryType()))
                 .transform((b, type, loader, module, domain) -> b.visit(Advice.to(SpringAiAdvice.class)
                     .on(named("call").and(takesArguments(1).or(takesArguments(2))).and(takesArgument(0, String.class)))));
             builder.installOn(instrumentation);
         } catch (Throwable ignored) { TraceAIAuto.integrationFailed(langchain4j ? LANGCHAIN4J : SPRING_AI); }
+    }
+    /** Neither a traceai library class (their wrappers open their own TOOL span) nor a subclass of one; the agent's own classes are not library classes. */
+    private static net.bytebuddy.matcher.ElementMatcher.Junction<TypeDescription> notLibraryType() {
+        net.bytebuddy.matcher.ElementMatcher.Junction<TypeDescription> library = nameStartsWith(LIBRARY_PREFIX).and(not(nameStartsWith(AGENT_PREFIX)));
+        return not(hasSuperType(library));
     }
     private static String integration(TypeDescription type) {
         try { return type.getInterfaces().asErasures().stream().anyMatch(t -> t.getName().equals(CALLBACK)) || hasSuper(type, CALLBACK) ? SPRING_AI : LANGCHAIN4J; }
@@ -108,7 +124,7 @@ public final class ToolSpans {
     public static Object enter(String integration, Object callee, String method, Object[] arguments) {
         try {
             // The library's own wrappers open their TOOL span themselves, after this advice would run: never trace them.
-            if (callee != null && libraryType(callee.getClass().getName())) return null;
+            if (callee != null && libraryInstance(callee)) return null;
             AutoConfig config = TraceAIAuto.config(); TraceAIAuto.RuntimeState state = TraceAIAuto.currentRuntime();
             if (config == null || state == null || !config.enabled(integration) || TraceAIAuto.besideOtelJavaAgent() || !state.acceptingResults()) return null;
             if (TraceAIAuto.IN_FLIGHT.get() || Boolean.TRUE.equals(Context.current().get(TraceAIAuto.SUPPRESS))) return null;
@@ -124,11 +140,18 @@ public final class ToolSpans {
             // A call is one frame: the callee object and the method entered. A different overload of the same callee, with the same
             // tool and arguments, called directly from the traced frame is its delegation (call(String) -> call(String, ToolContext))
             // and is part of that one execution; the same method calling itself, or another callee, is a new call.
-            Frame frame = new Frame(callee, method, arguments.length, integration, name, input);
             Deque<Frame> active = ACTIVE.get();
             Frame outer = active.peek();
-            if (outer != null && outer.callee() == callee && outer.integration().equals(integration) && outer.name().equals(name) && Objects.equals(outer.input(), input)
-                && !(outer.method().equals(method) && outer.arity() == arguments.length)) return null;
+            // Entered directly from a traced call of this callee (not from a delegation's body), as another overload with the same tool and arguments.
+            boolean delegation = outer != null && !outer.delegate() && outer.callee() == callee && outer.integration().equals(integration) && outer.name().equals(name)
+                && Objects.equals(outer.input(), input) && !(outer.method().equals(method) && outer.arity() == arguments.length);
+            Frame frame = new Frame(callee, method, arguments.length, integration, name, input, delegation);
+            if (delegation) {
+                // Kept on the stack until it returns, so a call made from the delegated overload's body is judged against it (and is a
+                // new, traced call), not mistaken for another delegation of the outer call.
+                active.push(frame);
+                return new Token(frame, name, null, null, null, state);
+            }
             OtelBridge.Snapshot context = OtelBridge.snapshot();
             if (OtelBridge.toolSpanActive(name)) return null;
             active.push(frame);
@@ -139,9 +162,13 @@ public final class ToolSpans {
     /** Called reflectively when the advised call returns or throws, on the thread that entered it. */
     public static void exit(Object token, Object returned, Throwable error) {
         if (!(token instanceof Token tool)) return;
-        Deque<Frame> active = ACTIVE.get();
-        active.removeFirstOccurrence(tool.frame());
-        if (active.isEmpty()) ACTIVE.remove();
+        try {
+            // By identity, inside the guard: nothing here may throw into the application or run its equals().
+            Deque<Frame> active = ACTIVE.get();
+            for (Iterator<Frame> it = active.iterator(); it.hasNext();) if (it.next() == tool.frame()) { it.remove(); break; }
+            if (active.isEmpty()) ACTIVE.remove();
+        } catch (Throwable ignored) { }
+        if (tool.delegation()) return;
         TraceAIAuto.RuntimeState state = tool.state();
         boolean finalizing = false;
         try {
@@ -200,7 +227,7 @@ public final class ToolSpans {
     private static long epochNanos(Instant instant) { return instant.getEpochSecond() * 1_000_000_000L + instant.getNano(); }
 
     /** Calls a public no-argument method through the first public type that declares it: the object's class may not be public. */
-    private static Object invoke(Object target, String name) {
+    static Object invoke(Object target, String name) {
         if (target == null) return null;
         try {
             Deque<Class<?>> pending = new ArrayDeque<>(List.of(target.getClass()));
