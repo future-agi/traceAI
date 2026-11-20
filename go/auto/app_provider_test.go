@@ -22,6 +22,8 @@ type exportedSpan struct {
 	attrs                   map[string]string
 	events                  []exportedEvent
 	links                   []exportedLink
+	droppedEvents           uint32
+	droppedLinks            uint32
 }
 
 type exportedEvent struct {
@@ -69,6 +71,7 @@ func newSpanSink(t *testing.T) *spanSink {
 						return out
 					}
 					exported := exportedSpan{name: span.Name, traceID: span.TraceId, spanID: span.SpanId, parent: span.ParentSpanId, attrs: attrs}
+					exported.droppedEvents, exported.droppedLinks = span.DroppedEventsCount, span.DroppedLinksCount
 					for _, e := range span.Events {
 						exported.events = append(exported.events, exportedEvent{name: e.Name, time: e.TimeUnixNano, attrs: flat(e.Attributes)})
 					}

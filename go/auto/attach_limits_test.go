@@ -11,6 +11,7 @@ import (
 
 	"github.com/future-agi/traceAI/go/auto"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -92,20 +93,27 @@ func TestARefusedLinkDoesNotShiftTheOthers(t *testing.T) {
 	}
 }
 
-// Duplicate keys inside one event keep the last value, as the SDK keeps it, on both copies.
-func TestDuplicateEventAttributesMatchOnBothCopies(t *testing.T) {
-	tracer, flush := limitedCopies(t, 4096)
+// What the SDK keeps of an event's and a link's attributes (its per-event and per-link limits, and the last of duplicate keys)
+// is what the copy for Future AGI carries, with the value each was written with.
+func TestEventAttributesFollowTheSDKLimitsOnBothCopies(t *testing.T) {
+	tracer, flush := limitedCopiesWith(t, sdktrace.SpanLimits{AttributeValueLengthLimit: 4096, AttributeCountLimit: 128, EventCountLimit: 128, LinkCountLimit: 128,
+		AttributePerEventCountLimit: 3, AttributePerLinkCountLimit: 2, AttributeValueDepthLimit: -1})
 	_, span := tracer.Start(context.Background(), "step", traceStart(attribute.String("gen_ai.span.kind", "CHAIN")))
-	span.AddEvent("noted", trace.WithTimestamp(time.Unix(1_700_000_000, 0)), trace.WithAttributes(attribute.String("k", "old"), attribute.String("k", "new")))
+	span.AddEvent("noted", trace.WithTimestamp(time.Unix(1_700_000_000, 0)), trace.WithAttributes(attribute.String("k", "stale-duplicate-value"), attribute.String("k", "new"),
+		attribute.String("a", "1"), attribute.String("b", "2"), attribute.String("c-over-the-limit", "3")))
+	span.AddLink(spanIDLink(1, attribute.String("l1", "x"), attribute.String("l2", "y"), attribute.String("l3-over-the-limit", "z")))
 	span.End()
 	fi, app := flush()
 	appSpan, fiSpan := onlyModuleSpan(t, "application", app), onlyModuleSpan(t, "Future AGI", fi)
-	if !reflect.DeepEqual(fiSpan.events, appSpan.events) || appSpan.events[0].attrs["k"] != "new" {
-		t.Fatalf("Future AGI %+v, application %+v", fiSpan.events, appSpan.events)
+	if len(appSpan.events) != 1 || appSpan.events[0].attrs["k"] != "new" {
+		t.Fatalf("application copy event %+v", appSpan.events)
+	}
+	if !reflect.DeepEqual(fiSpan.events, appSpan.events) || !reflect.DeepEqual(fiSpan.links, appSpan.links) {
+		t.Fatalf("Future AGI events %+v links %+v, application events %+v links %+v", fiSpan.events, fiSpan.links, appSpan.events, appSpan.links)
 	}
 	for name, sink := range map[string]*spanSink{"Future AGI": fi, "application": app} {
-		if _, raw := sink.snapshot(); bytes.Contains(raw, []byte("old")) {
-			t.Errorf("%s copy carries the overwritten duplicate value", name)
+		if _, raw := sink.snapshot(); bytes.Contains(raw, []byte("over-the-limit")) {
+			t.Errorf("%s copy carries an attribute the SDK dropped", name)
 		}
 	}
 }
@@ -132,5 +140,28 @@ func TestSecretLearnedAfterTheWriteAtTheValueLimitBoundary(t *testing.T) {
 				t.Errorf("%s copy contains the fragment %q of a secret", name, fragment)
 			}
 		}
+	}
+}
+
+// The record is bounded by the provider's limits, and the SDK's dropped counts stay what they would have been.
+func TestManyEventsAndLinksKeepTheNewestAndTheDroppedCounts(t *testing.T) {
+	tracer, flush := limitedCopies(t, 4096)
+	_, span := tracer.Start(context.Background(), "step", traceStart(attribute.String("gen_ai.span.kind", "CHAIN")))
+	for i := 0; i < 1000; i++ {
+		span.AddEvent(fmt.Sprintf("event-%04d", i), trace.WithTimestamp(time.Unix(1_700_000_000+int64(i), 0)))
+		span.AddLink(spanIDLink(i+1, attribute.String("n", fmt.Sprintf("content-%04d", i))))
+	}
+	span.End()
+	fi, app := flush()
+	appSpan, fiSpan := onlyModuleSpan(t, "application", app), onlyModuleSpan(t, "Future AGI", fi)
+	if len(appSpan.events) != 128 || appSpan.events[0].name != "event-0872" || appSpan.droppedEvents != 872 || appSpan.droppedLinks != 872 {
+		t.Fatalf("application copy: %d events from %q, dropped %d events and %d links; want 128 from event-0872, 872 and 872",
+			len(appSpan.events), appSpan.events[0].name, appSpan.droppedEvents, appSpan.droppedLinks)
+	}
+	if !reflect.DeepEqual(fiSpan.events, appSpan.events) || !reflect.DeepEqual(fiSpan.links, appSpan.links) {
+		t.Fatalf("Future AGI copy differs from the application's")
+	}
+	if fiSpan.droppedEvents != 872 || fiSpan.droppedLinks != 872 {
+		t.Fatalf("Future AGI copy reports %d events and %d links dropped, want 872 each", fiSpan.droppedEvents, fiSpan.droppedLinks)
 	}
 }

@@ -22,6 +22,13 @@ import (
 // limitedCopies is secretCopies on an application provider with an attribute value-length limit.
 func limitedCopies(t *testing.T, limit int) (tracer trace.Tracer, flush func() (fi, app *spanSink)) {
 	t.Helper()
+	return limitedCopiesWith(t, sdktrace.SpanLimits{AttributeValueLengthLimit: limit, AttributeCountLimit: 128, EventCountLimit: 128, LinkCountLimit: 128,
+		AttributePerEventCountLimit: 128, AttributePerLinkCountLimit: 128})
+}
+
+// limitedCopiesWith is secretCopies on an application provider with the given span limits.
+func limitedCopiesWith(t *testing.T, limits sdktrace.SpanLimits) (tracer trace.Tracer, flush func() (fi, app *spanSink)) {
+	t.Helper()
 	_ = auto.Shutdown(context.Background())
 	auto.ResetModulesForTest()
 	t.Setenv("FI_CONFIG_FILE", filepath.Join(t.TempDir(), "absent.toml"))
@@ -31,9 +38,7 @@ func limitedCopies(t *testing.T, limit int) (tracer trace.Tracer, flush func() (
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp), sdktrace.WithRawSpanLimits(sdktrace.SpanLimits{
-		AttributeValueLengthLimit: limit, AttributeCountLimit: 128, EventCountLimit: 128, LinkCountLimit: 128,
-		AttributePerEventCountLimit: 128, AttributePerLinkCountLimit: 128}))
+	host := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp), sdktrace.WithRawSpanLimits(limits))
 	t.Cleanup(func() { _ = host.Shutdown(context.Background()) })
 	if _, err := auto.InitForTest(context.Background(), auto.WithTracerProvider(host), auto.WithCredentials("SURFACE_FI_KEY", "SURFACE_FI_SECRET")); err != nil {
 		t.Fatal(err)
