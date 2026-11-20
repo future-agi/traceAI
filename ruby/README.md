@@ -110,9 +110,9 @@ What happens at startup:
   soon as you set one.
 - Without `opentelemetry-sdk` in the bundle, or in a standalone script, the agent
   uses a dependency-free pipeline with the same activation boundaries.
-- Forwarding through the application's OpenTelemetry SDK needs `opentelemetry-sdk` 1.10 or
-  later, the first release whose span data reports whether the parent is remote; the test suite
-  declares that as its floor. With an older SDK the span snapshot fails and nothing is forwarded.
+- Forwarding through the application's OpenTelemetry SDK works with `opentelemetry-sdk` 1.3 and
+  later. SDK 1.10 and later report whether a span's parent is remote; spans from an earlier SDK
+  are forwarded with a local parent. The test suite runs on SDK 1.10 and later.
 - Export to Future AGI always uses the agent's built-in exporter, which sends
   OTLP/HTTP protobuf to `${FI_BASE_URL}/tracer/v1/traces` (default base
   `https://api.futureagi.com`). It loads OpenSSL itself when your application has
