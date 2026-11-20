@@ -81,6 +81,7 @@ go get github.com/future-agi/traceAI/go/eino/auto@latest
 Eino agent, chain, tool and model spans then reach Future AGI through the
 agent's route, with or without a tracer provider of your own, and `Report()`
 shows `eino` as **auto**. Programs that do not import it never download Eino.
+`go/eino/auto` ships with the next `go/auto` and `go/eino` releases.
 
 **Other traceAI module spans need an SDK tracer provider.** The other modules
 (for example `traceailangchaingo`) use the global tracer provider unless you

@@ -1,0 +1,7 @@
+{
+  "_comment": "A Go module that requires other modules of this repository can be tagged only when each of those requirements is newer than the version listed here: the last release before the APIs it uses. Move a module's entries past its dependencies' first releases with those APIs, or delete the entry, when its go.mod requires them. Local replace directives are never tagged.",
+  "go/eino/auto": {
+    "github.com/future-agi/traceAI/go/auto": "0.2.0",
+    "github.com/future-agi/traceAI/go/eino": "0.1.0"
+  }
+}

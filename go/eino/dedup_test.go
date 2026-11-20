@@ -20,24 +20,41 @@ func runInfo() *callbacks.RunInfo {
 // before global ones, so a default handler can leave exactly those runs alone.
 func TestApplicationHandlerMarksTheRunsItIsOfferedAndDefaultHandlerYields(t *testing.T) {
 	manual, def := NewHandler(), NewDefaultHandler()
-	mine, other := runInfo(), runInfo()
-	if HandledManually(mine) {
+	handled, other := runInfo(), runInfo()
+	if HandledManually(handled) {
 		t.Fatal("a run is marked before any handler was offered it")
 	}
-	if !def.Needed(context.Background(), mine, callbacks.TimingOnStart) {
-		t.Fatal("the default handler declines a run no application handler was offered")
-	}
-	if !manual.Needed(context.Background(), mine, callbacks.TimingOnStart) {
+	// Eino asks the handlers of a run in order; an application handler given
+	// to the run (or registered before the default one) is asked first.
+	if !manual.Needed(context.Background(), handled, callbacks.TimingOnStart) {
 		t.Fatal("an application handler declines a timing")
 	}
-	if !HandledManually(mine) || HandledManually(other) {
-		t.Fatalf("marks: mine=%v other=%v", HandledManually(mine), HandledManually(other))
+	if !HandledManually(handled) || HandledManually(other) {
+		t.Fatalf("marks: handled=%v other=%v", HandledManually(handled), HandledManually(other))
 	}
-	if def.Needed(context.Background(), mine, callbacks.TimingOnEnd) {
-		t.Fatal("the default handler stays on a run an application handler handles")
+	for _, timing := range []callbacks.CallbackTiming{callbacks.TimingOnStart, callbacks.TimingOnEnd} {
+		if def.Needed(context.Background(), handled, timing) {
+			t.Fatalf("the default handler stays on a run an application handler handles (%v)", timing)
+		}
 	}
 	if !def.Needed(context.Background(), other, callbacks.TimingOnStart) {
 		t.Fatal("the default handler left a run no application handler handles")
+	}
+}
+
+// The answer for a run does not change while it runs: a handler registered
+// after the run began must not leave its spans half ended.
+func TestDefaultAnswerIsFixedAtTheFirstTimingOfTheRun(t *testing.T) {
+	info := runInfo()
+	if !DefaultNeeded(info, func() bool { return true }) {
+		t.Fatal("a default handler in service declines an unhandled run")
+	}
+	markManual(info) // an application handler appears mid-run
+	if !DefaultNeeded(info, func() bool { return true }) {
+		t.Fatal("the answer for a run in progress changed")
+	}
+	if DefaultNeeded(runInfo(), func() bool { return false }) {
+		t.Fatal("a default handler out of service wants a run")
 	}
 }
 

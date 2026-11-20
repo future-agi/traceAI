@@ -29,6 +29,18 @@ The publisher acknowledges each completed merged release PR by replacing `autore
 
 The Go proxy URL escapes uppercase letters: `traceAI` becomes `trace!a!i`. A module tag such as `go/openai/v0.1.0` is queried at `https://proxy.golang.org/github.com/future-agi/trace!a!i/go/openai/@v/v0.1.0.info`. No Go registry credentials are needed. JitPack remains a Java commit-preview route; Maven Central is the release route.
 
+### A Go module that depends on other modules of this repository
+
+`go/eino/auto` (the Eino blank import) requires `go/auto` and `go/eino`, and uses APIs those modules gained after their last release. In the working tree its `go.mod` carries two `replace` directives into the tree, as `go/auto/sdkcompat` does, so development and CI build against the code on disk. Consumers ignore the `replace` directives of the modules they depend on, so the module can be tagged only after its requirements name releases that contain those APIs.
+
+Release in this order:
+
+1. Release `go/auto` and `go/eino` through the normal release PR.
+2. In `go/eino/auto/go.mod`, set the `require` lines to those released versions and delete both `replace` lines; run `go mod tidy` there.
+3. Remove the module's entry from `.github/release/go_module_floors.json` (or move it past those versions), and merge. The next release PR then includes `go/eino/auto` (manifest entry `0.1.0`, tag `go/eino/auto/v0.1.0`).
+
+The release plan (`python3 .github/release/release_plan.py`) lists a Go module that fails this rule under `skipped` with the reason, and the Go release workflow runs `python3 .github/release/release_plan.py --go-gate <dir>` before it tests or tags a module, so a tag is refused while a `replace` into the tree or a requirement older than the floor remains. The check is the same function in both places; `python3 .github/release/release_plan.py --go-gate go/eino/auto` shows the current verdict.
+
 ### Bootstrap and the dev → main PR
 
 The manifest is seeded from the current versions on dev, **not** from old registry versions. Go starts at **0.1.0**. `bootstrap-sha` is the dev head `35f2e3dc364676fa5bdab1e71ae500daf9efc00c`: this deliberately excludes pre-bootstrap history from the first release PR. Keep that SHA as a fallback for components that have not yet acquired matching release tags; do not advance it on each release.

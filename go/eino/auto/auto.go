@@ -20,9 +20,11 @@
 //   - OTEL_SDK_DISABLED=true records nothing;
 //   - the FI_HIDE_* switches and the known-secret replacement apply exactly
 //     as to the agent's wire spans;
-//   - a program that also calls callbacks.AppendGlobalHandlers(traceaieino.NewHandler())
-//     itself gets each span once: this package's handler stops starting spans
-//     as soon as the application builds its own;
+//   - a run that an application handler (traceaieino.NewHandler(), registered
+//     globally or given to one run with compose.WithCallbacks or
+//     adk.WithCallbacks) handles gets its spans from that handler only; every
+//     other run keeps being traced here. Building a handler without using it
+//     changes nothing;
 //   - a chat model's HTTP call under an Eino model span adds no second span,
 //     because the agent never records a wire span beneath a span that already
 //     carries an LLM, EMBEDDING, RERANKER or GUARDRAIL kind.
@@ -55,98 +57,72 @@ func init() {
 	callbacks.AppendGlobalHandlers(h)
 }
 
-// markKey carries, on the context an OnStart returned, the RunInfo of the run
-// whose span this handler started, so the later timings of that run are
-// forwarded even if the application builds its own handler meanwhile.
-type markKey struct{}
-
+// handler is registered globally at start-up and forwards to a go/eino default
+// handler built, on first use, with the agent's route and privacy configuration.
 type handler struct {
 	att   *auto.Attachment
 	mu    sync.Mutex
 	inner atomic.Pointer[traceaieino.Handler]
+	idle  atomic.Pointer[traceaieino.Handler]
 }
 
-var _ callbacks.Handler = (*handler)(nil)
+var (
+	_ callbacks.Handler       = (*handler)(nil)
+	_ callbacks.TimingChecker = (*handler)(nil)
+)
 
-// get returns the Eino handler once the agent is enabled for Eino, building it
-// then with the agent's route and privacy configuration.
-func (h *handler) get() *traceaieino.Handler {
+// Needed declines a run the application handles with its own handler, and every
+// run while the agent does not serve Eino (not allowed, disabled, not
+// configured): Eino then makes no copy of a stream for this handler.
+func (h *handler) Needed(_ context.Context, info *callbacks.RunInfo, _ callbacks.CallbackTiming) bool {
+	return traceaieino.DefaultNeeded(info, h.att.Enabled)
+}
+
+// target returns the handler to forward to. When the agent does not serve Eino
+// it is a handler shut down from the start, which records nothing but still
+// releases the streams Eino hands it.
+func (h *handler) target() *traceaieino.Handler {
 	if in := h.inner.Load(); in != nil {
 		return in
 	}
-	if !h.att.Enabled() {
-		return nil
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if in := h.inner.Load(); in != nil {
+	if h.att.Enabled() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if in := h.inner.Load(); in != nil {
+			return in
+		}
+		in := traceaieino.NewDefaultHandler(
+			traceaieino.WithTracerProvider(h.att.TracerProvider()),
+			traceaieino.WithTraceConfig(traceaieino.TraceConfig(h.att.TraceConfig())),
+		)
+		h.inner.Store(in)
 		return in
 	}
-	in := traceaieino.NewDefaultHandler(
-		traceaieino.WithTracerProvider(h.att.TracerProvider()),
-		traceaieino.WithTraceConfig(traceaieino.TraceConfig(h.att.TraceConfig())),
-	)
-	h.inner.Store(in)
-	return in
-}
-
-func owned(ctx context.Context, info *callbacks.RunInfo) bool {
-	return ctx != nil && ctx.Value(markKey{}) == info
-}
-
-// forward returns the Eino handler for a timing of a run, or nil when the
-// timing is to be ignored: an application-built handler exists and this
-// handler did not start the run.
-func (h *handler) forward(ctx context.Context, info *callbacks.RunInfo) *traceaieino.Handler {
-	if !owned(ctx, info) && traceaieino.ManualHandlers() > 0 {
-		// The application's handler records; the agent must still be active,
-		// so the application's own provider forwards those spans to Future AGI
-		// from the first one.
-		h.att.Enabled()
-		return nil
+	if idle := h.idle.Load(); idle != nil {
+		return idle
 	}
-	return h.get()
+	idle := traceaieino.NewDefaultHandler()
+	_ = idle.Shutdown(context.Background())
+	h.idle.CompareAndSwap(nil, idle)
+	return h.idle.Load()
 }
 
 func (h *handler) OnStart(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
-	in := h.forward(ctx, info)
-	if in == nil {
-		return ctx
-	}
-	return context.WithValue(in.OnStart(ctx, info, input), markKey{}, info)
+	return h.target().OnStart(ctx, info, input)
 }
 
 func (h *handler) OnEnd(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
-	if in := h.forward(ctx, info); in != nil {
-		return in.OnEnd(ctx, info, output)
-	}
-	return ctx
+	return h.target().OnEnd(ctx, info, output)
 }
 
 func (h *handler) OnError(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
-	if in := h.forward(ctx, info); in != nil {
-		return in.OnError(ctx, info, err)
-	}
-	return ctx
+	return h.target().OnError(ctx, info, err)
 }
 
 func (h *handler) OnStartWithStreamInput(ctx context.Context, info *callbacks.RunInfo, input *schema.StreamReader[callbacks.CallbackInput]) context.Context {
-	in := h.forward(ctx, info)
-	if in == nil {
-		if input != nil {
-			input.Close()
-		}
-		return ctx
-	}
-	return context.WithValue(in.OnStartWithStreamInput(ctx, info, input), markKey{}, info)
+	return h.target().OnStartWithStreamInput(ctx, info, input)
 }
 
 func (h *handler) OnEndWithStreamOutput(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[callbacks.CallbackOutput]) context.Context {
-	if in := h.forward(ctx, info); in != nil {
-		return in.OnEndWithStreamOutput(ctx, info, output)
-	}
-	if output != nil {
-		output.Close()
-	}
-	return ctx
+	return h.target().OnEndWithStreamOutput(ctx, info, output)
 }

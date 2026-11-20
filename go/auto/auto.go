@@ -31,6 +31,7 @@ type settings struct {
 	processor       sdktrace.SpanProcessor
 	provider        *sdktrace.TracerProvider
 	ignoreInherited map[string]bool
+	module          bool // activation by a dedicated module's first span
 }
 
 func configOption(update func(*Config), keys ...string) Option {
@@ -320,6 +321,12 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 		processor = sdktrace.NewBatchSpanProcessor(&resourceExporter{SpanExporter: exp, client: client, config: c, res: res, limits: limits}, sdktrace.WithBatchTimeout(200*time.Millisecond), sdktrace.WithExportTimeout(5*time.Second))
 	}
 	capture := c.WireCapture && allowed(c, "wire")
+	if s.module && armed == nil {
+		// A module's first span can come while requests are in flight: never
+		// replace http.DefaultTransport then. Only an agent armed at package
+		// initialization captures wire spans.
+		capture = false
+	}
 	if armed != nil && capture {
 		// Fields are published by active.Store below; the armed wrapper reads
 		// none of them before that.

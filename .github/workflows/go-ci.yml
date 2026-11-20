@@ -110,6 +110,23 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go/eino/auto/go.sum
+      - name: Check module identity and in-repo replaces
+        # Unlike the matrix modules this one is developed against the working
+        # tree of go/auto and go/eino, so it carries exactly those two replaces.
+        # The release gate (.github/release/release_plan.py --go-gate) refuses
+        # to tag it while they, or requirements older than the first release
+        # with the APIs it uses, remain.
+        run: |
+          go mod edit -json | python3 -c '
+          import json, sys
+          mod = json.load(sys.stdin)
+          assert mod["Module"]["Path"] == "github.com/future-agi/traceAI/go/eino/auto"
+          assert mod["Go"] == "1.26.0"
+          replaces = {r["Old"]["Path"]: r["New"]["Path"] for r in mod.get("Replace") or []}
+          assert replaces == {"github.com/future-agi/traceAI/go/auto": "../../auto", "github.com/future-agi/traceAI/go/eino": "../"}, replaces
+          '
+      - name: Report the release gate
+        run: python3 "$GITHUB_WORKSPACE/.github/release/release_plan.py" --root "$GITHUB_WORKSPACE" --go-gate go/eino/auto || echo "not taggable yet (expected until go/auto and go/eino are released)"
       - name: Check tidy
         run: go mod tidy -diff
       - name: Vet and race tests through the blank import
@@ -125,8 +142,8 @@ jobs:
           go mod init example.com/auto-only
           go mod edit -require=github.com/future-agi/traceAI/go/auto@v0.0.0 -replace=github.com/future-agi/traceAI/go/auto="$GITHUB_WORKSPACE/go/auto"
           go mod tidy
-          ! go list -m all | grep -i cloudwego
-          ! grep -i cloudwego go.sum
+          if go list -m all | grep -qi cloudwego; then echo "go/auto requires cloudwego"; exit 1; fi
+          if grep -qi cloudwego go.sum; then echo "go.sum names cloudwego"; exit 1; fi
 
   auto-opentelemetry-latest:
     name: auto / span limits on the latest OpenTelemetry SDK
