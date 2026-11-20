@@ -24,12 +24,14 @@ import (
 //  3. The host as written must agree with the host Go parsed, else refused.
 //  4. Any other plaintext target is refused unless FI_ALLOW_INSECURE_HTTP is
 //     exactly "1"; the opt-in warns once per process, without values.
-//  5. A proxy named by the environment is refused.
+//  5. A plaintext send is never proxied; an https send uses the environment proxy
+//     (a CONNECT tunnel, with the host verified against the written name).
 //  6. A 3xx answer to a key-carrying send is refused.
 var insecureWarning sync.Once
 
-// dialResolver is the resolver the exporter dials with; nil means the system resolver. Tests replace it.
-var dialResolver *net.Resolver
+// dialAddress maps the address the transport asks for to the one dialed. It is the identity; tests replace it to
+// model a name that resolves somewhere other than loopback, which the dial guard must refuse.
+var dialAddress = func(addr string) string { return addr }
 
 var errKeyTransport = errors.New("traceai auto: refusing to send Future AGI keys over this transport")
 
@@ -114,14 +116,15 @@ func requestTransport(req *http.Request) error {
 	return keyTransport(req.URL.Scheme+"://"+req.URL.Host, req.URL)
 }
 
-// refuseProxy fails a send that an environment proxy would carry. The
-// environment is read per request so a later change is honored.
-func refuseProxy(req *http.Request) (*url.URL, error) {
-	p, err := httpproxy.FromEnvironment().ProxyFunc()(req.URL)
-	if err != nil || p != nil {
-		return nil, refuse("a proxy from the environment would carry the keys")
+// exporterProxy is the exporter transport's proxy choice, read from the environment per request. A plaintext
+// request carrying the keys is never proxied: it goes straight to its target. An https request follows the
+// environment (HTTPS_PROXY, NO_PROXY), so the keys travel inside TLS, end to end, through a CONNECT tunnel; the
+// certificate is still verified against the written host. Go does not read ALL_PROXY.
+func exporterProxy(req *http.Request) (*url.URL, error) {
+	if req.URL.Scheme != "https" {
+		return nil, nil
 	}
-	return nil, nil
+	return httpproxy.FromEnvironment().ProxyFunc()(req.URL)
 }
 
 // checkDialAddress makes the connected peer agree with a loopback claim.

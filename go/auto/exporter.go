@@ -13,23 +13,22 @@ import (
 // preserving escaping, duplicate parameters and CloseIdleConnections ownership.
 type collectorTransport struct {
 	*http.Transport
-	keyed      http.RoundTripper
 	rawQuery   string
 	forceQuery bool
 }
 
 func (t *collectorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := requestTransport(req); err != nil {
+		// A RoundTripper closes the request body even when it refuses to send.
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		return nil, err
 	}
 	outgoing := req.Clone(req.Context())
 	outgoing.URL.RawQuery = t.rawQuery
 	outgoing.URL.ForceQuery = t.forceQuery
-	next := t.keyed
-	if next == nil {
-		next = t.Transport
-	}
-	resp, err := next.RoundTrip(outgoing)
+	resp, err := t.Transport.RoundTrip(outgoing)
 	if err == nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		_ = resp.Body.Close()
 		return nil, refuse("redirect answered a key-carrying send")
@@ -43,7 +42,7 @@ func exporterClient(rawQuery string, forceQuery bool) *http.Client {
 	return &http.Client{
 		Transport: &collectorTransport{
 			Transport: &http.Transport{
-				Proxy:                 refuseProxy,
+				Proxy:                 exporterProxy,
 				DialContext:           dialChecked,
 				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          100,
@@ -69,5 +68,5 @@ func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
 		return nil, refuse("unreadable target")
 	}
 	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: func(_, peer string, _ syscall.RawConn) error { return checkDialAddress(host, peer) }}
-	return d.DialContext(ctx, network, addr)
+	return d.DialContext(ctx, network, dialAddress(addr))
 }

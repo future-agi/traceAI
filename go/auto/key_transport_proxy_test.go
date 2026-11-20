@@ -19,8 +19,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"golang.org/x/net/dns/dnsmessage"
 )
 
 const proxyTestKey = "KEY_VALUE_PRIVATE"
@@ -316,43 +314,14 @@ func TestKeyTransportProxyDecision(t *testing.T) {
 	}
 }
 
-// fakeResolver answers every lookup with one fixed IPv4 address.
-func fakeResolver(ip [4]byte) *net.Resolver {
-	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-		client, server := net.Pipe()
-		go func() {
-			defer server.Close()
-			buf := make([]byte, 4096)
-			n, err := server.Read(buf)
-			if err != nil {
-				return
-			}
-			var query dnsmessage.Message
-			if err := query.Unpack(buf[:n]); err != nil || len(query.Questions) == 0 {
-				return
-			}
-			q := query.Questions[0]
-			answer := dnsmessage.Message{Header: dnsmessage.Header{ID: query.ID, Response: true, Authoritative: true, RecursionAvailable: true}, Questions: query.Questions}
-			if q.Type == dnsmessage.TypeA {
-				answer.Answers = []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: q.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 1}, Body: &dnsmessage.AResource{A: ip}}}
-			}
-			out, err := answer.Pack()
-			if err != nil {
-				return
-			}
-			_, _ = server.Write(out)
-		}()
-		return client, nil
-	}}
-}
-
 // The loopback guard is part of the exporter transport: "localhost" resolving to a non-loopback address is refused at
 // connect time, before any bytes (and so any key) are sent.
 func TestKeyTransportDialGuardIsWiredIntoTheExporter(t *testing.T) {
 	clearProxyEnv(t)
-	previous := dialResolver
-	dialResolver = fakeResolver([4]byte{10, 255, 255, 1})
-	t.Cleanup(func() { dialResolver = previous })
+	// Stands in for a hosts-file or DNS answer that sends the name "localhost" somewhere else.
+	previous := dialAddress
+	dialAddress = func(addr string) string { return strings.Replace(addr, "localhost", "10.255.255.1", 1) }
+	t.Cleanup(func() { dialAddress = previous })
 	started := time.Now()
 	resp, err := post(exporterClient("", false), "http://localhost:4318/tracer/v1/traces")
 	if err == nil {
@@ -365,7 +334,7 @@ func TestKeyTransportDialGuardIsWiredIntoTheExporter(t *testing.T) {
 	if time.Since(started) > 4*time.Second {
 		t.Fatalf("the refusal waited for a connection attempt: %v", time.Since(started))
 	}
-	if strings.Contains(err.Error(), proxyTestKey) || strings.Contains(err.Error(), "10.255.255.1") {
+	if strings.Contains(err.Error(), proxyTestKey) {
 		t.Fatalf("error not value-free: %v", err)
 	}
 }

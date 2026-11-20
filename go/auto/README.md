@@ -318,7 +318,7 @@ can supply a complete profile pair through the environment.
 | --- | --- | --- |
 | `FI_API_KEY`, `FI_SECRET_KEY` | none | Future AGI credentials; both required for export |
 | `FI_BASE_URL` | `https://api.futureagi.com` | OTLP/HTTP base; exports to `/tracer/v1/traces` with `X-Api-Key` and `X-Secret-Key`, no compression |
-| `FI_ALLOW_INSECURE_HTTP` | unset | Exactly `1` allows keys over plaintext `http://` to a non-loopback, non-Future-AGI `FI_BASE_URL`; Future AGI hosts always require `https://`, and environment proxies are refused |
+| `FI_ALLOW_INSECURE_HTTP` | unset | Exactly `1` allows keys over plaintext `http://` to a non-loopback, non-Future-AGI `FI_BASE_URL`; Future AGI hosts always require `https://`. A request that carries the keys in plaintext is sent directly, never through a proxy; `https://` requests use the configured proxy (`HTTPS_PROXY`, `NO_PROXY`) |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, else working-directory name, else `DEFAULT_PROJECT_NAME` | Future AGI routing project (`project_name`); never assigns or replaces `service.name` |
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment`; no experiment registration/startup request |
 | `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | `DEFAULT_PROJECT_VERSION_NAME` / generated UUID | Project resource keys |
