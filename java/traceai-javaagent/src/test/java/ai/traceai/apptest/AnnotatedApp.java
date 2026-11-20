@@ -48,7 +48,7 @@ public final class AnnotatedApp {
             }
             case "mono" -> System.out.println("RESULT=" + service.mono("m").block(java.time.Duration.ofSeconds(10)));
             case "flux" -> System.out.println("RESULT=" + service.flux(3).collectList().block(java.time.Duration.ofSeconds(10)));
-            case "credential_text" -> System.out.println("RESULT=" + service.audit(new Account(), new KeyHolder(), new Csv(), new Wrapped(), new Quoted()));
+            case "credential_text" -> System.out.println("RESULT=" + service.audit(new Account(), new KeyHolder(), new Csv(), new Wrapped(), new Quoted()) + service.audit(new BasicHolder(), new CharsHolder(), new ParenHolder(), new QuoteHolder(), new FlagHolder()));
             case "straddle" -> {
                 String secret = System.getenv("FI_API_KEY");
                 String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJTWU5USEVUSUMifQ.SYNTHSIGNATUREAAAAAAAAAAAAAA";
@@ -56,6 +56,32 @@ public final class AnnotatedApp {
                 int count = 0;
                 for (int k = 0; k <= payload.length() + 6; k++) { service.sink("a".repeat(Math.max(1, 196 - k)) + payload); count++; }
                 System.out.println("RESULT=" + count);
+            }
+            case "credential_strings" -> {
+                for (String text : credentialStrings()) { service.sink(text); service.echo(text); }
+                System.out.println("RESULT=" + credentialStrings().size());
+            }
+            case "window_edge" -> {
+                String secret = System.getenv("FI_API_KEY");
+                String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJTWU5USEVUSUMifQ.SYNTHSIGNATUREAAAAAAAAAAAAAA";
+                String key = "sk-SYNTHKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+                int count = 0;
+                // Three secrets of 4096 characters shrink to three placeholders, so the replaced window is far shorter than the read window.
+                for (String shape : List.of(key, jwt)) {
+                    for (int edge = Integer.parseInt(args[1]) - 60; edge <= Integer.parseInt(args[1]) + 6; edge++) {
+                        String head = secret + " " + secret + " " + secret + " ";
+                        service.sink(head + "a".repeat(Math.max(1, edge - head.length())) + shape + " tail tail tail"); count++;
+                    }
+                }
+                System.out.println("RESULT=" + count);
+            }
+            case "record_credentials" -> System.out.println("RESULT=" + service.signIn(new Service.Login("bob", "SYNTHPW1", "SYNTHPW2", "SYNTHPW3", "SYNTHPW4", "SYNTHPW5", "keep-me")));
+            case "publisher_object" -> {
+                Object returned = service.asObject(); Object same = Service.PUBLISHED;
+                System.out.println("RESULT=object-same=" + (returned == same) + ";type=" + returned.getClass().getName());
+                org.reactivestreams.Publisher<String> publisher = service.asPublisher();
+                System.out.println("RESULT=publisher-same=" + (publisher == Service.PUBLISHED) + ";type=" + publisher.getClass().getName());
+                System.out.println("RESULT=" + ((Flux<String>) returned).collectList().block(java.time.Duration.ofSeconds(10)));
             }
             case "mono_subtype" -> System.out.println("RESULT=" + service.subtype().block(java.time.Duration.ofSeconds(10)));
             case "async_cancel" -> { var pending = service.neverCompletes("q"); pending.cancel(true); System.out.println("RESULT=cancelled=" + pending.isCancelled()); }
@@ -150,6 +176,24 @@ public final class AnnotatedApp {
         @Chain(name = "sink")
         public String sink(String text) { return "ok"; }
 
+        /** Returns what it is given: the text is exported as an input and as an output. */
+        @Chain(name = "echo")
+        public String echo(String text) { return text; }
+
+        public record Login(String user, String password, String pwd, String pass, String passphrase, String apiToken, String note) { }
+        @Chain(name = "sign_in")
+        public String signIn(Login login) { return "ok"; }
+
+        /** A Flux the application defines, returned through a declared type that is not exactly Flux. */
+        public static final class AppFlux extends Flux<String> {
+            @Override public void subscribe(reactor.core.CoreSubscriber<? super String> actual) { Flux.just("a", "b").subscribe(actual); }
+        }
+        static final AppFlux PUBLISHED = new AppFlux();
+        @Chain(name = "as_object")
+        public Object asObject() { return PUBLISHED; }
+        @Chain(name = "as_publisher")
+        public org.reactivestreams.Publisher<String> asPublisher() { return PUBLISHED; }
+
         public static final class GreetingMono extends Mono<String> {
             @Override public void subscribe(reactor.core.CoreSubscriber<? super String> actual) { Mono.just("g").subscribe(actual); }
         }
@@ -229,10 +273,31 @@ public final class AnnotatedApp {
     public static final class Greeter implements Hello { }
     private AnnotatedApp() { }
 
+    /** Free-form text with a credential in every shape that has leaked through a reader that parsed it. */
+    static List<String> credentialStrings() {
+        String basic = java.util.Base64.getEncoder().encodeToString("user:SYNTHB64PASS".getBytes());
+        return List.of(
+            "authorization=Basic " + basic + " trailing words",
+            "Authorization: Basic " + basic,
+            "password=SYNTHPAREN)TAILPAREN, id=7",
+            "password=[SYNTHBRACK, ], TAILBRACK] id=8",
+            "secret=\"SYNTHQUOTE\"TAILQUOTE\" id=9",
+            "run --password=SYNTHDASH now",
+            "java -Ddb.password=SYNTHDOTD -jar app.jar",
+            "pwd=SYNTHPWD id=10",
+            "passphrase=SYNTHPHRASE id=11",
+            "pass=SYNTHPASS id=12");
+    }
+
     /** Application objects whose declared toString() carries a credential in a shape a naive reader would cut short. */
     public static final class Account { @Override public String toString() { return "Account(user=bob, password=[S, Y, N, T, H, 7], id=7)"; } }
     public static final class KeyHolder { @Override public String toString() { return "KeyHolder(privateKey=-----BEGIN PRIVATE KEY-----\nMIISYNTHPEMBODY0123\nSYNTHSECONDLINE\n-----END PRIVATE KEY-----, id=1)"; } }
     public static final class Csv { @Override public String toString() { return "Csv(secret=SYNTHA,SYNTHB,SYNTHC, id=2)"; } }
     public static final class Wrapped { @Override public String toString() { return "Wrapped(apiKey=Inner(value=SYNTHX, other=SYNTHY), id=3)"; } }
+    public static final class BasicHolder { @Override public String toString() { return "BasicHolder(authorization=Basic " + java.util.Base64.getEncoder().encodeToString("user:SYNTHB64PASS".getBytes()) + ", id=5)"; } }
+    public static final class CharsHolder { @Override public String toString() { return "CharsHolder(password=[SYNTHBRACK, ], TAILBRACK], id=6)"; } }
+    public static final class ParenHolder { @Override public String toString() { return "ParenHolder(password=SYNTHPAREN)TAILPAREN, id=7)"; } }
+    public static final class QuoteHolder { @Override public String toString() { return "QuoteHolder(secret='SYNTHQUOTE'TAILQUOTE', id=8)"; } }
+    public static final class FlagHolder { @Override public String toString() { return "java --password=SYNTHDASH -Ddb.password=SYNTHDOTD pwd=SYNTHPWD"; } }
     public static final class Quoted { @Override public String toString() { return "Quoted(token=\"SYNTHA,SYNTHB\", id=4)"; } }
 }

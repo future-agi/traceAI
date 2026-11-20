@@ -310,14 +310,59 @@ class AnnotationsE2ETest {
     /** Every assertion below is on the span bytes the collector received: no byte of a synthetic credential reaches the exporter. */
     String exported() { return spans.toString(); }
 
-    @Test void aCredentialInADeclaredToStringNeverReachesTheExporterWhateverItsShape() throws Exception {
+    @Test void aDeclaredToStringIsNeverExportedAsTextWhateverItsShape() throws Exception {
         String log = run("agent", "credential_text", Map.of());
-        assertTrue(log.contains("RESULT=ok"), log);
+        assertTrue(log.contains("RESULT=okok"), log);
         String bytes = exported();
         assertFalse(spans.isEmpty());
-        for (String marker : List.of("S, Y, N, T, H", "Y, N", "SYNTH", "MIISYNTHPEMBODY", "BEGIN PRIVATE KEY", "END PRIVATE KEY", ",SYNTHB", "SYNTHX", "SYNTHY"))
+        for (String marker : List.of("S, Y, N, T, H", "Y, N", "SYNTH", "MIISYNTHPEMBODY", "BEGIN PRIVATE KEY", "END PRIVATE KEY", ",SYNTHB", "SYNTHX", "SYNTHY", "TAILBRACK", "TAILPAREN", "TAILQUOTE", "user:SYNTHB64PASS"))
             assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
-        assertTrue(bytes.contains("id=7") && bytes.contains("id=4"), "the ordinary pairs stay visible: " + bytes);
+        // The object is its type placeholder: not its text, not even the ordinary pairs.
+        assertTrue(bytes.contains("<ai.traceai.apptest.AnnotatedApp$Account>"), bytes);
+        assertTrue(bytes.contains("<ai.traceai.apptest.AnnotatedApp$FlagHolder>"), bytes);
+        assertFalse(bytes.contains("id=7") || bytes.contains("id=4") || bytes.contains("id=6"), "no toString text: " + bytes);
+    }
+
+    /** Credentials in plain String arguments and returns, asserted on what the collector received. */
+    @Test void credentialsInPlainStringsNeverReachTheExporterWhateverTheirShape() throws Exception {
+        String log = run("agent", "credential_strings", Map.of());
+        assertTrue(log.contains("RESULT=10"), log);
+        String bytes = exported();
+        assertFalse(spans.isEmpty());
+        String basic = java.util.Base64.getEncoder().encodeToString("user:SYNTHB64PASS".getBytes());
+        for (String marker : List.of(basic, basic.substring(0, 12), "SYNTHPAREN", "TAILPAREN", "SYNTHBRACK", "TAILBRACK", "SYNTHQUOTE", "TAILQUOTE", "SYNTHDASH", "SYNTHDOTD", "SYNTHPWD", "SYNTHPHRASE", "SYNTHPASS"))
+            assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
+        assertTrue(bytes.contains("id=7") || bytes.contains("run ") , "the surrounding text is kept where it is not part of a value: " + bytes);
+    }
+
+    /** A credential that straddles the read window's edge, after secrets shrank the window a long way, leaves no prefix. */
+    @Test void aShapedCredentialAtTheReadWindowEdgeAfterALargeShrinkLeavesNoPrefix() throws Exception {
+        String secret = "S".repeat(4096);
+        // The text budget is half of 9000 characters minus the argument name; the read window reaches 8192 characters past it.
+        run("agent", "window_edge", Map.of("FI_API_KEY", secret, "FI_WIRE_MAX_BODY_BYTES", "9000"), List.of("12692"));
+        assertTrue(spans.size() > 100, "one span per position: " + spans.size());
+        for (Map<String, Object> span : spans) {
+            String bytes = String.valueOf(span);
+            for (String marker : List.of("eyJ", "sk-S", "sk-", "SYNTHKEY", "SYNTHSIG"))
+                assertFalse(bytes.contains(marker), marker + " reached the exporter in " + attrs(span).get("input.value"));
+        }
+    }
+
+    @Test void aRecordComponentWithACredentialNameIsRedactedByName() throws Exception {
+        String log = run("agent", "record_credentials", Map.of());
+        assertTrue(log.contains("RESULT=ok"), log);
+        String bytes = exported();
+        for (String marker : List.of("SYNTHPW1", "SYNTHPW2", "SYNTHPW3", "SYNTHPW4", "SYNTHPW5"))
+            assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
+        assertTrue(bytes.contains("keep-me") && bytes.contains("bob"), "ordinary components stay: " + bytes);
+    }
+
+    @Test void aMethodDeclaredToReturnObjectOrPublisherKeepsTheReturnedInstance() throws Exception {
+        String log = run("agent", "publisher_object", Map.of());
+        assertTrue(log.contains("RESULT=object-same=true;type=ai.traceai.apptest.AnnotatedApp$Service$AppFlux"), log);
+        assertTrue(log.contains("RESULT=publisher-same=true;type=ai.traceai.apptest.AnnotatedApp$Service$AppFlux"), log);
+        assertEquals("as_object", String.valueOf(span("as_object").get("name")), "the span still ended");
+        assertEquals("as_publisher", String.valueOf(span("as_publisher").get("name")));
     }
 
     /** A known secret twice, a JWT, an sk- key and a Bearer token, with the cut sweeping across all of them one character at a time. */
