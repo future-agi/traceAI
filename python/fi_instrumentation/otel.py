@@ -666,7 +666,7 @@ def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | 
 
     Accepts a mapping, a sequence or one-shot iterator of pairs, or the comma-separated
     ``name=value`` string gRPC exporters take. With ``lower`` the names are lower-cased, as
-    gRPC requires; values are untouched.
+    gRPC requires; values are untouched, and entries whose value is None are left out.
     """
     if headers is None:
         return None
@@ -677,14 +677,20 @@ def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | 
     else:
         pairs = headers.items() if isinstance(headers, Mapping) else headers
     result: dict[str, Any] = {}
+    given: dict[str, str] = {}  # lower-case name -> the name as it appears in result
     for key, value in pairs:
+        if value is None:
+            continue
         name = key.decode() if isinstance(key, bytes) else str(key)
-        if lower:
-            name = name.lower()
-            # A blank duplicate that differs only in case never replaces a value that was given.
-            if name in result and _is_blank(value):
+        folded = name.lower()
+        if folded in given:
+            # Names that differ only in case are one header: a blank duplicate never replaces a value
+            # that was given, and a given value replaces an earlier blank one.
+            if _is_blank(value):
                 continue
-        result[name] = value
+            del result[given[folded]]
+        result[folded if lower else name] = value
+        given[folded] = folded if lower else name
     return result or None
 
 
