@@ -353,6 +353,10 @@ of `spec/auto-instrumentation/privacy.json`, version 3):
   credential headers and query values on outgoing `Net::HTTP` and `HTTPX`
   requests, including requests made before the first AI request, and values
   passed to `register_secret`) are removed from every exported string.
+  Secrets that overlap one another are replaced whole, whatever the overlap, and
+  a value too costly to match is replaced entirely. Values registered as secret after a span has ended are replaced in the copy sent to Future AGI; the application's own exporters receive spans as they were when they ended.
+  A RubyLLM span that is open when a secret is learned is replaced again when it
+  ends.
 - Media is omitted: data URLs, base64 images and audio, and payloads next to a
   media MIME type.
 - The `session.id` you set with `TraceAI::Auto.using_session` (or

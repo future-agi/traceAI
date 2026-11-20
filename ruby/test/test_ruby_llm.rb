@@ -119,6 +119,25 @@ class RubyLLMInstrumentorTest < Minitest::Test
     assert_equal [app_span], all.select { |s| s.name.start_with?('chat') }.map { |s| s.parent_span_id.unpack1('H*') }.uniq
   end
 
+  # A secret learned while a RubyLLM span is open (here a tool's own code registers the call id) is replaced on both
+  # copies of that span: the span has an end moment after the capture, so its start-time attributes are re-scrubbed.
+  def test_a_secret_learned_while_a_span_is_open_is_replaced_in_the_application_and_the_future_agi_copy
+    secret = 'LEARNEDCALLID-8d41f6'
+    call = JSON.generate(id: 'chat-0', object: 'chat.completion', model: 'm', choices: [{index: 0, message: {role: 'assistant', content: nil, tool_calls: [{id: secret, type: 'function', function: {name: 'weather', arguments: JSON.generate(city: 'Paris')}}]}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 7, completion_tokens: 4, total_tokens: 11})
+    @provider.stop
+    @provider = MockHTTP.new { |r| [200, JSON_TYPE, calls_tool?(r[:body]) ? call : CHAT] }
+    tool = TOOL.sub('def execute(city:) = "Sunny in #{city}"') { %q(def execute(city:); TraceAI::Auto.register_secret('LEARNEDCALLID-8d41f6'); "Sunny in #{city}"; end) }
+    sdk = "require 'opentelemetry/sdk'; require 'json'; memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new\n" \
+          "host = OpenTelemetry::SDK::Trace::TracerProvider.new; host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)); OpenTelemetry.tracer_provider = host\n"
+    dump = "\nTraceAI::Auto.flush; puts JSON.generate(memory.finished_spans.select { |s| s.name.start_with?('execute_tool') }.map { |s| s.attributes.to_a.flatten.map(&:to_s) + [s.name] })"
+    stdout, stderr, status = app(sdk + llm('chat.ask("weather?")', tool: tool) + dump)
+    assert status.success?, stderr
+    refute_includes stdout, secret, 'application copy of the tool span'
+    refute_empty JSON.parse(stdout.lines.last)
+    exported = spans.map { |span| [span.name, attrs(span.attributes)].to_s }.join("\n")
+    refute_includes exported, secret, 'Future AGI copy'
+  end
+
   CALLS = JSON.generate(id: 'chat-0', object: 'chat.completion', model: 'gpt-4o-mini-2024-07-18', choices: [{index: 0, message: {role: 'assistant', content: nil, tool_calls: %w[Paris Rome].each_with_index.map { |city, i| {id: "call_#{i}", type: 'function', function: {name: 'weather', arguments: JSON.generate(city: city)}} }}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 7, completion_tokens: 4, total_tokens: 11}).freeze
   # RubyLLM 2.1 and later carry the caller's instrumentation context to the
   # threads that run concurrent tool calls; 2.0 does not.
