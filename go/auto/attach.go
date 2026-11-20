@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -33,10 +34,13 @@ var shutdownHooks struct {
 	fns []func(context.Context) error
 }
 
-// runShutdownHooks runs the hooks with their own deadline, half of what is
-// left of ctx, so that flushing the queued spans always keeps the other half.
-// A hook that ignores its context is abandoned at that deadline.
-func runShutdownHooks(ctx context.Context) {
+// runHooks runs the registered hooks once per agent, outside its shutdown
+// Once, and waits for them for at most half of what is left of this caller's
+// context, so flushing the queued spans always keeps the other half and no
+// caller waits longer than its own deadline allows. The first caller starts
+// the hooks with a context of that same budget; a hook that ignores it is
+// abandoned when it ends.
+func (s *agentState) runHooks(ctx context.Context) {
 	shutdownHooks.Lock()
 	fns := append([]func(context.Context) error(nil), shutdownHooks.fns...)
 	shutdownHooks.Unlock()
@@ -47,20 +51,28 @@ func runShutdownHooks(ctx context.Context) {
 	if deadline, ok := ctx.Deadline(); ok {
 		budget = time.Until(deadline) / 2
 	}
-	hctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for _, fn := range fns {
-			_ = guarded(func() error { return fn(hctx) })
-		}
-	}()
+	if s.hooksStarted.CompareAndSwap(false, true) {
+		hctx, cancel := context.WithTimeout(ctx, budget)
+		go func() {
+			defer cancel()
+			defer close(s.hooksDone)
+			for _, fn := range fns {
+				_ = guarded(func() error { return fn(hctx) })
+			}
+		}()
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
 	select {
-	case <-done:
-	case <-hctx.Done():
+	case <-s.hooksDone:
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
+
+// moduleState is the agent's active state for dedicated modules: read without
+// the agent lock once the agent is active.
+var moduleState atomic.Pointer[agentState]
 
 // Attachment is a dedicated traceAI module's route to the agent. A module
 // package that is meant to work from one blank import (for example
@@ -107,6 +119,13 @@ func (a *Attachment) route() (s *agentState) {
 			s = nil
 		}
 	}()
+	if s := moduleState.Load(); s != nil && s.active.Load() {
+		// The agent is active: no lock, however many runs are in flight.
+		if allowed(s.config, a.name) {
+			return s
+		}
+		return nil
+	}
 	agent.Lock()
 	defer agent.Unlock()
 	if agent.current == nil && agent.first == nil {
@@ -188,11 +207,15 @@ func (t *moduleTracer) Start(ctx context.Context, spanName string, opts ...trace
 	if s == nil {
 		return noop.NewTracerProvider().Tracer(t.name).Start(ctx, spanName, opts...)
 	}
-	mask := s.config.TraceConfig.Mask
+	m := moduleMask{cfg: s.config}
 	cfg := trace.NewSpanStartConfig(opts...)
+	links := make([]trace.Link, 0, len(cfg.Links()))
+	for _, l := range cfg.Links() {
+		links = append(links, trace.Link{SpanContext: l.SpanContext, Attributes: m.attributes(l.Attributes)})
+	}
 	masked := []trace.SpanStartOption{
-		trace.WithAttributes(maskAttributes(mask, cfg.Attributes())...),
-		trace.WithLinks(cfg.Links()...),
+		trace.WithAttributes(m.attributes(cfg.Attributes())...),
+		trace.WithLinks(links...),
 		trace.WithSpanKind(cfg.SpanKind()),
 	}
 	if !cfg.Timestamp().IsZero() {
@@ -201,34 +224,80 @@ func (t *moduleTracer) Start(ctx context.Context, spanName string, opts ...trace
 	if cfg.NewRoot() {
 		masked = append(masked, trace.WithNewRoot())
 	}
-	ctx, span := s.provider.Tracer(t.name, t.opts...).Start(ctx, spanName, masked...)
-	return ctx, &maskedSpan{Span: span, mask: mask}
+	ctx, span := s.provider.Tracer(t.name, t.opts...).Start(ctx, captureString(spanName, s.config), masked...)
+	return ctx, &maskedSpan{Span: span, m: m}
 }
 
-func maskAttributes(mask func(attribute.KeyValue) (attribute.KeyValue, bool), kvs []attribute.KeyValue) []attribute.KeyValue {
+// moduleMask gives a module's span attributes exactly the treatment the agent's
+// wire attributes get: string values pass the structural capture (which removes
+// image references when they are hidden), then every FI_HIDE_* switch applies.
+type moduleMask struct{ cfg Config }
+
+func (m moduleMask) attribute(kv attribute.KeyValue) (attribute.KeyValue, bool) {
+	switch kv.Value.Type() {
+	case attribute.STRING:
+		kv = attribute.String(string(kv.Key), captureString(kv.Value.AsString(), m.cfg))
+	case attribute.STRINGSLICE:
+		values := append([]string(nil), kv.Value.AsStringSlice()...)
+		for i, v := range values {
+			values[i] = captureString(v, m.cfg)
+		}
+		kv = attribute.StringSlice(string(kv.Key), values)
+	}
+	return m.cfg.TraceConfig.Mask(kv)
+}
+
+func (m moduleMask) attributes(kvs []attribute.KeyValue) []attribute.KeyValue {
 	out := make([]attribute.KeyValue, 0, len(kvs))
 	for _, kv := range kvs {
-		if m, keep := mask(kv); keep {
-			out = append(out, m)
+		if masked, keep := m.attribute(kv); keep {
+			out = append(out, masked)
 		}
 	}
 	return out
 }
 
-// maskedSpan applies the agent's privacy switches to everything written to a
+// event masks an event's name and attributes. While any content switch is on,
+// everything but the exception name and exception.type is replaced by the
+// redaction marker: an event can carry anything the module put in it.
+func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attribute.KeyValue) {
+	if !hidesContent(m.cfg.TraceConfig) {
+		return captureString(name, m.cfg), m.attributes(kvs)
+	}
+	if name != "exception" {
+		name = RedactedValue
+	}
+	out := make([]attribute.KeyValue, 0, len(kvs))
+	for _, kv := range kvs {
+		switch {
+		case kv.Key == "exception.type":
+			out = append(out, attribute.String("exception.type", captureString(kv.Value.Emit(), m.cfg)))
+		case kv.Value.Type() == attribute.STRING || kv.Value.Type() == attribute.STRINGSLICE:
+			out = append(out, attribute.String(string(kv.Key), RedactedValue))
+		default:
+			if masked, keep := m.attribute(kv); keep {
+				out = append(out, masked)
+			}
+		}
+	}
+	return name, out
+}
+
+// maskedSpan applies the agent's privacy rules to everything written to a
 // module span after it started.
 type maskedSpan struct {
 	trace.Span
-	mask func(attribute.KeyValue) (attribute.KeyValue, bool)
+	m moduleMask
 }
 
 func (s *maskedSpan) SetAttributes(kvs ...attribute.KeyValue) {
-	s.Span.SetAttributes(maskAttributes(s.mask, kvs)...)
+	s.Span.SetAttributes(s.m.attributes(kvs)...)
 }
 
 func (s *maskedSpan) AddEvent(name string, opts ...trace.EventOption) {
 	cfg := trace.NewEventConfig(opts...)
-	s.Span.AddEvent(name, trace.WithAttributes(maskAttributes(s.mask, cfg.Attributes())...), trace.WithTimestamp(cfg.Timestamp()))
+	name, kvs := s.m.event(name, cfg.Attributes())
+	s.Span.AddEvent(name, trace.WithAttributes(kvs...), trace.WithTimestamp(cfg.Timestamp()))
 }
 
 func (s *maskedSpan) RecordError(err error, opts ...trace.EventOption) {
@@ -237,16 +306,16 @@ func (s *maskedSpan) RecordError(err error, opts ...trace.EventOption) {
 	}
 	cfg := trace.NewEventConfig(opts...)
 	kvs := append([]attribute.KeyValue{attribute.String("exception.type", fmt.Sprintf("%T", err)), attribute.String("exception.message", err.Error())}, cfg.Attributes()...)
-	s.Span.AddEvent("exception", trace.WithAttributes(maskAttributes(s.mask, kvs)...), trace.WithTimestamp(cfg.Timestamp()))
+	name, masked := s.m.event("exception", kvs)
+	s.Span.AddEvent(name, trace.WithAttributes(masked...), trace.WithTimestamp(cfg.Timestamp()))
 }
 
+// SetStatus keeps the description as the wire span's own status does, through
+// the structural capture only: the go/eino handler sets nothing but the Go
+// error type there, and the message is a masked attribute.
 func (s *maskedSpan) SetStatus(code codes.Code, description string) {
 	if code == codes.Error {
-		if m, keep := s.mask(attribute.String("error.message", description)); keep {
-			description = m.Value.AsString()
-		} else {
-			description = ""
-		}
+		description = captureString(description, s.m.cfg)
 	}
 	s.Span.SetStatus(code, description)
 }

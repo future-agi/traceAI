@@ -56,6 +56,7 @@ func resetModulesForTest() {
 	agent.Lock()
 	moduleProbe.tried, moduleProbe.seen = false, nil
 	agent.Unlock()
+	moduleState.Store(nil)
 }
 
 // ResetModulesForTest is resetModulesForTest for the external test package.

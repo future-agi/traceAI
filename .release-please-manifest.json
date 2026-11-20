@@ -127,7 +127,6 @@
   "go/anthropic": "0.1.0",
   "go/auto": "0.2.0",
   "go/eino": "0.1.0",
-  "go/eino/auto": "0.1.0",
   "go/genai": "0.1.1",
   "go/lambda": "0.1.1",
   "go/openai": "0.1.0",

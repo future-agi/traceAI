@@ -148,7 +148,7 @@ func arm() {
 		agent.last = makeReport(c, false, "")
 		return
 	}
-	state := &agentState{config: c, done: make(chan struct{})}
+	state := &agentState{config: c, done: make(chan struct{}), hooksDone: make(chan struct{})}
 	state.armed.Store(true)
 	state.transport = wrapTransport(http.DefaultTransport, state)
 	http.DefaultTransport = state.transport
@@ -190,6 +190,8 @@ type agentState struct {
 	nativeHooks    nativeCredentialHooks
 	attributeLimit int
 	ownedRatio     *ratioSampler // Only the known wrapper installed on our private provider.
+	hooksStarted   atomic.Bool   // Shutdown hooks of dedicated modules run once (see runHooks).
+	hooksDone      chan struct{}
 }
 
 // retire stops an armed wrapper that will not be activated. Inside an
@@ -332,7 +334,7 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 		// none of them before that.
 		state = armed
 	} else {
-		state = &agentState{done: make(chan struct{})}
+		state = &agentState{done: make(chan struct{}), hooksDone: make(chan struct{})}
 	}
 	state.config, state.processor, state.res = c, processor, res
 	state.registration = &processorRegistration{processor: processor, config: c, res: res, privacy: &spanPrivacy{}, queued: queued, limits: limits}
@@ -369,6 +371,7 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 	state.active.Store(true)
 	state.armed.Store(false)
 	agent.current, agent.first = state, state
+	moduleState.Store(state)
 	agent.last = makeReport(c, state.transport != nil, "")
 	if c.Debug {
 		b, _ := json.Marshal(agent.last)
@@ -379,12 +382,13 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 func (s *agentState) shutdown(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	s.runHooks(ctx)
 	s.once.Do(func() {
-		runShutdownHooks(ctx)
 		s.active.Store(false)
 		s.registration.active.Store(false)
 		agent.Lock()
 		if agent.current == s {
+			moduleState.CompareAndSwap(s, nil)
 			if s.transport != nil && http.DefaultTransport == s.transport {
 				http.DefaultTransport = unwrapTransport(s.transport).(*wireTransport).base
 			}

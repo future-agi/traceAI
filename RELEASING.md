@@ -33,13 +33,16 @@ The Go proxy URL escapes uppercase letters: `traceAI` becomes `trace!a!i`. A mod
 
 `go/eino/auto` (the Eino blank import) requires `go/auto` and `go/eino`, and uses APIs those modules gained after their last release. In the working tree its `go.mod` carries two `replace` directives into the tree, as `go/auto/sdkcompat` does, so development and CI build against the code on disk. Consumers ignore the `replace` directives of the modules they depend on, so the module can be tagged only after its requirements name releases that contain those APIs.
 
+Until then it is **pending**: it is listed in `.github/release/go_module_floors.json` (with, per required module, the last release without the APIs it uses) and is deliberately absent from `release-please-config.json` and `.release-please-manifest.json`. Keeping it out of the config matters: a release PR that bumped a module the planner then refuses to tag would stay `autorelease: pending` after it merges, and release-please opens no further release PR while one is pending. Its files are excluded from `go/eino`'s own release (`exclude-paths` on `go/eino`), so `go/eino`'s version and changelog do not move with it.
+
 Release in this order:
 
 1. Release `go/auto` and `go/eino` through the normal release PR.
 2. In `go/eino/auto/go.mod`, set the `require` lines to those released versions and delete both `replace` lines; run `go mod tidy` there.
-3. Remove the module's entry from `.github/release/go_module_floors.json` (or move it past those versions), and merge. The next release PR then includes `go/eino/auto` (manifest entry `0.1.0`, tag `go/eino/auto/v0.1.0`).
+3. In the same change, delete the module's entry from `.github/release/go_module_floors.json` and add `go/eino/auto` to `release-please-config.json` (release-type `go`, tag-separator `/`, initial-version `0.1.0`) and `.release-please-manifest.json` (`0.1.0`); drop the `exclude-paths` entry from `go/eino` if you want its changelog to keep covering that folder.
+4. The next release PR tags `go/eino/auto/v0.1.0`.
 
-The release plan (`python3 .github/release/release_plan.py`) lists a Go module that fails this rule under `skipped` with the reason, and the Go release workflow runs `python3 .github/release/release_plan.py --go-gate <dir>` before it tests or tags a module, so a tag is refused while a `replace` into the tree or a requirement older than the floor remains. The check is the same function in both places; `python3 .github/release/release_plan.py --go-gate go/eino/auto` shows the current verdict.
+`python3 .github/release/release_plan.py --check` enforces the bookkeeping: a pending module must not be in the config, a module that has become releasable must leave the list, and a Go module in the config must be taggable. The release plan lists a Go module that fails the rule under `skipped` with the reason, and the Go release workflow runs `python3 .github/release/release_plan.py --go-gate <dir>` before it tests or tags a module, so a tag is refused while a `replace` into the tree or a requirement older than the floor remains. `--go-gate go/eino/auto` shows the current verdict.
 
 ### Bootstrap and the dev → main PR
 

@@ -192,6 +192,33 @@ def go_release_blockers(root: Path, package: dict) -> list[str]:
     return blockers
 
 
+def pending_go_problems(root: Path) -> list[str]:
+    """Checks for Go modules that are not yet releasable, and for Go modules that claim to be.
+
+    A module listed in go_module_floors.json is known to be pending: it stays out of
+    release-please-config.json and the manifest (so no release PR bumps a module that cannot be
+    tagged, which would leave the merged PR pending and stop every later release PR), and it must
+    leave the list in the same change that adds it to the config. A Go module in the config must
+    be taggable, for the same reason."""
+    floors_file = root / GO_FLOORS
+    floors = {k: v for k, v in json.loads(floors_file.read_text()).items() if not k.startswith("_")} if floors_file.is_file() else {}
+    config_file = root / "release-please-config.json"
+    config = json.loads(config_file.read_text()).get("packages", {}) if config_file.is_file() else {}
+    problems = []
+    for path in sorted(floors):
+        if not (root / path / "go.mod").is_file():
+            problems.append(f"{path}: listed in {GO_FLOORS} but has no go.mod")
+        elif path in config:
+            problems.append(f"{path}: is in the release config while {GO_FLOORS} lists it as not yet releasable; keep it in one place")
+        elif not go_release_blockers(root, {"dir": path}):
+            problems.append(f"{path}: is releasable now; remove it from {GO_FLOORS} and add it to release-please-config.json and the manifest (initial version 0.1.0)")
+    for path in sorted(p for p in config if p.startswith("go/") and p not in floors and (root / p / "go.mod").is_file()):
+        blockers = go_release_blockers(root, {"dir": path})
+        if blockers:
+            problems.append(f"{path}: is in the release config but cannot be tagged ({blockers[0]}); its merged release PR would stay pending and stop later release PRs")
+    return problems
+
+
 def other_packages(root: Path = REPO_ROOT) -> list[dict]:
     out = []
     pom = root / "java/pom.xml"
@@ -287,7 +314,7 @@ def coverage_problems(root: Path, packages: list[dict]) -> list[str]:
             extra_files = {e if isinstance(e, str) else e.get("path") for e in cfg.get(path, {}).get("extra-files", [])}
             if scoped_rel not in extra_files:
                 problems.append(f"{p['dir']}/{rel}: missing release-please extra-file")
-    return problems
+    return problems + pending_go_problems(root)
 
 
 def _get_json(url: str) -> dict | list[dict] | None:

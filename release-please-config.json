@@ -1048,13 +1048,6 @@
         "go/eino/auto"
       ]
     },
-    "go/eino/auto": {
-      "release-type": "go",
-      "component": "go/eino/auto",
-      "package-name": "github.com/future-agi/traceAI/go/eino/auto",
-      "tag-separator": "/",
-      "initial-version": "0.1.0"
-    },
     "go/genai": {
       "release-type": "go",
       "component": "go/genai",
