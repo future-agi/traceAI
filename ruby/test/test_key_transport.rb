@@ -144,6 +144,77 @@ class KeyTransportTest < Minitest::Test
     assert_empty attempts
   end
 
+  def test_exactly_one_trailing_dot_marks_a_future_agi_host
+    _, attempts, = export_to('http://api.futureagi.com.', opt_in: '1')
+    assert_empty attempts
+    _, attempts, = export_to('http://api.futureagi.com..', opt_in: '1')
+    assert_equal 1, attempts.length
+    _, attempts, = export_to('http://api.futureagi.com..')
+    assert_empty attempts
+  end
+
+  def test_loopback_names_match_without_regard_to_case
+    %w[http://LOCALHOST:4318 http://Localhost:4318].each do |base|
+      _, attempts, = export_to(base)
+      assert_equal 1, attempts.length, base
+    end
+    peer = Struct.new(:ip) { def remote_address = Addrinfo.tcp(ip, 4318) }
+    refute A::KeyTransport.peer_agrees?('LOCALHOST', peer.new('10.1.2.3'))
+    assert A::KeyTransport.peer_agrees?('LOCALHOST', peer.new('127.0.0.1'))
+  end
+
+  def test_concurrent_exports_warn_once
+    ENV['FI_ALLOW_INSECURE_HTTP'] = '1'
+    out = capture_io do
+      16.times.map { Thread.new { A::KeyTransport.check('http://collector.test:4318') } }.each(&:join)
+    end.last
+    assert_equal 1, out.scan('FI_ALLOW_INSECURE_HTTP').length, out
+  end
+
+  def test_opt_in_is_fixed_at_construction
+    ENV['FI_ALLOW_INSECURE_HTTP'] = '1'
+    config = {'base_url' => 'http://collector.test:4318', 'api_key' => KEY, 'secret_key' => SECRET}
+    attempts = []
+    capture_io do
+      A.stub(:config, config) do
+        wire, send = send_span(config)
+        ENV.delete('FI_ALLOW_INSECURE_HTTP')
+        wire.send(:load_socket).stub(:tcp, ->(h, pt, **) { attempts << h; raise IOError }) { send.call(1) }
+      end
+    end
+    assert_equal ['collector.test'], attempts
+  end
+
+  # A loopback name that connects to another peer: refused, socket closed, nothing written.
+  def test_export_refuses_a_non_loopback_peer_and_closes_the_socket
+    written = []
+    sock = Object.new
+    sock.define_singleton_method(:remote_address) { Addrinfo.tcp('10.1.2.3', 4318) }
+    sock.define_singleton_method(:close) { @closed = true }
+    sock.define_singleton_method(:closed?) { !!@closed }
+    %i[write_nonblock write].each { |m| sock.define_singleton_method(m) { |*a, **| written << a; a.first.to_s.bytesize } }
+    config = {'base_url' => 'http://localhost:4318', 'api_key' => KEY, 'secret_key' => SECRET}
+    result = nil
+    capture_io do
+      A.stub(:config, config) do
+        wire, send = send_span(config)
+        wire.send(:load_socket).stub(:tcp, ->(*_a, **) { sock }) { result = send.call(1) }
+      end
+    end
+    assert_equal 1, result
+    assert sock.closed?
+    assert_empty written
+  end
+
+  def test_a_refused_send_warns_once_without_values
+    A::KeyTransport.reset_warning
+    errors = 3.times.map { export_to('http://secret-host.test:4318').last }
+    joined = errors.join
+    assert_equal 1, joined.scan('FI_ALLOW_INSECURE_HTTP').length, errors.inspect
+    refute_includes joined, 'secret-host'
+    refute_includes joined, KEY
+  end
+
   def test_decision_function_is_the_single_gate
     assert A.const_defined?(:KeyTransport)
     assert_equal true, A::KeyTransport.allowed?('http://127.0.0.1:4318')
