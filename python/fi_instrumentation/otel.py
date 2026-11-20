@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
 import uuid
 import warnings
@@ -826,14 +827,18 @@ def _grpc_target(endpoint: str | None) -> tuple[str, str, int] | None:
 
 
 def _known_future_agi_origins(grpc: bool) -> set[tuple[str, int]]:
-    """The (host, port) pairs the Future AGI environment and defaults name."""
+    """The (host, port) pairs the Future AGI environment and defaults name.
+
+    For gRPC the port of a host is the one ``FI_GRPC_URL`` names for it, otherwise 443; an endpoint argument and
+    ``FI_GRPC_URL`` are held to the same rule.
+    """
     known: set[tuple[str, int]] = set()
     if grpc:
-        candidates = [get_env_grpc_collector_endpoint(), "grpc.futureagi.com:443"]
-        for url in candidates:
-            target = _grpc_target(url)
-            if target:
-                known.add((target[1], target[2]))
+        named = _grpc_target(get_env_grpc_collector_endpoint())
+        if named:
+            known.add((named[1], named[2]))
+        if not named or named[1] != "grpc.futureagi.com":
+            known.add(("grpc.futureagi.com", 443))
     else:
         candidates = [get_env_traces_endpoint(), get_env_collector_endpoint(), "https://api.futureagi.com"]
         for url in candidates:
@@ -974,7 +979,20 @@ def _copy_session(session: requests.Session) -> requests.Session:
     copy.max_redirects = session.max_redirects
     copy.trust_env = session.trust_env
     copy.cookies = session.cookies.copy()
-    copy.adapters = type(session.adapters)(session.adapters)
+    # Fresh adapters with the same settings: closing the exporter closes these, not the caller's connection pools.
+    copy.adapters = type(session.adapters)()
+    for prefix, adapter in session.adapters.items():
+        settings_of = {
+            "pool_connections": getattr(adapter, "_pool_connections", 10),
+            "pool_maxsize": getattr(adapter, "_pool_maxsize", 10),
+            "max_retries": getattr(adapter, "max_retries", 0),
+            "pool_block": getattr(adapter, "_pool_block", False),
+        }
+        try:
+            fresh = type(adapter)(**settings_of)
+        except (TypeError, ValueError):  # an adapter class with its own constructor
+            fresh = requests.adapters.HTTPAdapter(**settings_of)
+        copy.adapters[prefix] = fresh
     return copy
 
 
@@ -1057,18 +1075,31 @@ def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_head
 
 
 def _is_loopback_host(host: str | None) -> bool:
-    """True for ``localhost`` and loopback addresses."""
+    """True for ``localhost``, loopback addresses and names that resolve only to loopback addresses.
+
+    ``localhost`` is loopback by name. A name ending in ``.localhost``, or ``localhost`` written with a trailing dot, is
+    loopback only when it resolves, and only to loopback addresses. One trailing dot is read as absent.
+    """
     import ipaddress
 
     if not host:
         return False
-    host = host.strip("[]").lower().removesuffix(".")
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
+    host = host.strip("[]").lower()
+    dotted = host.endswith(".")
+    host = host.removesuffix(".")
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
-        return False
+        pass
+    if host == "localhost" and not dotted:
+        return True
+    if host == "localhost" or host.endswith(".localhost"):
+        try:
+            addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
+            return bool(addresses) and all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addresses)
+        except (OSError, ValueError):
+            return False
+    return False
 
 
 def _force_tls_for_future_agi(endpoint: str | None, insecure: Any) -> bool:

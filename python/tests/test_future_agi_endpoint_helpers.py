@@ -105,9 +105,24 @@ class _NeedsArgument(requests.Session):
         self.required = required
 
 
-def _copied_session(exporter):
-    """The session an exporter built with a caller's session holds, where the layout keeps one on the exporter."""
-    return getattr(exporter, "_session", None)
+def _held_session(exporter):
+    """The session an exporter holds, on the exporter itself or on its client, depending on the OpenTelemetry release."""
+    client = getattr(exporter, "_client", None)
+    transport = getattr(client, "_transport", None)
+    return getattr(exporter, "_session", None) or getattr(client, "_session", None) or getattr(transport, "_session", None)
+
+
+def _assert_session_rules(exporter, session, expected_class):
+    held = _held_session(exporter)
+    assert held is not None, "the exporter holds a session on every supported release"
+    if hasattr(exporter, "_session"):
+        # The Future AGI headers are set on a copy of the caller's session.
+        assert held is not session
+        assert isinstance(held, expected_class)
+    else:
+        # The release keeps the session in its client and sends the keys per request: the caller's session is used as built.
+        assert held is session
+    assert {"x-api-key", "x-secret-key"}.isdisjoint({k.lower() for k in session.headers})
 
 
 def test_a_session_subclass_is_kept_on_the_copy():
@@ -115,12 +130,9 @@ def test_a_session_subclass_is_kept_on_the_copy():
     session.headers["X-Mine"] = "1"
     exporter = otel.HTTPSpanExporter(endpoint="https://api.futureagi.com/tracer/v1/traces", session=session, timeout=2)
     try:
-        held = _copied_session(exporter)
-        if held is not None:  # OpenTelemetry releases whose exporter keeps the session itself
-            assert held is not session
-            assert isinstance(held, _Tagged)
-            assert held.headers["X-Mine"] == "1"
-        assert {"x-api-key", "x-secret-key"}.isdisjoint({k.lower() for k in session.headers})
+        _assert_session_rules(exporter, session, _Tagged)
+        if hasattr(exporter, "_session"):
+            assert exporter._session.headers["X-Mine"] == "1"
     finally:
         exporter.shutdown()
 
@@ -129,13 +141,68 @@ def test_a_session_subclass_that_needs_arguments_falls_back_to_a_plain_session()
     session = _NeedsArgument("x")
     exporter = otel.HTTPSpanExporter(endpoint="https://api.futureagi.com/tracer/v1/traces", session=session, timeout=2)
     try:
-        held = _copied_session(exporter)
-        if held is not None:
-            assert held is not session
-            assert isinstance(held, requests.Session)
-        assert {"x-api-key", "x-secret-key"}.isdisjoint({k.lower() for k in session.headers})
+        _assert_session_rules(exporter, session, requests.Session)
     finally:
         exporter.shutdown()
+
+
+class _CountingAdapter(requests.adapters.HTTPAdapter):
+    was_closed = False
+
+    def close(self):
+        self.was_closed = True
+        super().close()
+
+
+def test_closing_the_exporter_does_not_close_the_callers_adapters():
+    session = requests.Session()
+    caller_adapter = _CountingAdapter(pool_maxsize=3, max_retries=2)
+    session.mount("https://", caller_adapter)
+    exporter = otel.HTTPSpanExporter(endpoint="https://api.futureagi.com/tracer/v1/traces", session=session, timeout=2)
+    if not hasattr(exporter, "_session"):
+        exporter.shutdown()
+        pytest.skip("this OpenTelemetry release keeps the caller's session in its client and does not copy it")
+    copied = exporter._session.adapters["https://"]
+    assert copied is not caller_adapter
+    assert isinstance(copied, _CountingAdapter) and copied.max_retries.total == 2 and copied._pool_maxsize == 3
+    exporter.shutdown()
+    assert copied.was_closed and not caller_adapter.was_closed
+
+
+@pytest.mark.parametrize("env, target, decision", [
+    ("https://grpc.futureagi.com", "grpc.futureagi.com:443", "fi"),
+    ("https://grpc.futureagi.com", "grpc.futureagi.com:4317", "refuse"),
+    ("http://grpc.futureagi.com:4317", "grpc.futureagi.com:4317", "fi"),
+    ("http://grpc.futureagi.com:4317", "grpc.futureagi.com:443", "refuse"),
+    ("127.0.0.1:9", "grpc.futureagi.com:443", "fi"),
+    ("127.0.0.1:9", "grpc.futureagi.com:4317", "refuse"),
+])
+def test_an_argument_and_fi_grpc_url_are_held_to_one_port_rule(monkeypatch, env, target, decision):
+    monkeypatch.setenv("FI_GRPC_URL", env)
+    assert otel._future_agi_decision(target, grpc=True) == decision
+    assert otel._future_agi_decision(env, grpc=True) in ("fi", "other")  # the environment's own target is its own rule
+
+
+@pytest.mark.parametrize("host, resolves_to, loopback", [
+    ("localhost", None, True),
+    ("127.0.0.1", None, True),
+    ("[::1]", None, True),
+    ("app.localhost", "127.0.0.1", True),
+    ("app.localhost", "93.184.216.34", False),
+    ("localhost.", "127.0.0.1", True),
+    ("localhost.", "10.0.0.5", False),
+    ("collector.example", "127.0.0.1", False),
+])
+def test_a_name_is_loopback_when_it_is_localhost_or_resolves_only_to_loopback(monkeypatch, host, resolves_to, loopback):
+    import socket as socket_module
+
+    def resolve(name, *args, **kwargs):
+        if resolves_to is None:
+            raise AssertionError("no lookup is needed")
+        return [(socket_module.AF_INET, socket_module.SOCK_STREAM, 6, "", (resolves_to, 0))]
+
+    monkeypatch.setattr(socket_module, "getaddrinfo", resolve)
+    assert otel._is_loopback_host(host) is loopback
 
 
 @pytest.fixture
@@ -206,5 +273,6 @@ def test_a_grpc_refusal_after_the_channel_is_built_closes_the_channel(monkeypatc
     monkeypatch.setattr(otel, "_check_future_agi_endpoint", check)
     with pytest.raises(otel.UnsupportedFutureAGIEndpointError):
         otel.GRPCSpanExporter(timeout=2)
-    if retains_channel:
-        assert opened and closed
+    if not retains_channel:
+        pytest.skip("this OpenTelemetry release does not keep the channel on the exporter, so none can be closed")
+    assert opened and closed
