@@ -5,8 +5,6 @@ module TraceAI
   module Auto
     class SecretRegistry
       CAPACITY = 1024
-      # What a replaced secret becomes (the privacy catalog's credential replacement, Privacy::REDACTED).
-      PLACEHOLDER = '<redacted>'
       ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH/i
       class Unavailable < StandardError; end
 
