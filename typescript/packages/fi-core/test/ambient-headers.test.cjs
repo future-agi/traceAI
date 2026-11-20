@@ -107,6 +107,44 @@ test('an exporter for another collector sends the caller\'s x-api-key as given a
   assert.deepEqual(grpc1.received[0].get('x-secret-key'), []);
 });
 
+// ---- Caller gRPC metadata with environment FI keys ------------------------------------------------
+const { createSpanExporter } = load('./dist/src');
+const { BasicTracerProvider, SimpleSpanProcessor } = load('@opentelemetry/sdk-trace-base');
+async function exportThrough(exporter) {
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  provider.getTracer('metadata').startSpan('one').end();
+  await provider.forceFlush(); await provider.shutdown();
+}
+function envKeys() {
+  Object.assign(process.env, { FI_API_KEY: 'synthetic-env-key', FI_SECRET_KEY: 'synthetic-env-secret' });
+  cleanup.push(() => { delete process.env.FI_API_KEY; delete process.env.FI_SECRET_KEY; });
+}
+test('gRPC FI endpoint, env keys, caller metadata and no headers option: both the FI keys and the metadata arrive', async () => {
+  envKeys();
+  const sink = await grpcSink(); fiEndpoint(sink, true);
+  const metadata = new grpc.Metadata(); metadata.set('x-caller-meta', 'from-metadata');
+  await exportThrough(createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, metadata }));
+  assert.equal(sink.received.length, 1);
+  assert.deepEqual(sink.received[0].get('x-api-key'), ['synthetic-env-key']);
+  assert.deepEqual(sink.received[0].get('x-secret-key'), ['synthetic-env-secret']);
+  assert.deepEqual(sink.received[0].get('x-caller-meta'), ['from-metadata']);
+});
+test('gRPC FI endpoint: an explicit headers pair wins over metadata and env, metadata stays underneath', async () => {
+  envKeys();
+  const sink = await grpcSink(); fiEndpoint(sink, true);
+  const metadata = new grpc.Metadata(); metadata.set('x-caller-meta', 'from-metadata'); metadata.set('x-api-key', 'metadata-key');
+  await exportThrough(createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, metadata, headers: FI }));
+  assert.deepEqual(sink.received[0].get('x-api-key'), [FI['x-api-key']]);
+  assert.deepEqual(sink.received[0].get('x-secret-key'), [FI['x-secret-key']]);
+  assert.deepEqual(sink.received[0].get('x-caller-meta'), ['from-metadata']);
+});
+test('gRPC caller metadata keeps repeated and binary values', async () => {
+  const sink = await grpcSink();
+  const metadata = new grpc.Metadata(); metadata.add('x-repeated', 'one'); metadata.add('x-repeated', 'two'); metadata.set('x-blob-bin', Buffer.from([1, 2, 3]));
+  await exportThrough(createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, metadata }));
+  assert.deepEqual(sink.received[0].get('x-repeated'), ['one', 'two']);
+  assert.deepEqual(sink.received[0].get('x-blob-bin'), [Buffer.from([1, 2, 3])]);
+});
 // ---- A second physical copy of @opentelemetry/otlp-exporter-base ------------------------------------
 // With npm hoisting the exporter packages can carry their own copy of the exporter base class, so the
 // base class fi-core imports is not the one the exporters extend. Ambient OTLP headers must still not
