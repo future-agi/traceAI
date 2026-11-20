@@ -27,8 +27,8 @@ const (
 )
 
 type exported struct {
-	scope, name string
-	attrs       map[string]string
+	scope, name, trace string
+	attrs              map[string]string
 }
 
 type collector struct {
@@ -56,7 +56,7 @@ func newCollector(t *testing.T) *collector {
 					for _, kv := range s.Attributes {
 						attrs[kv.Key] = kv.Value.GetStringValue()
 					}
-					c.spans = append(c.spans, exported{ss.Scope.GetName(), s.Name, attrs})
+					c.spans = append(c.spans, exported{ss.Scope.GetName(), s.Name, fmt.Sprintf("%x", s.TraceId), attrs})
 				}
 			}
 		}
@@ -126,9 +126,9 @@ func buildApp(t *testing.T) string {
 }
 
 type result struct {
-	fi, app []exported
-	fiRaw   []byte
-	stdout  string
+	fi, app       []exported
+	fiRaw, appRaw []byte
+	stdout        string
 }
 
 // runApp runs the program with the given environment, a fake model and fake
@@ -153,7 +153,7 @@ func runApp(t *testing.T, env ...string) result {
 	}
 	var r result
 	r.fi, r.fiRaw = fi.snapshot()
-	r.app, _ = app.snapshot()
+	r.app, r.appRaw = app.snapshot()
 	r.stdout = stdout.String()
 	return r
 }
@@ -191,27 +191,55 @@ func TestOneImportTracesEino(t *testing.T) {
 	if wire := inScope(r.fi, wireScope); len(wire) != 0 {
 		t.Errorf("model call under an Eino LLM span also produced %d wire spans", len(wire))
 	}
-	if len(r.app) != 0 {
-		t.Errorf("a program without its own provider exported %d spans elsewhere", len(r.app))
-	}
 	if !strings.Contains(r.stdout, `"name":"eino","status":"auto"`) {
 		t.Errorf("Report does not show eino as auto: %s", r.stdout)
 	}
 }
 
-// A program that also registers traceaieino.NewHandler itself gets each span
-// once, not twice.
-func TestManualHandlerAndImportGiveNoDuplicates(t *testing.T) {
-	plain := runApp(t, "APP_MODE=ownprovider")
-	manual := runApp(t, "APP_MODE=manual")
-	want := len(inScope(plain.app, einoScope))
-	if want == 0 {
+// perTrace counts the Eino spans of each trace.
+func perTrace(spans []exported) map[string]int {
+	m := map[string]int{}
+	for _, s := range inScope(spans, einoScope) {
+		m[s.trace]++
+	}
+	return m
+}
+
+func sameCounts(t *testing.T, where string, got map[string]int, traces, each int) {
+	t.Helper()
+	if len(got) != traces {
+		t.Errorf("%s: %d traces, want %d (%v)", where, len(got), traces, got)
+	}
+	for id, n := range got {
+		if n != each {
+			t.Errorf("%s: trace %s has %d Eino spans, want %d", where, id, n, each)
+		}
+	}
+}
+
+// Each way an application can also handle Eino itself leaves every run traced
+// exactly once: by the application's handler where it handles the run, by the
+// import everywhere else.
+func TestApplicationHandlersAndTheImportTraceEachRunOnce(t *testing.T) {
+	reference := runApp(t, "APP_MODE=ownprovider")
+	each := len(inScope(reference.app, einoScope))
+	if each == 0 {
 		t.Fatal("reference run exported no Eino spans")
 	}
-	for name, spans := range map[string][]exported{"application collector": manual.app, "Future AGI": manual.fi} {
-		if got := len(inScope(spans, einoScope)); got != want {
-			t.Errorf("%s received %d Eino spans with a manual handler, want %d", name, got, want)
-		}
+	for _, tc := range []struct {
+		mode   string
+		traces int
+	}{
+		{"manual", 1},       // a global handler: the import steps aside
+		{"unregistered", 1}, // a built handler nobody uses: nothing changes
+		{"perrun", 2},       // question A has its own handler, question B has the import
+		{"midrun", 2},       // registered while A runs: A is unaffected, B uses it
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			r := runApp(t, "APP_MODE="+tc.mode)
+			sameCounts(t, "application collector", perTrace(r.app), tc.traces, each)
+			sameCounts(t, "Future AGI", perTrace(r.fi), tc.traces, each)
+		})
 	}
 }
 
@@ -245,19 +273,67 @@ func TestSDKDisabledExportsNothing(t *testing.T) {
 	}
 }
 
-// Privacy switches and known-secret replacement apply to Eino spans.
-func TestPrivacyAppliesToEinoSpans(t *testing.T) {
-	r := runApp(t, "FI_HIDE_INPUTS=true", "FI_HIDE_OUTPUTS=true")
+// shown lists the spans that carry text in an attribute of the hidden family.
+// A node that echoes its input as its output (Eino's Init and Lambda nodes) is
+// output, so it is judged by the output switches.
+func shown(spans []exported, hidden string, families ...string) []string {
+	var out []string
+	for _, s := range inScope(spans, einoScope) {
+		for k, v := range s.attrs {
+			for _, f := range families {
+				if strings.HasPrefix(k, f) && strings.Contains(v, hidden) {
+					out = append(out, s.name+" "+k)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// Privacy switches apply to Eino spans on both copies: the one Future AGI
+// receives and the one the application's own provider exports.
+func TestPrivacyAppliesToEinoSpansOnBothCopies(t *testing.T) {
+	in := []string{"input.", "gen_ai.input."}
+	out := []string{"output.", "gen_ai.output."}
+	for _, tc := range []struct {
+		name     string
+		env      string
+		hidden   string
+		families []string
+	}{
+		{"inputs", "FI_HIDE_INPUTS", "QMARK-42", in},
+		{"input messages", "FI_HIDE_INPUT_MESSAGES", "QMARK-42", in},
+		{"input text", "FI_HIDE_INPUT_TEXT", "QMARK-42", in},
+		{"outputs", "FI_HIDE_OUTPUTS", "Pack a light rain jacket", out},
+		{"output messages", "FI_HIDE_OUTPUT_MESSAGES", "Pack a light rain jacket", out},
+		{"output text", "FI_HIDE_OUTPUT_TEXT", "Pack a light rain jacket", out},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := runApp(t, "APP_MODE=ownprovider", tc.env+"=true")
+			if len(inScope(r.fi, einoScope)) == 0 || len(inScope(r.app, einoScope)) == 0 {
+				t.Fatal("no Eino spans")
+			}
+			if got := shown(r.fi, tc.hidden, tc.families...); len(got) != 0 {
+				t.Errorf("%s=true: %q reached Future AGI in %v", tc.env, tc.hidden, got)
+			}
+			if got := shown(r.app, tc.hidden, tc.families...); len(got) != 0 {
+				t.Errorf("%s=true: %q reached the application's exporter in %v", tc.env, tc.hidden, got)
+			}
+		})
+	}
+}
+
+// A secret the agent knows is replaced in what Future AGI receives, even when
+// it appears in a prompt: the FI key pair is known from the start, the model
+// key once the model call is made.
+func TestKnownSecretsAreReplacedInEinoSpans(t *testing.T) {
+	r := runApp(t, "APP_QUESTION=my keys are "+fiSecret+" and "+modelKey)
 	if len(inScope(r.fi, einoScope)) == 0 {
 		t.Fatal("no Eino spans")
 	}
-	for _, leaked := range []string{"QMARK-42", "Pack a light rain jacket"} {
-		if bytes.Contains(r.fiRaw, []byte(leaked)) {
-			t.Errorf("hidden content %q was exported", leaked)
+	for _, secret := range []string{fiSecret, modelKey} {
+		if bytes.Contains(r.fiRaw, []byte(secret)) {
+			t.Errorf("secret %q was exported to Future AGI", secret)
 		}
-	}
-	r = runApp(t, "APP_QUESTION=my secret is "+fiSecret)
-	if bytes.Contains(r.fiRaw, []byte(fiSecret)) || bytes.Contains(r.fiRaw, []byte(modelKey)) {
-		t.Error("a known secret was exported")
 	}
 }

@@ -34,6 +34,7 @@ func InitForTest(ctx context.Context, opts ...Option) (func(context.Context) err
 		agent.repeated = sync.Once{}
 	}
 	agent.Unlock()
+	resetModulesForTest()
 	shutdown, err := Init(ctx, opts...)
 	if everySpanForTest.Load() {
 		agent.Lock()
@@ -44,3 +45,18 @@ func InitForTest(ctx context.Context, opts ...Option) (func(context.Context) err
 	}
 	return shutdown, err
 }
+
+// resetModulesForTest forgets what dedicated modules registered, so scenarios
+// do not depend on test order, -count or -shuffle.
+func resetModulesForTest() {
+	attached.Range(func(k, _ any) bool { attached.Delete(k); return true })
+	shutdownHooks.Lock()
+	shutdownHooks.fns = nil
+	shutdownHooks.Unlock()
+	agent.Lock()
+	moduleProbe.tried, moduleProbe.seen = false, nil
+	agent.Unlock()
+}
+
+// ResetModulesForTest is resetModulesForTest for the external test package.
+func ResetModulesForTest() { resetModulesForTest() }
