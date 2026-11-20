@@ -78,6 +78,7 @@ public static class TraceAIAuto
                 }
                 else if(!config.Disabled) Warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required for the default collector; no exporter or provider was supplied, so auto-instrumentation is disabled.");
             }
+            catch(BlankBaseUrlException) { s_failed=true; Warn("base-url-blank","FI_BASE_URL is set but empty; the agent did not start and no traces are sent. Unset it or give it a URL."); }
             catch { s_failed=true; Warn("init", "Agent initialization failed; application continues without tracing."); }
         }
     }
@@ -113,16 +114,18 @@ public static class TraceAIAuto
         try { var config=s_config; return s_agent==null || config==null ? null : HostingStartupPlanFor(config); }
         catch { return null; }
     }
-    /// <summary>The libraries' sensitive-content switch is off unless the user opts in with FI_AUTO_CAPTURE_CONTENT=true:
-    /// it makes the libraries put prompts and responses on their spans for every listener the application has, not only
-    /// this agent. Any traceAI hide setting keeps it off even then.</summary>
+    /// <summary>The libraries' sensitive-content switch is on unless FI_AUTO_CAPTURE_CONTENT is set false (false, 0, no or off),
+    /// so prompts and responses are recorded as in every other traceAI language. Any traceAI hide setting keeps it off.
+    /// The libraries' switch puts content on their spans for every listener the application has, not only this agent; the hosting
+    /// startup prints one value-free line when it actually turns the switch on. Content still reaches Future AGI only through the agent's own
+    /// processor, which applies the hide mask and scrubs known secrets.</summary>
     internal static string? HostingStartupPlanFor(AutoConfig config)
     {
         bool chat=config.Enabled("extensions_ai"),agents=config.Enabled("agents");
         if(!chat && !agents) return null;
         var mask=config.Options.TraceConfig??AutoProcessor.FromHideSwitches(config);
         bool hidden=mask.HideInputs||mask.HideOutputs||mask.HideInputMessages||mask.HideOutputMessages||mask.HideInputText||mask.HideOutputText||mask.HideInputImages;
-        bool sensitive=config.Bool("AUTO_CAPTURE_CONTENT") && !hidden;
+        bool sensitive=config.CaptureContent && !hidden;
         return $"chat={(chat?1:0)};agent={(agents?1:0)};sensitive={(sensitive?1:0)}";
     }
     public static IReadOnlyList<IntegrationStatus> GetStatus()
@@ -661,7 +664,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         foreach(var activity in batch) activities.Add(activity);
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
-        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation);
+        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),false,operation);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
         return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails,
             sampled:_sampler==null?null:_sampler.Export,samplingMetadata:_sampler==null?null:_sampler.ApplyMetadata);
@@ -681,7 +684,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
         return ExportSnapshot.SanitizeResource(resource,
-            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key))),
+            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),false),
             text=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets));
     }
     private static string EventKey(string name,string key) => name switch {
@@ -694,7 +697,11 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     /// values are still removed from its value.</summary>
     internal const string SessionKey="session.id";
     internal static string ScrubPath(string key)=>key==SessionKey?"":key;
-    internal object? Mask(string key,object value,string? operation=null)
+    /// <summary>Applies the hide policy to a value. With <paramref name="replaceSecrets"/> every known secret is replaced and then
+    /// the value shapes run, in that order and in one call. Without it neither runs: the caller (the export snapshot, the resource, a
+    /// wire span's raw values) replaces them itself, once, from one registry snapshot, and a shape run first could cut a known
+    /// secret in two. There is deliberately no default.</summary>
+    internal object? Mask(string key,object value,bool replaceSecrets,string? operation=null)
     {
         if(key!=SessionKey && (WirePrivacy.CredentialKey(key)||IsSensitiveKey(key))) return TraceConfig.RedactedValue;
         bool tool=key.StartsWith("gen_ai.tool.",StringComparison.Ordinal);
@@ -726,16 +733,17 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         if(decision==TraceConfig.RedactedValue) return TraceConfig.RedactedValue;
         if(_mask.HideErrorDetails && key=="otel.status_description") return null;
         if(_mask.HideInputImages && (key.Contains("image",StringComparison.OrdinalIgnoreCase)||key.Contains("file_uri",StringComparison.OrdinalIgnoreCase)||key.Contains("fileUri",StringComparison.Ordinal)||key.Contains("file_url",StringComparison.OrdinalIgnoreCase)||key.Contains("file.uri",StringComparison.OrdinalIgnoreCase)||key.Contains("file.url",StringComparison.OrdinalIgnoreCase))) return TraceConfig.RedactedValue;
-        value=WirePrivacy.Scrub(value,path:ScrubPath(key));
+        string[]? known=null;
+        if(replaceSecrets) { try { known=_config.KnownValues(); } catch { return WirePrivacy.Redacted; } }
+        value=WirePrivacy.Scrub(value,known,path:ScrubPath(key),shapes:replaceSecrets);
         if(value is string str)
         {
-            str=_config.RedactSecrets(str);
             if(_mask.HideInputImages && WireCore.Parse(System.Text.Encoding.UTF8.GetBytes(str)) is System.Text.Json.Nodes.JsonNode node && node is System.Text.Json.Nodes.JsonObject or System.Text.Json.Nodes.JsonArray)
             { HideImages(node); str=WireCore.J(node); }
             return str;
         }
-        if(value is string[] strings) return strings.Select(item=>item==null?null:(string?)Mask(key,item,operation)).ToArray();
-        if(value is object[] objects) return objects.Select(item=>item==null?null:Mask(key,item,operation)).ToArray();
+        if(value is string[] strings) return strings.Select(item=>item==null?null:(string?)Mask(key,item,replaceSecrets,operation)).ToArray();
+        if(value is object[] objects) return objects.Select(item=>item==null?null:Mask(key,item,replaceSecrets,operation)).ToArray();
         return value;
     }
     private static bool IsSensitiveKey(string key)

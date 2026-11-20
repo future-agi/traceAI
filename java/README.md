@@ -345,7 +345,7 @@ Search methods return lazy `SearchPagedIterable` results. Consume the results to
 
 ## Build and test
 
-Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode; the Arconia and Quarkus examples have their own Java 21 requirements.
+Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode, except `traceai-java-quarkus-langchain4j`, which requires Java 21; the Arconia and Quarkus examples also have their own Java 21 requirements. CI tests the complete reactor on Java 21, and on Java 17 without `traceai-java-quarkus-langchain4j`.
 
 ```bash
 cd java

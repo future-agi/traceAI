@@ -39,7 +39,7 @@ Each language guide lists the exact settings. The common ones are environment va
 | `FI_HIDE_OUTPUTS=true` | Do not record response content (completions, output messages). |
 | `FI_HIDE_ERROR_DETAILS=true` | Do not record error messages and stack traces. |
 
-Content is recorded by default in every language. In .NET, the clients and agents the ASP.NET Core hosting startup wraps keep prompt and response content off unless `FI_AUTO_CAPTURE_CONTENT=true` is set, as its guide explains. Check the guide for your language for the full list of hide settings and their exact names.
+Content is recorded by default in every language. In .NET, `FI_AUTO_CAPTURE_CONTENT=false` also keeps it off for the clients and agents the ASP.NET Core hosting startup wraps, as its guide explains. Check the guide for your language for the full list of hide settings and their exact names.
 
 ## Your existing OpenTelemetry setup
 

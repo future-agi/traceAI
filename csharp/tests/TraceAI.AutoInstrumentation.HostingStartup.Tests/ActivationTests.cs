@@ -117,22 +117,47 @@ public class ActivationTests
     }
 
     [Fact]
-    public async Task AnotherListenerOnTheLibrarySourcesReceivesNoContentByDefault()
+    public async Task AnotherListenerOnTheLibrarySourcesReceivesNoContentWhenCaptureIsSetFalse()
     {
-        var run = await Run("plain");
+        var run = await Run("plain", new() { ["FI_AUTO_CAPTURE_CONTENT"] = "false" });
         Assert.True(run.Summary.GetProperty("otherListenerSpanTags").GetInt32() > 0, "the application's own listener saw no spans");
         Assert.False(run.Summary.GetProperty("otherListenerSawContent").GetBoolean());
+        Assert.DoesNotContain("hello chat", run.Exported);
+        Assert.DoesNotContain("FI_AUTO_CAPTURE_CONTENT", run.Error);
     }
 
     [Fact]
-    public async Task OptingInSharesContentWithEveryListenerAndTheHideSettingsStillWin()
+    public async Task ContentIsOnByDefaultForEveryListenerAndTheHideSettingsStillWin()
     {
-        var optedIn = await Run("plain", new() { ["FI_AUTO_CAPTURE_CONTENT"] = "true" });
-        Assert.True(optedIn.Summary.GetProperty("otherListenerSawContent").GetBoolean());
-        Assert.Contains("hello chat", optedIn.Exported);
-        var hidden = await Run("plain", new() { ["FI_AUTO_CAPTURE_CONTENT"] = "true", ["FI_HIDE_INPUTS"] = "true" });
+        var byDefault = await Run("plain");
+        Assert.True(byDefault.Summary.GetProperty("otherListenerSawContent").GetBoolean());
+        Assert.Contains("hello chat", byDefault.Exported);
+        var hidden = await Run("plain", new() { ["FI_HIDE_INPUTS"] = "true" });
         Assert.False(hidden.Summary.GetProperty("otherListenerSawContent").GetBoolean());
         Assert.DoesNotContain("hello chat", hidden.Exported);
+        Assert.DoesNotContain("FI_AUTO_CAPTURE_CONTENT", hidden.Error);
+    }
+
+    [Fact]
+    public async Task ADefaultOnPromptReachesTheCollectorWithASeededSecretReplaced()
+    {
+        const string secret = "sk-seeded-secret-value-9f8e7d6c5b4a";
+        var run = await Run("plain", new() { ["FI_SECRET_KEY"] = secret });
+        // The prompt is exported with the text around the secret intact and the agent's redaction marker where the secret was.
+        Assert.Contains("hello chat <redacted>", run.Exported);
+        Assert.Contains("stub answer", run.Exported);
+        Assert.DoesNotContain(secret, run.Exported);
+        Assert.DoesNotContain(secret, run.Error);
+    }
+
+    [Fact]
+    public async Task TheContentStartupLineIsPrintedOncePerProcessAndNamesOnlyTheSetting()
+    {
+        const string secret = "sk-seeded-secret-value-9f8e7d6c5b4a";
+        var run = await Run("plain", new() { ["FI_SECRET_KEY"] = secret });
+        Assert.Equal(1, Count(run.Error, "FI_AUTO_CAPTURE_CONTENT"));
+        Assert.DoesNotContain("hello chat", run.Error);
+        Assert.DoesNotContain(secret, run.Error);
     }
 
     [Fact]

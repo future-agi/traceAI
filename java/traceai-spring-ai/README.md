@@ -135,3 +135,16 @@ Model metadata and usage come from Spring AI's native observations. Missing prov
 `TracedChatModel`, `TracedEmbeddingModel`, and their constructors remain available for models **without native tracing**. The wrappers use modern Spring AI APIs, trace embedding convenience calls, and defer each streaming span until subscription. Each subscription ends once on completion, failure, or cancellation. Stream content is bounded and the latest reported token usage is retained without summing cumulative chunks. Request metadata combines the model's configured defaults with non-null per-request overrides. Request and response model names stay separate; a response snapshot is never substituted for an unknown request model.
 
 For a wrapper stream subscribed on another thread, bind an explicit parent and TraceAI attributes using `SpringAITracingContext.withContext(...)`. Prefer the native path for new integrations; do not combine both paths on one model.
+
+## Tool call spans for callers without native tracing
+
+`TracedToolCallback` wraps a `ToolCallback` and records one `execute_tool <tool name>` span per call, for both `call(String)` and `call(String, ToolContext)`: an INTERNAL span, child of the current span and current while the tool runs, with `fi.span.kind=TOOL`, `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.description`, the arguments as `input.value` and the result as `output.value`. Spring AI does not give a callback its call id, so `gen_ai.tool.call.id` is not set. A failure is recorded with status `ERROR` and the original exception is rethrown.
+
+```java
+List<ToolCallback> callbacks = TracedToolCallback.wrapAll(
+    List.of(MethodToolCallbackProvider.builder().toolObjects(new WeatherTools()).build().getToolCallbacks()),
+    TraceAI.getTracer());
+chatClient.prompt("What is the weather in Lisbon?").toolCallbacks(callbacks).call().content();
+```
+
+Content goes through `FITracer`: `hideInputs` / `hideInputMessages` withhold the arguments and the description, `hideOutputs` / `hideOutputMessages` withhold the result, and `hideErrorDetails`, or any of those four settings, keeps exception text out. Use this wrapper or the native observation path above for a tool, not both: native tool observations already produce a TOOL span. With the zero-code `traceai-javaagent` also attached, the agent does not advise this wrapper and skips a call under its span, and it also skips a call under Spring AI's native tool observation span.

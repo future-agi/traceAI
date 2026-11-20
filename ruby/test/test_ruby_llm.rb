@@ -8,6 +8,7 @@ require_relative '../lib/traceai/auto/config'
 # application in a child process with the zero-code RUBYOPT flag, so the agent
 # loads before RubyLLM does, as it does in production.
 class RubyLLMInstrumentorTest < Minitest::Test
+  include SkipWhenMediaHooksUnproven
   include ChildHelper
   JSON_TYPE = {'Content-Type' => 'application/json'}.freeze
   CHAT = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini-2024-07-18', choices: [{index: 0, message: {role: 'assistant', content: 'Hello from RubyLLM'}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5}).freeze
