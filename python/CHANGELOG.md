@@ -1,3 +1,8 @@
+## [1.5.2] - 2026-11-20
+
+### Fixed
+- An exporter you point at your own collector is built and sends as configured when `FI_BASE_URL` or `FI_GRPC_URL` is set, including when the OpenTelemetry exporter's `__init__` is wrapped by a function that takes `*args, **kwargs`. Whether an exporter sends to Future AGI is decided from the endpoint it resolved, and its arguments are read against the exporter's own `__init__` parameters. An exporter that resolves to Future AGI with a header layout this release cannot set still raises `UnsupportedOTLPExporterError`.
+
 ## [1.5.1] - 2026-11-19
 
 ### Changed
