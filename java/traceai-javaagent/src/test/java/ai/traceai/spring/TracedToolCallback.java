@@ -8,7 +8,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 /** Stand-in for the traceai-java-spring-ai wrapper of the same name, for the agent's ToolApp (see the LangChain4j one). */
-public final class TracedToolCallback implements ToolCallback {
+public class TracedToolCallback implements ToolCallback {
     private final ToolCallback delegate; private final Tracer tracer;
     public TracedToolCallback(ToolCallback delegate, Tracer tracer) { this.delegate = delegate; this.tracer = tracer; }
     @Override public ToolDefinition getToolDefinition() { return delegate.getToolDefinition(); }

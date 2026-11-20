@@ -63,6 +63,31 @@ public final class ToolApp {
         @Override public String call(String toolInput, ToolContext toolContext) { return depth-- > 0 ? call(toolInput) : RESULT; }
     }
 
+    /** Spring AI-style: call(String) delegates to call(String, ToolContext), which recurses through the two-argument overload itself. */
+    public static final class RecursiveTwoArgCallback implements ToolCallback {
+        int depth = 1;
+        @Override public ToolDefinition getToolDefinition() {
+            return new ToolDefinition() { @Override public String name() { return "lookup"; } @Override public String description() { return "d"; } };
+        }
+        @Override public String call(String toolInput) { return call(toolInput, null); }
+        @Override public String call(String toolInput, ToolContext toolContext) { return depth-- > 0 ? call(toolInput, toolContext) : RESULT; }
+    }
+    /** A callback whose equals and hashCode must never run: the agent compares calls by identity. */
+    public static final class HostileEquals implements ToolCallback {
+        @Override public ToolDefinition getToolDefinition() {
+            return new ToolDefinition() { @Override public String name() { return "lookup"; } @Override public String description() { return "d"; } };
+        }
+        @Override public String call(String toolInput) { return RESULT; }
+        @Override public boolean equals(Object other) { throw new IllegalStateException("equals ran"); }
+        @Override public int hashCode() { throw new IllegalStateException("hashCode ran"); }
+    }
+    /** An application subclass of the library's non-final wrapper: still the wrapper, which opens its own TOOL span. */
+    public static final class WrapperSubclass extends ai.traceai.spring.TracedToolCallback {
+        WrapperSubclass(ToolCallback delegate, io.opentelemetry.api.trace.Tracer tracer) { super(delegate, tracer); }
+        @Override public String call(String toolInput) { return super.call(toolInput); }
+        @Override public String call(String toolInput, ToolContext toolContext) { return super.call(toolInput, toolContext); }
+    }
+
     public static void main(String[] args) throws Exception {
         String scenario = args[0];
         SpanExporter printer = new SpanExporter() {
@@ -74,7 +99,8 @@ public final class ToolApp {
             @Override public CompletableResultCode shutdown() { return CompletableResultCode.ofSuccess(); }
         };
         try (SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(printer)).build()) {
-            String parentName = scenario.equals("native_name") ? "framework lookup" : "application-parent";
+            String parentName = scenario.equals("native_name") ? "framework lookup" : scenario.equals("native_spring_ai_tool") ? "spring.ai.tool"
+                : scenario.equals("native_tool_call_name") ? "tool_call lookup" : "application-parent";
             Span app = provider.get("tool-app").spanBuilder(parentName).startSpan();
             if (scenario.equals("native_attribute")) app.setAttribute("spring.ai.kind", "tool_call");
             if (scenario.equals("library_span")) {
@@ -89,7 +115,14 @@ public final class ToolApp {
                     var tracer = provider.get("wrapper");
                     System.out.println("LC4J=" + new ai.traceai.langchain4j.TracedToolExecutor(executor, tracer).execute(request, "memory"));
                     System.out.println("SPRING_ONE=" + new ai.traceai.spring.TracedToolCallback(callback, tracer).call(ARGS));
-                } else if (scenario.equals("native_name") || scenario.equals("native_attribute")) {
+                } else if (scenario.equals("wrapper_subclass")) {
+                    System.out.println("SPRING_ONE=" + new WrapperSubclass(callback, provider.get("wrapper")).call(ARGS));
+                    System.out.println("SPRING_TWO=" + new WrapperSubclass(callback, provider.get("wrapper")).call(ARGS, new ToolContext(Map.of())));
+                } else if (scenario.equals("recursive_two_arg")) {
+                    System.out.println("SPRING_ONE=" + new RecursiveTwoArgCallback().call(ARGS));
+                } else if (scenario.equals("hostile_equals")) {
+                    System.out.println("SPRING_ONE=" + new HostileEquals().call(ARGS));
+                } else if (scenario.startsWith("native_")) {
                     System.out.println("SPRING_ONE=" + callback.call(ARGS));
                 } else if (scenario.equals("recursive")) {
                     System.out.println("LC4J=" + new RecursiveExecutor().execute(request, null));

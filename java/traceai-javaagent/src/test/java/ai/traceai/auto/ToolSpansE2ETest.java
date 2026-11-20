@@ -165,6 +165,28 @@ class ToolSpansE2ETest {
         run("native_attribute", Map.of());
         assertTrue(spans.isEmpty(), spans.toString());
     }
+    @Test void aNativeSpringAiSpanNamedSpringAiToolIsNotTracedAgain() throws Exception {
+        run("native_spring_ai_tool", Map.of());
+        assertTrue(spans.isEmpty(), spans.toString());
+    }
+    @Test void aNativeSpringAiSpanNamedToolCallAndTheToolIsNotTracedAgain() throws Exception {
+        run("native_tool_call_name", Map.of());
+        assertTrue(spans.isEmpty(), spans.toString());
+    }
+    @Test void anApplicationSubclassOfALibraryWrapperIsNotTracedAgain() throws Exception {
+        String log = run("wrapper_subclass", Map.of());
+        assertEquals(2, appSpans(log), log);
+        assertTrue(spans.isEmpty(), "the agent added a sibling span to a wrapper subclass's: " + spans);
+    }
+    @Test void aRecursionThroughTheTwoArgumentOverloadIsTracedAtEveryLevel() throws Exception {
+        run("recursive_two_arg", Map.of());
+        assertEquals(2, spans.size(), spans.toString());
+    }
+    @Test void aCalleeWhoseEqualsThrowsStillGetsItsSpanAndItsResult() throws Exception {
+        String log = run("hostile_equals", Map.of());
+        assertEquals("PRIVATE_TOOL_RESULT", line(log, "SPRING_ONE="));
+        assertEquals(1, spans.size(), spans.toString());
+    }
     @Test void aRecursiveToolCallIsTracedAtEveryLevel() throws Exception {
         run("recursive", Map.of());
         // One LangChain4j recursion (2 calls) and one Spring AI recursion (2 calls, each through the delegating overload).
