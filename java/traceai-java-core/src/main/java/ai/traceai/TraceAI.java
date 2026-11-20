@@ -1,5 +1,7 @@
 package ai.traceai;
 
+import ai.traceai.privacy.KnownSecrets;
+import ai.traceai.privacy.SecretReplacingSpanExporter;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
@@ -95,6 +97,8 @@ public final class TraceAI {
                 shutdownHookRegistered = true;
             }
 
+            registerSecrets(config);
+
             // Build resource with service name
             String serviceName = config.getServiceName() != null
                 ? config.getServiceName()
@@ -126,7 +130,7 @@ public final class TraceAI {
                 var otlpExporter = new KeyedOtlpSpanExporter(exportTarget, config.getApiKey(), config.getSecretKey(),
                     config.getProjectName() != null ? config.getProjectName() : "");
 
-                BatchSpanProcessor batchProcessor = BatchSpanProcessor.builder(otlpExporter)
+                BatchSpanProcessor batchProcessor = BatchSpanProcessor.builder(SecretReplacingSpanExporter.wrap(otlpExporter))
                     .setMaxExportBatchSize(config.getBatchSize())
                     .setScheduleDelay(config.getExportIntervalMs(), TimeUnit.MILLISECONDS)
                     .build();
@@ -138,7 +142,7 @@ public final class TraceAI {
             // Add console exporter if enabled
             if (config.isEnableConsoleExporter()) {
                 providerBuilder.addSpanProcessor(
-                    new SnapshotSpanProcessor(LoggingSpanExporter.create())
+                    new SnapshotSpanProcessor(SecretReplacingSpanExporter.wrap(LoggingSpanExporter.create()))
                 );
                 logger.info("TraceAI console exporter enabled");
             }
@@ -179,10 +183,21 @@ public final class TraceAI {
                 logger.debug("TraceAI already initialized, skipping");
                 return;
             }
+            registerSecrets(config);
             instance = new FITracer(openTelemetry.getTracer(TRACER_NAME, getVersion()), config);
             initialized = true;
             logger.info("TraceAI initialized with application-owned OpenTelemetry (version {})", getVersion());
         }
+    }
+
+    /**
+     * Teaches the process-wide registry the credentials this configuration carries. Exporters TraceAI
+     * creates replace them at export time; for an application-owned SDK, wrap the application's
+     * exporters with {@link SecretReplacingSpanExporter#wrap(io.opentelemetry.sdk.trace.export.SpanExporter)}.
+     */
+    private static void registerSecrets(TraceConfig config) {
+        KnownSecrets.process().register(config.getApiKey());
+        KnownSecrets.process().register(config.getSecretKey());
     }
 
     /**
