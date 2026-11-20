@@ -29,7 +29,7 @@ import { Resource, ResourceDetector, resourceFromAttributes, detectResources, de
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
-import { endpointTarget, isFiEndpoint, isLoopbackTarget, sameEndpointTarget } from "./fi-endpoint";
+import { endpointTarget, guardFiKeys, isFiEndpoint, isLoopbackTarget, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
 import { credentialSecrets } from "./privacy-runtime";
 import { hasCompleteKeyPair } from "./fi-key-pair";
 import { seedSecrets } from "./secrets";
@@ -417,17 +417,26 @@ function getEnvFiAuthHeader(): FIHeaders | undefined {
   }
   return undefined;
 }
-function resolveFiHeaders(headers?: FIHeaders): FIHeaders | undefined {
+/**
+ * The environment's FI keys for a request to `endpoint`: the one place they are obtained for a request. It
+ * throws, naming no value, when the endpoint is one they are not sent to (an http:// Future AGI host).
+ */
+function fiEnvKeysFor(endpoint: string, transport: EndpointTransport): FIHeaders | undefined {
+  const keys = getEnvFiAuthHeader();
+  if (hasCompleteKeyPair(keys)) guardFiKeys(endpoint, transport);
+  return keys;
+}
+function resolveFiHeaders(endpoint: string, transport: EndpointTransport, headers?: FIHeaders): FIHeaders | undefined {
   // Selection is atomic, but ignored halves remain known FI secrets (ROUND5 B2).
   seedSecrets(process.env, credentialSecrets(headers ?? {}));
-  if (headers === undefined) return getEnvFiAuthHeader();
+  if (headers === undefined) return fiEnvKeysFor(endpoint, transport);
   const items = Object.entries(headers), pair = items.filter(([name]) => /^(?:x-api-key|x-secret-key)$/i.test(name));
   if (!pair.length) return headers; // Explicit bearer/custom/empty headers remain host-owned.
   const key = pair.find(([name]) => name.toLowerCase() === "x-api-key")?.[1];
   const secret = pair.find(([name]) => name.toLowerCase() === "x-secret-key")?.[1];
   if (key?.trim() && secret?.trim()) return headers;
   if (key?.trim() || secret?.trim()) diag.warn(`Ignoring incomplete FI credentials from explicit headers: missing ${key?.trim() ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`);
-  return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...getEnvFiAuthHeader() };
+  return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...fiEnvKeysFor(endpoint, transport) };
 }
 
 /**
@@ -462,7 +471,13 @@ function resolveTarget(options: { endpoint?: unknown; url?: unknown }, grpcTrans
  */
 function headersForEndpoint(endpoint: string, grpcTransport: boolean, headers?: FIHeaders, declaredFi = false): { headers: FIHeaders | undefined; fiBound: boolean } {
   const fiBound = isFiBound(endpoint, grpcTransport, declaredFi);
-  if (fiBound) return { headers: resolveFiHeaders(headers), fiBound };
+  if (fiBound) {
+    const transport = grpcTransport ? "grpc" : "http";
+    const resolved = resolveFiHeaders(endpoint, transport, headers);
+    // Whatever pair the headers end up carrying, explicit or from the environment, is sent only where the rule allows.
+    if (hasCompleteKeyPair(resolved)) guardFiKeys(endpoint, transport);
+    return { headers: resolved, fiBound };
+  }
   seedSecrets(process.env, credentialSecrets(headers ?? {}));
   return { headers, fiBound };
 }
@@ -480,22 +495,34 @@ function getEnvGrpcCollectorEndpoint(): string {
 
 // Explicit endpoints retain their base-or-full URL behavior. Environment collector
 // endpoints are full URLs; only FI_BASE_URL and the default are base origins.
-/** The collector URL an HTTP exporter given `endpoint` dials: the endpoint itself when it is a usable URL, else the environment's or the default route. */
-export function resolveTraceEndpoint(endpoint?: string): string { return constructFullEndpoint(endpoint); }
+/** An endpoint as it may be logged: scheme, host and path only, never userinfo or a query; an unparseable value is not echoed. */
+function loggable(endpoint: string): string {
+  try { const url = new URL(endpoint); return `${url.protocol}//${url.host}${url.pathname}`; } catch { return "(not a URL)"; }
+}
+/** The collector URL an HTTP exporter given `endpoint` dials: the endpoint itself when it is a usable URL, else the environment's or the default route. It carries no userinfo. */
+export function resolveTraceEndpoint(endpoint?: string): string {
+  const resolved = constructFullEndpoint(endpoint);
+  try {
+    const url = new URL(resolved);
+    if (!url.username && !url.password) return resolved;
+    url.username = ""; url.password = "";
+    return url.toString();
+  } catch { return resolved; }
+}
 function constructFullEndpoint(customEndpoint?: string): string {
   if (customEndpoint) {
     try {
       const parsedCustom = new URL(customEndpoint);
       if (!parsedCustom.protocol || !parsedCustom.host) {
-        diag.warn(`Custom endpoint '${customEndpoint}' is missing protocol or host. Falling back to environment or default.`);
+        diag.warn(`Custom endpoint '${loggable(customEndpoint)}' is missing protocol or host. Falling back to environment or default.`);
       } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
-        diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
+        diag.warn(`Using custom endpoint as full URL: ${loggable(customEndpoint)}`);
         return customEndpoint;
       } else {
         return `${parsedCustom.protocol}//${parsedCustom.host}${FI_COLLECTOR_PATH}`;
       }
     } catch (e) {
-      diag.warn(`Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
+      diag.warn(`Custom endpoint '${loggable(customEndpoint)}' is not a valid URL. Falling back to environment or default.`);
     }
   }
 
@@ -522,10 +549,6 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders } = {}) {
     const url = constructFullEndpoint(resolveTarget(options, false));
     const { headers, fiBound } = headersForEndpoint(url, false, options.headers, isFiRouteDeclared(options));
-    // Keys go to a Future AGI host over TLS only.
-    if (fiBound && hasCompleteKeyPair(headers) && isFiEndpoint(url, "http") && endpointTarget(url, "http")?.origin.startsWith("http:")) {
-      throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
-    }
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);
@@ -926,9 +949,15 @@ async function checkCustomEvalConfigExists(
   }
   const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_CONFIG_CHECK_PATH}`;
 
+  let keys: FIHeaders | undefined;
+  try { keys = fiEnvKeysFor(url, "http"); }
+  catch {
+    diag.warn("checkCustomEvalConfigExists: skipped: Future AGI keys are sent only over TLS; use an https:// Future AGI base URL.");
+    return false;
+  }
   const headers: FIHeaders = {
     "Content-Type": "application/json",
-    ...(getEnvFiAuthHeader() || {}),
+    ...(keys || {}),
   };
 
   const payload = {
@@ -988,9 +1017,15 @@ export async function checkCustomEvalTemplateExists(
   }
   const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH}`;
 
+  let keys: FIHeaders | undefined;
+  try { keys = fiEnvKeysFor(url, "http"); }
+  catch {
+    diag.warn("checkCustomEvalTemplateExists: skipped: Future AGI keys are sent only over TLS; use an https:// Future AGI base URL.");
+    return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+  }
   const headers: FIHeaders = {
     "Content-Type": "application/json",
-    ...(getEnvFiAuthHeader() || {}),
+    ...(keys || {}),
   };
 
   const payload = {

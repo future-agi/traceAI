@@ -23,7 +23,7 @@ const PINNED: Record<string, "reader" | "guard" | "attach" | "names"> = {
 };
 
 const SRC = join(__dirname, "..");
-const TOKEN = /FI_API_KEY|FI_SECRET_KEY|x-api-key|x-secret-key|getEnvFiAuthHeader/i;
+const TOKEN = /FI_API_KEY|FI_SECRET_KEY|x-api-key|x-secret-key|getEnvFiAuthHeader|fiEnvKeysFor/i;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
