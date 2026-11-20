@@ -88,6 +88,20 @@ def test_worker_context_coexists_with_native_wrapper_and_restores(
     assert observed == [("request-0", "0"), ("request-1", "1")]
 
 
+# CrewAI's event bus lazily starts a process-lifetime handler pool and loop thread the
+# first time any event is emitted, which can land inside a test's thread snapshot window.
+# They never exit by design, so they are not Task workers and must not be joined.
+EVENT_BUS_THREAD_PREFIXES = ("CrewAISyncHandler", "CrewAIEventsLoop")
+
+
+def task_worker_threads(before_threads):
+    return {
+        thread
+        for thread in set(threading.enumerate()) - before_threads
+        if not thread.name.startswith(EVENT_BUS_THREAD_PREFIXES)
+    }
+
+
 @pytest.mark.parametrize("outcome", ["error", "cancel"])
 def test_worker_error_and_cancellation_preserve_native_behavior(
     provider_composition, monkeypatch, outcome
@@ -130,7 +144,7 @@ def test_worker_error_and_cancellation_preserve_native_behavior(
                 state["release"].set()
                 # Join actual native workers, not just the Future: cancellation
                 # can finish the Future while HTTP and Task spans remain active.
-                for thread in set(threading.enumerate()) - before_threads:
+                for thread in task_worker_threads(before_threads):
                     thread.join(timeout=10)
                     assert not thread.is_alive()
             if outcome == "error":

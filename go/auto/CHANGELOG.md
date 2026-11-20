@@ -2,6 +2,13 @@
 
 Release history of `github.com/future-agi/traceAI/go/auto`. Each version is published as the tag `go/auto/v<version>`.
 
+## Unreleased
+
+### Added
+
+- `auto.Attach(name)` lets a dedicated module's blank-import package send its spans through the agent's route, at the application's global SDK provider or the agent's private one. The module is reported as `auto` instead of `manual` while the agent is active or armed, follows `FI_INSTRUMENTATIONS` and `OTEL_SDK_DISABLED` without activating the agent when it is not allowed, applies the wire rules (structural capture, hidden image references, every `FI_HIDE_*` switch) to the span name, attributes, events, links and status of the copy the application's own provider exports. Known credentials are replaced in that copy as the span ends (its events and links are added then, so links given at span start are added when the span ends and a sampler does not see them at start) and, in the copy sent to Future AGI, at export. A value longer than the provider's attribute value-length limit is replaced whole and then cut, on both copies, so a secret learned after the write cannot leave a fragment at the cut. A recorded stack trace is cut to 2 048 bytes after the replacement. The copy sent to Future AGI keeps exactly the events and links the provider's limits keep (the oldest are dropped past the count limits, a link the SDK refuses is not counted, and what the SDK keeps of an event's or a link's attributes, the first ones up to the per-event and per-link limit, is what is sent; a link the SDK refuses after the privacy switches have removed its attributes is not counted either), and the record held while the span is open is cut by the same count limits and attribute limits as it grows. Events and links added while the span is ending are ignored on both copies. This covers what a module writes through the span it reads back from the context, a rename and a late link. The module never replaces `http.DefaultTransport`, and can wait for its background spans for up to half of the shutdown budget. `go/eino/auto` uses it. No dependency was added.
+- The `FI_HIDE_*` rules cover a retriever's query (`gen_ai.retrieval.query`, with the input switches) and retrieved document content and metadata (`retrieval.documents.N.document.content` and `.document.metadata*`, with the output switches); they are replaced by `__REDACTED__`.
+
 ## [0.2.0] - 2026-11-18
 
 ### Added

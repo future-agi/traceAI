@@ -11,3 +11,9 @@ by the release process.
 
 ### Changed
 - Known secrets that overlap one another, in any number and at any overlap (a shared edge of any length, a secret inside another, chains of three or more), are replaced as a whole in the copy sent to Future AGI at export and in a span captured after they were known; a value that would need more matching work than the bounded limit is replaced entirely. Values registered as secret after a span has ended are replaced in the copy sent to Future AGI; the application's own exporters receive spans as they were when they ended. A RubyLLM span that is still open when a secret is learned has its values replaced again when it ends, so both copies are clean.
+- Forwarding through the application's OpenTelemetry SDK is tested on `opentelemetry-sdk` 1.10 and later (the lock pins 1.10.0) with the locked `opentelemetry-api` 1.8 (CI runs the lock; API 1.11 is not part of the CI run). Spans from SDK 1.3 through 1.9 are forwarded too, with a local parent because their span data does not report whether the parent is remote.
+- At startup the agent runs a one-time probe of its media bookkeeping hooks on a throwaway span of the SDK in use. When the probe cannot verify them, the spans the agent exports (AI and server spans, and every span sent to an exporter you pass to the agent) are still forwarded but keep only identity, timing and usage metadata (content, events and links are not exported) and one line says so; SDK 1.3 and 1.4 are such SDKs.
+
+### Fixed
+- Span events and links are copied whether the SDK and API define them as structs or as plain objects, with the same masking.
+- Forwarding to an application SDK exporter no longer drops a batch when the SDK's span data has a member the agent does not know; that member is left empty.

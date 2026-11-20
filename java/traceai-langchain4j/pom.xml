@@ -27,6 +27,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- LangChain4j AiServices and DefaultToolExecutor (provided - user brings their own) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>${langchain4j.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

@@ -2,7 +2,11 @@
 require_relative 'test_helper'
 require 'tempfile'
 
+require_relative '../lib/traceai/auto/agent'
+require_relative '../lib/traceai/auto/media_admission'
+
 class SamplerTest < Minitest::Test
+  include SkipWhenMediaHooksUnproven
   include ChildHelper
 
   def setup
@@ -299,6 +303,7 @@ class SamplerTest < Minitest::Test
   end
 
   def test_non_wire_owned_spans_protect_ratio_at_admission_and_after_setters
+    skip 'media admission hooks are unproven on this SDK' unless TraceAI::Auto::MediaAdmission.verified?
     [1, 3].each do |limit|
       code = <<~RUBY
         require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
@@ -440,6 +445,7 @@ class SamplerTest < Minitest::Test
   end
 
   def test_ratio_admission_preserves_native_ai_filtering_and_coverage
+    skip 'media admission hooks are unproven on this SDK' unless TraceAI::Auto::MediaAdmission.verified?
     code = <<~'RUBY'
       require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
       OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }
@@ -466,6 +472,7 @@ class SamplerTest < Minitest::Test
   end
 
   def test_ratio_restoration_keeps_original_media_admission_evidence
+    skip 'media admission hooks are unproven on this SDK' unless TraceAI::Auto::MediaAdmission.verified?
     code = <<~'RUBY'
       require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'json'
       OpenTelemetry::Trace.define_singleton_method(:generate_trace_id) { ['01' * 16].pack('H*') }

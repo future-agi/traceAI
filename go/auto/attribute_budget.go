@@ -46,6 +46,21 @@ func spanLimit(provider reflect.Value, field string) int {
 	return 0
 }
 
+// spanLimitIfReadable is spanLimit for a caller that has a safe fallback for an unreadable layout: it reports whether
+// the field was read, and prints nothing.
+func spanLimitIfReadable(provider *sdktrace.TracerProvider, field string) (int, bool) {
+	if provider == nil {
+		return 0, false
+	}
+	limits := reflect.ValueOf(provider).Elem().FieldByName("spanLimits")
+	if limits.IsValid() && limits.Kind() == reflect.Struct {
+		if value := limits.FieldByName(field); value.IsValid() && value.Kind() == reflect.Int {
+			return int(value.Int()), true
+		}
+	}
+	return 0, false
+}
+
 // providerAttributeLimit is the provider's attribute count limit; an
 // unsupported layout fails closed to a zero-slot budget.
 func providerAttributeLimit(provider *sdktrace.TracerProvider) int {
