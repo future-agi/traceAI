@@ -291,8 +291,8 @@ public final class KnownSecrets {
          * Finishes text that was already cut at a capture-time cap (so the rest of it is gone): drops the
          * last {@code longest() - 1} characters, which could be the start of a secret that continued past
          * the cut, replaces known secrets in what remains and appends {@link #TRUNCATION_MARKER}.
-         * <p>The result can be longer than {@code cutText} plus the marker: a trailing partial secret becomes the
-         * placeholder, which is up to nine characters longer than a one-character partial. Use
+         * <p>The result has no fixed growth bound over {@code cutText} plus the marker: every replaced match of eight or nine
+         * characters becomes the ten-character placeholder, and the number of matches in the text is not bounded. Use
          * {@link #sealCut(String, int)} where a limit must hold.</p>
          * @param cutText the retained prefix, may be null
          * @return the replaced text ending with the marker, or null for null
@@ -358,9 +358,10 @@ public final class KnownSecrets {
             if (regions == null) {
                 return text;
             }
+            java.util.BitSet odd = backslashParity(text);
             for (int[] region : regions) {
-                region[0] = escapeStart(text, region[0]);
-                region[1] = escapeEnd(text, region[1]);
+                region[0] = escapeStart(text, region[0], odd);
+                region[1] = escapeEnd(text, region[1], odd);
             }
             regions.sort((a, b) -> Integer.compare(a[0], b[0]));
             StringBuilder out = new StringBuilder(text.length());
@@ -389,24 +390,31 @@ public final class KnownSecrets {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 
-    /** True when the backslashes that end at {@code last} are an odd number: the last one starts an escape. */
-    private static boolean oddBackslashRun(String text, int last) {
-        int run = 0;
-        for (int i = last; i >= 0 && text.charAt(i) == '\\'; i--) {
-            run++;
+    /**
+     * For each position, whether the backslashes that end there are an odd number (the last one starts an escape). Computed once per
+     * scrub, so deciding whether a boundary lies inside an escape is constant time however long a backslash run is.
+     */
+    private static java.util.BitSet backslashParity(String text) {
+        java.util.BitSet odd = new java.util.BitSet(text.length());
+        boolean current = false;
+        for (int i = 0; i < text.length(); i++) {
+            current = text.charAt(i) == '\\' && !current;
+            if (current) {
+                odd.set(i);
+            }
         }
-        return (run & 1) == 1;
+        return odd;
     }
 
     /**
      * Where the JSON escape (a backslash and its character, or a backslash, u and four hex digits) that the boundary before
      * {@code position} lies inside begins, or -1 when that boundary is not inside one.
      */
-    private static int insideEscape(String text, int position) {
+    private static int insideEscape(String text, int position, java.util.BitSet odd) {
         if (position <= 0 || position >= text.length()) {
             return -1;
         }
-        if (oddBackslashRun(text, position - 1)) {
+        if (odd.get(position - 1)) {
             return position - 1;
         }
         for (int digits = 1; digits <= 4; digits++) {
@@ -420,7 +428,7 @@ public final class KnownSecrets {
                 }
                 continue;
             }
-            if (oddBackslashRun(text, u - 1)) {
+            if (odd.get(u - 1)) {
                 return u - 1;
             }
             break;
@@ -428,20 +436,59 @@ public final class KnownSecrets {
         return -1;
     }
 
-    /** A region that would start inside an escape starts at the escape's backslash instead. */
-    private static int escapeStart(String text, int start) {
-        int begin = insideEscape(text, start);
-        return begin < 0 ? start : begin;
+    /** The code unit value of the {@code \\uXXXX} escape that begins at {@code at}, or -1 when there is none. */
+    private static int unicodeEscape(String text, int at, java.util.BitSet odd) {
+        if (at < 0 || at + 6 > text.length() || text.charAt(at) != '\\' || text.charAt(at + 1) != 'u' || !odd.get(at)) {
+            return -1;
+        }
+        int value = 0;
+        for (int i = at + 2; i < at + 6; i++) {
+            int digit = Character.digit(text.charAt(i), 16);
+            if (digit < 0) {
+                return -1;
+            }
+            value = value * 16 + digit;
+        }
+        return value;
     }
 
-    /** A region that would end inside an escape ends after the escape instead. */
-    private static int escapeEnd(String text, int end) {
-        int begin = insideEscape(text, end);
-        if (begin < 0) {
+    /** A region that would start inside an escape starts at the escape's backslash instead; an escaped surrogate pair is one unit. */
+    private static int escapeStart(String text, int start, java.util.BitSet odd) {
+        int begin = insideEscape(text, start, odd);
+        int at = begin < 0 ? start : begin;
+        // A region starting at a low-surrogate escape right after its high-surrogate escape takes the high one too.
+        int low = unicodeEscape(text, at, odd);
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+            int high = unicodeEscape(text, at - 6, odd);
+            if (high >= 0xD800 && high <= 0xDBFF) {
+                return at - 6;
+            }
+        }
+        return at;
+    }
+
+    /**
+     * A region that would end inside an escape ends after the escape instead, and one that ends right after a high-surrogate escape also
+     * takes the low-surrogate escape that follows. A region that ends where a truncation marker begins ends there: its last backslash
+     * belongs to the secret, not to an escape that reaches into the marker.
+     */
+    private static int escapeEnd(String text, int end, java.util.BitSet odd) {
+        if (text.startsWith(TRUNCATION_MARKER, end)) {
             return end;
         }
-        int after = text.charAt(begin + 1) == 'u' ? begin + 6 : begin + 2;
-        return Math.min(text.length(), after);
+        int begin = insideEscape(text, end, odd);
+        int after = end;
+        if (begin >= 0) {
+            after = Math.min(text.length(), text.charAt(begin + 1) == 'u' ? begin + 6 : begin + 2);
+        }
+        int high = unicodeEscape(text, after - 6, odd);
+        if (high >= 0xD800 && high <= 0xDBFF) {
+            int low = unicodeEscape(text, after, odd);
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                return after + 6;
+            }
+        }
+        return after;
     }
 
     /** KMP keeps matching linear for long, repeated-prefix credentials. */
