@@ -14,21 +14,25 @@ import java.util.*;
 final class OtlpJsonExporter implements SpanExporter {
     private final AutoConfig config;
     private volatile HttpClient client;
+    private final java.util.concurrent.ExecutorService executor = KeyTransport.newExecutor();
+    private final KeyTransport.Sends sends = new KeyTransport.Sends();
+    private final Duration waitLimit;
     volatile String lastExport = "not_tested (no startup network request)";
     OtlpJsonExporter(AutoConfig config) { this(config, Duration.ofSeconds(5)); }
     OtlpJsonExporter(AutoConfig config, Duration waitLimit) {
-        this.config = config;
+        this.config = config; this.waitLimit = waitLimit;
         config.credentialValues.forEach(KnownSecrets.PROCESS::register);
     }
     @Override public CompletableResultCode export(Collection<SpanData> spans) {
         if (spans.isEmpty()) return CompletableResultCode.ofSuccess();
+        // A failed batch is dropped: never retried, never sent to a different target. After shutdown nothing is sent.
+        if (!sends.begin()) { lastExport = "refused (shut down)"; return CompletableResultCode.ofFailure(); }
         try {
+            config.checkKeyTransport();
+            KeyTransport.Target target = KeyTransport.check(config.get("FI_BASE_URL"), config.credentials(), config.insecureSettings(), false);
             List<Object> resources = new ArrayList<>();
             for (SpanData span : spans) resources.add(serialize(span));
-            String optIn = config.get(KeyTransport.ALLOW_INSECURE_SETTING);
-            KeyTransport.Target target = KeyTransport.check(config.get("FI_BASE_URL"), config.credentials(),
-                optIn == null ? Map.of() : Map.of(KeyTransport.ALLOW_INSECURE_SETTING, optIn), false);
-            if (client == null) client = KeyTransport.client(target, Duration.ofSeconds(2));
+            if (client == null) client = KeyTransport.client(target, Duration.ofSeconds(2), executor);
             HttpRequest request = HttpRequest.newBuilder(target.endpoint("/tracer/v1/traces")).timeout(Duration.ofSeconds(2))
                 .header("Content-Type", "application/json").header("X-Api-Key", config.get("FI_API_KEY"))
                 .header("X-Secret-Key", config.get("FI_SECRET_KEY")).header("fi-project-name", projectHeader(config.get("FI_PROJECT_NAME")))
@@ -43,6 +47,7 @@ final class OtlpJsonExporter implements SpanExporter {
             TraceAIAuto.warn("Collector export refused: keys are sent only to a permitted target");
             return CompletableResultCode.ofFailure();
         } catch (Throwable ignored) { lastExport = "unreachable"; }
+        finally { sends.end(); }
         TraceAIAuto.warn("Collector export failed; application requests are unaffected");
         return CompletableResultCode.ofFailure();
     }
@@ -124,6 +129,17 @@ final class OtlpJsonExporter implements SpanExporter {
         if (value instanceof List<?> list) return Map.of("arrayValue", Map.of("values", list.stream().map(OtlpJsonExporter::any).toList()));
         return Map.of("stringValue", value instanceof String ? value : value == null ? "null" : value.getClass().getName());
     }
-    @Override public CompletableResultCode flush() { return CompletableResultCode.ofSuccess(); }
-    @Override public CompletableResultCode shutdown() { return CompletableResultCode.ofSuccess(); }
+    /** Succeeds only when no send is in flight after the wait limit and the exporter is still open. */
+    @Override public CompletableResultCode flush() {
+        if (sends.closed()) return CompletableResultCode.ofFailure();
+        return sends.awaitIdle(waitLimit) ? CompletableResultCode.ofSuccess() : CompletableResultCode.ofFailure();
+    }
+    /** Refuses further exports, waits for a send in flight up to the wait limit (failure when one still runs), then releases the client. */
+    @Override public CompletableResultCode shutdown() {
+        sends.close();
+        boolean idle = sends.awaitIdle(waitLimit);
+        HttpClient current = client;
+        if (current != null) KeyTransport.release(current, executor); else executor.shutdownNow();
+        return idle ? CompletableResultCode.ofSuccess() : CompletableResultCode.ofFailure();
+    }
 }

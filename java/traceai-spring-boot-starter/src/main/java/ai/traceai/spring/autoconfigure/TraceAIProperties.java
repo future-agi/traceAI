@@ -14,6 +14,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   project-name: my-spring-app
  *   hide-inputs: false
  *   hide-outputs: false
+ *   allow-insecure-http: false
+ *   fail-on-refused-transport: true
  * </pre>
  */
 @ConfigurationProperties(prefix = "traceai")
@@ -28,6 +30,19 @@ public class TraceAIProperties {
      * The base URL for the TraceAI backend.
      */
     private String baseUrl;
+
+    /**
+     * Allow plaintext http:// export to a host that is neither literal loopback nor a Future AGI host. The explicit form of
+     * FI_ALLOW_INSECURE_HTTP=1: it never applies to a Future AGI host, and a plaintext send is never proxied.
+     */
+    private boolean allowInsecureHttp = false;
+
+    /**
+     * What a refused key transport (a target or ambient OTLP headers that may not receive the keys) does while the context starts:
+     * true (the default) fails the startup with a value-free error, false logs one value-free warning and disables export. Either way
+     * nothing is sent to a refused target.
+     */
+    private boolean failOnRefusedTransport = true;
 
     /**
      * The API key for authentication.
@@ -190,4 +205,9 @@ public class TraceAIProperties {
     public void setExportIntervalMs(long exportIntervalMs) {
         this.exportIntervalMs = exportIntervalMs;
     }
+
+    public boolean isAllowInsecureHttp() { return allowInsecureHttp; }
+    public void setAllowInsecureHttp(boolean allowInsecureHttp) { this.allowInsecureHttp = allowInsecureHttp; }
+    public boolean isFailOnRefusedTransport() { return failOnRefusedTransport; }
+    public void setFailOnRefusedTransport(boolean failOnRefusedTransport) { this.failOnRefusedTransport = failOnRefusedTransport; }
 }

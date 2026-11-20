@@ -258,7 +258,11 @@ traceai:
   hide-outputs: false
   hide-input-messages: false
   hide-output-messages: false
+  allow-insecure-http: false      # the explicit form of FI_ALLOW_INSECURE_HTTP=1
+  fail-on-refused-transport: true # false: log one value-free warning and disable export instead of failing the startup
 ```
+
+`allow-insecure-http` lets plaintext `http://` go to a host that is neither literal loopback nor a Future AGI host; it never applies to a Future AGI host and a plaintext send is never proxied. When the target, or `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, may not receive the keys, the starter fails the application context with a `KeyTransport.Refused` error whose message names no value (and `FI_ALLOW_INSECURE_HTTP` when plaintext is the reason). With `fail-on-refused-transport: false` the context starts, one value-free warning is logged and nothing is exported; the property only chooses how a refusal shows, a refused target is never sent to.
 
 ## Instrumentation modules
 

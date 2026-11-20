@@ -81,6 +81,8 @@ public final class TraceAI {
                 boolean complete = !config.getApiKey().isBlank() && config.getSecretKey() != null && !config.getSecretKey().isBlank();
                 if (complete) {
                     exportTarget = KeyTransport.check(config.getBaseUrl(), true, env, config.isAllowInsecureHttp());
+                    KeyTransport.checkAmbientHeaders(env, java.util.List.of(config.getApiKey(), config.getSecretKey(),
+                        String.valueOf(env.get("FI_API_KEY")), String.valueOf(env.get("FI_SECRET_KEY"))));
                 } else {
                     logger.warn("TraceAI export is off: both the API key and the secret key are required");
                 }
@@ -119,6 +121,8 @@ public final class TraceAI {
 
             // Add OTLP exporter if configured
             if (exportTarget != null) {
+                // The seam for a wrapper in front of the keyed exporter (for example one that replaces known secrets): whatever wraps it
+                // must be what the batch processor receives, so the replacement runs before the keyed send.
                 var otlpExporter = new KeyedOtlpSpanExporter(exportTarget, config.getApiKey(), config.getSecretKey(),
                     config.getProjectName() != null ? config.getProjectName() : "");
 

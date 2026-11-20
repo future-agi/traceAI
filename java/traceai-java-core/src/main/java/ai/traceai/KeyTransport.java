@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -85,21 +86,25 @@ public final class KeyTransport {
         }
         String authority = url.substring(start, end);
         if (authority.isEmpty()) throw new Refused("the target has an empty authority");
-        for (int i = 0; i < authority.length(); i++) {
-            char c = authority.charAt(i);
-            if (c == '@' || c == '\\' || c == '%' || c <= ' ' || c >= 0x7f) throw new Refused("the target host is ambiguous");
-        }
         String written;
         if (authority.startsWith("[")) {
             int close = authority.indexOf(']');
             if (close < 0) throw new Refused("the target host is ambiguous");
             written = authority.substring(1, close);
+            checkBracketedHost(written);
             checkPort(authority.substring(close + 1));
         } else {
+            for (int i = 0; i < authority.length(); i++) {
+                char c = authority.charAt(i);
+                if (c == '@' || c == '\\' || c == '%' || c <= ' ' || c >= 0x7f) throw new Refused("the target host is ambiguous");
+            }
             int colon = authority.indexOf(':');
             written = colon < 0 ? authority : authority.substring(0, colon);
             checkPort(colon < 0 ? "" : authority.substring(colon));
         }
+        // After the authority an '@', a backslash or an escaped backslash can make another parser read a different host.
+        String rest = url.substring(end);
+        if (rest.indexOf('@') >= 0 || rest.indexOf('\\') >= 0 || rest.toLowerCase(Locale.ROOT).contains("%5c")) throw new Refused("the target path or query is ambiguous");
         if (written.isEmpty()) throw new Refused("the target has an empty host");
         URI parsed;
         try { parsed = new URI(url); } catch (URISyntaxException e) { throw new Refused("the target is not a valid URL"); }
@@ -125,6 +130,26 @@ public final class KeyTransport {
         return new Target(tls ? "https" : "http", host, parsed.getPort(), path, !tls);
     }
 
+    /**
+     * The inside of an IPv6 literal. A zone is written {@code %25<zone>} and is the only percent escape allowed; the written host keeps it
+     * exactly as the URL parser does. A zoned address is link-local and never loopback.
+     */
+    private static void checkBracketedHost(String inner) {
+        int percent = inner.indexOf('%');
+        String address = percent < 0 ? inner : inner.substring(0, percent);
+        if (address.isEmpty()) throw new Refused("the target host is ambiguous");
+        for (int i = 0; i < address.length(); i++) {
+            char c = address.charAt(i);
+            if (!(c == ':' || c == '.' || Character.digit(c, 16) >= 0)) throw new Refused("the target host is ambiguous");
+        }
+        if (percent < 0) return;
+        if (!inner.startsWith("%25", percent) || inner.length() == percent + 3) throw new Refused("the target host is ambiguous");
+        for (int i = percent + 3; i < inner.length(); i++) {
+            char c = inner.charAt(i);
+            if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' || c == '~')) throw new Refused("the target host is ambiguous");
+        }
+    }
+
     private static void checkPort(String rest) {
         if (rest.isEmpty()) return;
         if (rest.charAt(0) != ':' || rest.length() > 6) throw new Refused("the target port is invalid");
@@ -132,10 +157,55 @@ public final class KeyTransport {
     }
 
     /** A client for key-carrying sends: never follows redirects, and uses no proxy for plaintext. */
-    public static HttpClient client(Target target, Duration connectTimeout) {
+    public static HttpClient client(Target target, Duration connectTimeout) { return client(target, connectTimeout, null); }
+
+    /** As {@link #client(Target, Duration)}, running on {@code executor} (which the caller shuts down with the exporter), when given. */
+    public static HttpClient client(Target target, Duration connectTimeout, java.util.concurrent.Executor executor) {
         HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(connectTimeout).followRedirects(HttpClient.Redirect.NEVER);
         if (target.plaintext()) builder.proxy(NO_PROXY);
+        if (executor != null) builder.executor(executor);
         return builder.build();
+    }
+
+    /** A daemon executor for one exporter's client. */
+    public static java.util.concurrent.ExecutorService newExecutor() {
+        java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger();
+        return java.util.concurrent.Executors.newCachedThreadPool(runnable -> {
+            Thread thread = new Thread(runnable, "traceai-export-" + count.incrementAndGet()); thread.setDaemon(true); return thread;
+        });
+    }
+
+    /** Releases a client and its executor: the JDK's own shutdown where the client has one (JDK 21), and the executor always. */
+    public static void release(HttpClient client, java.util.concurrent.ExecutorService executor) {
+        try { HttpClient.class.getMethod("shutdownNow").invoke(client); } catch (ReflectiveOperationException | RuntimeException unavailable) { /* JDK 17 */ }
+        if (executor != null) executor.shutdownNow();
+    }
+
+    /**
+     * The sends of one exporter that are in flight. Flush and shutdown wait for them, up to a limit, and report failure when one is
+     * still running; after {@link #close()} no send begins.
+     */
+    public static final class Sends {
+        private final Object lock = new Object();
+        private int inFlight;
+        private boolean closed;
+        /** Starts a send; false (send nothing) once closed. */
+        public boolean begin() { synchronized (lock) { if (closed) return false; inFlight++; return true; } }
+        public void end() { synchronized (lock) { inFlight--; lock.notifyAll(); } }
+        /** Waits until no send is in flight; false when one still is after {@code limit}. */
+        public boolean awaitIdle(Duration limit) {
+            long deadline = System.nanoTime() + limit.toNanos();
+            synchronized (lock) {
+                while (inFlight > 0) {
+                    long left = deadline - System.nanoTime();
+                    if (left <= 0) return false;
+                    try { TimeUnit.NANOSECONDS.timedWait(lock, left); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return false; }
+                }
+                return true;
+            }
+        }
+        public void close() { synchronized (lock) { closed = true; } }
+        public boolean closed() { synchronized (lock) { return closed; } }
     }
 
     /** A 3xx answer to a key-carrying request is a refusal; nothing is sent to the redirect target. */
@@ -145,9 +215,58 @@ public final class KeyTransport {
 
     /**
      * Refuses a configuration whose ambient OTLP headers (OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_TRACES_HEADERS in
-     * {@code env}) name a Future AGI key header or carry a Future AGI key value ({@code fiValues}).
+     * {@code env}) name a Future AGI key header (X-Api-Key, X-Secret-Key: any case, trimmed, percent-decoded, in any comma-separated
+     * pair) or carry a Future AGI key value ({@code fiValues}, as written or percent-decoded). Another vendor's values and other
+     * credential variables are not judged. A variable that cannot be parsed fails closed only when {@code fiValues} is not empty.
+     * The message names no value.
      */
-    public static void checkAmbientHeaders(Map<String, String> env, Collection<String> fiValues) { }
+    public static void checkAmbientHeaders(Map<String, String> env, Collection<String> fiValues) {
+        if (env == null) return;
+        List<String> keys = new java.util.ArrayList<>();
+        if (fiValues != null) for (String value : fiValues) if (value != null && value.trim().length() >= 8) { keys.add(value); keys.add(value.trim()); }
+        boolean configured = fiValues != null && !fiValues.isEmpty();
+        for (String variable : new String[] {"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"}) {
+            String raw = env.get(variable);
+            if (raw == null || raw.isBlank()) continue;
+            boolean malformed = false;
+            for (String pair : raw.split(",", -1)) {
+                String trimmed = pair.trim();
+                int equals = trimmed.indexOf('=');
+                String name = equals < 0 ? "" : trimmed.substring(0, equals).trim();
+                String decoded = decode(name);
+                if (equals < 0 || name.isEmpty() || decoded == null) { malformed = true; continue; }
+                String lower = decoded.trim().toLowerCase(Locale.ROOT);
+                if (lower.equals("x-api-key") || lower.equals("x-secret-key") || name.toLowerCase(Locale.ROOT).equals("x-api-key") || name.toLowerCase(Locale.ROOT).equals("x-secret-key"))
+                    throw new Refused("ambient OTLP headers name a Future AGI key header");
+                if (decode(trimmed.substring(equals + 1).trim()) == null) malformed = true;
+            }
+            String whole = decodeLenient(raw);
+            for (String key : keys) {
+                if (raw.contains(key) || whole.contains(key)) throw new Refused("ambient OTLP headers carry a Future AGI key");
+            }
+            if (malformed && configured) throw new Refused("ambient OTLP headers cannot be read while Future AGI keys are configured");
+        }
+    }
+
+    /** Percent-decodes (UTF-8); null when an escape is malformed. */
+    private static String decode(String text) {
+        try { return java.net.URLDecoder.decode(text.replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8); }
+        catch (IllegalArgumentException malformed) { return null; }
+    }
+
+    /** Percent-decodes what can be decoded and keeps a malformed escape as written. */
+    private static String decodeLenient(String text) {
+        String decoded = decode(text);
+        if (decoded != null) return decoded;
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '%' && i + 2 < text.length() + 0 && Character.digit(text.charAt(i + 1), 16) >= 0 && Character.digit(text.charAt(i + 2), 16) >= 0) {
+                out.append((char) Integer.parseInt(text.substring(i + 1, i + 3), 16)); i += 2;
+            } else out.append(c);
+        }
+        return out.toString();
+    }
 
     /** Test hook: allows the one-per-process warning to be observed again. */
     public static void resetWarningForTest() { WARNED.set(false); }

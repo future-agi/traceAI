@@ -26,6 +26,9 @@ final class KeyedOtlpSpanExporter implements SpanExporter {
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private final URI endpoint;
     private final HttpClient client;
+    private final java.util.concurrent.ExecutorService executor = KeyTransport.newExecutor();
+    private final KeyTransport.Sends sends = new KeyTransport.Sends();
+    private final Duration waitLimit;
     private final Map<String, String> headers = new LinkedHashMap<>();
 
     KeyedOtlpSpanExporter(KeyTransport.Target target, String apiKey, String secretKey, String projectName) {
@@ -34,7 +37,8 @@ final class KeyedOtlpSpanExporter implements SpanExporter {
 
     KeyedOtlpSpanExporter(KeyTransport.Target target, String apiKey, String secretKey, String projectName, Duration waitLimit) {
         this.endpoint = target.endpoint("/tracer/v1/traces");
-        this.client = KeyTransport.client(target, TIMEOUT);
+        this.waitLimit = waitLimit;
+        this.client = KeyTransport.client(target, TIMEOUT, executor);
         headers.put("X-Api-Key", apiKey);
         headers.put("X-Secret-Key", secretKey);
         headers.put("fi-project-name", projectName);
@@ -42,6 +46,8 @@ final class KeyedOtlpSpanExporter implements SpanExporter {
 
     @Override public CompletableResultCode export(Collection<SpanData> spans) {
         CompletableResultCode result = new CompletableResultCode();
+        // A failed batch is dropped: it is never retried, and never sent to a different target.
+        if (!sends.begin()) { result.fail(); return result; }
         try {
             ByteArrayOutputStream body = new ByteArrayOutputStream();
             TraceRequestMarshaler.create(spans).writeBinaryTo(body);
@@ -49,19 +55,34 @@ final class KeyedOtlpSpanExporter implements SpanExporter {
                 .header("Content-Type", "application/x-protobuf").POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()));
             headers.forEach(request::header);
             client.sendAsync(request.build(), HttpResponse.BodyHandlers.discarding()).whenComplete((response, failure) -> {
-                if (failure != null) { logger.warn("TraceAI export failed"); result.fail(); return; }
-                int status = response.statusCode();
-                if (status >= 300 && status < 400) { logger.warn("TraceAI export refused a redirect"); result.fail(); }
-                else if (status >= 200 && status < 300) result.succeed();
-                else { logger.warn("TraceAI export rejected (HTTP {})", status); result.fail(); }
+                try {
+                    if (failure != null) { logger.warn("TraceAI export failed"); result.fail(); return; }
+                    int status = response.statusCode();
+                    try { KeyTransport.checkStatus(status); }
+                    catch (KeyTransport.Refused redirect) { logger.warn("TraceAI export refused a redirect"); result.fail(); return; }
+                    if (status >= 200 && status < 300) result.succeed();
+                    else { logger.warn("TraceAI export rejected (HTTP {})", status); result.fail(); }
+                } finally { sends.end(); }
             });
         } catch (Throwable failure) {
+            sends.end();
             logger.warn("TraceAI export failed");
             result.fail();
         }
         return result;
     }
 
-    @Override public CompletableResultCode flush() { return CompletableResultCode.ofSuccess(); }
-    @Override public CompletableResultCode shutdown() { return CompletableResultCode.ofSuccess(); }
+    /** Succeeds only when no send is in flight after the wait limit, and the exporter is still open. */
+    @Override public CompletableResultCode flush() {
+        if (sends.closed()) return CompletableResultCode.ofFailure();
+        return sends.awaitIdle(waitLimit) ? CompletableResultCode.ofSuccess() : CompletableResultCode.ofFailure();
+    }
+
+    /** Refuses further exports, waits for a send in flight up to the wait limit (failure when one still runs), then releases the client. */
+    @Override public CompletableResultCode shutdown() {
+        sends.close();
+        boolean idle = sends.awaitIdle(waitLimit);
+        KeyTransport.release(client, executor);
+        return idle ? CompletableResultCode.ofSuccess() : CompletableResultCode.ofFailure();
+    }
 }

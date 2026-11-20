@@ -2,6 +2,7 @@ package ai.traceai.spring.autoconfigure;
 
 import ai.traceai.FITracer;
 import ai.traceai.TraceAI;
+import ai.traceai.KeyTransport;
 import ai.traceai.TraceConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,10 +53,28 @@ public class TraceAIAutoConfiguration {
             ? properties.getServiceName()
             : applicationName;
 
-        TraceConfig config = TraceConfig.builder()
-            .baseUrl(properties.getBaseUrl())
-            .apiKey(properties.getApiKey())
-            .secretKey(properties.getSecretKey())
+        TraceConfig config = configuration(properties, serviceName, true);
+        // Initialize TraceAI. A refused key transport throws KeyTransport.Refused, whose message names no value; the failure-mode property
+        // only chooses whether that fails the startup or disables export. A refused target is never sent to.
+        try {
+            TraceAI.init(config);
+        } catch (KeyTransport.Refused refused) {
+            if (properties.isFailOnRefusedTransport()) throw refused;
+            logger.warn("TraceAI export is disabled: {}", refused.getMessage());
+            TraceAI.init(configuration(properties, serviceName, false));
+        }
+
+        logger.info("TraceAI initialized successfully (version {})", TraceAI.getVersion());
+
+        return TraceAI.getTracer();
+    }
+
+    private static TraceConfig configuration(TraceAIProperties properties, String serviceName, boolean export) {
+        return TraceConfig.builder()
+            .baseUrl(export ? properties.getBaseUrl() : null)
+            .apiKey(export ? properties.getApiKey() : null)
+            .secretKey(export ? properties.getSecretKey() : null)
+            .allowInsecureHttp(properties.isAllowInsecureHttp())
             .projectName(properties.getProjectName())
             .serviceName(serviceName)
             .hideInputs(properties.isHideInputs())
@@ -66,12 +85,5 @@ public class TraceAIAutoConfiguration {
             .batchSize(properties.getBatchSize())
             .exportIntervalMs(properties.getExportIntervalMs())
             .build();
-
-        // Initialize TraceAI
-        TraceAI.init(config);
-
-        logger.info("TraceAI initialized successfully (version {})", TraceAI.getVersion());
-
-        return TraceAI.getTracer();
     }
 }

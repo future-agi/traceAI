@@ -107,6 +107,15 @@ public final class TraceAIAuto {
                 initialized = false;
                 STATUS.put("wire", "disabled (missing credentials)"); warn("FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is off"); return;
             }
+            // The target and the ambient OTLP headers are judged once, here, before any exporter or instrumentation exists: a refusal logs one
+            // value-free warning and installs nothing. (The export path judges them again before each send.)
+            try { config.checkKeyTransport(); }
+            catch (ai.traceai.KeyTransport.Refused refused) {
+                initialized = false;
+                STATUS.put("wire", "disabled (key transport refused)");
+                warn("Keys are sent only to a permitted target and without ambient OTLP key headers; auto-instrumentation is off");
+                return;
+            }
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
             Resource resource = resource(config);
