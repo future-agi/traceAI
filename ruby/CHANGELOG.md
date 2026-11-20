@@ -10,8 +10,8 @@ by the release process.
 - Raw input and raw output (`raw.input`, `raw.output` and their children) are not recorded while any content hide setting is on, and a tool call's name and id stay visible while its arguments and result follow the input and output hide settings.
 
 ### Changed
-- Forwarding through the application's OpenTelemetry SDK is tested on `opentelemetry-sdk` 1.10 and later (the lock pins 1.10.0) with `opentelemetry-api` 1.8 and 1.11. Spans from SDK 1.3 through 1.9 are forwarded too, with a local parent because their span data does not report whether the parent is remote.
-- At startup the agent runs its media bookkeeping hooks once against the SDK in use. When they do not behave as expected (SDK 1.3 and 1.4 do not), spans are still forwarded, media is omitted from them, and one line is printed.
+- Forwarding through the application's OpenTelemetry SDK is tested on `opentelemetry-sdk` 1.10 and later (the lock pins 1.10.0) with the locked `opentelemetry-api` 1.8 (CI runs the lock; API 1.11 is not part of the CI run). Spans from SDK 1.3 through 1.9 are forwarded too, with a local parent because their span data does not report whether the parent is remote.
+- At startup the agent runs a one-time probe of its media bookkeeping hooks on a throwaway span of the SDK in use. When the probe cannot verify them, AI spans are still forwarded but keep only identity, timing and usage metadata (content, events and links are not exported) and one line says so; SDK 1.3 and 1.4 are such SDKs.
 
 ### Fixed
 - Span events and links are copied whether the SDK and API define them as structs or as plain objects, with the same masking.
