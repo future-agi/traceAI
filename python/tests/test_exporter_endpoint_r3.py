@@ -1,9 +1,22 @@
 """Endpoint binding regressions; no real credentials or external collector calls."""
 import inspect
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from fi_instrumentation import otel
+
+
+def _emulate_parent(exporter, captured):
+    """Set what the real OpenTelemetry parent sets: the resolved endpoint and a header layout.
+
+    The tests stub the parent's __init__ to capture its arguments; the subclass then checks
+    the resolved endpoint and pins headers, so the stub mirrors the parent's attributes.
+    """
+    headers = {str(k).lower(): v for k, v in (captured.get("headers") or {}).items()}
+    exporter._endpoint = captured.get("endpoint")
+    exporter._client = SimpleNamespace(_headers=dict(headers))
+    exporter._headers = tuple(headers.items()) or None
 
 
 @pytest.mark.parametrize("transport", ["grpc", "http"])
@@ -24,6 +37,7 @@ def test_endpoint_precedence_and_headers(transport, form, monkeypatch):
     init_signature = inspect.signature(base.__init__)
     def capture(self, *args, **kwargs):
         captured.update(signature.bind_partial(*args, **kwargs).arguments)
+        _emulate_parent(self, captured)
     capture.__signature__ = init_signature
     with patch.object(base, "__init__", capture):
         cls(*args, **kwargs)
@@ -44,6 +58,7 @@ def test_default_endpoint_and_fi_headers(transport, monkeypatch):
     init_signature = inspect.signature(base.__init__)
     def capture(self, *args, **kwargs):
         captured.update(signature.bind_partial(*args, **kwargs).arguments)
+        _emulate_parent(self, captured)
     capture.__signature__ = init_signature
     with patch.object(base, "__init__", capture):
         cls(headers={"X-Custom": "value"})
@@ -58,6 +73,7 @@ def test_positional_http_endpoint_and_headers_with_other_options(monkeypatch):
     init_signature = inspect.signature(otel._HTTPSpanExporter.__init__)
     def capture(self, *args, **kwargs):
         captured.update(signature.bind_partial(*args, **kwargs).arguments)
+        _emulate_parent(self, captured)
     capture.__signature__ = init_signature
     with patch.object(otel._HTTPSpanExporter, "__init__", capture):
         otel.HTTPSpanExporter("http://local.invalid/path", "ca.pem", "key.pem", "cert.pem", {"Authorization": "synthetic"}, 4)
@@ -73,6 +89,7 @@ def test_grpc_transport_options_and_positional_headers(monkeypatch):
     init_signature = inspect.signature(otel._GRPCSpanExporter.__init__)
     def capture(self, *args, **kwargs):
         captured.update(signature.bind_partial(*args, **kwargs).arguments)
+        _emulate_parent(self, captured)
     capture.__signature__ = init_signature
     sentinel = object()
     opts = {"channel_options": (("grpc.test", "value"),)} if "channel_options" in inspect.signature(otel._GRPCSpanExporter).parameters else {}
@@ -94,12 +111,16 @@ def test_binding_errors_are_preserved():
 
 def _captured_headers(transport, monkeypatch, env, headers):
     monkeypatch.setattr(otel, "get_env_fi_auth_header", lambda: env)
+    # These cases are about credentials sent to Future AGI, so the endpoint is the Future AGI one.
+    monkeypatch.setenv("FI_BASE_URL", "http://local.invalid:4317")
+    monkeypatch.setenv("FI_GRPC_URL", "http://local.invalid:4317")
     cls, base = (otel.GRPCSpanExporter, otel._GRPCSpanExporter) if transport == "grpc" else (otel.HTTPSpanExporter, otel._HTTPSpanExporter)
     captured = {}
     signature = inspect.signature(base)
     init_signature = inspect.signature(base.__init__)
     def capture(self, *args, **kwargs):
         captured.update(signature.bind_partial(*args, **kwargs).arguments)
+        _emulate_parent(self, captured)
     capture.__signature__ = init_signature
     with patch.object(base, "__init__", capture):
         cls(endpoint="http://local.invalid:4317", headers=headers)
