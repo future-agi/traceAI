@@ -285,7 +285,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
       rememberAutoSpanSink(processor, supplied);
     }
     else if (options.exporter || fiCredentials) {
-      const exporter = guardedExporter(options.exporter ?? createSpanExporter({ endpoint: config.baseUrl,
+      const exporter = guardedExporter(options.exporter ?? createSpanExporter({ endpoint: config.baseUrl, fiEndpoint: true,
         headers: { "x-api-key": config.apiKey!, "x-secret-key": config.secretKey! }, verbose: false, traceConfig: config.traceConfig,
         resourceAttributes: { project_name: config.projectName, project_type: config.projectType } }), agent, options, failedCaptures);
       processor = new BatchSpanProcessor(exporter);

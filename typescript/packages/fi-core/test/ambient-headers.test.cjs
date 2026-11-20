@@ -40,6 +40,11 @@ async function grpcSink() {
   cleanup.push(() => server.forceShutdown());
   return { received, endpoint: `127.0.0.1:${port}` };
 }
+// An exporter is FI-bound by its resolved endpoint, so the sink is made the FI endpoint through the environment.
+function fiEndpoint(sink, grpcTransport) {
+  const name = grpcTransport ? 'FI_GRPC_COLLECTOR_ENDPOINT' : 'FI_BASE_URL';
+  process.env[name] = sink.endpoint; cleanup.push(() => { delete process.env[name]; });
+}
 async function exportOne(options) {
   const provider = register({ projectName: 'ambient-headers', setGlobalTracerProvider: false, batch: false, verbose: false, ...options });
   provider.getTracer('ambient-headers').startSpan('one').end();
@@ -50,8 +55,8 @@ async function exportOne(options) {
 for (const [label, env] of Object.entries(CASES)) {
   test(`HTTP exporter: ambient ${label} headers are not sent to the FI endpoint`, async () => {
     Object.assign(process.env, env); cleanup.push(() => { for (const key of Object.keys(env)) delete process.env[key]; });
-    const sink = await httpSink();
-    await exportOne({ endpoint: sink.endpoint, headers: { ...FI, 'x-caller-custom': 'caller' } });
+    const sink = await httpSink(); fiEndpoint(sink, false);
+    await exportOne({ headers: { ...FI, 'x-caller-custom': 'caller' } });
     assert.equal(sink.received.length, 1);
     const [headers] = sink.received;
     assert.equal(headers['x-api-key'], FI['x-api-key']);
@@ -61,8 +66,8 @@ for (const [label, env] of Object.entries(CASES)) {
   });
   test(`gRPC exporter: ambient ${label} headers are not sent to the FI endpoint`, async () => {
     Object.assign(process.env, env); cleanup.push(() => { for (const key of Object.keys(env)) delete process.env[key]; });
-    const sink = await grpcSink();
-    await exportOne({ endpoint: sink.endpoint, transport: Transport.GRPC, headers: { ...FI, 'x-caller-custom': 'caller' } });
+    const sink = await grpcSink(); fiEndpoint(sink, true);
+    await exportOne({ transport: Transport.GRPC, headers: { ...FI, 'x-caller-custom': 'caller' } });
     assert.equal(sink.received.length, 1);
     const [metadata] = sink.received;
     assert.deepEqual(metadata.get('x-api-key'), [FI['x-api-key']]);
@@ -87,4 +92,101 @@ test('an exporter for another collector sends no FI keys and keeps its own OTLP 
   assert.deepEqual(grpc1.received[0].get('x-api-key'), []);
   assert.deepEqual(grpc1.received[0].get('x-secret-key'), []);
   assert.deepEqual(grpc1.received[0].get('authorization'), ['Bearer SYNTHETIC-OTHER-BACKEND']);
+});
+
+test('an exporter for another collector sends the caller\'s x-api-key as given and no FI env value', async () => {
+  Object.assign(process.env, { FI_API_KEY: 'synthetic-env-key', FI_SECRET_KEY: 'synthetic-env-secret' });
+  cleanup.push(() => { for (const key of ['FI_API_KEY', 'FI_SECRET_KEY']) delete process.env[key]; });
+  const http1 = await httpSink();
+  await exportOne({ endpoint: http1.endpoint, headers: { 'x-api-key': 'own-backend-key' } });
+  assert.equal(http1.received[0]['x-api-key'], 'own-backend-key');
+  assert.equal(http1.received[0]['x-secret-key'], undefined);
+  const grpc1 = await grpcSink();
+  await exportOne({ endpoint: grpc1.endpoint, transport: Transport.GRPC, headers: { 'x-api-key': 'own-backend-key' } });
+  assert.deepEqual(grpc1.received[0].get('x-api-key'), ['own-backend-key']);
+  assert.deepEqual(grpc1.received[0].get('x-secret-key'), []);
+});
+
+// ---- A second physical copy of @opentelemetry/otlp-exporter-base ------------------------------------
+// With npm hoisting the exporter packages can carry their own copy of the exporter base class, so the
+// base class fi-core imports is not the one the exporters extend. Ambient OTLP headers must still not
+// reach the FI endpoint, through the CommonJS entry and the ESM entry alike.
+const fs = require('node:fs');
+const os = require('node:os');
+const { pathToFileURL } = require('node:url');
+const coreRoot = path.dirname(load.resolve('./package.json'));
+function packageDir(name) {
+  let dir = path.dirname(load.resolve(name));
+  while (!fs.existsSync(path.join(dir, 'package.json')) || JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).name !== name) {
+    const parent = path.dirname(dir); if (parent === dir) throw new Error(`cannot find ${name}`); dir = parent;
+  }
+  return dir;
+}
+function copyPackage(from, to) { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true, dereference: true, filter: src => !/[\\/]node_modules$/.test(src) }); }
+function duplicateInstall() {
+  const root = fs.mkdtempSync(path.join(coreRoot, '.dup-'));
+  cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nm = path.join(root, 'node_modules');
+  const coreCopy = path.join(nm, '@traceai', 'fi-core');
+  copyPackage(path.join(coreRoot, 'dist'), path.join(coreCopy, 'dist'));
+  fs.copyFileSync(path.join(coreRoot, 'package.json'), path.join(coreCopy, 'package.json'));
+  const otel = name => path.join(nm, '@opentelemetry', name);
+  const nested = (exporter, name) => path.join(otel(exporter), 'node_modules', '@opentelemetry', name);
+  for (const exporter of ['exporter-trace-otlp-http', 'exporter-trace-otlp-grpc']) {
+    copyPackage(packageDir(`@opentelemetry/${exporter}`), otel(exporter));
+    copyPackage(packageDir('@opentelemetry/otlp-exporter-base'), nested(exporter, 'otlp-exporter-base'));
+  }
+  copyPackage(packageDir('@opentelemetry/otlp-grpc-exporter-base'), nested('exporter-trace-otlp-grpc', 'otlp-grpc-exporter-base'));
+  const base = packageDir('@opentelemetry/otlp-exporter-base');
+  assert.notEqual(fs.realpathSync(nested('exporter-trace-otlp-http', 'otlp-exporter-base')), fs.realpathSync(base));
+  return path.join(nm, '@traceai', 'fi-core');
+}
+const ENTRIES = {
+  cjs: dir => require(path.join(dir, 'dist', 'src', 'index.js')),
+  esm: dir => import(pathToFileURL(path.join(dir, 'dist', 'esm', 'index.js')).href),
+};
+async function exportWith(core, options) {
+  const provider = core.register({ projectName: 'ambient-headers', setGlobalTracerProvider: false, batch: false, verbose: false, ...options });
+  provider.getTracer('ambient-headers').startSpan('one').end();
+  await provider.forceFlush();
+  await provider.shutdown();
+}
+for (const [entry, loadEntry] of Object.entries(ENTRIES)) {
+  for (const [label, env] of Object.entries(CASES)) {
+    // Either the headers are isolated correctly, or the exporter is refused: never ambient headers at the FI sink.
+    for (const transport of ['http', 'grpc']) {
+      test(`${entry} entry, second otlp-exporter-base copy, ${transport}: ambient ${label} headers do not reach the FI endpoint`, async () => {
+        Object.assign(process.env, env); cleanup.push(() => { for (const key of Object.keys(env)) delete process.env[key]; });
+        const core = await loadEntry(duplicateInstall());
+        const grpcTransport = transport === 'grpc';
+        const sink = grpcTransport ? await grpcSink() : await httpSink(); fiEndpoint(sink, grpcTransport);
+        let refused;
+        try { await exportWith(core, { transport: grpcTransport ? core.Transport.GRPC : core.Transport.HTTP, headers: FI }); } catch (error) { refused = error; }
+        if (refused) {
+          assert.match(refused.message, /^Unsupported OTLP exporter layout: /);
+          assert.doesNotMatch(refused.message, /synthetic|x-api-key|x-secret-key|authorization/i);
+          assert.equal(sink.received.length, 0);
+          return;
+        }
+        assert.equal(sink.received.length, 1);
+        const got = sink.received[0];
+        if (grpcTransport) {
+          assert.deepEqual(got.get('x-api-key'), [FI['x-api-key']]);
+          for (const name of AMBIENT) assert.deepEqual(got.get(name), [], `${name} reached the sink`);
+        } else {
+          assert.equal(got['x-api-key'], FI['x-api-key']);
+          for (const name of AMBIENT) assert.equal(got[name], undefined, `${name} reached the sink`);
+        }
+      });
+    }
+  }
+}
+test('esm entry (no duplicate): ambient headers do not reach the FI endpoint', async () => {
+  Object.assign(process.env, CASES.both); cleanup.push(() => { for (const key of Object.keys(CASES.both)) delete process.env[key]; });
+  const core = await import(pathToFileURL(path.join(coreRoot, 'dist', 'esm', 'index.js')).href);
+  const sink = await httpSink(); fiEndpoint(sink, false);
+  await exportWith(core, { headers: FI });
+  assert.equal(sink.received.length, 1);
+  for (const name of AMBIENT) assert.equal(sink.received[0][name], undefined, `${name} reached the sink`);
+  assert.equal(sink.received[0]['x-api-key'], FI['x-api-key']);
 });

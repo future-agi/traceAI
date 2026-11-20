@@ -30,7 +30,8 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); });
-beforeEach(() => { hits = 0; layout = "ok"; });
+beforeEach(() => { hits = 0; layout = "ok"; delete process.env.FI_BASE_URL; delete process.env.FI_GRPC_COLLECTOR_ENDPOINT; });
+afterEach(() => { delete process.env.FI_BASE_URL; delete process.env.FI_GRPC_COLLECTOR_ENDPOINT; });
 
 const refusal = (fn: () => unknown) => {
   let thrown: Error | undefined;
@@ -40,20 +41,40 @@ const refusal = (fn: () => unknown) => {
 };
 
 test("an HTTP exporter whose headers are not a provider function is refused", () => {
-  layout = "headers-not-a-function";
-  refusal(() => createSpanExporter({ endpoint: base, headers: FI }));
+  layout = "headers-not-a-function"; process.env.FI_BASE_URL = base;
+  refusal(() => createSpanExporter({ headers: FI }));
   expect(hits).toBe(0);
 });
 test("an HTTP exporter that adds a header we cannot account for is refused", () => {
-  layout = "unaccounted-header";
-  refusal(() => createSpanExporter({ endpoint: base, headers: FI }));
+  layout = "unaccounted-header"; process.env.FI_BASE_URL = base;
+  refusal(() => createSpanExporter({ headers: FI }));
   expect(hits).toBe(0);
 });
 test("a gRPC exporter whose metadata is not gRPC metadata is refused", () => {
-  layout = "metadata-not-metadata";
-  refusal(() => createSpanExporter({ endpoint: "127.0.0.1:1", headers: FI, transport: Transport.GRPC }));
+  layout = "metadata-not-metadata"; process.env.FI_GRPC_COLLECTOR_ENDPOINT = "127.0.0.1:1";
+  refusal(() => createSpanExporter({ headers: FI, transport: Transport.GRPC }));
 });
 test("an exporter for another collector is not subject to the layout check", () => {
   layout = "headers-not-a-function";
   expect(() => createSpanExporter({ endpoint: base })).not.toThrow();
+});
+
+// No early return: an FI-bound exporter that cannot be classified is refused, never passed through.
+describe("an FI-bound exporter is classified inside the refusal block", () => {
+  const { isolateHttpExporterHeaders, isolateGrpcExporterHeaders } = jest.requireActual("../otlp-header-isolation");
+  const withoutJest = (run: () => void) => {
+    const saved = process.env.JEST_WORKER_ID; delete process.env.JEST_WORKER_ID;
+    try { run(); } finally { if (saved !== undefined) process.env.JEST_WORKER_ID = saved; }
+  };
+  const odd = [["a plain object with no delegate", {}], ["an object from an unknown base class", new (class Unknown { export() {} shutdown() {} forceFlush() {} })()], ["null", null], ["a number", 7]] as Array<[string, unknown]>;
+  test.each(odd)("outside a test runner, %s is refused (HTTP and gRPC)", (_label, exporter) => withoutJest(() => {
+    refusal(() => isolateHttpExporterHeaders(exporter, { url: base }, FI));
+    refusal(() => isolateGrpcExporterHeaders(exporter, { url: "127.0.0.1:1" }));
+  }));
+  test.each(odd)("under jest, only a mock object may skip: %s", (_label, exporter) => {
+    expect(() => isolateHttpExporterHeaders(exporter, { url: base }, FI)).not.toThrow();
+  });
+  test("an object with a delegate shape that cannot be pinned is refused even under jest", () => {
+    refusal(() => isolateHttpExporterHeaders({ _delegate: {} }, { url: base }, FI));
+  });
 });

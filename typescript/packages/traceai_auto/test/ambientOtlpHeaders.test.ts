@@ -14,16 +14,21 @@ const ENV_CASES: Array<[string, string]> = [
 const BOTH: Record<string, string> = { OTEL_EXPORTER_OTLP_HEADERS: "x-synthetic-ambient-general=general,x-synthetic-ambient-marker=ambient-all", OTEL_EXPORTER_OTLP_TRACES_HEADERS: `authorization=${AMBIENT_AUTH.replace(" ", "%20")},x-synthetic-ambient-marker=ambient-traces` };
 const AMBIENT_NAMES = ["authorization", "x-synthetic-ambient-marker", "x-synthetic-ambient-general"];
 let server: Server, base: string, received: IncomingHttpHeaders[];
+let userServer: Server, userBase: string, userReceived: IncomingHttpHeaders[];
+async function listen(into: () => IncomingHttpHeaders[]): Promise<[Server, string]> {
+  const sink = createServer((req, res) => { req.resume(); req.on("end", () => { into().push(req.headers); res.setHeader("content-type", "application/json"); res.end("{}"); }); });
+  await new Promise<void>(done => sink.listen(0, "127.0.0.1", done));
+  return [sink, `http://127.0.0.1:${(sink.address() as AddressInfo).port}`];
+}
 beforeAll(async () => {
-  server = createServer((req, res) => { req.resume(); req.on("end", () => { received.push(req.headers); res.setHeader("content-type", "application/json"); res.end("{}"); }); });
-  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  [server, base] = await listen(() => received);
+  [userServer, userBase] = await listen(() => userReceived);
 });
-afterAll(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); });
+afterAll(async () => { for (const s of [server, userServer]) { s.closeAllConnections(); await new Promise<void>(done => s.close(() => done())); } });
 
 const KEYS = ["OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL"];
 let saved: Record<string, string | undefined>;
-beforeEach(() => { received = []; saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]])); KEYS.forEach(k => delete process.env[k]); });
+beforeEach(() => { received = []; userReceived = []; saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]])); KEYS.forEach(k => delete process.env[k]); });
 afterEach(() => { for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
 
 function runInit(env: Record<string, string>): Promise<{ stderr: string }> {
@@ -72,5 +77,50 @@ describe("ambient headers with the bundled --require launcher", () => {
     expect(received.length).toBeGreaterThan(0);
     for (const headers of received) for (const name of AMBIENT_NAMES) expect(headers[name]).toBeUndefined();
     expect(received.some(headers => headers["x-api-key"] === "synthetic-fi-key" && headers["x-secret-key"] === "synthetic-fi-secret")).toBe(true);
+  }, 60000);
+});
+
+// The application's own exporter and a caller header named x-api-key: FI keys in the environment never join it.
+describe("another collector with a caller x-api-key and FI keys in the environment", () => {
+  const FI_ENV = { FI_API_KEY: "synthetic-env-key", FI_SECRET_KEY: "synthetic-env-secret" };
+  function expectOwnKeyOnly(headers: IncomingHttpHeaders) {
+    expect(headers["x-api-key"]).toBe("own-backend-key");
+    expect(headers["x-secret-key"]).toBeUndefined();
+    expect(JSON.stringify(headers)).not.toMatch(/synthetic-env-/);
+  }
+  test("init() with an application provider", async () => {
+    await new Promise<string>(done => {
+      const proc = spawn(process.execPath, ["--import", "tsx", join(__dirname, "apps", "user-endpoint-headers.ts")], {
+        cwd: join(__dirname, ".."), timeout: 60000,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, USER_TEST_BASE_URL: userBase, FI_BASE_URL: base, ...FI_ENV },
+      });
+      let stderr = ""; proc.stderr.on("data", c => { stderr += c; }); proc.on("close", () => done(stderr));
+    });
+    expect(userReceived.length).toBeGreaterThan(0);
+    for (const headers of userReceived) expectOwnKeyOnly(headers);
+  });
+  test("the --require launcher next to the application's own exporter", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "traceai-user-endpoint-"));
+    try {
+      const exporterPath = require.resolve("@opentelemetry/exporter-trace-otlp-http"), basePath = require.resolve("@opentelemetry/sdk-trace-base"), apiPath = require.resolve("@opentelemetry/api");
+      writeFileSync(join(dir, "app.cjs"), `
+        const { trace } = require(${JSON.stringify(apiPath)});
+        const { BasicTracerProvider, SimpleSpanProcessor } = require(${JSON.stringify(basePath)});
+        const { OTLPTraceExporter } = require(${JSON.stringify(exporterPath)});
+        (async () => {
+          const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(new OTLPTraceExporter({ url: process.env.USER_TEST_BASE_URL + '/v1/traces', headers: { 'x-api-key': 'own-backend-key' } }))] });
+          trace.setGlobalTracerProvider(provider);
+          trace.getTracer('user-endpoint').startSpan('one').end();
+          await provider.forceFlush(); await provider.shutdown();
+        })();`);
+      const agent = process.env.TRACEAI_TEST_AGENT || join(__dirname, "..", "dist", "agent");
+      await new Promise<void>(done => {
+        const child = spawn(process.execPath, ["--require", join(agent, "preload.cjs"), "app.cjs"], { cwd: dir, timeout: 30000,
+          env: { PATH: process.env.PATH!, HOME: process.env.HOME!, USER_TEST_BASE_URL: userBase, FI_BASE_URL: base, FI_INSTRUMENTATIONS: "wire", ...FI_ENV } });
+        child.on("close", () => done());
+      });
+      expect(userReceived.length).toBeGreaterThan(0);
+      for (const headers of userReceived) expectOwnKeyOnly(headers);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   }, 60000);
 });

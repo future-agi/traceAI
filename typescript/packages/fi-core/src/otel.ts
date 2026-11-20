@@ -292,9 +292,9 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
-  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
-    const { endpoint, verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
-    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, options.headers);
+  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; fiEndpoint?: boolean; [key: string]: any }) {
+    const { endpoint, verbose = false, traceConfig, resourceAttributes, fiEndpoint, ...restOptions } = options;
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, options.headers, fiEndpoint === true);
     const headers = resolvedHeaders ?? {};
     delete restOptions.headers;
     const auth_header = headers;
@@ -386,28 +386,39 @@ function resolveFiHeaders(headers?: FIHeaders): FIHeaders | undefined {
 }
 
 const FI_HOST = /(?:^|\.)futureagi\.com$/i;
-// The FI credential header names: carrying either one says the exporter is meant for Future AGI.
-const hasFiKeyHeader = (headers?: FIHeaders): boolean =>
-  Object.entries(headers ?? {}).some(([key, value]) => /^(?:x-api-key|x-secret-key)$/i.test(key) && String(value ?? "").trim() !== "");
 const hostOf = (endpoint: string): string => {
   try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`).hostname; } catch { return ""; }
 };
+/** Scheme, host case, default port and trailing slash do not make two spellings of an endpoint different. */
+function normalizeEndpoint(endpoint: string, grpcTransport: boolean): string {
+  const text = endpoint.trim();
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
+    const port = url.port || (url.protocol === "http:" ? "80" : "443");
+    const path = url.pathname.replace(/\/+$/, "");
+    // gRPC targets are host:port; the scheme only selects the credentials, not the destination.
+    return grpcTransport ? `${url.hostname}:${port}` : `${url.protocol}//${url.hostname}:${port}${path}`;
+  } catch { return text; }
+}
 /**
  * An exporter is bound for Future AGI when its RESOLVED endpoint is one: a futureagi.com host, or
- * the endpoint the FI environment (or the default) selects. The caller passing an FI key header
- * explicitly also binds it, since those headers are only meant for an FI collector. Anything else
- * is the application's own collector.
+ * the endpoint the FI environment (or the default) selects. Nothing else binds it: header names the
+ * caller passes, FI keys in the environment and the exporter's transport are all irrelevant.
+ * `declaredFi` is for the SDK's own wiring (the auto package resolves its FI base URL from options,
+ * a config file, the environment or the default); the endpoint is then the FI endpoint by that resolution.
  */
-function isFiBound(endpoint: string, grpcTransport: boolean, headers?: FIHeaders): boolean {
-  if (hasFiKeyHeader(headers) || FI_HOST.test(hostOf(endpoint))) return true;
-  return endpoint === (grpcTransport ? getEnvGrpcCollectorEndpoint() : constructFullEndpoint());
+function isFiBound(endpoint: string, grpcTransport: boolean, declaredFi = false): boolean {
+  if (declaredFi || FI_HOST.test(hostOf(endpoint))) return true;
+  const fiEndpoint = grpcTransport ? getEnvGrpcCollectorEndpoint() : constructFullEndpoint();
+  return normalizeEndpoint(endpoint, grpcTransport) === normalizeEndpoint(fiEndpoint, grpcTransport);
 }
 /**
  * Headers for an exporter at `endpoint`: an FI-bound one gets the SDK's FI headers plus the
- * caller's explicit ones; any other gets exactly what the caller passed, never FI keys from the environment.
+ * caller's explicit ones; any other gets exactly what the caller passed, with nothing added or
+ * filled in from the FI environment.
  */
-function headersForEndpoint(endpoint: string, grpcTransport: boolean, headers?: FIHeaders): { headers: FIHeaders | undefined; fiBound: boolean } {
-  const fiBound = isFiBound(endpoint, grpcTransport, headers);
+function headersForEndpoint(endpoint: string, grpcTransport: boolean, headers?: FIHeaders, declaredFi = false): { headers: FIHeaders | undefined; fiBound: boolean } {
+  const fiBound = isFiBound(endpoint, grpcTransport, declaredFi);
   if (fiBound) return { headers: resolveFiHeaders(headers), fiBound };
   seedSecrets(process.env, credentialSecrets(headers ?? {}));
   return { headers, fiBound };
@@ -463,9 +474,9 @@ function constructFullEndpoint(customEndpoint?: string): string {
 /** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders } = {}) {
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders; fiEndpoint?: boolean } = {}) {
     const url = constructFullEndpoint(options.endpoint);
-    const { headers, fiBound } = headersForEndpoint(url, false, options.headers);
+    const { headers, fiBound } = headersForEndpoint(url, false, options.headers, options.fiEndpoint === true);
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);
@@ -481,6 +492,11 @@ export function createSpanExporter(options: ExportPrivacyOptions & {
   headers?: FIHeaders;
   transport?: Transport;
   verbose?: boolean;
+  /**
+   * @internal For the SDK's own wiring: the endpoint is the FI endpoint (the auto package resolves its
+   * base URL from options, a config file, the environment or the default). Headers never set this.
+   */
+  fiEndpoint?: boolean;
 } = {}): SpanExporter {
   return options.transport === Transport.GRPC
     ? new GRPCSpanExporter({ ...options, endpoint: options.endpoint ?? getEnvGrpcCollectorEndpoint() })

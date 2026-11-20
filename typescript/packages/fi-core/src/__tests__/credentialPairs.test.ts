@@ -15,10 +15,19 @@ afterEach(() => {
   if (savedSecret === undefined) delete process.env.FI_SECRET_KEY; else process.env.FI_SECRET_KEY = savedSecret;
   warn.mockRestore();
 });
+// An exporter for another collector sends the caller's headers exactly as given: nothing is filled in
+// from the FI environment and no warning is raised, whatever header names the caller passed.
+test.each([["x-api-key only", { "x-api-key": "own-key" }], ["x-secret-key only", { "x-secret-key": "own-secret" }], ["both", { "x-api-key": "own-key", "x-secret-key": "own-secret" }], ["other names", { custom: "keep" }]] as Array<[string, Record<string, string>]>)(
+  "another collector: %s is sent exactly as given", (_label, headers) => {
+    process.env.FI_API_KEY = "environment-private-key"; process.env.FI_SECRET_KEY = "environment-private-secret";
+    createSpanExporter({ endpoint: "https://collector.invalid", headers });
+    expect(lastOptions().headers).toEqual(headers);
+    expect(warn).not.toHaveBeenCalled();
+  });
 const lastOptions = () => (OTLPTraceExporter as jest.Mock).mock.calls.at(-1)![0];
 test.each(["X-API-Key", "X-Secret-Key"])("S7-pre core explicit %s half is ignored atomically, preserving non-FI headers", half => {
   process.env.FI_API_KEY = "environment-private-key"; process.env.FI_SECRET_KEY = "environment-private-secret";
-  createSpanExporter({ endpoint: "https://collector.invalid", headers: { [half]: "explicit-private-half", custom: "keep" } });
+  createSpanExporter({ endpoint: "https://api.futureagi.com", headers: { [half]: "explicit-private-half", custom: "keep" } });
   expect(lastOptions().headers).toEqual({ custom: "keep", "x-api-key": "environment-private-key", "x-secret-key": "environment-private-secret" });
   expect(warn).toHaveBeenCalledTimes(1); expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
 });
@@ -26,13 +35,13 @@ test("S7-pre core complete explicit pair wins; custom/empty auth does not inheri
   process.env.FI_API_KEY = "environment-private-key"; process.env.FI_SECRET_KEY = "environment-private-secret";
   const variants: Record<string, string>[] = [{ "x-api-key": "code-private-key", "x-secret-key": "code-private-secret" }, { Authorization: "Bearer custom-auth" }, {}];
   for (const headers of variants) {
-    createSpanExporter({ endpoint: "https://collector.invalid", headers }); expect(lastOptions().headers).toEqual(headers);
+    createSpanExporter({ endpoint: "https://api.futureagi.com", headers }); expect(lastOptions().headers).toEqual(headers);
   }
   expect(warn).not.toHaveBeenCalled();
 });
 test("S7-pre core does not combine opposite halves across explicit headers and environment", () => {
   process.env.FI_SECRET_KEY = "environment-private-half";
-  createSpanExporter({ endpoint: "https://collector.invalid", headers: { "x-api-key": "explicit-private-half" } });
+  createSpanExporter({ endpoint: "https://api.futureagi.com", headers: { "x-api-key": "explicit-private-half" } });
   expect(lastOptions().headers).toEqual({}); expect(warn).toHaveBeenCalledTimes(2);
   expect(JSON.stringify(warn.mock.calls)).toContain("FI_SECRET_KEY"); expect(JSON.stringify(warn.mock.calls)).toContain("FI_API_KEY");
   expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
