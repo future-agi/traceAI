@@ -1,3 +1,9 @@
+## Unreleased
+
+### Changed
+- Exporters bound for the Future AGI endpoint send the headers the SDK sets plus any the caller passes in explicitly; exporters pointed at another collector get only the headers configured for it. For HTTP and gRPC, `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` are no longer added to requests for the Future AGI endpoint, and `FI_API_KEY` / `FI_SECRET_KEY` from the environment are no longer added to requests for another collector. An exporter is bound for Future AGI when its resolved endpoint is a `futureagi.com` host or the one `FI_BASE_URL`, `FI_TRACES_URL`, `FI_COLLECTOR_ENDPOINT`, `FI_GRPC_URL` or the default selects, or when the caller passes an `x-api-key` or `x-secret-key` header. An app that sets only `FI_API_KEY` / `FI_SECRET_KEY` and passes a different `endpoint` now also passes the keys as `headers` (or sets `FI_BASE_URL`).
+- Constructing a Future AGI exporter throws `Unsupported OTLP exporter layout: ...` when the installed `@opentelemetry/exporter-trace-otlp-http` or `-grpc` package does not have the header configuration this release was built against. The message names no header and no value, and nothing is sent. The accepted exporter versions are `~0.202.0` (`>=0.202.0 <0.203.0`, tested with 0.202.0), and `@opentelemetry/otlp-exporter-base`, `@opentelemetry/otlp-grpc-exporter-base` and `@opentelemetry/otlp-transformer` are now direct dependencies at the same range.
+
 ## [1.4.1] - 2026-11-19
 
 ### Changed

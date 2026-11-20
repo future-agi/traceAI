@@ -39,7 +39,7 @@ test("S7-pre core does not combine opposite halves across explicit headers and e
 });
 test("S7-pre core provider resolves an incomplete environment once without constructing a mixed pair", async () => {
   process.env.FI_API_KEY = "environment-private-half";
-  const provider = new FITracerProvider({ endpoint: "https://collector.invalid" });
+  const provider = new FITracerProvider({ endpoint: "https://api.futureagi.com" });
   expect(lastOptions().headers).toEqual({}); expect(warn).toHaveBeenCalledTimes(1);
   await provider.shutdown();
 });

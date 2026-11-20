@@ -29,11 +29,11 @@ jest.mock('@grpc/grpc-js', () => ({
     createSsl: jest.fn(),
     createInsecure: jest.fn(),
   },
-  Metadata: jest.fn().mockImplementation(() => ({
-    set: jest.fn(),
-    get: jest.fn(),
-    add: jest.fn(),
-  })),
+  Metadata: jest.fn().mockImplementation(() => {
+    const metadata: any = { set: jest.fn(), get: jest.fn(() => []), add: jest.fn(), getMap: jest.fn(() => ({})) };
+    metadata.clone = jest.fn(() => metadata);
+    return metadata;
+  }),
 }));
 
 // Mock the OTLP HTTP trace exporter

@@ -27,6 +27,7 @@ import {
 } from "@opentelemetry/sdk-trace-node";
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
+import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -153,7 +154,7 @@ class HTTPSpanExporter implements SpanExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
   constructor(options: HTTPSpanExporterOptions) {
-    const headers = resolveFiHeaders(options.headers);
+    const { headers } = headersForEndpoint(options.endpoint, false, options.headers);
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
@@ -293,7 +294,8 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
 
   constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
     const { endpoint, verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
-    const headers = resolveFiHeaders(options.headers) ?? {};
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, options.headers);
+    const headers = resolvedHeaders ?? {};
     delete restOptions.headers;
     const auth_header = headers;
     const lower_case_auth_header = auth_header 
@@ -320,6 +322,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       diag.error(`GRPCSpanExporter: Error initializing OTLP exporter:`, error);
       throw error;
     }
+    if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
     
     this.verbose = verbose;
     this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, headers);
@@ -382,6 +385,34 @@ function resolveFiHeaders(headers?: FIHeaders): FIHeaders | undefined {
   return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...getEnvFiAuthHeader() };
 }
 
+const FI_HOST = /(?:^|\.)futureagi\.com$/i;
+// The FI credential header names: carrying either one says the exporter is meant for Future AGI.
+const hasFiKeyHeader = (headers?: FIHeaders): boolean =>
+  Object.entries(headers ?? {}).some(([key, value]) => /^(?:x-api-key|x-secret-key)$/i.test(key) && String(value ?? "").trim() !== "");
+const hostOf = (endpoint: string): string => {
+  try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`).hostname; } catch { return ""; }
+};
+/**
+ * An exporter is bound for Future AGI when its RESOLVED endpoint is one: a futureagi.com host, or
+ * the endpoint the FI environment (or the default) selects. The caller passing an FI key header
+ * explicitly also binds it, since those headers are only meant for an FI collector. Anything else
+ * is the application's own collector.
+ */
+function isFiBound(endpoint: string, grpcTransport: boolean, headers?: FIHeaders): boolean {
+  if (hasFiKeyHeader(headers) || FI_HOST.test(hostOf(endpoint))) return true;
+  return endpoint === (grpcTransport ? getEnvGrpcCollectorEndpoint() : constructFullEndpoint());
+}
+/**
+ * Headers for an exporter at `endpoint`: an FI-bound one gets the SDK's FI headers plus the
+ * caller's explicit ones; any other gets exactly what the caller passed, never FI keys from the environment.
+ */
+function headersForEndpoint(endpoint: string, grpcTransport: boolean, headers?: FIHeaders): { headers: FIHeaders | undefined; fiBound: boolean } {
+  const fiBound = isFiBound(endpoint, grpcTransport, headers);
+  if (fiBound) return { headers: resolveFiHeaders(headers), fiBound };
+  seedSecrets(process.env, credentialSecrets(headers ?? {}));
+  return { headers, fiBound };
+}
+
 function getEnvGrpcCollectorEndpoint(): string {
   let endpoint = getEnv("FI_GRPC_COLLECTOR_ENDPOINT") ?? 
                  getEnv("FI_GRPC_URL") ?? 
@@ -433,8 +464,10 @@ function constructFullEndpoint(customEndpoint?: string): string {
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
   constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders } = {}) {
-    const headers = resolveFiHeaders(options.headers);
-    super({ url: constructFullEndpoint(options.endpoint), headers });
+    const url = constructFullEndpoint(options.endpoint);
+    const { headers, fiBound } = headersForEndpoint(url, false, options.headers);
+    super({ url, headers });
+    if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
   }
@@ -492,7 +525,7 @@ class FITracerProvider extends BasicTracerProvider {
       endpoint = constructFullEndpoint(config.endpoint);
     }
     
-    const headers = resolveFiHeaders(config.headers);
+    const { headers } = headersForEndpoint(endpoint, transport === Transport.GRPC, config.headers);
 
     if (verbose) {
       diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${endpoint}`);
@@ -724,7 +757,8 @@ if (!projectName) {
 
   
   // Headers for the exporter
-  const exporterHeaders = resolveFiHeaders(optHeaders);
+  // The provider resolves them against the endpoint it exports to.
+  const exporterHeaders = optHeaders;
   // Endpoint for the exporter is now determined by FITracerProvider's constructor
   // using _constructFullEndpoint, which considers optEndpoint and env vars.
 
