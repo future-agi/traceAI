@@ -123,4 +123,26 @@ class KeyTransportWireTest {
         assertThat(hits).hasValue(1);
         assertThat(err.toString()).doesNotContain("FI_ALLOW_INSECURE_HTTP");
     }
+
+    @Test void anHttpsExportKeepsTheEnvironmentProxy() throws Exception {
+        List<String> connects = new CopyOnWriteArrayList<>();
+        try (java.net.ServerSocket proxy = new java.net.ServerSocket(0, 5, InetAddress.getByName("127.0.0.1"))) {
+            Thread acceptor = new Thread(() -> {
+                try (java.net.Socket socket = proxy.accept()) {
+                    String line = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream())).readLine();
+                    connects.add(line);
+                } catch (IOException ignored) { }
+            });
+            acceptor.setDaemon(true); acceptor.start();
+            System.setProperty("https.proxyHost", "127.0.0.1"); System.setProperty("https.proxyPort", String.valueOf(proxy.getLocalPort()));
+            System.setProperty("http.nonProxyHosts", "");
+            try {
+                TraceAI.init(config("https://api.futureagi.com").build());
+                exportOneSpan();
+                acceptor.join(10000);
+            } finally { System.clearProperty("https.proxyHost"); System.clearProperty("https.proxyPort"); }
+        }
+        assertThat(connects).hasSize(1);
+        assertThat(connects.get(0)).startsWith("CONNECT api.futureagi.com:443");
+    }
 }
