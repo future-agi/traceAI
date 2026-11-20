@@ -129,11 +129,14 @@ def get_custom_eval_template(
         base_url = get_env_collector_endpoint()
 
     url = f"{base_url}/tracer/custom-eval-config/get_custom_eval_by_name/"
+    from fi_instrumentation.otel import _guard_future_agi_request
+
+    send_keys = _guard_future_agi_request(url)
 
     try:
         headers = {
             "Content-Type": "application/json",
-            **(get_env_fi_auth_header() or {}),
+            **((get_env_fi_auth_header() or {}) if send_keys else {}),
         }
 
         response = requests.post(

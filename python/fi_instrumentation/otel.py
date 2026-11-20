@@ -907,6 +907,23 @@ def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers:
     return decision
 
 
+def _guard_future_agi_request(url: str, named: bool = False) -> bool:
+    """True when Future AGI keys may be attached to an HTTP request to ``url``.
+
+    The endpoint rules of the exporters apply before any request: a Future AGI host reached over http, or in a form that
+    cannot be verified, raises UnsupportedFutureAGIEndpointError (which names FI_BASE_URL) when Future AGI credentials are
+    set. ``named`` marks a URL the user configured as their Future AGI base, which is then treated as self-hosted when
+    it is not a futureagi.com host. A plain-text self-hosted base logs one warning per process.
+    """
+    decision = _check_future_agi_endpoint(url, False)
+    if decision == "other" and named and _http_origin(url) is not None:
+        decision = "fi"
+    if decision != "fi":
+        return False
+    _warn_plain_text_once(url)
+    return True
+
+
 _SUPPORTED_OTLP_EXPORTERS = "1.29.0 to 1.45.x"
 
 
@@ -1326,11 +1343,12 @@ def check_custom_eval_config_exists(
         base_url = get_env_collector_endpoint()
 
     url = f"{base_url}/tracer/custom-eval-config/check_exists/"
+    send_keys = _guard_future_agi_request(url)
 
     try:
         headers = {
             CONTENT_TYPE: "application/json",
-            **(get_env_fi_auth_header() or {}),
+            **((get_env_fi_auth_header() or {}) if send_keys else {}),
         }
 
         response = requests.post(
