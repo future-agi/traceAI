@@ -1,8 +1,10 @@
 package auto
 
 import (
+	"context"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -17,10 +19,22 @@ type collectorTransport struct {
 }
 
 func (t *collectorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := requestTransport(req); err != nil {
+		return nil, err
+	}
 	outgoing := req.Clone(req.Context())
 	outgoing.URL.RawQuery = t.rawQuery
 	outgoing.URL.ForceQuery = t.forceQuery
-	return t.Transport.RoundTrip(outgoing)
+	next := t.keyed
+	if next == nil {
+		next = t.Transport
+	}
+	resp, err := next.RoundTrip(outgoing)
+	if err == nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		_ = resp.Body.Close()
+		return nil, refuse("redirect answered a key-carrying send")
+	}
+	return resp, err
 }
 
 // Use net/http's standard transport defaults, not the mutable global transport
@@ -29,8 +43,8 @@ func exporterClient(rawQuery string, forceQuery bool) *http.Client {
 	return &http.Client{
 		Transport: &collectorTransport{
 			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
-				DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+				Proxy:                 refuseProxy,
+				DialContext:           dialChecked,
 				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          100,
 				IdleConnTimeout:       90 * time.Second,
@@ -45,4 +59,15 @@ func exporterClient(rawQuery string, forceQuery bool) *http.Client {
 		// not a browser; decline all redirects, including HTTPS downgrades.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+}
+
+// dialChecked connects like the default dialer, but a loopback claim in the
+// written host must be matched by the connected peer.
+func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, refuse("unreadable target")
+	}
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: func(_, peer string, _ syscall.RawConn) error { return checkDialAddress(host, peer) }}
+	return d.DialContext(ctx, network, addr)
 }

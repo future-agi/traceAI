@@ -168,6 +168,9 @@ func collectorEndpoint(c Config) (*url.URL, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
 		return nil, fmt.Errorf("invalid FI_BASE_URL")
 	}
+	if err := keyTransport(c.BaseURL, u); err != nil {
+		return nil, err
+	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/tracer/v1/traces"
 	u.RawPath, u.Fragment, u.RawFragment = "", "", ""
 	return u, nil
