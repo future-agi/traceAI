@@ -323,4 +323,59 @@ class RubyLLMInstrumentorTest < Minitest::Test
     stdout, stderr, status = app(code)
     assert status.success?, stderr; assert_equal ":answer\nKEPT from the block\n", stdout
   end
+
+  # fi-security: the instrumentor writes the tool arguments into three attributes of the execute_tool
+  # span and the tool result into three more. Every copy follows its own side's hide settings, and
+  # the raw copies follow all nine content settings. A new attribute that carries either value must
+  # be added to these lists, or the key-set check below fails.
+  ARGUMENT_COPIES = %w[gen_ai.tool.call.arguments input.value raw.input].freeze
+  RESULT_COPIES = %w[gen_ai.tool.call.result output.value raw.output].freeze
+  INPUT_SIDE = %w[hide_inputs hide_input_text hide_input_messages].freeze
+  OUTPUT_SIDE = %w[hide_outputs hide_output_text hide_output_messages].freeze
+  def tool_span_with(flags)
+    private_chat = JSON.generate(id: 'c', object: 'chat.completion', model: 'gpt-4o-mini', choices: [{index: 0, message: {role: 'assistant', content: 'final answer'}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5})
+    private_call = CALL.sub('Paris', 'SYNTHETIC_ARGUMENT_VALUE')
+    @provider.stop; @provider = MockHTTP.new { |r| [200, JSON_TYPE, calls_tool?(r[:body]) ? private_call : private_chat] }
+    _, stderr, status = app(llm("chat.ask('question')", tool: TOOL.sub('"Sunny in #{city}"', '"SYNTHETIC_RESULT_VALUE"')), flags) # the result does not echo the argument
+    assert status.success?, stderr
+    tools = by_name(spans, 'execute_tool weather')
+    assert_equal 1, tools.length, flags.inspect
+    attrs(tools.first.attributes)
+  end
+  def carrying(attributes, marker) = attributes.select { |_key, value| value.to_s.include?(marker) }.keys.sort
+  def assert_withheld(attributes, keys, marker, setting)
+    keys.each { |key| assert_includes [nil, '__REDACTED__'], attributes[key], "#{key} under #{setting}" }
+    assert_empty carrying(attributes, marker), "#{marker} survived under #{setting}"
+  end
+
+  def test_tool_arguments_and_result_are_in_exactly_the_known_copies_without_a_hide_setting
+    tool = tool_span_with({})
+    assert_equal ARGUMENT_COPIES.sort, carrying(tool, 'SYNTHETIC_ARGUMENT_VALUE'), 'a new attribute carries the tool arguments: cover it here and in the hide checks'
+    assert_equal RESULT_COPIES.sort, carrying(tool, 'SYNTHETIC_RESULT_VALUE'), 'a new attribute carries the tool result: cover it here and in the hide checks'
+  end
+
+  (INPUT_SIDE + OUTPUT_SIDE).each do |setting|
+    define_method("test_every_tool_copy_follows_its_side_under_#{setting}") do
+      tool = tool_span_with("FI_#{setting.upcase}" => 'true')
+      input = INPUT_SIDE.include?(setting)
+      withheld, kept = input ? [ARGUMENT_COPIES, RESULT_COPIES] : [RESULT_COPIES, ARGUMENT_COPIES]
+      withheld_marker, kept_marker = input ? %w[SYNTHETIC_ARGUMENT_VALUE SYNTHETIC_RESULT_VALUE] : %w[SYNTHETIC_RESULT_VALUE SYNTHETIC_ARGUMENT_VALUE]
+      assert_withheld(tool, withheld, withheld_marker, setting)
+      # The raw copy of the other side is withheld by every content setting; its other two copies stay.
+      raw = kept.find { |key| key.start_with?('raw.') }
+      assert_nil tool[raw], "#{raw} under #{setting}"
+      (kept - [raw]).each { |key| assert_includes tool[key].to_s, kept_marker, "#{key} under #{setting}" }
+      assert_equal 'weather', tool['gen_ai.tool.name']
+      refute_includes ['__REDACTED__', nil, ''], tool['gen_ai.tool.call.id']
+    end
+  end
+
+  (CONTENT_HIDE - INPUT_SIDE - OUTPUT_SIDE).each do |setting|
+    define_method("test_raw_tool_copies_are_withheld_under_#{setting}") do
+      tool = tool_span_with("FI_#{setting.upcase}" => 'true')
+      assert_nil tool['raw.input'], setting
+      assert_nil tool['raw.output'], setting
+      assert_equal 'weather', tool['gen_ai.tool.name']
+    end
+  end
 end
