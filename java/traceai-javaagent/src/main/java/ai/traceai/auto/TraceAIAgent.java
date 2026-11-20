@@ -34,6 +34,7 @@ public final class TraceAIAgent {
         // annotations disabled must not keep another copy from weaving.
         boolean annotations = TraceAIAuto.annotationsEnabled();
         if (annotations && !claimAnnotationTransformer()) { annotations = false; TraceAIAuto.annotationsHeldElsewhere(); }
+        final boolean claimed = annotations;
         AgentBuilder base = new AgentBuilder.Default().disableClassFormatChanges()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .ignore(nameStartsWith("ai.traceai.auto.").and(not(hasSuperType(namedOneOf("okio.Source", "okhttp3.ResponseBody"))))
@@ -61,6 +62,8 @@ public final class TraceAIAgent {
                     .and(type -> TraceAIAuto.annotationsEnabled()))
                 .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(AnnotatedMethodAdvice.class).on(annotated())));
         }
+        // A claim whose installation fails is given back, so another copy can still weave the annotations.
+        try {
         base.type(named("jdk.internal.net.http.HttpRequestImpl"))
             .transform((builder, type, loader, module, domain) -> builder
                 .visit(Advice.to(JdkHeaderAdvice.class).on(namedOneOf("setSystemHeader", "addSystemHeader").and(takesArguments(String.class, String.class)))))
@@ -83,6 +86,10 @@ public final class TraceAIAgent {
             .type(named("okhttp3.OkHttpClient"))
             .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))))
             .installOn(instrumentation);
+        } catch (Throwable failed) {
+            if (claimed) System.getProperties().remove(TRANSFORMER_CLAIM);
+            throw failed;
+        }
     }
     /** A concrete method with one of the annotations; the compiler's bridge and other synthetic copies of it are never woven, so one call is one span. */
     private static net.bytebuddy.matcher.ElementMatcher.Junction<net.bytebuddy.description.method.MethodDescription> annotated() {

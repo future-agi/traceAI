@@ -97,12 +97,12 @@ final class AnnotationTracing {
                 });
                 return null;
             }
-            Object wrapped = Reactor.wrap(started, returned);
-            if (wrapped != null) {
-                if (started.returnType.isInstance(wrapped)) return wrapped;
-                // A method declared to return a subtype of Mono or Flux cannot return the wrapper: end the span now, without an output.
-                finish(started, null, null, false, false);
-                return null;
+            // Only a method declared to return exactly Mono or Flux gets the wrapper. Any other declared type (Object, Publisher, a subclass,
+            // an erased type variable) keeps the returned instance as it is: the span ends at return, as for any other value.
+            String declared = started.returnType.getName();
+            if (declared.equals("reactor.core.publisher.Mono") || declared.equals("reactor.core.publisher.Flux")) {
+                Object wrapped = Reactor.wrap(started, returned);
+                if (wrapped != null) return wrapped;
             }
             finish(started, returned, null);
         } catch (Throwable ignored) { finish(started, null, null); }

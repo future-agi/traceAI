@@ -83,8 +83,8 @@ class CapturedValueTest {
         assertEquals("{\"x\":1,\"y\":2}", text(new Point(1, 2)));
         String bean = text(new Bean());
         assertFalse(bean.contains("bean-private-secret"), bean);
-        assertEquals("\"Described[ok]\"", text(new Described()));
-        assertFalse(text(new Described()).contains("field-secret"));
+        // An application object's own toString() is never exported as text: it is its type placeholder.
+        assertEquals("\"<ai.traceai.auto.CapturedValueTest$Described>\"", text(new Described()));
     }
     @Test void aThrowingToStringNeverEscapes() {
         assertDoesNotThrow(() -> text(new Throwing()));
@@ -120,8 +120,8 @@ class CapturedValueTest {
     @Test void toStringAndAccessorsRunOnceAcrossTheRenderRetries() {
         Escapy.CALLS.set(0); Accessors.CALLS.set(0);
         String json = AnnotationTracing.render(new Escapy(), 100);
-        assertEquals("\"" + CapturedValue.CUT + "\"", json, "every budget was tried and the last one fell back: " + json);
-        assertEquals(1, Escapy.CALLS.get(), "toString() once, though the text was cut again at a smaller budget");
+        assertEquals("\"<ai.traceai.auto.CapturedValueTest$Escapy>\"", json);
+        assertEquals(0, Escapy.CALLS.get(), "toString() is never run");
         String record = AnnotationTracing.render(new EscapyRecord("x"), 100);
         assertDoesNotThrow(() -> com.google.gson.JsonParser.parseString(record));
         assertEquals(1, Accessors.CALLS.get(), "the accessor once");
@@ -130,8 +130,8 @@ class CapturedValueTest {
     static final class Lombok { @Override public String toString() { return "User(name=alice, password=hunter2-synthetic, apiToken: tok-synthetic-9, nested=Inner(secret=inner-synthetic-3, id=7))"; } }
 
     /** Text from a declared toString() gets the credential-name redaction that maps and records get. */
-    @Test void aDeclaredToStringIsRedactedByCredentialName() {
-        String captured = text(new Lombok());
+    @Test void aCredentialNamedPairInAPlainStringIsRedactedByName() {
+        String captured = text(new Lombok().toString());
         for (String leaked : List.of("hunter2-synthetic", "tok-synthetic-9", "inner-synthetic-3")) assertFalse(captured.contains(leaked), captured);
         assertTrue(captured.contains("name=alice") && captured.contains("id=7"), "ordinary pairs stay: " + captured);
         assertTrue(captured.contains("password=<redacted>"), captured);
@@ -198,7 +198,7 @@ class CapturedValueTest {
         cases.put("Brace(credentials={k=v, k2=v2}, id=7)", new String[] {"k=v", "k2"});
         cases.put("Unclosed(password=[h, u, n, id=7", new String[] {"h, u", "id=7"});
         cases.forEach((text, leaked) -> {
-            String captured = text(new Fixed(text));
+            String captured = text(text);
             for (String fragment : leaked) assertFalse(captured.contains(fragment), "'" + fragment + "' left in " + captured);
             assertTrue(captured.contains("<redacted>"), captured);
             if (!text.startsWith("Unclosed")) assertTrue(captured.contains("id=7"), "ordinary pairs stay: " + captured);
