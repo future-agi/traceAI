@@ -1261,6 +1261,18 @@ def _routing_is_stock(owner: Any, stock: Any, names: tuple[str, ...]) -> bool:
     return all(getattr(type(owner), name, None) is getattr(stock, name, None) for name in names)
 
 
+def _session_is_stock(session: Any) -> bool:
+    """True when ``session`` and its adapters keep the routing methods of ``requests``, so its proxies can be read."""
+    from requests.adapters import HTTPAdapter
+
+    if not isinstance(session, requests.Session) or not _routing_is_stock(session, requests.Session, _SESSION_ROUTING):
+        return False
+    adapters = getattr(session, "adapters", None)
+    return hasattr(adapters, "values") and all(
+        isinstance(adapter, HTTPAdapter) and _routing_is_stock(adapter, HTTPAdapter, _ADAPTER_ROUTING) for adapter in adapters.values()
+    )
+
+
 def _client_may_proxy(session: Any, host: str, port: int) -> bool:
     """True when a ``requests`` session the caller passed may send a plain request to ``host:port`` through a proxy.
 
@@ -1270,15 +1282,9 @@ def _client_may_proxy(session: Any, host: str, port: int) -> bool:
     """
     import urllib.request
 
-    from requests.adapters import HTTPAdapter
     from requests.utils import get_environ_proxies, select_proxy
 
-    if not isinstance(session, requests.Session) or not _routing_is_stock(session, requests.Session, _SESSION_ROUTING):
-        return True
-    adapters = getattr(session, "adapters", None)
-    if not hasattr(adapters, "values") or not all(
-        isinstance(adapter, HTTPAdapter) and _routing_is_stock(adapter, HTTPAdapter, _ADAPTER_ROUTING) for adapter in adapters.values()
-    ):
+    if not _session_is_stock(session):
         return True
     if any((getattr(session, "proxies", None) or {}).values()):
         return True
@@ -1399,6 +1405,13 @@ def _secure_http_transport(exporter: Any, plain: bool, caller_session: Any) -> N
     if session is caller_session:
         return
     if plain:
+        if not _session_is_stock(session):
+            # A session this package did not build (for example one the OpenTelemetry release loads itself) that cannot be inspected.
+            raise UnsupportedFutureAGIEndpointError(
+                "The requests session the exporter sends with cannot be inspected, so Future AGI keys are not sent over a plain "
+                "channel with it. Use https, or do not use a session loader.",
+                "proxied",
+            )
         _without_proxies(session)
     _refuse_redirects(session)
 

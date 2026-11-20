@@ -348,3 +348,18 @@ def test_key_header_names_in_the_environment_are_refused_for_an_exporter_that_is
     assert raised.value.code == "key_header_in_environment"
     assert oc.MARKER_KEY not in str(raised.value)
     assert listeners.measure() == {"dialed": None, "marker_bytes": 0}
+
+
+def test_a_session_the_opentelemetry_release_loads_itself_and_that_cannot_be_inspected_is_refused_on_a_plain_channel(listeners, monkeypatch):
+    import opentelemetry.exporter.otlp.proto.http.trace_exporter as trace_exporter
+
+    if not hasattr(trace_exporter, "_load_session_from_envvar"):
+        pytest.skip("this release of the exporter has no session loader")
+
+    class Loaded(requests.Session):
+        def request(self, *args, **kwargs):
+            return super().request(*args, **kwargs)
+
+    monkeypatch.setattr(trace_exporter, "_load_session_from_envvar", lambda *a, **k: Loaded())
+    code, measured = _http_send(listeners, {})
+    assert code == "proxied" and measured["marker_bytes"] == 0
