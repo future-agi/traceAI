@@ -19,7 +19,7 @@ import { diag } from "@opentelemetry/api";
 import { comparableHost, endpointTarget, fiHostname, isFiEndpoint, isFiHostName, isLiteralLoopback, sameEndpointTarget, targetShape, writtenHost, type EndpointTransport } from "./fi-endpoint";
 import { parseKeyPairsIntoRecord } from "@opentelemetry/core";
 import { credentialSecrets } from "./privacy-runtime";
-import { getRegisteredSecrets, seedSecrets } from "./secrets";
+import { seedSecrets } from "./secrets";
 
 export type FiKeyRefusalCode = "FI_HOST_MISMATCH" | "FI_EMPTY_AUTHORITY" | "FI_PLAINTEXT_FI_HOST" | "FI_PLAINTEXT_NOT_ALLOWED" | "FI_PLAINTEXT_PROXIED" | "FI_AMBIENT_KEY_HEADERS" | "FI_REDIRECT";
 const MESSAGES: Record<FiKeyRefusalCode, string> = {
@@ -158,15 +158,16 @@ function dispatcherName(dispatcher: unknown): string | undefined {
   } catch { return undefined; }
 }
 /**
- * Whether a request through `dispatcher` (a caller's, or the global one) counts as proxied: when the library's own resolution says so
- * (a proxy agent; EnvHttpProxyAgent by undici's rule), OR Python's proxy_bypass_environment does. A dispatcher that cannot be inspected,
- * or one this code does not know to be direct, counts as proxied.
+ * Whether a request through `dispatcher` (a caller's, or the global one) counts as proxied: any proxy or environment-reading agent
+ * (EnvHttpProxyAgent included) always does, and for a direct dispatcher Python's proxy_bypass_environment decides. A dispatcher that
+ * cannot be inspected, or one this code does not know to be direct, counts as proxied.
  */
 export function dispatcherProxied(dispatcher: unknown, host: string, port: string, env: Env = process.env): boolean {
   const name = dispatcherName(dispatcher);
   if (name === undefined) return true;
-  if (/Proxy/.test(name) && name !== "EnvHttpProxyAgent") return true;
-  if (name === "EnvHttpProxyAgent") return proxiedByUndiciEnvironment(host, port, env) || proxiedByPython(host, port, env);
+  // A proxy agent, and every agent that may take its proxy from the environment or from an option (EnvHttpProxyAgent), is proxied:
+  // what it reads can change between its construction and a send, and an option names a proxy the environment never shows.
+  if (/Proxy/.test(name)) return true;
   if (!DIRECT_DISPATCHERS.has(name)) return true;
   return proxiedByPython(host, port, env);
 }
@@ -214,9 +215,11 @@ export function assertDirectFetch(url: string, keysAttached: boolean, callerDisp
   if (parsed === undefined || parsed.protocol !== "http:" || isLiteralLoopback(url, "http")) return;
   const port = (() => { try { return new URL(url.trim()).port; } catch { return ""; } })();
   const active = callerDispatcher !== undefined ? callerDispatcher : globalDispatcher();
+  // Node's own environment-proxy switch makes the global fetch read the proxy variables itself: such a send is proxied.
   const nodeEnvProxy = callerDispatcher === undefined && ["1", "true"].includes((process.env.NODE_USE_ENV_PROXY ?? "").toLowerCase());
-  if (nodeEnvProxy && (proxiedByUndiciEnvironment(parsed.hostname, port) || proxiedByPython(parsed.hostname, port))) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
-  if (active !== undefined && dispatcherProxied(active, parsed.hostname, port)) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+  if (nodeEnvProxy) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+  // An empty global slot is the default Agent: the same rule as a plain Agent installed there (Python's proxy_bypass_environment).
+  if (active === undefined ? proxiedByPython(parsed.hostname, port) : dispatcherProxied(active, parsed.hostname, port)) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
 }
 
 /** Whether a response is a redirect (3xx): not followed when keys were sent. */
@@ -230,20 +233,37 @@ export function isRedirect(response: { status?: number; type?: string } | undefi
 function ambientOtlpHeaders(): Record<string, string> {
   return { ...parseKeyPairsIntoRecord(process.env.OTEL_EXPORTER_OTLP_HEADERS?.trim()), ...parseKeyPairsIntoRecord(process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS?.trim()) };
 }
+/** The values the given headers (an options object, or the strings of gRPC metadata) carry under a Future AGI key header name. */
+export function fiKeyHeaderValues(...sources: Array<Record<string, unknown> | undefined>): string[] {
+  const found: string[] = [];
+  for (const source of sources) for (const [name, value] of Object.entries(source ?? {})) if (isKeyName(name) && typeof value === "string") found.push(value);
+  return found;
+}
+/** The forms a value can take in an ambient header: as written, percent-decoded (the exporter decodes values), and percent-encoded. */
+function valueForms(text: string): string[] {
+  const forms = [text];
+  try { forms.push(decodeURIComponent(text)); } catch { /* not percent-encoded text */ }
+  return forms;
+}
 /**
  * An exporter for a collector that is not Future AGI merges the ambient OTLP headers into what it sends. Refuse (naming no
- * value) when they carry a Future AGI key header, or a known secret (the Future AGI key values, `known`, or any registered one)
- * in any header value. Call it where the exporter reads them, immediately before its constructor does: they are read once there.
+ * value) when they carry a Future AGI key header, or a Future AGI key value in any header value: `fiKeyValues` (the key values of
+ * the exporter's own headers option and metadata) and FI_API_KEY / FI_SECRET_KEY from the environment. Another vendor's values,
+ * and secrets that are not Future AGI keys, are that collector's own. Does nothing when no OTEL header variable is set, never reads
+ * the secret registry, and skips a value that is not a string. Call it where the exporter reads them, immediately before its constructor.
  */
-export function assertNoKeysInAmbientHeaders(known: readonly string[] = []): void {
+export function assertNoKeysInAmbientHeaders(fiKeyValues: readonly unknown[] = []): void {
+  const raw = [process.env.OTEL_EXPORTER_OTLP_HEADERS, process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS].filter((text): text is string => typeof text === "string" && text.trim() !== "");
+  if (raw.length === 0) return;
   const ambient = ambientOtlpHeaders();
   if (Object.keys(ambient).some(isKeyName)) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
-  const secrets = new Set<string>([...getRegisteredSecrets(), ...known]);
-  for (const name of ["FI_API_KEY", "FI_SECRET_KEY"]) { const value = process.env[name]; if (value && value.trim().length >= 8) secrets.add(value); }
-  const raw = [process.env.OTEL_EXPORTER_OTLP_HEADERS ?? "", process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS ?? ""];
-  for (const secret of secrets) {
-    if (secret.length < 8) continue;
-    if (Object.values(ambient).some(value => value.includes(secret)) || raw.some(text => text.includes(secret))) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
+  const keys = new Set<string>();
+  for (const value of [...fiKeyValues, ...["FI_API_KEY", "FI_SECRET_KEY"].map(name => process.env[name])]) if (typeof value === "string" && value.trim().length >= 8) { keys.add(value); keys.add(value.trim()); }
+  if (keys.size === 0) return;
+  const haystacks = [...raw.flatMap(valueForms), ...Object.values(ambient).filter((value): value is string => typeof value === "string").flatMap(valueForms)];
+  for (const key of keys) {
+    const needles = [key, encodeURIComponent(key)];
+    if (haystacks.some(text => needles.some(needle => text.includes(needle)))) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
   }
 }
 

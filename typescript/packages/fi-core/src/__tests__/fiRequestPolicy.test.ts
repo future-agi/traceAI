@@ -113,10 +113,12 @@ class Agent {}
 class EnvHttpProxyAgent {}
 class ProxyAgent {}
 const DISPATCHERS: Record<string, new () => object> = { Agent, EnvHttpProxyAgent, ProxyAgent };
+// An environment-reading dispatcher is always proxied (what it reads can change, and an option can name a proxy): whatever the table
+// row says about the environment, a send through one is refused.
 const D = (name: string, target: string, expectation: Row["expect"], proxy: Record<string, string>, dispatcher = "EnvHttpProxyAgent"): Row =>
-  ({ name: `${name}, through a ${dispatcher}`, target, transport: "http", keys: "explicit", optIn: "env", proxy, dispatcher, expect: expectation });
+  ({ name: `${name}, through a ${dispatcher}`, target, transport: "http", keys: "explicit", optIn: "env", proxy, dispatcher, expect: dispatcher === "EnvHttpProxyAgent" && !/\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(target) ? no("FI_PLAINTEXT_PROXIED") : expectation });
 const COLLECTOR = "http://collector.example:4318";
-/** Through a dispatcher the caller supplies: proxied when the library's own rule OR Python's proxy_bypass_environment says so; unknown counts as proxied. */
+/** Through a dispatcher the caller supplies: any proxy or environment-reading agent is proxied; for a direct one Python's proxy_bypass_environment decides; unknown counts as proxied. */
 const DISPATCHER_ROWS: Row[] = [
   D("HTTP_PROXY", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY }),
   D("http_proxy", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { http_proxy: PROXY }),

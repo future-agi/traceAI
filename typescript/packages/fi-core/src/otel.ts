@@ -30,7 +30,7 @@ import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { connectGrpcDirect, isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
-import { assertDirectFetch, assertNoKeysInAmbientHeaders, decideFiRequest, hasCompleteKeyPair, isRedirect, metadataStrings, FiKeyRefusal, type FiDecision, type FiRequest } from "./fi-request-policy";
+import { assertDirectFetch, assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, hasCompleteKeyPair, isRedirect, metadataStrings, FiKeyRefusal, type FiDecision, type FiRequest } from "./fi-request-policy";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -334,7 +334,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     const decision = decide({ target: endpoint, transport: "grpc", headers: callerHeaders, metadata: callerMetadata, credentials: callerCredentials, allowInsecureHttp, declaredFi: isFiRouteDeclared(options) });
     const { fiBound, metadata, credentials: channelCredentials } = decision;
     // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
-    if (!fiBound) assertNoKeysInAmbientHeaders([...Object.values(callerHeaders ?? {}), ...metadataKnown]);
+    if (!fiBound) assertNoKeysInAmbientHeaders(fiKeyHeaderValues(callerHeaders, callerStrings));
     const headers = decision.headers ?? {};
     const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
@@ -489,7 +489,7 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
     const { headers, fiBound } = decide({ target: url, written: named, transport: "http", headers: options.headers, declaredFi: isFiRouteDeclared(options), allowInsecureHttp: options.allowInsecureHttp });
     // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
     // (It sends with its own http.Agent, which does not consult a proxy environment.)
-    if (!fiBound) assertNoKeysInAmbientHeaders(Object.values(options.headers ?? {}));
+    if (!fiBound) assertNoKeysInAmbientHeaders(fiKeyHeaderValues(options.headers));
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);

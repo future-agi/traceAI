@@ -66,11 +66,11 @@ describe("a known secret in an ambient header", () => {
     process.env.OTEL_EXPORTER_OTLP_HEADERS = "x-trace-token=env-key-synthetic-0003";
     expect(refused(() => http())).not.toBe("");
   });
-  test("a registered known secret is refused too", () => {
+  test("a registered secret that is not a Future AGI key belongs to the other collector and is not refused", () => {
     registerSecret("registered-secret-synthetic-0004");
     process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS = "x-other=registered-secret-synthetic-0004";
-    expect(refused(() => http())).not.toBe("");
-    expect(refused(() => rpc())).not.toBe("");
+    expect(refused(() => http())).toBe("");
+    expect(refused(() => rpc())).toBe("");
   });
   test("a value that only looks similar is not refused", () => {
     process.env.FI_API_KEY = "env-key-synthetic-0003"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0003";

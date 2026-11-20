@@ -192,10 +192,10 @@ describe("the custom eval checks follow the same rules", () => {
     await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
-  test("the proxy environment does not route the check, which is sent direct", async () => {
+  test("with a proxy in the environment the check is not sent, whether the global dispatcher slot is empty or holds a plain Agent", async () => {
     process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
     await checkCustomEvalConfigExists("p", [tag()]);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
   test("loopback and https bases are checked", async () => {
     process.env.FI_BASE_URL = "http://127.0.0.1:9"; await checkCustomEvalConfigExists("p", [tag()]);

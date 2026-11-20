@@ -291,3 +291,55 @@ test('the published type surface has no fiEndpoint, and no shipped source reads 
   for (const file of walk(path.join(coreRoot, 'dist')).filter(f => f.endsWith('.d.ts'))) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /fiEndpoint/, file);
   for (const file of walk(path.join(coreRoot, 'dist', 'src')).filter(f => f.endsWith('.js'))) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /JEST_WORKER_ID/, file);
 });
+
+// ---- Plaintext opt-in gRPC: a channel built with proxies off ----------------------------------------
+// A plaintext channel that carries keys under the opt-in goes to a host that is not literal loopback (127.0.0.2 here, which this
+// machine routes to the loopback sink). A gRPC proxy in the environment must not get it, with or without gzip; a channel that is
+// not plaintext never takes this path; an exporter without the layout it relies on is refused.
+const net = require('node:net');
+async function grpcSinkAt(address) {
+  const received = [];
+  const server = new grpc.Server();
+  const id = buffer => buffer;
+  server.addService({ Export: { path: '/opentelemetry.proto.collector.trace.v1.TraceService/Export', requestStream: false, responseStream: false,
+    requestSerialize: id, requestDeserialize: id, responseSerialize: id, responseDeserialize: id } },
+  { Export: (call, callback) => { received.push(call.metadata); callback(null, Buffer.alloc(0)); } });
+  const port = await new Promise((ok, bad) => server.bindAsync(`${address}:0`, grpc.ServerCredentials.createInsecure(), (e, p) => e ? bad(e) : ok(p)));
+  cleanup.push(() => server.forceShutdown());
+  return { received, endpoint: `${address}:${port}` };
+}
+async function proxyTrap() {
+  const state = { connections: 0 };
+  const server = net.createServer(socket => { state.connections++; socket.destroy(); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  cleanup.push(() => new Promise(done => server.close(done)));
+  state.url = `http://127.0.0.1:${server.address().port}`;
+  return state;
+}
+for (const compression of [undefined, 'gzip']) {
+  test(`plaintext opt-in gRPC, compression ${compression}: sent direct with a gRPC proxy in the environment, keys arrive`, async () => {
+    const trap = await proxyTrap();
+    for (const name of ['grpc_proxy', 'https_proxy', 'http_proxy']) { process.env[name] = trap.url; cleanup.push(() => { delete process.env[name]; }); }
+    const sink = await grpcSinkAt('127.0.0.2');
+    const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, credentials: grpc.credentials.createInsecure(), headers: FI,
+      allowInsecureHttp: true, ...(compression ? { compression } : {}) });
+    await exportThrough(exporter);
+    assert.equal(trap.connections, 0, 'the proxy was contacted');
+    assert.equal(sink.received.length, 1);
+    assert.deepEqual(sink.received[0].get('x-api-key'), [FI['x-api-key']]);
+  });
+}
+test('a gRPC channel that is not plaintext keeps the exporter\'s own send; the plaintext opt-in one replaces it', async () => {
+  const own = exporter => Object.prototype.hasOwnProperty.call(exporter._delegate._transport, 'send');
+  const tls = createSpanExporter({ transport: Transport.GRPC, endpoint: 'collector.example:4317', credentials: grpc.credentials.createSsl(), headers: FI });
+  assert.equal(own(tls), false);
+  const plaintext = createSpanExporter({ transport: Transport.GRPC, endpoint: '127.0.0.2:4317', credentials: grpc.credentials.createInsecure(), headers: FI, allowInsecureHttp: true });
+  assert.equal(own(plaintext), true);
+  await tls.shutdown(); await plaintext.shutdown();
+});
+test('an exporter without the layout the direct channel relies on is refused, naming nothing', () => {
+  const { connectGrpcDirect } = load('./dist/src/otlp-header-isolation');
+  for (const stand of [{}, { _delegate: {} }, { _delegate: { _transport: { send() {}, _parameters: {} } } }]) {
+    assert.throws(() => connectGrpcDirect(stand), error => /^Unsupported OTLP exporter layout: /.test(error.message) && !/synthetic|x-api-key/i.test(error.message));
+  }
+});
