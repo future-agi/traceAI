@@ -111,7 +111,7 @@ def test_grpc_transport_options_and_positional_headers(monkeypatch):
         otel.GRPCSpanExporter("http://local.invalid:4317", True, sentinel, [("Authorization", "synthetic")], 7, **opts)
     assert captured["endpoint"] == "http://local.invalid:4317"
     assert captured["insecure"] is True and captured["credentials"] is sentinel
-    assert {k.lower(): v for k, v in captured["headers"]} == {"authorization": "synthetic"} and captured["timeout"] == 7
+    assert {k.lower(): v for k, v in dict(captured["headers"]).items()} == {"authorization": "synthetic"} and captured["timeout"] == 7
     for key, value in opts.items():
         assert captured[key] == value
 

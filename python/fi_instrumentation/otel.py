@@ -661,6 +661,33 @@ def _ambient_headers() -> dict[str, str]:
     return found
 
 
+def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | None:
+    """The caller's headers read once into a dict (None when there are none).
+
+    Accepts a mapping, a sequence or one-shot iterator of pairs, or the comma-separated
+    ``name=value`` string gRPC exporters take. With ``lower`` the names are lower-cased, as
+    gRPC requires; values are untouched.
+    """
+    if headers is None:
+        return None
+    if isinstance(headers, str):
+        from opentelemetry.util.re import parse_env_headers
+
+        pairs: Any = parse_env_headers(headers, liberal=True).items()
+    else:
+        pairs = headers.items() if isinstance(headers, Mapping) else headers
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        name = key.decode() if isinstance(key, bytes) else str(key)
+        if lower:
+            name = name.lower()
+            # A blank duplicate that differs only in case never replaces a value that was given.
+            if name in result and _is_blank(value):
+                continue
+        result[name] = value
+    return result or None
+
+
 def _caller_headers(headers: Any) -> dict[str, Any]:
     """The headers a caller passed to an exporter, keyed by lower-case name."""
     pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
@@ -815,7 +842,10 @@ class GRPCSpanExporter(_GRPCSpanExporter):
 
     def __init__(self, *args: Any, **kwargs: Any):
         bound_args = _get_class_signature(_GRPCSpanExporter, "grpc").bind_partial(*args, **kwargs)
-        caller_headers = bound_args.arguments.get("headers")
+        # Read once; gRPC metadata names are lower case.
+        caller_headers = _materialize_headers(bound_args.arguments.get("headers"), lower=True)
+        if "headers" in bound_args.arguments:
+            bound_args.arguments["headers"] = caller_headers
 
         if bound_args.arguments.get("endpoint") is None:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
@@ -855,7 +885,9 @@ class HTTPSpanExporter(_HTTPSpanExporter):
 
     def __init__(self, *args: Any, **kwargs: Any):
         bound_args = _get_class_signature(_HTTPSpanExporter, "http").bind_partial(*args, **kwargs)
-        caller_headers = bound_args.arguments.get("headers")
+        caller_headers = _materialize_headers(bound_args.arguments.get("headers"))
+        if "headers" in bound_args.arguments:
+            bound_args.arguments["headers"] = caller_headers
 
         if bound_args.arguments.get("endpoint") is None:
             _, endpoint = _normalized_endpoint(None)
