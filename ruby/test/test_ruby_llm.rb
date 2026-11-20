@@ -33,8 +33,12 @@ class RubyLLMInstrumentorTest < Minitest::Test
     end
   RUBY
   RAISING_TOOL = TOOL.sub('"Sunny in #{city}"', "raise(ArgumentError, 'tool exploded')")
+  # The child runs the RubyLLM version the suite runs under (the floor and the
+  # latest are tested by pointing BUNDLE_GEMFILE at a Gemfile that pins one).
+  RUBY_LLM_PIN = Gem.loaded_specs['ruby_llm'] ? "gem 'ruby_llm', '= #{Gem.loaded_specs['ruby_llm'].version}'" : ''
   def llm(code, tool: nil)
     <<~RUBY
+      #{RUBY_LLM_PIN}
       require 'ruby_llm'
       RubyLLM.configure { |c| c.openai_api_key = 'mock-key'; c.openai_api_base = '#{@provider.url}/v1'; c.max_retries = 0 }
       #{tool}
@@ -92,12 +96,41 @@ class RubyLLMInstrumentorTest < Minitest::Test
     tool = by_name(all, 'execute_tool weather').first; t = attrs(tool.attributes)
     assert_equal :SPAN_KIND_INTERNAL, tool.kind; assert_equal :STATUS_CODE_OK, tool.status.code
     assert_equal 'TOOL', t['gen_ai.span.kind']; assert_equal 'execute_tool', t['gen_ai.operation.name']
-    assert_equal 'weather', t['gen_ai.tool.name']; assert_equal 'call_1', t['gen_ai.tool.call.id']; assert_equal 'function', t['gen_ai.tool.type']
+    assert_equal 'weather', t['gen_ai.tool.name']; assert_equal 'function', t['gen_ai.tool.type']
+    # RubyLLM numbers the call itself (2.2 replaces the provider's id); the id on the tool span is the one the chat span's reply carries.
+    refute_empty t['gen_ai.tool.call.id'].to_s
+    assert_equal t['gen_ai.tool.call.id'], a['gen_ai.output.messages.0.message.tool_calls.0.tool_call.id']
     assert_equal({'city' => 'Paris'}, JSON.parse(t['gen_ai.tool.call.arguments']))
     assert_equal 'Sunny in Paris', t['gen_ai.tool.call.result']
     assert_equal 'ruby_llm', t['traceai.capture.layer']
-    # Every span of the round trip is in one trace of its own.
-    assert_equal 1, all.map(&:trace_id).uniq.length
+  end
+
+  def test_tool_span_is_current_while_the_tool_runs_on_an_application_provider
+    tool = TOOL.sub('def execute(city:) = "Sunny in #{city}"') { %q(def execute(city:); puts(OpenTelemetry::Trace.current_span.context.span_id.unpack1('H*')); "Sunny in #{city}"; end) }
+    code = app_sdk + llm("OpenTelemetry.tracer_provider.tracer('app').in_span('checkout') { |s| puts s.context.span_id.unpack1('H*'); chat.ask('weather?') }", tool: tool)
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    app_span, inside_tool = stdout.lines.first(2).map(&:strip)
+    all = spans
+    tool_span = by_name(all, 'execute_tool weather').first
+    assert_equal inside_tool, tool_span.span_id.unpack1('H*')
+    assert_equal app_span, tool_span.parent_span_id.unpack1('H*')
+    assert_equal [app_span], all.select { |s| s.name.start_with?('chat') }.map { |s| s.parent_span_id.unpack1('H*') }.uniq
+  end
+
+  CALLS = JSON.generate(id: 'chat-0', object: 'chat.completion', model: 'gpt-4o-mini-2024-07-18', choices: [{index: 0, message: {role: 'assistant', content: nil, tool_calls: %w[Paris Rome].each_with_index.map { |city, i| {id: "call_#{i}", type: 'function', function: {name: 'weather', arguments: JSON.generate(city: city)}} }}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 7, completion_tokens: 4, total_tokens: 11}).freeze
+  # RubyLLM 2.1 and later carry the caller's instrumentation context to the
+  # threads that run concurrent tool calls; 2.0 does not.
+  def test_concurrent_tool_spans_nest_under_the_callers_span
+    skip 'RubyLLM 2.0 does not hand its callers context to tool threads' if Gem.loaded_specs['ruby_llm'] && Gem.loaded_specs['ruby_llm'].version < Gem::Version.new('2.1')
+    @provider.stop; @provider = MockHTTP.new { |r| [200, JSON_TYPE, calls_tool?(r[:body]) ? CALLS : CHAT] }
+    code = app_sdk + llm("chat.with_tool_options(concurrency: :threads); OpenTelemetry.tracer_provider.tracer('app').in_span('checkout') { |s| puts s.context.span_id.unpack1('H*'); chat.ask('weather?') }", tool: TOOL)
+    stdout, stderr, status = app(code)
+    assert status.success?, stderr
+    parent = stdout.lines.first.strip
+    tools = by_name(spans, 'execute_tool weather')
+    assert_equal 2, tools.length
+    assert_equal [parent], tools.map { |t| t.parent_span_id.unpack1('H*') }.uniq
   end
 
   def test_tool_error_is_recorded_on_the_tool_span_and_raised_to_the_application
@@ -176,21 +209,21 @@ class RubyLLMInstrumentorTest < Minitest::Test
       end
       t = attrs(by_name(all, 'execute_tool weather').first.attributes)
       # Names, ids and counts are not content.
-      assert_equal 'weather', t['gen_ai.tool.name']; assert_equal 'call_1', t['gen_ai.tool.call.id']
+      assert_equal 'weather', t['gen_ai.tool.name']; refute_includes ['__REDACTED__', nil, ''], t['gen_ai.tool.call.id']
       chat = attrs(all.select { |s| s.name.start_with?('chat') }.first.attributes)
       assert_equal 'gpt-4o-mini', chat['gen_ai.request.model']; assert chat['gen_ai.usage.input_tokens']
     end
   end
 
   def test_hiding_invocation_parameters_drops_the_request_parameters
-    stdout, stderr, status = app(llm("chat.with_temperature(0.25); chat.ask('hi')"), {'FI_HIDE_LLM_INVOCATION_PARAMETERS' => 'true'})
+    _, stderr, status = app(llm("chat.with_temperature(0.25); chat.ask('hi')"), {'FI_HIDE_LLM_INVOCATION_PARAMETERS' => 'true'})
     assert status.success?, stderr
     a = attrs(spans.first.attributes)
     refute a.key?('gen_ai.request.temperature'); assert_equal 'gpt-4o-mini', a['gen_ai.request.model']
   end
 
   def test_session_and_user_helpers_reach_the_chat_and_tool_spans
-    stdout, stderr, status = app(llm("TraceAI::Auto.using_session('session-9') { chat.ask('hi') }", tool: TOOL))
+    _, stderr, status = app(llm("TraceAI::Auto.using_session('session-9') { chat.ask('hi') }", tool: TOOL))
     assert status.success?, stderr
     all = spans
     refute_empty all
@@ -256,7 +289,7 @@ class RubyLLMInstrumentorTest < Minitest::Test
   end
 
   def test_an_allowlist_without_ruby_llm_leaves_the_wire_span
-    stdout, stderr, status = app(llm("puts chat.ask('hi').content"), {'FI_INSTRUMENTATIONS' => 'wire'})
+    _, stderr, status = app(llm("puts chat.ask('hi').content"), {'FI_INSTRUMENTATIONS' => 'wire'})
     assert status.success?, stderr
     all = export_spans.map(&:first)
     assert_equal ['chat gpt-4o-mini'], all.map(&:name)
@@ -266,7 +299,7 @@ class RubyLLMInstrumentorTest < Minitest::Test
   # Without the RUBYOPT flag: RubyLLM is loaded first and the application starts
   # the agent afterwards, as the README describes for clients loaded after boot.
   def test_explicit_start_after_ruby_llm_is_loaded_instruments_it
-    code = "require 'ruby_llm'; RubyLLM::Support::Instrumentation\n" \
+    code = "#{RUBY_LLM_PIN}; require 'ruby_llm'; RubyLLM::Support::Instrumentation\n" \
            "require 'traceai/auto/agent'; TraceAI::Auto.init; TraceAI::Auto.auto_instrument\n" + llm("puts chat.ask('hi').content; TraceAI::Auto.flush")
     stdout, stderr, status = app(code, {'RUBYOPT' => nil})
     assert status.success?, stderr; assert_equal "Hello from RubyLLM\n", stdout
@@ -277,6 +310,7 @@ class RubyLLMInstrumentorTest < Minitest::Test
     # A payload the instrumentor cannot read (no messages, no model) still lets
     # the call through unchanged and returns what the block returned.
     code = <<~RUBY
+      #{RUBY_LLM_PIN}
       require 'ruby_llm'
       result = RubyLLM.instrument('chat.ruby_llm', {input_messages: 42, model: Object.new, tools: nil}) { |event| event[:response] = Object.new; :answer }
       puts result.inspect
