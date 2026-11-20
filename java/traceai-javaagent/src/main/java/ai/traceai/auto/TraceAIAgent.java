@@ -33,15 +33,19 @@ public final class TraceAIAgent {
             .or(any(), loader -> loader != null && loader.getClass().getName().startsWith(OtelJavaAgent.PREFIX))
             .with(new AgentBuilder.Listener.Adapter() {
                 @Override public void onTransformation(TypeDescription type, ClassLoader loader, JavaModule module, boolean loaded, DynamicType dynamicType) {
-                    TraceAIAuto.integrationInstrumented(type.getName().startsWith("okhttp3") ? "okhttp" : "java.net.http");
+                    TraceAIAuto.integrationInstrumented(integration(type.getName()));
                 }
                 @Override public void onError(String type, ClassLoader loader, JavaModule module, boolean loaded, Throwable error) {
-                    TraceAIAuto.integrationFailed(type.startsWith("okhttp3") ? "okhttp" : "java.net.http");
+                    TraceAIAuto.integrationFailed(integration(type));
                     TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                 }
             })
             // Only HTTP client classes are transformed. The application's OpenTelemetry SDK classes,
             // providers and processors are never rewritten, wrapped or observed.
+            // Application classes with a method annotated with ai.traceai.annotations.*; matched by name, so the annotation module is not needed here.
+            .type(declaresMethod(isAnnotatedWith(annotationType())).and(not(isInterface())).and(not(nameStartsWith("java.").or(nameStartsWith("jdk.")).or(nameStartsWith("sun.")))))
+            .transform((builder, type, loader, module, domain) -> builder
+                .visit(Advice.to(AnnotatedMethodAdvice.class).on(isAnnotatedWith(annotationType()).and(not(isAbstract())).and(not(isConstructor())).and(not(isTypeInitializer())))))
             .type(named("jdk.internal.net.http.HttpRequestImpl"))
             .transform((builder, type, loader, module, domain) -> builder
                 .visit(Advice.to(JdkHeaderAdvice.class).on(namedOneOf("setSystemHeader", "addSystemHeader").and(takesArguments(String.class, String.class)))))
@@ -64,6 +68,24 @@ public final class TraceAIAgent {
             .type(named("okhttp3.OkHttpClient"))
             .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))))
             .installOn(instrumentation);
+    }
+    private static net.bytebuddy.matcher.ElementMatcher<TypeDescription> annotationType() { return type -> AnnotationTracing.annotationName(type.getName()); }
+    /** The integration a transformed class belongs to, for the status report. */
+    private static String integration(String type) {
+        return type.startsWith("okhttp3") ? "okhttp" : type.startsWith("jdk.internal.net.http") ? "java.net.http" : "annotations";
+    }
+    public static class AnnotatedMethodAdvice {
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static Object enter(@Advice.Origin java.lang.reflect.Method method, @Advice.AllArguments Object[] arguments) throws Exception {
+            return ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("enterAnnotated", java.lang.reflect.Method.class, Object[].class).invoke(null, method, arguments);
+        }
+        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
+        public static void exit(@Advice.Enter Object state, @Advice.Return(readOnly = false, typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,
+                                @Advice.Thrown Throwable error) throws Exception {
+            if (state == null) return;
+            Object replacement = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("exitAnnotated", Object.class, Object.class, Throwable.class).invoke(null, state, returned, error);
+            if (replacement != null) returned = replacement;
+        }
     }
     public static class JdkHeaderAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)

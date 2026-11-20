@@ -31,8 +31,10 @@ final class OtelBridge {
         Context parent = Context.current();
         Span current = Span.current();
         validSpan = current.getSpanContext().isValid();
+        // Inside an annotated application method its span is the parent, and is not a library span to suppress under.
+        boolean annotated = parent.get(AnnotationTracing.ACTIVE) != null;
         boolean suppressed = Boolean.TRUE.equals(parent.get(TraceAIAuto.SUPPRESS));
-        if (current instanceof ReadableSpan readable) suppressed |= library(readable.getAttribute(AttributeKey.stringKey("gen_ai.span.kind"))) || library(readable.getAttribute(AttributeKey.stringKey("fi.span.kind")));
+        if (!annotated && current instanceof ReadableSpan readable) suppressed |= library(readable.getAttribute(AttributeKey.stringKey("gen_ai.span.kind"))) || library(readable.getAttribute(AttributeKey.stringKey("fi.span.kind")));
         Integer attributeLimit = null;
         io.opentelemetry.sdk.resources.Resource resource = null;
         Map<String, String> attrs = new LinkedHashMap<>(ContextAttributes.getAttributesFromContext());
@@ -77,7 +79,10 @@ final class OtelBridge {
             Class<?> scApi = Class.forName(prefix + ".api.trace.SpanContext", false, loader);
             boolean validContext = (boolean)scApi.getMethod("isValid").invoke(sc);
             validSpan |= validContext;
-            if (validContext) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
+            // The annotated span stays the parent inside an annotated method; the application's span context does not replace it.
+            if (validContext && !annotated) parent = Context.root().with(Span.wrap(ApplicationOtel.context(sc, loader)));
+            // A Google ADK span is current: it is the parent even inside an annotated method (the agent span nests under the
+            // annotated span, and the model and tool spans nest under the agent span).
             Context adkParent = GoogleAdk.contextOf(external);
             if (adkParent != null) parent = adkParent;
             try {

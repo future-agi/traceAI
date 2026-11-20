@@ -277,7 +277,7 @@ public final class TraceAIAuto {
     /** An integration that is not a wire transport: gated on the agent being configured and its own name only. */
     static boolean integrationEnabled(String name) { return config != null && config.enabled(name); }
     static void integrationInstrumented(String name) {
-        boolean enabled = GoogleAdk.INTEGRATION.equals(name) ? integrationEnabled(name) : transportEnabled(name);
+        boolean enabled = GoogleAdk.INTEGRATION.equals(name) ? integrationEnabled(name) : name.equals("annotations") ? annotationsEnabled() : transportEnabled(name);
         STATUS.put(name, enabled ? "instrumented" : "disabled");
     }
     static void integrationFailed(String name) {
@@ -365,7 +365,7 @@ public final class TraceAIAuto {
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
         boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
-        if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || key.startsWith("gen_ai.tool.") || key.equals("gen_ai.request.parameters")
+        if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || (key.startsWith("gen_ai.tool.") && !key.equals("gen_ai.tool.name")) || key.equals("gen_ai.request.parameters")
             || key.equals("raw.input") || key.equals("llm.prompt_template.variables") || key.startsWith("llm.prompt_template.variables.")
             || key.equals("gen_ai.prompt.template.variables") || key.startsWith("gen_ai.prompt.template.variables.")
             || key.startsWith("embedding.embeddings.") && key.endsWith(".embedding.text")
@@ -415,6 +415,7 @@ public final class TraceAIAuto {
             {"elasticsearch", "co.elastic.clients.elasticsearch.ElasticsearchClient", "ai.traceai.elasticsearch.TracedElasticsearchClient"}
         };
         for (String[] library : libraries) STATUS.put(library[0], !config.enabled(library[0]) ? "disabled" : !present(library[1]) ? "not_installed" : !present(library[2]) ? "missing_instrumentor (known HTTP protocols still covered by wire)" : "manual (use " + library[2] + "; wrapper/listener registration required)");
+        STATUS.put("annotations", config.credentials() && annotationsEnabled() ? "pending (enabled when an annotated class loads)" : "disabled");
         STATUS.put("servlet", config.credentials() && transportEnabled("servlet") ? "pending (joins incoming W3C trace context when loaded)" : "disabled");
         STATUS.put(GoogleAdk.INTEGRATION, !config.credentials() || !config.enabled(GoogleAdk.INTEGRATION) ? "disabled" : !present("com.google.adk.runner.Runner") ? "not_installed" : "pending (enabled when loaded)");
         boolean wire = config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && config.credentials();
@@ -438,6 +439,10 @@ public final class TraceAIAuto {
     public static void requestOkHttp(Object call) {
         try { if (active) OkHttpTransport.requestContext(call); } catch (Throwable ignored) { }
     }
+    // Called reflectively from advice woven into application methods annotated with ai.traceai.annotations.*.
+    public static Object enterAnnotated(java.lang.reflect.Method method, Object[] arguments) { return AnnotationTracing.enter(method, arguments); }
+    public static Object exitAnnotated(Object state, Object returned, Throwable error) { return AnnotationTracing.exit(state, returned, error); }
+    static boolean annotationsEnabled() { return config != null && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains("annotations"); }
     public static void installOkHttp(Object builder) {
         try { if (transportEnabled("okhttp") && !besideOtelJavaAgent()) OkHttpTransport.install(builder); } catch (Throwable ignored) { integrationFailed("okhttp"); }
     }

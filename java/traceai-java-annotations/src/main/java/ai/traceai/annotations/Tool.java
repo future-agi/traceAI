@@ -18,6 +18,6 @@ public @interface Tool {
     /** Span name; the method name when empty. */
     String name() default "";
 
-    /** Free-text description, recorded as the span description attribute when set. */
+    /** Free-text description, recorded as {@code gen_ai.tool.description} when set; it is withheld under the input hide settings, like the other tool definitions. */
     String description() default "";
 }

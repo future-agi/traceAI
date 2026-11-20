@@ -17,7 +17,4 @@ import java.lang.annotation.Target;
 public @interface LLM {
     /** Span name; the method name when empty. */
     String name() default "";
-
-    /** Free-text description, recorded as the span description attribute when set. */
-    String description() default "";
 }

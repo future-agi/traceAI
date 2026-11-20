@@ -29,6 +29,8 @@ public final class AnnotatedApp {
                 System.out.println("RESULT=" + service.agent("what is 2+2?", SECRET_ARG));
                 service.noArguments(); System.out.println("PRIMITIVE=" + service.count(41));
             }
+            case "wire" -> System.out.println("RESULT=" + service.callModel(args[1]));
+            case "blank_kind" -> System.out.println("RESULT=" + service.blank() + service.both());
             case "secret" -> System.out.println("RESULT=" + service.agent(System.getenv("FI_API_KEY"), "s"));
             case "error" -> {
                 try { service.boom("x"); System.out.println("NO_EXCEPTION"); }
@@ -58,7 +60,7 @@ public final class AnnotatedApp {
     public static class Service {
         static volatile RuntimeException LAST;
 
-        @Agent(name = "planner", description = "plans the work")
+        @Agent(name = "planner")
         public String agent(String question, @ExcludeFromSpan String apiKey) {
             String found = lookup(question);
             String answer = generate("Answer: " + found);
@@ -73,6 +75,22 @@ public final class AnnotatedApp {
 
         @Span(kind = "retriever", name = "fetch_docs")
         public String fetch(List<String> terms) { return "docs" + terms.size(); }
+
+        /** An LLM-kind method that makes a real provider HTTP call: the agent's wire span must still appear, under this one. */
+        @LLM(name = "ask_model")
+        public String callModel(String endpoint) throws Exception {
+            var client = java.net.http.HttpClient.newHttpClient();
+            var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(endpoint))
+                .header("Content-Type", "application/json").POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}")).build();
+            return String.valueOf(client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+        }
+
+        @Span(kind = " ")
+        public String blank() { return "b"; }
+
+        @Span(kind = "guardrail")
+        @Tool
+        public String both() { return "t"; }
 
         @Chain
         public void noArguments() { }

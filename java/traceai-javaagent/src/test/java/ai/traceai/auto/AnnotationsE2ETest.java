@@ -19,6 +19,11 @@ class AnnotationsE2ETest {
 
     @BeforeEach void startCollector() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes(); byte[] body = AgentE2ETest.BASIC.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body); exchange.close();
+        });
         server.createContext("/tracer/v1/traces", exchange -> {
             Object root = WireCore.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             for (Object resource : WireCore.list(WireCore.get(root, "resourceSpans")))
@@ -33,6 +38,9 @@ class AnnotationsE2ETest {
 
     /** mode: agent (-javaagent), init (agent jar on the class path, initialization first), none (no agent at all). */
     String run(String mode, String scenario, Map<String, String> env) throws Exception {
+        return run(mode, scenario, env, List.of());
+    }
+    String run(String mode, String scenario, Map<String, String> env, List<String> extra) throws Exception {
         Path agent = AgentE2ETest.agentJar();
         String cp = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
         String classes = Path.of("target", "classes").toAbsolutePath().normalize().toString();
@@ -50,6 +58,7 @@ class AnnotationsE2ETest {
             app.add(0, agent.toString());
         }
         command.addAll(List.of("-XX:+EnableDynamicAgentLoading", "-cp", String.join(File.pathSeparator, app), APP, scenario));
+        command.addAll(extra);
         Path output = Files.createTempFile(Path.of("target"), "annotations-e2e-", ".log");
         ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         Map<String, String> environment = pb.environment(); environment.keySet().removeIf(k -> k.startsWith("FI_") || k.startsWith("OTEL_"));
@@ -83,7 +92,14 @@ class AnnotationsE2ETest {
         Object parent = span.get("parentSpanId");
         return spans.stream().filter(s -> s.get("spanId").equals(parent)).findFirst().orElse(null);
     }
-    static Object json(Object text) { return WireCore.parse(String.valueOf(text)); }
+    /** The parsed JSON with integral numbers as Long and containers as plain collections, so it compares with Map.of / List.of. */
+    static Object json(Object text) { return normal(WireCore.parse(String.valueOf(text))); }
+    static Object normal(Object value) {
+        if (value instanceof Map<?, ?> map) { Map<String, Object> out = new LinkedHashMap<>(); map.forEach((k, v) -> out.put(String.valueOf(k), normal(v))); return out; }
+        if (value instanceof List<?> list) return list.stream().map(AnnotationsE2ETest::normal).toList();
+        if (value instanceof Number number && number.doubleValue() == Math.rint(number.doubleValue())) return number.longValue();
+        return value;
+    }
     static List<String> names(List<Map<String, Object>> spans) { return spans.stream().map(s -> String.valueOf(s.get("name"))).sorted().toList(); }
 
     void assertSyncSpans(String log) {
@@ -104,7 +120,7 @@ class AnnotationsE2ETest {
         assertEquals("docs1|The answer is 4|" + AnnotatedAppSecret.LENGTH, json(attrs(planner).get("output.value")));
         assertEquals(Map.of("expression", "what is 2+2?"), json(attrs(tool).get("input.value")));
         assertEquals(Map.of("terms", List.of("what is 2+2?")), json(attrs(fetch).get("input.value")));
-        assertEquals(Map.of("n", 41), json(attrs(span("count")).get("input.value")));
+        assertEquals(Map.of("n", 41L), json(attrs(span("count")).get("input.value")));
         assertEquals(42, ((Number)json(attrs(span("count")).get("output.value"))).intValue());
         assertNull(attrs(span("noArguments")).get("input.value")); assertNull(attrs(span("noArguments")).get("output.value"));
         for (Map<String, Object> s : spans) {
@@ -156,7 +172,7 @@ class AnnotationsE2ETest {
         assertEquals("mono:m", json(attrs(mono).get("output.value")));
         spans.clear();
         run("agent", "flux", Map.of());
-        assertEquals(List.of(1, 2, 3), json(attrs(span("flux")).get("output.value")));
+        assertEquals(List.of(1L, 2L, 3L), json(attrs(span("flux")).get("output.value")));
     }
     @Test void hideInputsDropsInputValueButKeepsTheToolName() throws Exception {
         run("agent", "sync", Map.of("FI_HIDE_INPUTS", "true"));
@@ -180,5 +196,24 @@ class AnnotationsE2ETest {
         String log = run("none", "sync", Map.of());
         assertTrue(log.contains("RESULT=docs1|The answer is 4|"), log);
         assertTrue(spans.isEmpty());
+    }
+    @Test void aProviderCallInsideAnLlmMethodKeepsItsWireSpanUnderTheAnnotatedSpan() throws Exception {
+        run("agent", "wire", Map.of(), List.of("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions"));
+        Map<String, Object> annotated = span("ask_model");
+        List<Map<String, Object>> wire = spans.stream().filter(s -> !"ask_model".equals(s.get("name"))).toList();
+        assertEquals(1, wire.size(), "the provider call is still traced: " + names(spans));
+        assertSame(annotated, parentOf(wire.get(0)), "the wire span nests under the annotated span");
+        assertEquals("LLM", attrs(annotated).get("fi.span.kind"));
+    }
+    @Test void aBlankSpanKindIsChainAndTheFirstAnnotationInPriorityOrderWins() throws Exception {
+        run("agent", "blank_kind", Map.of());
+        assertEquals("CHAIN", attrs(span("blank")).get("fi.span.kind"));
+        assertEquals("TOOL", attrs(span("both")).get("fi.span.kind"), "@Tool outranks @Span on one method; one span only");
+        assertEquals("both", attrs(span("both")).get("tool.name"));
+    }
+    @Test void disablingAnnotationsTurnsTracingOffWithoutChangingTheApplication() throws Exception {
+        String log = run("agent", "sync", Map.of("FI_DISABLED_INSTRUMENTATIONS", "annotations"));
+        assertTrue(log.contains("RESULT=docs1|The answer is 4|"), log);
+        assertTrue(spans.isEmpty(), "no span: " + names(spans));
     }
 }

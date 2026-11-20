@@ -19,7 +19,4 @@ public @interface Span {
 
     /** Span kind, case-insensitive. An empty or blank value means {@code CHAIN}. */
     String kind() default "CHAIN";
-
-    /** Free-text description, recorded as the span description attribute when set. */
-    String description() default "";
 }
