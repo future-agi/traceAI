@@ -164,7 +164,7 @@ public class HostingStartupPlanTests
 
     [Theory]
     [InlineData("enabled")]
-    [InlineData("y")]
+    [InlineData("sure")]
     public void AnUnrecognisedValueIsOffWithOneWarningThatNamesOnlyTheSetting(string value)
     {
         var (plan, error) = PlanWithStderr(("FI_AUTO_CAPTURE_CONTENT", value));

@@ -51,14 +51,16 @@ internal sealed class AutoConfig
     internal AutoConfig(AutoOptions options)
     {
         Options = options;
-        Values = ReadFile(options.ConfigFile ?? Environment.GetEnvironmentVariable("FI_CONFIG_FILE") ?? Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
+        var envConfigFile=Environment.GetEnvironmentVariable("FI_CONFIG_FILE");
+        Values = ReadFile(options.ConfigFile ?? (string.IsNullOrWhiteSpace(envConfigFile)?null:envConfigFile) ?? Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
         var fileApi=Values.GetValueOrDefault("FI_API_KEY"); var fileSecret=Values.GetValueOrDefault("FI_SECRET_KEY");
         foreach (System.Collections.DictionaryEntry pair in Environment.GetEnvironmentVariables())
             if (pair.Key is string key && (key.StartsWith("FI_") || key == "OTEL_SDK_DISABLED"))
             {
                 var value = pair.Value?.ToString() ?? "";
-                // A blank hide switch is not set, so it does not replace the file's value.
-                if (key.StartsWith("FI_HIDE_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value)) continue;
+                // A blank value is not set for any FI_* key (templated environments often export an empty variable), so it
+                // never replaces the file's value; the file or the default applies.
+                if (key.StartsWith("FI_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value)) continue;
                 Values[key] = value;
             }
         Set("CONFIG_FILE",options.ConfigFile); Values.TryAdd("FI_CONFIG_FILE",Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
@@ -115,8 +117,21 @@ internal sealed class AutoConfig
     /// 1 or yes is on, trimmed and case-insensitive; anything else is off.</summary>
     internal bool Bool(string key) => Get(key).Trim().ToLowerInvariant() is "true" or "1" or "yes";
     /// <summary>FI_AUTO_CAPTURE_CONTENT: on when unset or blank, and for true, 1, yes or on; off for false, 0, no or off.
-    /// Any other value is off, the cautious reading of a switch someone set.</summary>
-    internal bool CaptureContent => Get("AUTO_CAPTURE_CONTENT").Trim().ToLowerInvariant() is "" or "true" or "1" or "yes" or "on";
+    /// Any other value is off, the cautious reading of a switch someone set, reported with one warning that names only the setting.</summary>
+    internal bool CaptureContent
+    {
+        get
+        {
+            switch (Get("AUTO_CAPTURE_CONTENT").Trim().ToLowerInvariant())
+            {
+                case "" or "true" or "1" or "yes" or "on": return true;
+                case "false" or "0" or "no" or "off": return false;
+                default:
+                    TraceAIAuto.Warn("capture-content","FI_AUTO_CAPTURE_CONTENT has a value that is not recognised, so content is not recorded. Use true, 1, yes or on to record it, or false, 0, no or off to keep it off.");
+                    return false;
+            }
+        }
+    }
     /// <summary>A hide switch, from FI_HIDE_* or its file setting, trimmed and case-insensitive:
     /// true, 1, yes or on hides; false, 0, no or off shows. Null when it is not set or blank, so
     /// the caller's default applies. Any other value hides, because a hide switch someone set
@@ -170,9 +185,9 @@ internal sealed class AutoConfig
             var pair=text.Split('=',2); if(pair.Length!=2) continue;
             var key=pair[0].Trim(); var value=pair[1].Trim(); if(key.Length==0||value.Length==0) continue;
             var name=key=="debug"?"FI_AUTO_DEBUG":"FI_"+key.ToUpperInvariant();
-            // A hide switch someone set must never be dropped. When its value is outside the flat
+            // A hide switch or the content switch someone set must never be dropped. When its value is outside the flat
             // subset, keep the text (a single-quoted string without its quotes) and let Hide() decide.
-            bool hide=name.StartsWith("FI_HIDE_",StringComparison.Ordinal);
+            bool hide=name.StartsWith("FI_HIDE_",StringComparison.Ordinal)||name=="FI_AUTO_CAPTURE_CONTENT";
             try
             {
                 if(value.StartsWith('[')) value=string.Join(',',JsonSerializer.Deserialize<string[]>(value)??[]);
