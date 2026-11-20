@@ -148,4 +148,34 @@ class ToolSpansE2ETest {
         run("basic", Map.of("FI_INSTRUMENTATIONS", "okhttp"));
         assertTrue(spans.isEmpty(), spans.toString());
     }
+
+    long appSpans(String log) { return log.lines().filter(l -> l.equals("APP_SPAN=execute_tool lookup")).count(); }
+
+    @Test void theLibrarysOwnWrappersAreNotTracedAgain() throws Exception {
+        // The wrapper opens its TOOL span after the agent's enter advice ran on it: one execute_tool span in all, the wrapper's.
+        String log = run("wrapped", Map.of());
+        assertEquals(2, appSpans(log), log);
+        assertTrue(spans.isEmpty(), "the agent added a sibling span to a wrapper's: " + spans);
+    }
+    @Test void aNativeSpringAiToolObservationSpanNamedForTheToolIsNotTracedAgain() throws Exception {
+        run("native_name", Map.of());
+        assertTrue(spans.isEmpty(), spans.toString());
+    }
+    @Test void aNativeSpringAiToolObservationSpanTaggedToolCallIsNotTracedAgain() throws Exception {
+        run("native_attribute", Map.of());
+        assertTrue(spans.isEmpty(), spans.toString());
+    }
+    @Test void aRecursiveToolCallIsTracedAtEveryLevel() throws Exception {
+        run("recursive", Map.of());
+        // One LangChain4j recursion (2 calls) and one Spring AI recursion (2 calls, each through the delegating overload).
+        assertEquals(4, spans.size(), spans.toString());
+    }
+    @Test void theToolIntegrationStatusSaysChatCallsGoThroughWireOnlyWhenWireIsOn() throws Exception {
+        String on = run("doctor", Map.of());
+        assertTrue(line(on, "DOCTOR=").contains("chat calls through wire"), on);
+        String off = run("doctor", Map.of("FI_WIRE_CAPTURE", "false"));
+        assertFalse(line(off, "DOCTOR=").contains("chat calls through wire"), off);
+        assertTrue(line(off, "DOCTOR=").contains("execute_tool spans"), off);
+        assertTrue(line(off, "DOCTOR=").contains("ai.traceai.langchain4j"), "manual-wrapper hint kept: " + off);
+    }
 }

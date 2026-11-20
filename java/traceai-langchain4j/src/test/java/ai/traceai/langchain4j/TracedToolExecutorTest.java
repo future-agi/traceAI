@@ -161,6 +161,20 @@ class TracedToolExecutorTest {
     }
 
     @Test
+    void anyContentHideSettingKeepsTheExceptionTextOutEvenWithErrorDetailsShown() {
+        for (TraceConfig config : java.util.List.of(TraceConfig.builder().hideInputs(true).build(), TraceConfig.builder().hideOutputs(true).build(),
+                TraceConfig.builder().hideInputMessages(true).build(), TraceConfig.builder().hideOutputMessages(true).build())) {
+            otel.clearSpans();
+            assertThatThrownBy(() -> traced(config, (request, memoryId) -> {
+                throw new IllegalStateException("private-error-text-DO-NOT-EXPORT");
+            }).execute(REQUEST, null)).hasMessage("private-error-text-DO-NOT-EXPORT");
+            SpanData data = only();
+            assertThat(data.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(exports(data, "private-error-text")).isFalse();
+        }
+    }
+
+    @Test
     void hideInputsKeepsArgumentsAndDescriptionOutButKeepsTheResult() {
         traced(TraceConfig.builder().hideInputs(true).build(), (request, memoryId) -> SECRET_RESULT).execute(REQUEST, null);
         SpanData data = only();

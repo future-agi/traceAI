@@ -177,6 +177,22 @@ class TracedToolCallbackTest {
     }
 
     @Test
+    void anyContentHideSettingKeepsTheExceptionTextOutEvenWithErrorDetailsShown() {
+        for (TraceConfig config : java.util.List.of(TraceConfig.builder().hideInputs(true).build(), TraceConfig.builder().hideOutputs(true).build(),
+                TraceConfig.builder().hideInputMessages(true).build(), TraceConfig.builder().hideOutputMessages(true).build())) {
+            try (SpanTestSupport support = new SpanTestSupport(config)) {
+                ToolCallback traced = new TracedToolCallback(callback((in, ctx) -> {
+                    throw new IllegalStateException("private-error-text-DO-NOT-EXPORT");
+                }), support.tracer);
+                assertThatThrownBy(() -> traced.call("{}")).hasMessage("private-error-text-DO-NOT-EXPORT");
+                SpanData data = support.single();
+                assertThat(data.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+                assertThat(exports(data, "private-error-text")).isFalse();
+            }
+        }
+    }
+
+    @Test
     void hideInputsKeepsArgumentsAndDescriptionOutButKeepsTheResult() {
         for (boolean withContext : new boolean[]{false, true}) {
             SpanData data = run(TraceConfig.builder().hideInputs(true).build(), (in, ctx) -> SECRET_RESULT, withContext);
