@@ -1,0 +1,2 @@
+const f = fetch;
+f("https://example.invalid/");

@@ -40,46 +40,87 @@ const sites = (collect: (node: ts.Node) => boolean): string[] => {
   return [...found].sort();
 };
 
-const TRANSPORT_MODULES = /^(?:node:)?(?:http|https|http2|net|tls|dgram|undici)$/;
-const DISPATCHER_CLASSES = /^(?:Pool|Client|BalancedPool|RoundRobinPool|H2CClient|Agent|ProxyAgent|EnvHttpProxyAgent|Dispatcher)$/;
-const NETWORK_MEMBERS = /^(?:request|get|fetch|connect|createConnection|stream|pipeline|upgrade|dispatch)$/;
-const GRPC_CONSTRUCTORS = /^(?:makeGenericClientConstructor|makeClientConstructor)$/;
+const TRANSPORT_MODULES = /^(?:node:)?(?:http|https|http2|net|tls|dgram|undici)$|^undici\/|^@grpc\/grpc-js$|^@opentelemetry\/(?:exporter-trace-otlp-(?:http|grpc|proto)|otlp-exporter-base(?:\/.*)?|otlp-grpc-exporter-base)$/;
+const DISPATCHER_CLASSES = /^(?:Pool|Client|BalancedPool|RoundRobinPool|H2CClient|Agent|ProxyAgent|EnvHttpProxyAgent|Dispatcher|Channel|Server|Socket|WebSocket|EventSource|XMLHttpRequest)$/;
+const NETWORK_MEMBERS = /^(?:request|get|fetch|connect|createConnection|stream|pipeline|upgrade|dispatch|createServer)$/;
+const GRPC_MEMBERS = /^(?:Client|Channel|makeGenericClientConstructor|makeClientConstructor|credentials)$/;
+const TRANSPORT_GLOBALS = /^(?:fetch|WebSocket|EventSource|XMLHttpRequest)$/;
 
-/** A call or construction that can put a request on the wire. */
+const specifierOf = (node: ts.Node): string | undefined => {
+  if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) return node.moduleSpecifier.text;
+  if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) return node.moduleReference.expression.text;
+  if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) return (node.arguments[0] as ts.StringLiteralLike).text;
+  return undefined;
+};
+const isTransportModule = (spec: string | undefined): boolean => spec !== undefined && TRANSPORT_MODULES.test(spec);
+/** An element or property access that names a global transport, however the global object is reached. */
+const namesTransportGlobal = (node: ts.Node): boolean => {
+  // `typeof globalThis.fetch === "function"` only asks whether the global exists; nothing is sent.
+  if (node.parent && ts.isTypeOfExpression(node.parent)) return false;
+  if (ts.isElementAccessExpression(node)) return ts.isStringLiteralLike(node.argumentExpression) && TRANSPORT_GLOBALS.test(node.argumentExpression.text);
+  if (ts.isPropertyAccessExpression(node) && /^(?:globalThis|global|self|window)$/.test(node.expression.getText())) return TRANSPORT_GLOBALS.test(node.name.text);
+  return false;
+};
+
+/**
+ * A reference that can put a request on the wire, in any spelling: a transport global used in any way (call, alias, .call/.apply/.bind,
+ * Reflect.apply, destructuring), a transport module imported, required, dynamically imported or `import x = require()`d, a network member of
+ * a transport module object, a dispatcher, channel or client constructed, a grpc client, channel or credentials constructor.
+ */
 function isTransportPrimitive(node: ts.Node): boolean {
+  if (isTransportModule(specifierOf(node))) return true;
+  if (namesTransportGlobal(node)) return true;
+  // A bare identifier that is a transport global, wherever it appears except as a declaration name or a property name.
+  if (ts.isIdentifier(node) && TRANSPORT_GLOBALS.test(node.text)) {
+    const parent = node.parent;
+    if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+    if ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isPropertyDeclaration(parent)) && parent.name === node) return false;
+    if ((ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent) || ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isImportSpecifier(parent)) && (parent as any).name === node) return false;
+    if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent)) return false;
+    return true;
+  }
   if (ts.isCallExpression(node)) {
     const callee = node.expression;
-    if (ts.isIdentifier(callee)) return callee.text === "fetch" || callee.text === "request" || callee.text === "connect" || GRPC_CONSTRUCTORS.test(callee.text);
+    if (ts.isIdentifier(callee)) return /^(?:request|connect)$/.test(callee.text) || GRPC_MEMBERS.test(callee.text);
     if (ts.isPropertyAccessExpression(callee)) {
-      if (callee.name.text === "fetch" || GRPC_CONSTRUCTORS.test(callee.name.text)) return true;
+      if (GRPC_MEMBERS.test(callee.name.text) || (callee.name.text === "createInsecure" || callee.name.text === "createSsl")) return true;
       const receiver = callee.expression.getText();
-      return /^(?:http|https|http2|net|tls|undici|globalThis)$/.test(receiver) && NETWORK_MEMBERS.test(callee.name.text);
+      if (/^(?:http|https|http2|net|tls|undici|globalThis|global|Reflect)$/.test(receiver) && NETWORK_MEMBERS.test(callee.name.text)) return true;
+      if (receiver === "Reflect" && callee.name.text === "apply") return /\b(?:fetch|request|connect)\b/.test(node.arguments[0]?.getText() ?? "");
     }
   }
   if (ts.isNewExpression(node)) {
     const name = ts.isIdentifier(node.expression) ? node.expression.text : ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : "";
-    return DISPATCHER_CLASSES.test(name) || name === "Client" || /^(?:Socket|Server)$/.test(name);
+    return DISPATCHER_CLASSES.test(name) || GRPC_MEMBERS.test(name) || /^_?OTLP\w*Exporter$/.test(name);
   }
-  if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-    const spec = ts.isImportDeclaration(node) ? node.moduleSpecifier : node.moduleSpecifier;
-    return spec !== undefined && ts.isStringLiteral(spec) && TRANSPORT_MODULES.test(spec.text);
-  }
-  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "require") return ts.isStringLiteral(node.arguments[0]) && TRANSPORT_MODULES.test((node.arguments[0] as ts.StringLiteral).text);
+  if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && /^grpc$/.test(node.expression.text) && GRPC_MEMBERS.test(node.name.text)) return true;
   return false;
 }
 
 describe("every transport primitive in the key-carrying modules is inside the guard", () => {
   test("the exact set of sites", () => {
     expect(sites(isTransportPrimitive)).toEqual([
+      "fi-core/fi-request-policy.ts::<top level>", // the grpc import for Metadata, which the decider builds as data
+      "fi-core/fi-send-guard.ts::<top level>", // the imports of the transports the guard uses
+      "fi-core/fi-send-guard.ts::channelCredentials", // the one place a channel's credentials are constructed
       "fi-core/fi-send-guard.ts::guardOtlpGrpcExporter", // the channel it builds with proxies off
       "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch
+      "fi-core/fi-send-guard.ts::primeNodeDispatcher", // the one probe that has Node install its own default dispatcher while the slot is empty
+      "fi-core/otel.ts::<top level>", // the imports of the OTLP exporter packages the SDK's exporter classes extend
+      "fi-core/otel.ts::createSpanExporter", // constructs the SDK's own exporter, whose constructor calls its guarded entry point
+      "fi-core/otlp-header-isolation.ts::<top level>", // the exporter packages' own configuration functions, used to rebuild a delegate
     ]);
   });
-  test("a scan with a stray fetch would be caught: the scanner sees fetch, request, dispatcher construction and imports", () => {
-    const sample = ts.createSourceFile("sample.ts", `import http from "node:http"; import { Pool } from "undici"; function a(){ fetch("x"); http.request("y"); new Pool("z"); undici.fetch("w"); globalThis.fetch("v"); grpc.makeGenericClientConstructor({}, "n"); }`, ts.ScriptTarget.Latest, true);
-    let count = 0;
-    walk(sample, node => { if (isTransportPrimitive(node)) count++; });
-    expect(count).toBeGreaterThanOrEqual(8);
+  test("each bypass form has a fixture, and the scanner flags every one", () => {
+    const dir = join(__dirname, "pin-bypass-fixtures");
+    const files = readdirSync(dir).filter(name => name.endsWith(".txt"));
+    expect(files.length).toBeGreaterThanOrEqual(20);
+    for (const name of files) {
+      const sample = ts.createSourceFile(name, readFileSync(join(dir, name), "utf8"), ts.ScriptTarget.Latest, true);
+      let count = 0;
+      walk(sample, node => { if (isTransportPrimitive(node)) count++; });
+      expect({ fixture: name, flagged: count > 0 }).toEqual({ fixture: name, flagged: true });
+    }
   });
 });
 
