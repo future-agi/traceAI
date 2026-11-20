@@ -143,7 +143,9 @@ public class ActivationTests
     {
         const string secret = "sk-seeded-secret-value-9f8e7d6c5b4a";
         var run = await Run("plain", new() { ["FI_SECRET_KEY"] = secret });
-        Assert.Contains("hello chat", run.Exported);
+        // The prompt is exported with the text around the secret intact and the agent's redaction marker where the secret was.
+        Assert.Contains("hello chat <redacted>", run.Exported);
+        Assert.Contains("stub answer", run.Exported);
         Assert.DoesNotContain(secret, run.Exported);
         Assert.DoesNotContain(secret, run.Error);
     }

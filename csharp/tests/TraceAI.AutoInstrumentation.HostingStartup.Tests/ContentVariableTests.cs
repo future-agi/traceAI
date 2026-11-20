@@ -98,4 +98,32 @@ public class ContentVariableTests
         }
         finally { Environment.SetEnvironmentVariable(Variable, previous); }
     }
+
+    [Fact]
+    public void ARegistrationThatOwnershipDeclinesPrintsNoContentLine()
+    {
+        var previous = Environment.GetEnvironmentVariable(Variable);
+        var cache = (System.Collections.Concurrent.ConcurrentDictionary<(Type, bool), System.Reflection.ConstructorInfo?>)typeof(Ownership)
+            .GetField("Cache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+        var key = (typeof(DelegatingChatClient), true);
+        try
+        {
+            Environment.SetEnvironmentVariable(Variable, null);
+            cache[key] = null; // ownership cannot build its object for chat clients: the registration is left untraced
+            Assert.Equal("", Activate(new Settings(Chat: true, Agent: true, Sensitive: true), 1));
+        }
+        finally { cache.TryRemove(key, out _); Environment.SetEnvironmentVariable(Variable, previous); }
+    }
+
+    [Fact]
+    public void AKeptRegistrationStillPrintsTheContentLineOnce()
+    {
+        var previous = Environment.GetEnvironmentVariable(Variable);
+        try
+        {
+            Environment.SetEnvironmentVariable(Variable, null);
+            Assert.Single(Activate(new Settings(Chat: true, Agent: true, Sensitive: true), 1).Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        }
+        finally { Environment.SetEnvironmentVariable(Variable, previous); }
+    }
 }
