@@ -110,7 +110,8 @@ describe("privacy covers duplicate payload attributes", () => {
         expect(masked).toEqual({
           ...attributes,
           [SC.PROMPT_TEMPLATE_TEMPLATE]: hidesInput ? REDACTED_VALUE : payload,
-          [SC.LLM_FUNCTION_CALL]: hidesInput ? payload : REDACTED_VALUE,
+          // Python masks the aggregate tool call under hideInputs as well as hideOutputs; the finer input flags leave it.
+          [SC.LLM_FUNCTION_CALL]: hidesInput && flag !== "hideInputs" ? payload : REDACTED_VALUE,
         });
         const expected = { ...masked };
         if (flag !== "hideInputImages" && flag !== "hideEmbeddingVectors") delete expected[SC.LLM_FUNCTION_CALL];

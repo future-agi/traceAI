@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fi-instrumentation-otel"
-version = "1.5.0"
+version = "1.5.1"
 description = "OpenTelemetry tracing for AI applications: tracer setup, span helpers, exporters, and semantic conventions for Future AGI."
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -53,7 +53,7 @@ classifiers = [
 python = ">=3.10,<3.16"
 opentelemetry-api = "^1.29.0"
 opentelemetry-sdk = "^1.29.0"
-opentelemetry-exporter-otlp-proto-http = "^1.29.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.29.0,<1.46"
 opentelemetry-instrumentation = "*"
 requests = "^2.32.3"
 typing-extensions = "^4.9.0"
@@ -62,7 +62,7 @@ wrapt = "^1.15.0"
 jsonschema = "^4.21.1"
 futureagi = {version = ">=0.6.0", optional = true}
 ai-evaluation = {version = ">=0.1.0", optional = true}
-opentelemetry-exporter-otlp-proto-grpc = {version = "^1.29.0", optional = true}
+opentelemetry-exporter-otlp-proto-grpc = {version = ">=1.29.0,<1.46", optional = true}
 
 [tool.poetry.extras]
 grpc = ["opentelemetry-exporter-otlp-proto-grpc"]

@@ -217,7 +217,10 @@ function maskAttributes(attributes: Attributes, config: TraceConfig, spanType: A
     // Native and FI I/O blobs do not share a reliable typed message schema.
     // Hide the entire alias for granular content flags rather than leave a
     // second unmasked copy (including tool arguments and system instructions).
-    const hideInput = input && (config.hideInputs || config.hideInputMessages || config.hideInputText || config.hideInputImages);
+    // An input processor's span output is the rewritten request (messages, systemMessages): request content,
+    // so the input settings hide it too. The whole value is hidden, never selected fields of it.
+    const requestOutput = output && spanType === "processor_run";
+    const hideInput = (input || requestOutput) && (config.hideInputs || config.hideInputMessages || config.hideInputText || config.hideInputImages);
     const hideOutput = output && (config.hideOutputs || config.hideOutputMessages || config.hideOutputText);
     const hideVector = config.hideEmbeddingVectors && (/(?:embedding|embeddings).*vector/.test(key) || (embedding && output));
     if (hideInput || hideOutput || hideVector) {

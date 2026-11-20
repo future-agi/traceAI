@@ -73,7 +73,9 @@ class ExportSurfacePrivacyTest {
                 boolean hideInput = flag.startsWith("hide_input") || flag.equals("both"), hideOutput = flag.startsWith("hide_output") || flag.equals("both");
                 String json = WireCore.dump(new OtlpJsonExporter(config).serialize(data));
                 assertEquals(!hideInput, json.contains("PRIVATE_COHERE_SYSTEM_PROMPT"), flag);
-                for (String value : List.of("PRIVATE_COHERE_TOOL_ROOT", "PRIVATE_COHERE_TOOL_NAME", "PRIVATE_COHERE_TOOL_ARGUMENT", "PRIVATE_COHERE_TOOL_ARRAY")) assertEquals(!hideOutput, json.contains(value), flag + ":" + value);
+                for (String value : List.of("PRIVATE_COHERE_TOOL_ROOT", "PRIVATE_COHERE_TOOL_NAME")) assertEquals(!hideOutput, json.contains(value), flag + ":" + value);
+                // Tool-call arguments are masked under every hide setting the core SDK has (the agent-only text switches stay side-aware).
+                for (String value : List.of("PRIVATE_COHERE_TOOL_ARGUMENT", "PRIVATE_COHERE_TOOL_ARRAY")) assertEquals(flag.endsWith("_text") ? !hideOutput : flag.equals("none"), json.contains(value), flag + ":" + value);
                 assertTrue(json.contains("public-model")); assertTrue(json.contains("existing-cohere-wrapper")); assertTrue(json.contains("links"));
             }
             assertEquals(attributes.asMap(), original.getAttributes().asMap()); assertEquals(attributes.asMap(), original.getResource().getAttributes().asMap());

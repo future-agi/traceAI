@@ -26,6 +26,37 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     return {"value": str(obj)}
 
 
+# Response-side fields that may be recorded while input settings are on. The request echoes (chat_history,
+# documents, search queries and results, embed texts, rerank documents) are left out rather than stripped by name.
+_RESPONSE_FIELDS = (
+    "id", "response_id", "generation_id", "text", "finish_reason", "tool_calls", "citations", "meta",
+    "usage", "embeddings", "response_type", "event_type", "is_finished",
+)
+_RESULT_FIELDS = ("index", "relevance_score")
+
+
+def _input_hidden(tracer: Any) -> bool:
+    config = getattr(tracer, "_self_config", None)
+    return bool(config is not None and (config.hide_inputs or config.hide_input_messages or config.hide_input_text or config.hide_input_images))
+
+
+def _response_side(response: Dict[str, Any]) -> Dict[str, Any]:
+    """The response fields that carry generated content, usage and identity only."""
+    out: Dict[str, Any] = {k: response[k] for k in _RESPONSE_FIELDS if k in response}
+    results = response.get("results")
+    if isinstance(results, list):
+        out["results"] = [
+            {k: r[k] for k in _RESULT_FIELDS if k in r} for r in results if isinstance(r, dict)
+        ]
+    return out
+
+
+def _response_dict(response: Any, tracer: Any) -> Dict[str, Any]:
+    """The response as a dict; under any input hide setting, only its response-side fields."""
+    data = _to_dict(response)
+    return _response_side(data) if _input_hidden(tracer) else data
+
+
 def _flatten(
     mapping: Mapping[str, Any], prefix: str = ""
 ) -> Iterator[Tuple[str, AttributeValue]]:

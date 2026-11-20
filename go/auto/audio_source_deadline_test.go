@@ -198,10 +198,12 @@ func TestNativeDeadlineAndCancellationParity(t *testing.T) {
 								w.(http.Flusher).Flush()
 							}
 							entered <- struct{}{}
-							select {
-							case <-r.Context().Done():
-							case <-release:
-							}
+							// Hold the response open until the subtest ends. Returning when
+							// the request context is canceled lets the server finish the
+							// chunked body at the instant the client gives up, so a stalled
+							// body read can legitimately observe a clean EOF instead of the
+							// timeout or cancellation under test.
+							<-release
 						}))
 						server.EnableHTTP2 = h2
 						server.StartTLS()

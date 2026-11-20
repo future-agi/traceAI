@@ -33,6 +33,11 @@
     <!-- Only this BCL-only type enters the application's default load context. -->
     <Compile Include="StartupHook.cs" />
     <ProjectReference Include="AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj" />
+    <!-- Shipped beside the hook; loaded only by an ASP.NET Core host, by name, when the hook enables it. It is built
+         first and copied as a file: referencing it normally would pull its ASP.NET Core framework reference into
+         this project and prune the Microsoft.Extensions assemblies the private runtime needs from the output. -->
+    <ProjectReference Include="HostingStartup/TraceAI.AutoInstrumentation.HostingStartup.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+    <Content Include="HostingStartup/bin/$(Configuration)/net8.0/TraceAI.AutoInstrumentation.HostingStartup.dll" Link="TraceAI.AutoInstrumentation.HostingStartup.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
   <!-- Pack runs the same publish the README's build-from-source route runs, then puts the whole

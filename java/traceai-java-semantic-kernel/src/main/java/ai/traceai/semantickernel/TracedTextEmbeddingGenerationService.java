@@ -172,7 +172,7 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
 
             // Set individual text attributes for first few texts
             if (i < 5) {
-                span.setAttribute(SemanticConventions.EMBEDDING_INPUT_TEXT + "." + i, truncateIfNeeded(text));
+                tracer.setAttribute(span, SemanticConventions.EMBEDDING_INPUT_TEXT + "." + i, text);
             }
         }
 

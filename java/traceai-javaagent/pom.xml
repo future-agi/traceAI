@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.4.0</version>
+        <version>1.4.1</version>
     </parent>
 
     <artifactId>traceai-javaagent</artifactId>
@@ -345,6 +345,10 @@
                                     <shadedPattern>ai.traceai.auto.shaded.core.TraceConfig</shadedPattern>
                                 </relocation>
                                 <relocation>
+                                    <pattern>ai.traceai.ContentKeys</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.core.ContentKeys</shadedPattern>
+                                </relocation>
+                                <relocation>
                                     <pattern>ai.traceai.SamplingRatioSampler</pattern>
                                     <shadedPattern>ai.traceai.auto.shaded.core.SamplingRatioSampler</shadedPattern>
                                 </relocation>
@@ -381,6 +385,8 @@
                                     <includes>
                                         <include>ai/traceai/TraceConfig.class</include>
                                         <include>ai/traceai/TraceConfig$*.class</include>
+                                        <include>ai/traceai/ContentKeys.class</include>
+                                        <include>ai/traceai/ContentKeys$*.class</include>
                                         <include>ai/traceai/SamplingRatioSampler.class</include>
                                         <include>ai/traceai/SamplingRatioSampler$*.class</include>
                                         <include>ai/traceai/ContextAttributes.class</include>

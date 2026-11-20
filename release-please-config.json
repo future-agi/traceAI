@@ -228,6 +228,14 @@
         "traceai_google_genai/version.py"
       ]
     },
+    "python/frameworks/google-generativeai": {
+      "release-type": "python",
+      "component": "traceai-google-generativeai",
+      "package-name": "traceAI-google-generativeai",
+      "extra-files": [
+        "traceai_google_generativeai/version.py"
+      ]
+    },
     "python/frameworks/google-genai-live": {
       "release-type": "python",
       "component": "traceai-google-genai-live",
@@ -912,6 +920,14 @@
         "src/instrumentation.ts"
       ]
     },
+    "typescript/packages/traceai_sagemaker": {
+      "release-type": "node",
+      "component": "npm-traceai-sagemaker",
+      "package-name": "@traceai/sagemaker",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "typescript/packages/traceai_strands": {
       "release-type": "node",
       "component": "npm-traceai-strands",
@@ -924,6 +940,14 @@
       "release-type": "node",
       "component": "npm-traceai-together",
       "package-name": "@traceai/together",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
+    "typescript/packages/traceai_typesafe": {
+      "release-type": "node",
+      "component": "npm-traceai-typesafe",
+      "package-name": "@traceai/typesafe",
       "extra-files": [
         "src/version.ts"
       ]
@@ -1338,6 +1362,14 @@
       "component": "npm-traceai-vitest-evals",
       "package-name": "@traceai/vitest-evals"
     },
+    "python/frameworks/elasticsearch": {
+      "release-type": "python",
+      "component": "traceai-elasticsearch",
+      "package-name": "traceAI-elasticsearch",
+      "extra-files": [
+        "traceai_elasticsearch/version.py"
+      ]
+    },
     "python/frameworks/marqo": {
       "release-type": "python",
       "component": "traceai-marqo",
@@ -1376,6 +1408,30 @@
       "package-name": "traceAI-writer",
       "extra-files": [
         "traceai_writer/version.py"
+      ]
+    },
+    "python/frameworks/alephalpha": {
+      "release-type": "python",
+      "component": "traceai-alephalpha",
+      "package-name": "traceAI-alephalpha",
+      "extra-files": [
+        "traceai_alephalpha/version.py"
+      ]
+    },
+    "python/frameworks/agentspec": {
+      "release-type": "python",
+      "component": "traceai-agentspec",
+      "package-name": "traceAI-agentspec",
+      "extra-files": [
+        "traceai_agentspec/version.py"
+      ]
+    },
+    "python/frameworks/promptflow": {
+      "release-type": "python",
+      "component": "traceai-promptflow",
+      "package-name": "traceAI-promptflow",
+      "extra-files": [
+        "traceai_promptflow/version.py"
       ]
     },
     "go/langchaingo": {

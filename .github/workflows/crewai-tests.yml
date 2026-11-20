@@ -28,9 +28,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.12']
+        python: ['3.10', '3.12', '3.13']
         # Exercise the Flow-node contract floor as well as the package floor.
         crewai: ['0.41.1', '1.15.0', 'latest']
+        exclude:
+          # CrewAI 0.41.1 allows Python 3.13.0 only, and its pinned regex and tiktoken ship no
+          # 3.13 wheels; CrewAI supports 3.13 from 0.126.0.
+          - python: '3.13'
+            crewai: '0.41.1'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

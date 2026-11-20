@@ -3,11 +3,15 @@
     "name": "anthropic",
     "package": "@traceai/anthropic",
     "targets": [
-      "@anthropic-ai/sdk"
+      "@anthropic-ai/sdk",
+      "@anthropic-ai/bedrock-sdk",
+      "@anthropic-ai/vertex-sdk"
     ],
     "className": "AnthropicInstrumentation",
     "modules": [
-      "@anthropic-ai/sdk"
+      "@anthropic-ai/sdk",
+      "@anthropic-ai/bedrock-sdk",
+      "@anthropic-ai/vertex-sdk"
     ]
   },
   {
@@ -467,6 +471,17 @@
     "vectorOnly": true
   },
   {
+    "name": "sagemaker",
+    "package": "@traceai/sagemaker",
+    "targets": [
+      "@aws-sdk/client-sagemaker-runtime"
+    ],
+    "className": "SageMakerInstrumentation",
+    "modules": [
+      "@aws-sdk/client-sagemaker-runtime"
+    ]
+  },
+  {
     "name": "strands",
     "package": "@traceai/strands",
     "targets": [
@@ -486,6 +501,17 @@
     "className": "TogetherInstrumentation",
     "modules": [
       "together-ai"
+    ]
+  },
+  {
+    "name": "typesafe",
+    "package": "@traceai/typesafe",
+    "targets": [
+      "@typesafe-ai/sdk"
+    ],
+    "className": "TypeSafeInstrumentation",
+    "modules": [
+      "@typesafe-ai/sdk"
     ]
   },
   {

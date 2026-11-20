@@ -39,10 +39,16 @@ final class AttributeProjection {
             || key.startsWith("gen_ai.tool.") || CONTENT.contains(key) || key.startsWith("message.tool_calls");
     }
     static Map<String, Object> sanitize(Map<String, Object> source, AutoConfig config, WireCore.Match match) {
+        // A whole-response body can echo the request, so it is not recorded while any hide setting is on.
+        if (source.containsKey(WireCore.WHOLE_RESPONSE)) {
+            source = new LinkedHashMap<>(source);
+            source.remove(WireCore.WHOLE_RESPONSE);
+            if (TraceAIAuto.hidesContent(config)) { source.remove("output.value"); source.remove("output.mime_type"); }
+        }
         WirePrivacy privacy = ExportPrivacy.privacy(config); Map<String, Object> clean = new TreeMap<>();
         try {
             WirePrivacy.Scope scope = privacy.scope(source, "", WirePrivacy.Scope.EMPTY);
-            for (var e : source.entrySet()) if (!TraceAIAuto.hidden(e.getKey(), match, config)) {
+            for (var e : source.entrySet()) if (!TraceAIAuto.hidden(e.getKey(), e.getValue(), match, config)) {
                 // Wire attributes: session.id comes only from the context API's session id (see WirePrivacy.sessionValue).
                 Object value = WirePrivacy.SESSION_ID.equals(e.getKey()) && e.getValue() instanceof String session
                     ? privacy.sessionValue(session) : privacy.clean(e.getKey(), e.getValue(), scope, true);
@@ -55,7 +61,7 @@ final class AttributeProjection {
         clean.clear(); long dropped = 0;
         for (var e : source.entrySet()) {
             if (isProtected(e.getKey())) clean.put(e.getKey(), privacy.clean(e.getKey(), e.getValue()));
-            else if (content(e.getKey()) && !TraceAIAuto.hidden(e.getKey(), match, config)) dropped++;
+            else if (content(e.getKey()) && !TraceAIAuto.hidden(e.getKey(), e.getValue(), match, config)) dropped++;
         }
         if (dropped > 0) clean.put(DROPPED, sum(count(clean.get(DROPPED)), dropped));
         return clean;

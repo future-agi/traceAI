@@ -63,13 +63,29 @@ public class TraceConfig
         return valueFactory();
     }
 
-    private bool ShouldOmit(string key) => HideErrorDetails && (
-        key is "error.message" or "exception.message" or "exception.stacktrace" ||
-        key.EndsWith(".error.message", StringComparison.Ordinal) ||
-        key.EndsWith(".exception.message", StringComparison.Ordinal) ||
-        key.EndsWith(".exception.stacktrace", StringComparison.Ordinal) ||
-        key.EndsWith(".error_message", StringComparison.Ordinal));
+    private bool ShouldOmit(string key) =>
+        (HideErrorDetails && (
+            key is "error.message" or "exception.message" or "exception.stacktrace" ||
+            key.EndsWith(".error.message", StringComparison.Ordinal) ||
+            key.EndsWith(".exception.message", StringComparison.Ordinal) ||
+            key.EndsWith(".exception.stacktrace", StringComparison.Ordinal) ||
+            key.EndsWith(".error_message", StringComparison.Ordinal))) ||
+        // Python drops (returns None for) every message key under the whole-direction and message flags;
+        // only the text and image flags redact a value.
+        ((HideInputs || HideInputMessages) && IsFamily(key, SemanticConventions.GenAiInputMessages)) ||
+        ((HideOutputs || HideOutputMessages) && IsFamily(key, SemanticConventions.GenAiOutputMessages));
 
+    // Mirrors the Python SDK (python/fi_instrumentation/instrumentation/config.py) for the content keys
+    // listed here, not for everything Python does. InputContent is _INPUT_CONTENT_PREFIXES plus input.value,
+    // raw.input, the prompt-template variables and the C# alias tool.parameters; OutputContent is
+    // _OUTPUT_CONTENT_PREFIXES plus output.value and raw.output; MixedContent is _MIXED_CONTENT_PREFIXES.
+    // InputValueKeys/OutputValueKeys (input.value, raw.input, template variables / output.value, raw.output)
+    // follow Python's private_input / private_output: hidden by the whole-direction, message and text flags
+    // (and, for input, the image flag). Message keys are dropped, not redacted, under the whole-direction and
+    // message flags, as in Python; the text and image flags redact them. Differences that remain: C# matches
+    // message, image and embedding keys by dotted family or field (Python uses a substring test), and Python's
+    // ChatInput structure masking and PII redaction pass are not part of this class. ContentMaskParityTests
+    // checks each key against its hide flag, so a key added to Python belongs in the test and here.
     // Content families, not whole namespaces: model names, tool IDs, token counts,
     // template names and other operational identifiers must remain available.
     private static readonly string[] InputContent =
@@ -88,6 +104,14 @@ public class TraceConfig
         SemanticConventions.GenAiRerankerQuery, SemanticConventions.GenAiRerankerInputDocuments,
         SemanticConventions.RerankerQuery, SemanticConventions.RerankerInputDocuments,
     ];
+
+    private static readonly string[] InputValueKeys =
+    [
+        SemanticConventions.InputValue, "raw.input", "llm.prompt_template.variables",
+        SemanticConventions.GenAiPromptTemplateVariables,
+    ];
+
+    private static readonly string[] OutputValueKeys = [SemanticConventions.OutputValue, "raw.output"];
 
     private static readonly string[] OutputContent =
     [
@@ -125,19 +149,23 @@ public class TraceConfig
             return true;
         if (HideOutputs && (key == SemanticConventions.OutputMimeType || HasPrefix(key, OutputContent)))
             return true;
+        // Python: the opaque value keys follow private_input / private_output, which include the message
+        // and text flags (and, for input, the image flag), because they can duplicate the messages.
+        if ((HideInputs || HideInputMessages || HideInputText || HideInputImages) && HasPrefix(key, InputValueKeys))
+            return true;
+        if ((HideOutputs || HideOutputMessages || HideOutputText) && HasPrefix(key, OutputValueKeys))
+            return true;
         if ((HideInputs || HideOutputs) &&
             (key == SemanticConventions.GenAiToolCall || HasPrefix(key, MixedContent)))
             return true;
 
         if (IsFamily(key, SemanticConventions.GenAiInputMessages) &&
-            (HideInputs || HideInputMessages ||
-             (HideInputText && IsMessageText(key, SemanticConventions.GenAiInputMessages)) ||
+            ((HideInputText && IsMessageText(key, SemanticConventions.GenAiInputMessages)) ||
              (HideInputImages && (IsMessageContainer(key, SemanticConventions.GenAiInputMessages) ||
                                  HasField(key, SemanticConventions.MessageContentImage)))))
             return true;
         if (IsFamily(key, SemanticConventions.GenAiOutputMessages) &&
-            (HideOutputs || HideOutputMessages ||
-             (HideOutputText && IsMessageText(key, SemanticConventions.GenAiOutputMessages))))
+            (HideOutputText && IsMessageText(key, SemanticConventions.GenAiOutputMessages)))
             return true;
 
         if (HideInputImages && (IsFamily(key, SemanticConventions.InputImages) ||

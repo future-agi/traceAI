@@ -141,7 +141,7 @@ describe("FITracer creation-time attributes", () => {
       expect(exported(span)).not.toContain(PROMPT);
       expect(exported(span)).not.toContain("/private/tmp");
       expect(span.attributes[SemanticConventions.INPUT_VALUE]).toBe(REDACTED_VALUE);
-      expect(span.attributes[SemanticConventions.RAW_INPUT]).toBe(REDACTED_VALUE);
+      expect(span.attributes[SemanticConventions.RAW_INPUT]).toBeUndefined();
       expect(span.attributes[SemanticConventions.PROMPT_TEMPLATE_VARIABLES]).toBe(
         REDACTED_VALUE,
       );
@@ -196,7 +196,7 @@ describe("FITracer creation-time attributes", () => {
     expect(attributes[SemanticConventions.INPUT_VALUE]).toContain(PROMPT);
   });
 
-  it("hideOutputs masks raw.output like output.value", () => {
+  it("hideOutputs does not record raw.output or raw.input", () => {
     const span = tracerWith({ hideOutputs: true }).startSpan("x", {
       attributes: {
         [SemanticConventions.OUTPUT_VALUE]: PROMPT,
@@ -208,8 +208,8 @@ describe("FITracer creation-time attributes", () => {
     span.end();
     const { attributes } = onlySpan();
     expect(attributes[SemanticConventions.OUTPUT_VALUE]).toBe(REDACTED_VALUE);
-    expect(attributes[SemanticConventions.RAW_OUTPUT]).toBe(REDACTED_VALUE);
-    expect(attributes[SemanticConventions.RAW_INPUT]).toBe("kept");
+    expect(attributes[SemanticConventions.RAW_OUTPUT]).toBeUndefined();
+    expect(attributes[SemanticConventions.RAW_INPUT]).toBeUndefined();
   });
 
   it("PII redaction applies to creation-time attributes", () => {

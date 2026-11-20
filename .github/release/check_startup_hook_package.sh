@@ -33,6 +33,7 @@ unzip -Z1 "$PKG" > "$WORK/entries.txt"
 for entry in \
   tools/net8.0/any/TraceAI.AutoInstrumentation.dll \
   tools/net8.0/any/TraceAI.AutoInstrumentation.Runtime.dll \
+  tools/net8.0/any/TraceAI.AutoInstrumentation.HostingStartup.dll \
   tools/net8.0/any/FIInstrumentation.dll \
   tools/net8.0/any/OpenTelemetry.dll \
   tools/net8.0/any/OpenTelemetry.Api.dll \

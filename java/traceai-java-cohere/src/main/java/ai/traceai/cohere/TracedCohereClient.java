@@ -135,14 +135,14 @@ public class TracedCohereClient {
                         ToolCall toolCall = toolCalls.get(i);
                         span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
                             + SemanticConventions.TOOL_CALL_FUNCTION_NAME, toolCall.getName());
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                        tracer.setAttribute(span, SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
                             + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
                             tracer.toJson(toolCall.getParameters()));
                     }
                 });
             }
 
-            tracer.setRawOutput(span, response);
+            setRawOutputUnlessHidden(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 
@@ -152,6 +152,21 @@ public class TracedCohereClient {
         } finally {
             span.end();
         }
+    }
+
+    /**
+     * Records a raw response only while no hide setting is on. A response can echo the request (the chat history,
+     * the embedded texts, the returned documents) and may carry fields added by later SDK versions, so under any
+     * hide setting it is not recorded; the dedicated attributes still carry the operational data. Every raw-output
+     * write in this class goes through here.
+     */
+    private void setRawOutputUnlessHidden(Span span, Object response) {
+        TraceConfig config = tracer.getConfig();
+        if (config.isHideInputs() || config.isHideInputMessages()
+            || config.isHideOutputs() || config.isHideOutputMessages()) {
+            return;
+        }
+        tracer.setRawOutput(span, response);
     }
 
     /**
@@ -227,7 +242,7 @@ public class TracedCohereClient {
                 }
             });
 
-            tracer.setRawOutput(span, response);
+            setRawOutputUnlessHidden(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 
@@ -295,7 +310,7 @@ public class TracedCohereClient {
                     units.getSearchUnits().ifPresent(searchUnits ->
                         span.setAttribute("cohere.rerank.search_units", searchUnits.longValue()))));
 
-            tracer.setRawOutput(span, response);
+            setRawOutputUnlessHidden(span, response);
             span.setStatus(StatusCode.OK);
             return response;
 

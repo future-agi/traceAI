@@ -304,6 +304,45 @@ public class TraceConfig {
         }
     }
 
+    /**
+     * Applies the hide settings to one attribute. Content keys listed in {@link ContentKeys} are
+     * replaced with {@link ContentKeys#REDACTED}; message keys and MIME types are dropped, as Python
+     * does. Anything else, including names, ids and counts, is returned unchanged.
+     *
+     * @param key the attribute key
+     * @param value the attribute value
+     * @return the value to export, {@link ContentKeys#REDACTED}, or null when the attribute is dropped
+     */
+    public String maskAttribute(String key, String value) {
+        if (key == null || value == null) return null;
+        switch (ContentKeys.actionFor(key, this)) {
+            case OMIT: return null;
+            case REDACT: return ContentKeys.REDACTED;
+            default: return value;
+        }
+    }
+
+    /**
+     * Applies the hide settings to a non-string value (long, double, boolean or an array of them) by
+     * key, as {@link #maskAttribute(String, String)} does for strings. Python masks by key whatever the
+     * value type; the placeholder is a string, so a redacted key is written as the string
+     * {@link ContentKeys#REDACTED} (the value's type is not preserved, and no part of the value is kept).
+     * A whole-number document count on a reranker document key is not content and is returned unchanged.
+     *
+     * @param key the attribute key
+     * @param value the typed value
+     * @return the value to export, {@link ContentKeys#REDACTED}, or null when the attribute is dropped
+     */
+    public Object maskTypedAttribute(String key, Object value) {
+        if (key == null || value == null) return null;
+        if (ContentKeys.isDocumentCount(key, value)) return value;
+        switch (ContentKeys.actionFor(key, this)) {
+            case OMIT: return null;
+            case REDACT: return ContentKeys.REDACTED;
+            default: return value;
+        }
+    }
+
     // Getters
     public boolean isHideInputs() { return hideInputs; }
     public boolean isHideOutputs() { return hideOutputs; }
