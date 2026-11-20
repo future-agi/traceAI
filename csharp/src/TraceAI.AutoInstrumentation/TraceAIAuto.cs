@@ -78,6 +78,7 @@ public static class TraceAIAuto
                 }
                 else if(!config.Disabled) Warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required for the default collector; no exporter or provider was supplied, so auto-instrumentation is disabled.");
             }
+            catch(BlankBaseUrlException) { s_failed=true; Warn("base-url-blank","FI_BASE_URL is set but empty; the agent did not start and no traces are sent. Unset it or give it a URL."); }
             catch { s_failed=true; Warn("init", "Agent initialization failed; application continues without tracing."); }
         }
     }
@@ -113,16 +114,18 @@ public static class TraceAIAuto
         try { var config=s_config; return s_agent==null || config==null ? null : HostingStartupPlanFor(config); }
         catch { return null; }
     }
-    /// <summary>The libraries' sensitive-content switch is off unless the user opts in with FI_AUTO_CAPTURE_CONTENT=true:
-    /// it makes the libraries put prompts and responses on their spans for every listener the application has, not only
-    /// this agent. Any traceAI hide setting keeps it off even then.</summary>
+    /// <summary>The libraries' sensitive-content switch is on unless FI_AUTO_CAPTURE_CONTENT is set false (false, 0, no or off),
+    /// so prompts and responses are recorded as in every other traceAI language. Any traceAI hide setting keeps it off.
+    /// The libraries' switch puts content on their spans for every listener the application has, not only this agent; the hosting
+    /// startup prints one value-free line when it actually turns the switch on. Content still reaches Future AGI only through the agent's own
+    /// processor, which applies the hide mask and scrubs known secrets.</summary>
     internal static string? HostingStartupPlanFor(AutoConfig config)
     {
         bool chat=config.Enabled("extensions_ai"),agents=config.Enabled("agents");
         if(!chat && !agents) return null;
         var mask=config.Options.TraceConfig??AutoProcessor.FromHideSwitches(config);
         bool hidden=mask.HideInputs||mask.HideOutputs||mask.HideInputMessages||mask.HideOutputMessages||mask.HideInputText||mask.HideOutputText||mask.HideInputImages;
-        bool sensitive=config.Bool("AUTO_CAPTURE_CONTENT") && !hidden;
+        bool sensitive=config.CaptureContent && !hidden;
         return $"chat={(chat?1:0)};agent={(agents?1:0)};sensitive={(sensitive?1:0)}";
     }
     public static IReadOnlyList<IntegrationStatus> GetStatus()

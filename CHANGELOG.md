@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Ruby `traceai-auto` instruments RubyLLM 2.x with no application code: a chat span for each model request (streamed or not) and an `execute_tool <name>` span for each tool call, masked by the existing hide settings, with no second wire span for the same call. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
 
+### Changed
+- .NET auto-instrumentation records prompt and response content by default in ASP.NET Core hosts, like every other language. Set `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, to keep it off; a `TraceConfig` supplied to the agent with any of those hides keeps it off too. See [`csharp/src/TraceAI.AutoInstrumentation/CHANGELOG.md`](csharp/src/TraceAI.AutoInstrumentation/CHANGELOG.md).
+
 ### Fixed
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
