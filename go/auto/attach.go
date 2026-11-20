@@ -183,11 +183,13 @@ func (a *Attachment) TraceConfig() TraceConfig {
 //
 // Every FI_HIDE_* switch applies to the attributes of these spans as it does
 // to the agent's wire spans, including the copy the application's own
-// exporters receive. Known secrets are replaced in the copy the application's
-// own exporters receive (with the credentials known as each value is written
-// and again as the span ends) and, from the values before that replacement, in
-// the copy sent to Future AGI at export, so a longer secret learned after a
-// shorter overlapping one still matches as a whole.
+// exporters receive. Known secrets are replaced on every surface of the span
+// (attributes, name, events, links, status) in the copy the application's own
+// exporters receive, with the credentials known as the span ends (its events
+// and links are added then), and, from what the module wrote before that
+// replacement, in the copy sent to Future AGI with the credentials known at
+// export, so a longer secret learned after a shorter overlapping one still
+// matches as a whole on both.
 func (a *Attachment) TracerProvider() trace.TracerProvider { return moduleProvider{a: a} }
 
 type moduleProvider struct {
@@ -213,16 +215,12 @@ func (t *moduleTracer) Start(ctx context.Context, spanName string, opts ...trace
 	}
 	m := moduleMask{cfg: s.config}
 	cfg := trace.NewSpanStartConfig(opts...)
-	links := make([]trace.Link, 0, len(cfg.Links()))
-	for _, l := range cfg.Links() {
-		links = append(links, trace.Link{SpanContext: l.SpanContext, Attributes: m.attributes(l.Attributes)})
-	}
 	raw := m.captured(cfg.Attributes())
 	written := m.replaced(raw)
 	rawName := captureString(spanName, s.config)
+	// Links are not given to the SDK here: the span records them when it ends, with the credentials known then.
 	masked := []trace.SpanStartOption{
 		trace.WithAttributes(written...),
-		trace.WithLinks(links...),
 		trace.WithSpanKind(cfg.SpanKind()),
 	}
 	if !cfg.Timestamp().IsZero() {
@@ -233,8 +231,11 @@ func (t *moduleTracer) Start(ctx context.Context, spanName string, opts ...trace
 	}
 	ctx, span := s.provider.Tracer(t.name, t.opts...).Start(ctx, m.text(rawName), masked...)
 	// The context carries the masked span too, so a module that reads the span back from it writes through the same rules.
-	ms := &maskedSpan{Span: span, m: m, reg: s.registration, applied: map[attribute.Key]string{}, raw: map[attribute.Key]attribute.Value{}}
-	ms.remember(raw, written, &rawName)
+	ms := &maskedSpan{Span: span, m: m, reg: s.registration}
+	ms.keep(raw, written, &rawName)
+	for _, l := range cfg.Links() {
+		ms.addLink(trace.Link{SpanContext: l.SpanContext, Attributes: l.Attributes})
+	}
 	return trace.ContextWithSpan(ctx, ms), ms
 }
 
@@ -296,17 +297,12 @@ func (m moduleMask) replaced(kvs []attribute.KeyValue) []attribute.KeyValue {
 	return out
 }
 
-// attributes is captured and replaced, for what is written once (links, events).
-func (m moduleMask) attributes(kvs []attribute.KeyValue) []attribute.KeyValue {
-	return m.replaced(m.captured(kvs))
-}
-
-// event masks an event's name and attributes. While any content switch is on,
-// everything but the exception name and exception.type is replaced by the
-// redaction marker: an event can carry anything the module put in it.
+// event masks an event's name and attributes, without replacing credentials. While any content switch is on,
+// everything but the exception name and exception.type is replaced by the redaction marker: an event can carry
+// anything the module put in it.
 func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attribute.KeyValue) {
 	if !hidesContent(m.cfg.TraceConfig) {
-		return m.text(captureString(name, m.cfg)), m.attributes(kvs)
+		return captureString(name, m.cfg), m.captured(kvs)
 	}
 	if name != "exception" {
 		name = RedactedValue
@@ -315,7 +311,7 @@ func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attr
 	for _, kv := range kvs {
 		switch {
 		case kv.Key == "exception.type":
-			out = append(out, attribute.String("exception.type", m.text(captureString(kv.Value.Emit(), m.cfg))))
+			out = append(out, attribute.String("exception.type", captureString(kv.Value.Emit(), m.cfg)))
 		default:
 			out = append(out, attribute.String(string(kv.Key), RedactedValue))
 		}
@@ -323,89 +319,59 @@ func (m moduleMask) event(name string, kvs []attribute.KeyValue) (string, []attr
 	return name, out
 }
 
-// maskedSpan applies the agent's privacy rules to everything written to a
-// module span after it started.
+// maskedSpan applies the agent's privacy rules to everything written to a module span after it started.
 //
-// Known credentials are replaced in the span's attributes and name as they are
-// written, and again when the span ends, from the values kept without that
-// replacement, so the application's own exporters, which read the span as it
-// ends, receive the replacement of the end. The raw values stay in the span's
-// record in the agent (never on the span), and the export to Future AGI starts
-// from them: a longer secret learned after a shorter overlapping one was
-// replaced still matches as a whole. Events and links keep the replacement of
-// the moment they were written.
+// What the module writes is kept in the span's record in the agent (never on the span), before known credentials are
+// replaced: attributes (those the replacement changes), the name, and, because the SDK cannot rewrite them once added,
+// every event, every link and the status. The span itself carries the replacement of the moment for attributes, the
+// name and the status, and gets its events and links when it ends. When it ends, the attributes, name and status are
+// replaced again and the events and links are added, all with the credentials known by then: the application's own
+// exporters read the span as it ends, so that is the best they can get. The export to Future AGI starts from the
+// record (see rawSpan) and takes the credentials known at export, so a longer secret learned after a shorter
+// overlapping one was seen still matches as a whole. A span that never ends keeps its record until shutdown.
 type maskedSpan struct {
 	trace.Span
 	m   moduleMask
 	reg *processorRegistration
-	mu  sync.Mutex
-	raw map[attribute.Key]attribute.Value // before replacement
-	// applied is what was last written to the span for each key.
-	applied map[attribute.Key]string
-	name    *string
 }
 
-// remember keeps raw values (and the raw name when not nil) for the end and for the export to Future AGI, and
-// what was written to the span for them.
-func (s *maskedSpan) remember(kvs, written []attribute.KeyValue, name *string) {
-	s.mu.Lock()
-	for _, kv := range kvs {
-		s.raw[kv.Key] = kv.Value
-	}
-	for _, kv := range written {
-		s.applied[kv.Key] = kv.Value.Emit()
-	}
-	if name != nil {
-		s.name = name
-	}
-	s.mu.Unlock()
-	if s.reg != nil {
-		s.reg.rememberRaw(s.Span.SpanContext(), kvs, name)
-	}
+// keep records raw attribute values (those the replacement changed, and the name when not nil) in the span's record.
+func (s *maskedSpan) keep(raw, written []attribute.KeyValue, name *string) {
+	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) {
+		if r.raw == nil {
+			r.raw = map[attribute.Key]attribute.Value{}
+		}
+		for i, kv := range raw {
+			if kv.Value.Emit() != written[i].Value.Emit() {
+				r.raw[kv.Key] = kv.Value
+			} else {
+				delete(r.raw, kv.Key)
+			}
+		}
+		if name != nil {
+			r.rawName = name
+		}
+	})
 }
 
 func (s *maskedSpan) SetAttributes(kvs ...attribute.KeyValue) {
 	raw := s.m.captured(kvs)
 	written := s.m.replaced(raw)
-	s.remember(raw, written, nil)
+	s.keep(raw, written, nil)
 	s.Span.SetAttributes(written...)
-}
-
-// End replaces the credentials known by now in the attributes and the name, then ends the span.
-func (s *maskedSpan) End(opts ...trace.SpanEndOption) {
-	if s.Span.IsRecording() {
-		s.mu.Lock()
-		var changed []attribute.KeyValue
-		for _, kv := range s.m.replaced(rawList(s.raw)) {
-			if kv.Value.Emit() != s.applied[kv.Key] {
-				changed = append(changed, kv)
-				s.applied[kv.Key] = kv.Value.Emit()
-			}
-		}
-		name := s.name
-		s.mu.Unlock()
-		if len(changed) > 0 {
-			s.Span.SetAttributes(changed...)
-		}
-		if name != nil {
-			s.Span.SetName(s.m.text(*name))
-		}
-	}
-	s.Span.End(opts...)
-}
-
-func rawList(raw map[attribute.Key]attribute.Value) []attribute.KeyValue {
-	out := make([]attribute.KeyValue, 0, len(raw))
-	for k, v := range raw {
-		out = append(out, attribute.KeyValue{Key: k, Value: v})
-	}
-	return out
 }
 
 func (s *maskedSpan) AddEvent(name string, opts ...trace.EventOption) {
 	cfg := trace.NewEventConfig(opts...)
-	name, kvs := s.m.event(name, cfg.Attributes())
-	s.Span.AddEvent(name, trace.WithAttributes(kvs...), trace.WithTimestamp(cfg.Timestamp()))
+	s.addEvent(name, cfg.Attributes(), cfg.Timestamp())
+}
+
+func (s *maskedSpan) addEvent(name string, kvs []attribute.KeyValue, at time.Time) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	rawName, raw := s.m.event(name, kvs)
+	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) { r.events = append(r.events, rawEvent{name: rawName, attrs: raw, time: at}) })
 }
 
 // RecordError writes the exception event the SDK writes: exception.type, exception.message and, when asked,
@@ -419,9 +385,7 @@ func (s *maskedSpan) RecordError(err error, opts ...trace.EventOption) {
 	if cfg.StackTrace() {
 		kvs = append(kvs, attribute.String("exception.stacktrace", stackTrace()))
 	}
-	kvs = append(kvs, cfg.Attributes()...)
-	name, masked := s.m.event("exception", kvs)
-	s.Span.AddEvent(name, trace.WithAttributes(masked...), trace.WithTimestamp(cfg.Timestamp()))
+	s.addEvent("exception", append(kvs, cfg.Attributes()...), cfg.Timestamp())
 }
 
 // errorType is exception.type as the SDK builds it: the package path and name of a named type, else its string form.
@@ -433,36 +397,87 @@ func errorType(err error) string {
 	return t.PkgPath() + "." + t.Name()
 }
 
-// stackTrace is the calling goroutine's stack, as the SDK records it for WithStackTrace(true).
+// stackTrace is the calling goroutine's whole stack (up to 1 MiB): credentials are replaced in it before it is cut to
+// the size the SDK records, so a cut cannot leave a fragment of one.
 func stackTrace() string {
-	buf := make([]byte, 2048)
+	buf := make([]byte, 4096)
 	for {
 		n := runtime.Stack(buf, false)
-		if n < len(buf) {
+		if n < len(buf) || len(buf) >= 1<<20 {
 			return string(buf[:n])
 		}
 		buf = make([]byte, 2*len(buf))
 	}
 }
 
-// SetStatus keeps the description as the wire span's own status does, through
-// the structural capture only: the go/eino handler sets nothing but the Go
-// error type there, and the message is a masked attribute.
+// SetStatus keeps the description as the wire span's own status does, through the structural capture only: the
+// go/eino handler sets nothing but the Go error type there, and the message is a masked attribute.
 func (s *maskedSpan) SetStatus(code codes.Code, description string) {
-	if code == codes.Error {
-		description = s.m.text(captureString(description, s.m.cfg))
+	if code != codes.Error {
+		s.Span.SetStatus(code, description)
+		return
 	}
-	s.Span.SetStatus(code, description)
+	raw := captureString(description, s.m.cfg)
+	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) { r.status = &rawStatus{code: code, description: raw} })
+	s.Span.SetStatus(code, s.m.text(raw))
 }
 
 // SetName gives a rename the treatment the name given at start gets.
 func (s *maskedSpan) SetName(name string) {
 	raw := captureString(name, s.m.cfg)
-	s.remember(nil, nil, &raw)
+	s.keep(nil, nil, &raw)
 	s.Span.SetName(s.m.text(raw))
 }
 
 // AddLink gives a late link the treatment the links given at start get.
-func (s *maskedSpan) AddLink(link trace.Link) {
-	s.Span.AddLink(trace.Link{SpanContext: link.SpanContext, Attributes: s.m.attributes(link.Attributes)})
+func (s *maskedSpan) AddLink(link trace.Link) { s.addLink(link) }
+
+func (s *maskedSpan) addLink(link trace.Link) {
+	raw := s.m.captured(link.Attributes)
+	s.reg.update(s.Span.SpanContext(), func(r *spanRecord) { r.links = append(r.links, rawLink{sc: link.SpanContext, attrs: raw}) })
+}
+
+// End replaces the credentials known by now in what the span carries, adds its events and links, and ends it.
+func (s *maskedSpan) End(opts ...trace.SpanEndOption) {
+	if s.Span.IsRecording() {
+		raw := s.reg.rawSnapshot(s.Span.SpanContext())
+		if current, ok := s.Span.(sdktrace.ReadOnlySpan); ok {
+			var changed []attribute.KeyValue
+			for _, kv := range current.Attributes() {
+				v := kv.Value
+				if r, ok := raw.attrs[kv.Key]; ok {
+					v = r
+				}
+				if rep := s.m.replaced([]attribute.KeyValue{{Key: kv.Key, Value: v}})[0]; rep.Value.Emit() != kv.Value.Emit() {
+					changed = append(changed, rep)
+				}
+			}
+			if len(changed) > 0 {
+				s.Span.SetAttributes(changed...)
+			}
+			name := current.Name()
+			if raw.name != nil {
+				name = *raw.name
+			}
+			if rep := s.m.text(name); rep != current.Name() {
+				s.Span.SetName(rep)
+			}
+		}
+		for _, l := range raw.links {
+			s.Span.AddLink(trace.Link{SpanContext: l.sc, Attributes: s.m.replaced(l.attrs)})
+		}
+		for _, e := range raw.events {
+			attrs := s.m.replaced(e.attrs)
+			for i, kv := range attrs {
+				if kv.Key == "exception.stacktrace" && kv.Value.Type() == attribute.STRING {
+					attrs[i].Value = attribute.StringValue(capStack(kv.Value.AsString()))
+				}
+			}
+			s.Span.AddEvent(s.m.text(e.name), trace.WithAttributes(attrs...), trace.WithTimestamp(e.time))
+		}
+		if raw.status != nil {
+			s.Span.SetStatus(raw.status.code, s.m.text(raw.status.description))
+		}
+	}
+	s.Span.End(opts...)
 }

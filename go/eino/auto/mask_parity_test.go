@@ -15,7 +15,27 @@ import (
 )
 
 // switches are the privacy switches, one at a time, as the two modules spell them.
-var noContentKeys []string
+// noContentKeys are the go/eino attribute keys that carry no content: identity, model, usage and error-type values.
+var noContentKeys = []string{
+	traceaieino.ResourceProjectName, traceaieino.ResourceProjectType, traceaieino.GenAISpanKind, traceaieino.GenAIOperationName,
+	traceaieino.GenAIRequestModel, traceaieino.GenAIRequestTemperature, traceaieino.GenAIRequestTopP, traceaieino.GenAIRequestMaxTokens,
+	traceaieino.GenAIRequestStopSequences, traceaieino.GenAIResponseFinishReasons, traceaieino.GenAIUsageInputTokens,
+	traceaieino.GenAIUsageOutputTokens, traceaieino.GenAIUsageTotalTokens, traceaieino.GenAIUsageCacheReadTokens,
+	traceaieino.GenAIUsageReasoningTokens, traceaieino.GenAIToolName, traceaieino.GenAIToolCallID, traceaieino.GenAIAgentName,
+	traceaieino.GenAIRetrievalTopK, traceaieino.GenAIEmbeddingsDimension, traceaieino.ErrorType, traceaieino.SessionID, traceaieino.UserID,
+	traceaieino.MimeTypeJSON, traceaieino.MimeTypeText, traceaieino.EinoComponent, traceaieino.EinoType, traceaieino.EinoName,
+	traceaieino.EinoAgentInterrupted, traceaieino.EinoAgentResumed, traceaieino.EinoRetrieverDocumentCount, traceaieino.EinoEmbeddingCount,
+	traceaieino.EinoIndexerDocumentCount, traceaieino.SpanKindLLM, traceaieino.SpanKindTool, traceaieino.SpanKindAgent, traceaieino.SpanKindChain,
+	traceaieino.SpanKindRetriever, traceaieino.SpanKindEmbedding, traceaieino.SpanKindUnknown,
+	// Cost, usage, timing and provenance of an agent turn: numbers, booleans and bounded codes.
+	traceaieino.GenAICostTotal, traceaieino.GenAICostInput, traceaieino.GenAICostOutput, traceaieino.GenAIServerTimeToFirstToken, traceaieino.ToolName,
+	traceaieino.FIUsageScope, traceaieino.FIUsageContribution, traceaieino.FICostKind, traceaieino.FIAgentFidelity, traceaieino.FIAgentTiming,
+	traceaieino.FIAgentOutcome, traceaieino.FIAgentUsageAdditive, traceaieino.FIAgentUsagePlan, traceaieino.FIAgentUsageCacheInInput,
+	traceaieino.FIAgentUsageReasoningInOutput, traceaieino.FIAgentCostSource, traceaieino.FIAgentCostEstimator, traceaieino.FIAgentGap,
+	traceaieino.FIAgentTransport, traceaieino.FIAgentSourceCallID, traceaieino.FIAgentSummaryInput, traceaieino.FIAgentSummaryOutput,
+	traceaieino.FIAgentSummaryTotal, traceaieino.FIAgentSummaryCacheRead, traceaieino.FIAgentSummaryCacheWrite, traceaieino.FIAgentSummaryReasoning,
+	traceaieino.FIAgentSummaryCostUSD, traceaieino.FIAgentTags, traceaieino.FIAgentEvent, traceaieino.FIAgentInputCompleteness, traceaieino.FIAgentContentSource,
+}
 
 var switches = []struct {
 	name string
@@ -92,12 +112,16 @@ func TestEveryEinoAttributeKeyIsClassified(t *testing.T) {
 	classified := map[string]bool{}
 	for _, k := range contentKeys() {
 		classified[k] = true
-		// The base constants of indexed families (gen_ai.input.messages, retrieval.documents, ...) are prefixes of content keys.
-		for _, base := range []string{traceaieino.GenAIInputMessages, traceaieino.GenAIOutputMessages, traceaieino.RetrievalDocuments, traceaieino.GenAIToolDefinitions} {
-			if strings.HasPrefix(k, base+".") {
-				classified[base] = true
+	}
+	// A constant that is a dot-delimited part of a content key (gen_ai.input.messages, message.content, ...) is
+	// classified through the key that contains it.
+	partOfContentKey := func(constant string) bool {
+		for _, k := range contentKeys() {
+			if k == constant || strings.HasPrefix(k, constant+".") || strings.Contains(k, "."+constant+".") || strings.HasSuffix(k, "."+constant) {
+				return true
 			}
 		}
+		return false
 	}
 	for _, k := range noContentKeys {
 		classified[k] = true
@@ -115,7 +139,7 @@ func TestEveryEinoAttributeKeyIsClassified(t *testing.T) {
 					continue
 				}
 				key, _ := strconv.Unquote(lit.Value)
-				if !classified[key] {
+				if !classified[key] && !partOfContentKey(key) {
 					t.Errorf("attributes.go: %s = %q is not classified in mask_parity_test.go", name.Name, key)
 				}
 			}

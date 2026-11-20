@@ -8,10 +8,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/future-agi/traceAI/go/auto/internal/wire"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -35,10 +37,15 @@ type spanRecord struct {
 	// from ContextWithSessionID, if any. Only that value keeps its value at
 	// export.
 	session *string
-	// raw holds the values a dedicated module wrote on its span before known-secret replacement, and
-	// rawName its name; the export to Future AGI starts from them (see rawSpan).
+	// What a dedicated module wrote before known-secret replacement, kept in the span's record until it ends
+	// (an unended span keeps it until shutdown): the export to Future AGI starts from it (see rawSpan). Only
+	// attributes whose replaced value differs are kept; events, links and the status are not on the SDK span
+	// until the span ends, so they are kept whole.
 	raw     map[attribute.Key]attribute.Value
 	rawName *string
+	events  []rawEvent
+	links   []rawLink
+	status  *rawStatus
 }
 
 // Live dedup ancestry is process-local and removed at OnEnd. Credentials are
@@ -118,25 +125,45 @@ func (p *processorRegistration) wroteSession(span trace.SpanContext, value strin
 	}
 }
 
-// rememberRaw keeps, in the span's record until it ends, the attributes (and name, when not nil) a dedicated
-// module wrote before the agent replaced known secrets in the copy the span's own provider exports.
-func (p *processorRegistration) rememberRaw(span trace.SpanContext, kvs []attribute.KeyValue, name *string) {
+type rawEvent struct {
+	name  string
+	attrs []attribute.KeyValue
+	time  time.Time
+}
+
+type rawLink struct {
+	sc    trace.SpanContext
+	attrs []attribute.KeyValue
+}
+
+type rawStatus struct {
+	code        codes.Code
+	description string
+}
+
+// update changes the module span's record under the store lock; a span that is not recorded has none.
+func (p *processorRegistration) update(span trace.SpanContext, change func(*spanRecord)) {
 	store := p.privacy
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	r := store.spans[identity(span)]
-	if r == nil {
-		return
+	if r := store.spans[identity(span)]; r != nil {
+		change(r)
 	}
-	if r.raw == nil {
-		r.raw = map[attribute.Key]attribute.Value{}
-	}
-	for _, kv := range kvs {
-		r.raw[kv.Key] = kv.Value
-	}
-	if name != nil {
-		r.rawName = name
-	}
+}
+
+// rawSnapshot copies the module span's raw values.
+func (p *processorRegistration) rawSnapshot(span trace.SpanContext) (out rawSpan) {
+	p.update(span, func(r *spanRecord) {
+		out.attrs = make(map[attribute.Key]attribute.Value, len(r.raw))
+		for k, v := range r.raw {
+			out.attrs[k] = v
+		}
+		out.name = r.rawName
+		out.events = append([]rawEvent(nil), r.events...)
+		out.links = append([]rawLink(nil), r.links...)
+		out.status = r.status
+	})
+	return out
 }
 
 // endPrivacy removes the span's record and returns the session.id value the
@@ -150,8 +177,8 @@ func (p *processorRegistration) endPrivacy(span sdktrace.ReadOnlySpan) (*string,
 	var raw *rawSpan
 	if r := store.spans[key]; r != nil {
 		session = r.session
-		if r.raw != nil || r.rawName != nil {
-			raw = &rawSpan{attrs: r.raw, name: r.rawName}
+		if r.raw != nil || r.rawName != nil || r.events != nil || r.links != nil || r.status != nil {
+			raw = &rawSpan{attrs: r.raw, name: r.rawName, events: r.events, links: r.links, status: r.status}
 		}
 	}
 	delete(store.spans, key)
@@ -159,12 +186,16 @@ func (p *processorRegistration) endPrivacy(span sdktrace.ReadOnlySpan) (*string,
 }
 
 // rawSpan restores, for the export to Future AGI, what a dedicated module wrote before the agent replaced known
-// secrets in the span the application's own provider exports: the export boundary replaces them with the snapshot
-// taken at export, so a secret learned after the value was written still matches as a whole.
+// secrets in the span the application's own provider exports: attributes, name, events, links and the status. The
+// export boundary then replaces secrets with the snapshot taken at export, so a secret learned after the value was
+// written still matches as a whole, and caps what the application's provider caps (capAfterReplacement).
 type rawSpan struct {
 	sdktrace.ReadOnlySpan
-	attrs map[attribute.Key]attribute.Value
-	name  *string
+	attrs  map[attribute.Key]attribute.Value
+	name   *string
+	events []rawEvent
+	links  []rawLink
+	status *rawStatus
 }
 
 func (s rawSpan) with(span sdktrace.ReadOnlySpan) rawSpan { s.ReadOnlySpan = span; return s }
@@ -186,6 +217,120 @@ func (s rawSpan) Name() string {
 		return *s.name
 	}
 	return s.ReadOnlySpan.Name()
+}
+
+// Events are the module's, in the order they were added when the span ended.
+func (s rawSpan) Events() []sdktrace.Event {
+	src := s.ReadOnlySpan.Events()
+	out := make([]sdktrace.Event, len(src))
+	for i, e := range src {
+		if i < len(s.events) {
+			e.Name, e.Attributes = s.events[i].name, s.events[i].attrs
+		}
+		out[i] = e
+	}
+	return out
+}
+
+func (s rawSpan) Links() []sdktrace.Link {
+	src := s.ReadOnlySpan.Links()
+	out := make([]sdktrace.Link, len(src))
+	for i, l := range src {
+		if i < len(s.links) {
+			l.Attributes = s.links[i].attrs
+		}
+		out[i] = l
+	}
+	return out
+}
+
+func (s rawSpan) Status() sdktrace.Status {
+	st := s.ReadOnlySpan.Status()
+	if s.status != nil && st.Code == codes.Error {
+		st.Description = s.status.description
+	}
+	return st
+}
+
+// rawView finds the raw record under the wrappers the agent puts on a span on its way to the export.
+func rawView(span sdktrace.ReadOnlySpan) (rawSpan, bool) {
+	for i := 0; i < 4 && span != nil; i++ {
+		switch v := span.(type) {
+		case rawSpan:
+			return v, true
+		case sessionSpan:
+			span = v.ReadOnlySpan
+		default:
+			return rawSpan{}, false
+		}
+	}
+	return rawSpan{}, false
+}
+
+// maxStackTrace is the size of the stack trace the SDK records for WithStackTrace(true).
+const maxStackTrace = 2048
+
+// capText cuts s to limit runes, as the SDK cuts attribute values; a negative limit is unlimited.
+func capText(s string, limit int) string {
+	if limit < 0 || utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == limit {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
+// capStack cuts a stack trace to maxStackTrace bytes at a rune boundary.
+func capStack(s string) string {
+	if len(s) <= maxStackTrace {
+		return s
+	}
+	cut := maxStackTrace
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// capAfterReplacement applies what the application's provider caps to the values restored from the raw record, after the
+// export boundary replaced secrets in them: the secret is replaced on the whole value first, so a cap can never leave a
+// fragment of one. Attributes follow the provider's value-length limit; a stack trace is cut to maxStackTrace.
+func capAfterReplacement(span sdktrace.ReadOnlySpan, attrs []attribute.KeyValue, events []sdktrace.Event, valueLimit int) ([]attribute.KeyValue, []sdktrace.Event) {
+	raw, ok := rawView(span)
+	if !ok {
+		return attrs, events
+	}
+	if valueLimit >= 0 {
+		for i, kv := range attrs {
+			if _, restored := raw.attrs[kv.Key]; !restored {
+				continue
+			}
+			switch kv.Value.Type() {
+			case attribute.STRING:
+				attrs[i].Value = attribute.StringValue(capText(kv.Value.AsString(), valueLimit))
+			case attribute.STRINGSLICE:
+				values := append([]string(nil), kv.Value.AsStringSlice()...)
+				for j, v := range values {
+					values[j] = capText(v, valueLimit)
+				}
+				attrs[i].Value = attribute.StringSliceValue(values)
+			}
+		}
+	}
+	for i := range events {
+		for j, kv := range events[i].Attributes {
+			if kv.Key == "exception.stacktrace" && kv.Value.Type() == attribute.STRING {
+				events[i].Attributes = append([]attribute.KeyValue(nil), events[i].Attributes...)
+				events[i].Attributes[j].Value = attribute.StringValue(capStack(kv.Value.AsString()))
+			}
+		}
+	}
+	return attrs, events
 }
 
 // sessionSpan is one of the agent's wire spans on its way to the export
@@ -735,5 +880,6 @@ func exportSpanLimited(span sdktrace.ReadOnlySpan, c Config, res *resource.Resou
 		s.session = &own.session
 	}
 	attrs := s.attrs(span.Attributes(), false, 0, 0)
+	attrs, events = capAfterReplacement(span, attrs, events, valueLimit)
 	return privateSpan{ReadOnlySpan: span, name: s.text("", span.Name()), attrs: attrs, events: events, links: links, status: status, res: r, scope: scope, ctx: s.spanContext(span.SpanContext()), parent: s.spanContext(span.Parent())}
 }

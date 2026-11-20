@@ -21,7 +21,8 @@
 //   - the FI_HIDE_* switches apply exactly as to the agent's wire spans, to
 //     the copy Future AGI receives and the copy the application's own
 //     provider exports (error.message becomes the redaction marker rather
-//     than being dropped); known secrets are replaced in both, in the
+//     than being dropped); known secrets are replaced in both on every part
+//     of a span (attributes, name, events, links, status), in the
 //     application's copy as each span ends and in Future AGI's at export;
 //   - a run that an application handler (traceaieino.NewHandler(), registered
 //     globally or given to one run with compose.WithCallbacks or
