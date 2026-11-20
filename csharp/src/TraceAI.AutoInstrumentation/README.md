@@ -345,7 +345,7 @@ an HttpClient callback. Transport errors read only the BCL's stored exception te
 never a virtual `Message` override. Unrecognized host context layouts are skipped, fail-open.
 **One process-wide known-secret registry** is shared as BCL state across the isolated
 hook and default load contexts. It holds at most 1,024 values of eight or more
-characters, evicting the least recently registered/observed value first. At
+characters, evicting the least recently registered/observed value first; the FI keys of the configuration are pinned outside that LRU (a separate set of at most 256 values), so no amount of other registrations can evict them. At
 initialization it learns every supplied FI key (including ignored incomplete explicit
 pairs and overridden TOML/environment values) and credential-like environment values
 (names containing KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH). Such an
@@ -355,12 +355,18 @@ the variable, never its value.
 shorter values are ignored. If the registry itself must fail closed (for example an
 overlong registered value), the agent says so once on standard error and exports
 spans with identity and timing but no content for the rest of the process.
-Replacement works on the whole value, then any length cap applies to the replaced text, so a cap never cuts a secret in two.
+Replacement works on the whole value, then any length cap applies to the replaced text, so a cap never cuts a secret in two:
+the attribute limit, the 500-character status description of a non-JSON error body and the 4,096-character value limits all run
+after replacement. Known secrets are replaced first and the credential value shapes (`AKIA...`, `Bearer ...`, `sk-...`, JWT) run on
+the result, in the same call; no shape ever runs on text that still holds a known secret, because a shape that matched part of a
+secret would leave the rest of it behind. The one exception is a multipart text field, which is read to 64 KiB before the secrets of
+the request are known: a field cut at that cap also loses the last 4,095 characters it kept, so a secret straddling the cap keeps no part
+of itself (such a field is at most 61,441 characters).
 Values that contain or overlap known secrets, including two secrets that overlap only at their edges, are replaced as one span, so
 no part of any of them remains. The Future AGI copy is replaced at export: the export boundary takes one immutable
 snapshot per batch, at export, and replaces these values in every exported string, including unrelated and later spans, so a
 secret learned after a span was captured is still replaced. For the HTTP model-call spans the agent itself creates, the agent
-keeps the unreplaced values in a custom property, which exporters do not read, and the application's own providers, listeners and
+keeps the unreplaced values in an agent-side table keyed by the Activity (not a custom property, tag or any other member the application can read), and the application's own providers, listeners and
 exporters see the same values replaced once, from the registry as it is when the span ends (a secret learned after that is
 not known to them). There is no per-request secret set, span-start inheritance
 or ancestor credential propagation. Registry values never appear in diagnostics.
@@ -391,8 +397,8 @@ The fully merged resource includes `OTEL_RESOURCE_ATTRIBUTES`, detected attribut
 and all project fields, with the same hide and credential rules. Project routing is
 separate (`project_name`); it never replaces detected `service.name`,
 `service.version` or `service.instance.id`, or synthesizes application identity from
-the instrumentation's version. All supplied FI values are refreshed before export,
-so ordinary LRU churn cannot evict ignored/overridden FI credentials.
+the instrumentation's version. All supplied FI values are pinned before export,
+so LRU churn cannot evict ignored/overridden FI credentials.
 
 Attribute projection follows the shared A7 contract, independent of insertion order.
 Wire candidates are projected before Activity creation; forwarded Activities are

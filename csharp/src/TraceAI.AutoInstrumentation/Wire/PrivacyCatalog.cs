@@ -217,7 +217,7 @@ internal static class PrivacyCatalog
         string candidate=UrlValue(value,true);
         return candidate!=value&&Full(ExactUrl,candidate);
     }
-    internal static string Text(string value,IEnumerable<string>? secrets=null,bool framed=true)
+    internal static string Text(string value,IEnumerable<string>? secrets=null,bool framed=true,bool shapes=true)
     {
         if(framed&&IsUrlValue(value)) value=UrlValue(value);
         else
@@ -231,7 +231,9 @@ internal static class PrivacyCatalog
             });
         }
         value=ReplaceSecrets(value,secrets);
-        foreach(var shape in ValueShapes) value=shape.Replace(value,Redacted);
+        // Known secrets are replaced first, then the credential value shapes on the result, in this one call. A pass that does not
+        // replace known secrets (shapes: false) never runs a shape on text that still holds one.
+        if(shapes) foreach(var shape in ValueShapes) value=shape.Replace(value,Redacted);
         return value;
     }
     /// <summary>Replaces every occurrence of every known secret (eight or more characters). Occurrences that overlap or contain
@@ -271,7 +273,7 @@ internal static class PrivacyCatalog
         internal void Node(int depth) { if(depth>MaxDepth||--nodes<0) throw new InvalidDataException("Privacy structure budget"); }
         internal void Text(int length) { if((characters-=length)<0) throw new InvalidDataException("Privacy text budget"); }
     }
-    internal static JsonNode? Scrub(JsonNode? value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false)
+    internal static JsonNode? Scrub(JsonNode? value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false,bool shapes=true)
     {
         budget??=new(); budget.Node(depth);
         if(CredentialName(path)) return JsonValue.Create(Redacted);
@@ -282,11 +284,11 @@ internal static class PrivacyCatalog
             var result=new JsonObject();
             foreach(var pair in obj)
             {
-                string key=Text(pair.Key,secrets),child=path.Length>0?path+"."+pair.Key:pair.Key;
+                string key=Text(pair.Key,secrets,true,shapes),child=path.Length>0?path+"."+pair.Key:pair.Key;
                 // Preserve the pre-S6 embedding-vector export policy. This is not
                 // a credential/media recognition list and never affects harvesting.
                 result[key]=pair.Key.ToLowerInvariant() is "embedding" or "embeddings" && pair.Value is JsonObject or JsonArray
-                    ?JsonValue.Create(Redacted):Scrub(pair.Value,child,hints,secrets,true,budget,depth+1,media,audio);
+                    ?JsonValue.Create(Redacted):Scrub(pair.Value,child,hints,secrets,true,budget,depth+1,media,audio,shapes);
             }
             return result;
         }
@@ -295,15 +297,15 @@ internal static class PrivacyCatalog
         {
             if(context.Payload&&array.Count>0&&array.All(IsNumberOrBool)) return JsonValue.Create(OtherMedia);
             var result=new JsonArray();
-            for(int i=0;i<array.Count;i++) result.Add(Scrub(array[i],path+"."+i,hints,secrets,true,budget,depth+1,media,audio));
+            for(int i=0;i<array.Count;i++) result.Add(Scrub(array[i],path+"."+i,hints,secrets,true,budget,depth+1,media,audio,shapes));
             return result;
         }
         if(WireCore.S(value) is not {} text) return value!=null&&context.Payload?JsonValue.Create(OtherMedia):value?.DeepClone();
         budget.Text(text.Length);
-        return JsonValue.Create(String(text,path,hints,secrets,framed,budget,depth,media,audio));
+        return JsonValue.Create(String(text,path,hints,secrets,framed,budget,depth,media,audio,shapes));
     }
     private static bool IsNumberOrBool(JsonNode? value)=>value is JsonValue scalar&&(scalar.GetValueKind() is System.Text.Json.JsonValueKind.Number or System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False);
-    internal static string String(string value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false)
+    internal static string String(string value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false,bool shapes=true)
     {
         if(CredentialName(path)) return Redacted;
         if(MediaString(value,path,hints,framed,media,audio) is {} replacement) return replacement;
@@ -312,9 +314,9 @@ internal static class PrivacyCatalog
         {
             // Invalid/deep serialized JSON fails closed at S1 rather than being treated as prose.
             var parsed=JsonNode.Parse(value); var context=Context(path,hints,media,audio);
-            var clean=Scrub(parsed,"",null,secrets,true,budget,depth+1,context.Media,context.Audio);
+            var clean=Scrub(parsed,"",null,secrets,true,budget,depth+1,context.Media,context.Audio,shapes);
             if(!JsonNode.DeepEquals(parsed,clean)) value=WireCore.J(clean);
         }
-        return Text(value,secrets,framed);
+        return Text(value,secrets,framed,shapes);
     }
 }

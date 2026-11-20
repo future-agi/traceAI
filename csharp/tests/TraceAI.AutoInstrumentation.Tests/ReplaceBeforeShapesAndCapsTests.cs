@@ -82,6 +82,25 @@ public class ReplaceBeforeShapesAndCapsTests : InitIsolation
     }
 
     [Fact]
+    public void TheRawPassNeverRunsAValueShapeBeforeKnownSecrets()
+    {
+        // A shapes-off scrub leaves the text as it is; the replacing scrub then removes the secret whole, shapes after secrets.
+        var raw = (string)WirePrivacy.Scrub("x " + AwsPair + " y", null, shapes: false);
+        Assert.Contains(AwsPair, raw);
+        var replaced = (string)WirePrivacy.Scrub(raw, [AwsPair]);
+        Assert.Equal("x <redacted> y", replaced);
+        // A shape that is not part of a known secret is still replaced in the same call.
+        Assert.Equal("<redacted> and <redacted>", (string)WirePrivacy.Scrub(AwsPair + " and AKIAABCDEFGHIJKLMNOP", [AwsPair]));
+    }
+
+    [Fact]
+    public async Task ASecretWithAShapeLearnedAfterCaptureLeavesNoFragmentOnTheFutureAgiCopy()
+    {
+        var copies = await RunLearningLater(AwsPair, "{\"error\":{\"message\":\"bad " + AwsPair + "\"}}", 401, "application/json");
+        Assert.DoesNotContain("wJalr", copies.FutureAgi); Assert.DoesNotContain("EXAMPLEKEY", copies.FutureAgi); Assert.DoesNotContain("AKIAIOSFODNN7EXAMPLE", copies.FutureAgi);
+    }
+
+    [Fact]
     public async Task FiKeysStayReplacedOnBothCopiesAfterMoreThanTheRegistryCapacityOfOtherSecrets()
     {
         var others = Enumerable.Range(0, 1100).Select(i => "filler-secret-value-" + i.ToString("D5")).ToArray();
@@ -110,7 +129,7 @@ public class ReplaceBeforeShapesAndCapsTests : InitIsolation
         Assert.DoesNotContain("STRADDLE", copies.FutureAgi); Assert.DoesNotContain("LATE-SEC", copies.FutureAgi);
     }
 
-    private static async Task<Copies> RunLearningLater(string secret, string reply)
+    private static async Task<Copies> RunLearningLater(string secret, string reply, int status = 500, string contentType = "text/plain")
     {
         var saved = new[] { "FI_API_KEY", "FI_SECRET_KEY", "OTEL_SDK_DISABLED" }.Select(name => (name, Environment.GetEnvironmentVariable(name))).ToArray();
         try
@@ -119,7 +138,7 @@ public class ReplaceBeforeShapesAndCapsTests : InitIsolation
             var hostExporter = new MemoryExporter(); var agentExporter = new MemoryExporter();
             using var provider = Sdk.CreateTracerProviderBuilder().AddSource(TraceAIAuto.Source.Name).AddProcessor(new SimpleActivityExportProcessor(hostExporter)).Build();
             TraceAIAuto.Init(options => { options.ConfigFile = AbsentConfig; options.Provider = provider; options.Exporter = agentExporter; });
-            await using var server = new MockServer(Encoding.UTF8.GetBytes(reply), "text/plain") { StatusCode = 500 };
+            await using var server = new MockServer(Encoding.UTF8.GetBytes(reply), contentType) { StatusCode = status };
             using var client = new HttpClient();
             using (await client.PostAsync(server.Url + "v1/chat/completions", new StringContent(Chat("hello"), Encoding.UTF8, "application/json"))) { }
             TraceAIAuto.RegisterSecret(secret);

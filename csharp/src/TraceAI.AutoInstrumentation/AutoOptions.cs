@@ -180,9 +180,10 @@ internal sealed class AutoConfig
     /// <summary>Replaces every secret the agent knows: the FI credentials of this configuration and the process-wide registry
     /// (registered secrets and credentials discovered in requests), the same set the Future AGI copy uses. When the registry is
     /// unavailable the text is replaced entirely.</summary>
+    internal string[] KnownValues()=>CredentialValues.Concat(KnownSecrets.Snapshot()).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length).ToArray();
     internal string RedactSecrets(string text)
     {
-        try { return Wire.WirePrivacy.ScrubString(text,CredentialValues.Concat(KnownSecrets.Snapshot()).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length)); }
+        try { return Wire.WirePrivacy.ScrubString(text,KnownValues()); }
         catch { return Wire.WirePrivacy.Redacted; }
     }
     private static string DefaultProjectName()

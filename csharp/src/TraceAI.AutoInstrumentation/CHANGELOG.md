@@ -6,6 +6,12 @@ Release notes are added here by the release process.
 
 ## Unreleased
 
+### Fixed
+- A known secret that contains a credential value shape (an `AKIA...` key followed by more characters, a `Bearer ...` value with a `~` or `.` suffix) is replaced whole on both copies of a wire span: known secrets are replaced first and value shapes run on the result, in the same call, never on raw text.
+- The FI keys are pinned outside the registry's LRU, so registering more than 1,024 other secrets never lets them be evicted from either copy.
+- The 500-character status description of a non-JSON error body is cut after replacement, not before. A multipart text field cut at 64 KiB also loses its last 4,095 characters, so no secret straddling the cap keeps a part of itself.
+- The unreplaced values of a wire span are kept in an agent-side table keyed by the Activity, not in a custom property the application can read.
+
 ### Added
 - ASP.NET Core hosts are traced with no application code: the startup hook activates the companion assembly `TraceAI.AutoInstrumentation.HostingStartup`, which wraps registered `IChatClient`, `IEmbeddingGenerator<,>` and `AIAgent` services in the libraries' own OpenTelemetry wrappers when `extensions_ai` or `agents` is enabled. An application that already calls `UseOpenTelemetry()` is not wrapped twice, no hide setting is overridden, and an existing `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` value is kept.
 - The agent starts next to `System.Diagnostics.DiagnosticSource` 11, which `Microsoft.Extensions.AI` 11 ships.

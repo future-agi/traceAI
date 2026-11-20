@@ -59,7 +59,11 @@ internal sealed class ResponseData
 }
 internal sealed record WireMatch(JsonNode Endpoint, string Provider, Uri Url, Dictionary<string, string> Groups,
     Dictionary<string, string> Query, bool KnownProvider);
-internal sealed record SpanResult(string Name, Dictionary<string, object> Attributes, bool Ok, string? Description);
+/// <param name="Secrets">The registry snapshot the span was built with (null when the registry is unavailable); a raw span
+/// is replaced from it, so building and replacing share one lookup.</param>
+/// <param name="CapDescription">The description is a non-JSON response body: it is cut to <see cref="WireCore.DescriptionCap"/>
+/// characters only after known secrets are replaced, so the cut can never fall inside one.</param>
+internal sealed record SpanResult(string Name, Dictionary<string, object> Attributes, bool Ok, string? Description, string[]? Secrets=null, bool CapDescription=false);
 
 /// <summary>Transport-independent port of the shared Python wire parser. No HTTP or telemetry dependencies.</summary>
 internal static class WireCore
@@ -386,7 +390,7 @@ internal static class WireCore
                 if(payload.Length>65536) req.Truncated=true;
                 var field=Bounded(name.Groups[1].Value,1024);
                 var text=Encoding.UTF8.GetString(payload[..Math.Min(payload.Length,65536)]);
-                req.Fields[field]=text;
+                req.Fields[field]=CutBeforeCap(text,payload.Length>65536);
                 req.CredentialDiscoveryIncomplete|=WirePrivacy.ObserveField(field,text,payload.Length<=65536);
             }
             else req.Truncated=true;
@@ -694,6 +698,12 @@ internal static class WireCore
             for(int k=0;k<m.Calls.Count;k++) { var c=m.Calls[k]; var ck=$"{key}.tool_calls.{k}.tool_call"; Put(attrs,ck+".id",c.Id); Put(attrs,ck+".function.name",c.Name); Put(attrs,ck+".function.arguments",c.Arguments); }
         }
     }
+    /// <summary>A multipart text field is read only up to 64 KiB, before the secrets of the request are known, so the cap can fall
+    /// inside one. A field that was cut loses the last <c>KnownSecrets.MaxLength - 1</c> characters it kept: a secret (never longer than
+    /// that limit) that straddles the cap begins in them, so no part of it stays.</summary>
+    internal static string CutBeforeCap(string text,bool cut)=>cut?text[..Math.Max(0,text.Length-(KnownSecrets.MaxLength-1))]:text;
+    internal const int DescriptionCap=500;
+    internal static string CapDescription(string description)=>description[..Math.Min(description.Length,DescriptionCap)];
     /// <summary>Builds the span's name, attributes and status description. With <paramref name="raw"/> the known secrets are not
     /// replaced (the caller replaces them, once, from the registry at the moment each copy is made); every other privacy rule
     /// applies, and content is still dropped when the registry is unavailable.</summary>
@@ -737,7 +747,7 @@ internal static class WireCore
         if(req.Truncated||resp.Truncated) a["traceai.wire.truncated"]=true;
         if(resp.Incomplete || streamed&&resp.ArrivalTrackingLost) a["traceai.wire.incomplete"]=true;
         Put(a,"traceai.wire.undecoded_encoding",resp.UndecodedEncoding??req.UndecodedEncoding);
-        string? description=null;
+        string? description=null; bool capDescription=false;
         if(!ok)
         {
             a["error.type"]=resp.Error?.GetType().Name??resp.Status?.ToString()??"unknown";
@@ -745,7 +755,10 @@ internal static class WireCore
             if(!hideErrorDetails)
             {
                 var d=body.Json is JsonArray ? G(body.Json,"0") : body.Json;
-                description=(resp.Error==null?null:WirePrivacy.ErrorMessage(resp.Error))??S(G(d,"error","message"))??S(G(d,"error"))??S(G(d,"message"))??S(G(d,"detail"))??S(G(d,"err_msg"))??S(G(d,"detail","message"))??(body.Text is {} t?t[..Math.Min(t.Length,500)]:null)??$"HTTP {resp.Status}";
+                description=(resp.Error==null?null:WirePrivacy.ErrorMessage(resp.Error))??S(G(d,"error","message"))??S(G(d,"error"))??S(G(d,"message"))??S(G(d,"detail"))??S(G(d,"err_msg"))??S(G(d,"detail","message"));
+                // A non-JSON body is kept whole (up to the privacy text limit) and cut after replacement, never before.
+                if(description==null&&body.Text is {} t&&t.Length<=PrivacyCatalog.MaxText) { description=t; capDescription=true; }
+                description??=$"HTTP {resp.Status}";
             }
         }
         KnownSecrets.Register(WirePrivacy.RequestSecrets(req));
@@ -758,12 +771,16 @@ internal static class WireCore
             foreach(var key in a.Keys.Where(key=>!AttributeProjection.Protected(key)).ToArray()) a.Remove(key);
             a["traceai.wire.incomplete"]=true;
             if(dropped>0) a[AttributeProjection.DroppedContent]=dropped;
-            description=null;
+            description=null; capDescription=false;
         }
         var replace=raw?null:secrets;
+        // A raw span is replaced later, from the unreplaced values: neither known secrets nor value shapes are applied here, since a
+        // shape run first could cut a known secret in two. Replaced here, secrets come first and shapes follow in the same call.
         foreach(var (key,value) in a.ToArray()) a[key]=secrets==null?
-            (value is bool or int or long or double?value:WirePrivacy.Redacted):WirePrivacy.Scrub(value,replace,path:key);
+            (value is bool or int or long or double?value:WirePrivacy.Redacted):WirePrivacy.Scrub(value,replace,path:key,shapes:!raw);
         var model=p.Model??p.ResponseModel;
-        return new(secrets==null?"traceai.redacted":WirePrivacy.ScrubString(model!=null?$"{operation} {model}":operation,replace),a,ok,description==null?null:WirePrivacy.ScrubString(description,replace));
+        string? described=description==null||secrets==null?null:WirePrivacy.ScrubString(description,replace,shapes:!raw);
+        if(!raw&&capDescription&&described!=null) { described=CapDescription(described); capDescription=false; }
+        return new(secrets==null?"traceai.redacted":WirePrivacy.ScrubString(model!=null?$"{operation} {model}":operation,replace,shapes:!raw),a,ok,described,secrets,capDescription);
     }
 }

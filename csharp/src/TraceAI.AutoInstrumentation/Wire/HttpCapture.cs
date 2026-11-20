@@ -221,12 +221,13 @@ internal sealed class HttpCapture : IObserver<DiagnosticListener>, IObserver<Key
                 var bytes=new byte[(int)Math.Min(memory.Length,65536)]; int count=0;
                 try { memory.Position=0; while(count<bytes.Length) { int copied=memory.Read(bytes,count,bytes.Length-count); if(copied==0) break; count+=copied; } }
                 finally { memory.Position=position; }
-                if(memory.Length>65536) req.Truncated=true;
+                bool cut=memory.Length>65536;
+                if(cut) req.Truncated=true;
                 var prefix=bytes.AsSpan(0,count);
                 // Drop an incomplete trailing UTF-8 codepoint rather than expanding it past the byte cap.
                 var text=System.Text.Encoding.UTF8.GetString(prefix);
-                while(System.Text.Encoding.UTF8.GetByteCount(text)>65536) text=text[..^1];
-                req.Fields[name]=text;
+                while(System.Text.Encoding.UTF8.GetByteCount(text)>65536) { text=text[..^1]; cut=true; }
+                req.Fields[name]=WireCore.CutBeforeCap(text,cut);
             }
             return;
         }
@@ -335,15 +336,16 @@ internal sealed class Capture
             var unreplaced=tags.Select(pair=> {
                 try
                 {
-                    var value=pair.Value==null?null:WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints);
-                    if(value!=null && _privacy!=null) value=_privacy.Mask(pair.Key,value,operation,replaceSecrets:false);
+                    // Raw: neither known secrets nor value shapes yet. A shape run now could cut a known secret in two.
+                    var value=pair.Value==null?null:WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints,shapes:false);
+                    if(value!=null && _privacy!=null) value=_privacy.Mask(pair.Key,value,false,operation);
                     return new KeyValuePair<string,object?>(pair.Key,value);
                 }
                 catch { return new KeyValuePair<string,object?>(pair.Key,FIInstrumentation.TraceConfig.RedactedValue); }
             }).ToArray();
-            // One lookup for this span: replace on each full value first, then project (cap) the replaced values.
-            string[]? secrets;
-            try { secrets=KnownSecrets.Snapshot(); } catch { secrets=null; }
+            // The one registry lookup of this span was taken when it was built (it includes the pinned FI keys). Known secrets are
+            // replaced on each full value first and value shapes follow in the same call; only then are the values projected (capped).
+            var secrets=result.Secrets;
             object? Replaced(string key,object? value)
             {
                 if(value==null) return null;
@@ -356,6 +358,7 @@ internal sealed class Capture
             var projected=AttributeProjection.Project(unreplaced.Select(pair=>new KeyValuePair<string,object?>(pair.Key,Replaced(pair.Key,pair.Value))).ToArray(),_attributeLimit).ToArray();
             var name=secrets==null?"traceai.redacted":WirePrivacy.ScrubString(result.Name,secrets);
             var description=result.Description==null||secrets==null?null:WirePrivacy.ScrubString(result.Description,secrets);
+            if(description!=null&&result.CapDescription) description=WireCore.CapDescription(description);
             ExecutionContext.Run(_requestContext,_=>
             {
                 // Explicitly clear ambient context so a request with no parent stays a root.
@@ -364,8 +367,8 @@ internal sealed class Capture
                 {
                     Activity.Current=null;
                     using var activity=TraceAIAuto.Source.StartActivity(name,ActivityKind.Client,_parent,projected,startTime:_start);
-                    // The unreplaced values stay with the agent: a custom property is not read by exporters.
-                    activity?.SetCustomProperty(WireRecord.Key,new WireRecord(result.Name,result.Description,unreplaced,projected,name,description));
+                    // The unreplaced values stay with the agent, in a table keyed by the Activity: application code cannot reach them.
+                    if(activity!=null) WireRecord.Keep(activity,new WireRecord(result.Name,result.Description,result.CapDescription,unreplaced,projected,name,description));
                     activity?.SetStatus(result.Ok?ActivityStatusCode.Ok:ActivityStatusCode.Error,description);
                     activity?.SetEndTime(ended.UtcDateTime);
                 }

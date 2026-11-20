@@ -54,10 +54,10 @@ public class ErrorDetailPrivacyTests : InitIsolation
         Assert.Equal(hidden,processor.HideErrorDetails);
         foreach(var key in new[] { "exception.message","exception.stacktrace","error.message" })
         {
-            if(hidden) Assert.Null(processor.Mask(key,Echo));
-            else Assert.Equal(Echo,processor.Mask(key,Echo));
+            if(hidden) Assert.Null(processor.Mask(key,Echo,true));
+            else Assert.Equal(Echo,processor.Mask(key,Echo,true));
         }
-        Assert.Equal("400",processor.Mask("error.type","400"));
+        Assert.Equal("400",processor.Mask("error.type","400",true));
     }
     [Theory]
     [InlineData("hide_inputs = true",true)]
