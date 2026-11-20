@@ -144,30 +144,21 @@ describe("the opt-in allows plaintext to a host that is not Future AGI, with one
   });
 });
 
-describe("the opt-in does not apply when the request would go through a proxy", () => {
-  test.each(["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"])("%s refuses HTTP", name => {
-    process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
-    expect(refused(() => http("http://collector.example:4318"))).not.toBe("");
-    expect(refused(() => http("http://collector.example:4318", { allowInsecureHttp: true }))).not.toBe("");
-  });
-  test.each(["http_proxy", "https_proxy", "grpc_proxy"])("%s refuses gRPC (the names the gRPC channel itself reads)", name => {
-    process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
-    expect(refused(() => rpc("http://collector.example:4317"))).not.toBe("");
-  });
-  test.each(["HTTPS_PROXY", "https_proxy"])("%s alone does not route an http:// request", name => {
+describe("a request the SDK builds itself goes direct, whatever the proxy environment says", () => {
+  test.each(["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"])("%s does not refuse or route HTTP", name => {
     process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
     expect(refused(() => http("http://collector.example:4318"))).toBe("");
+    expect(refused(() => http("http://collector.example:4318", { allowInsecureHttp: true }))).toBe("");
   });
-  test("NO_PROXY for the host (or a parent domain, or *) lifts the refusal; loopback never needed it", () => {
-    process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
-    for (const noProxy of ["collector.example", ".example", "other.test,collector.example:4318", "*"]) {
-      process.env.NO_PROXY = noProxy;
-      expect(refused(() => http("http://collector.example:4318"))).toBe("");
-    }
-    process.env.NO_PROXY = "other.example";
-    expect(refused(() => http("http://collector.example:4318"))).not.toBe("");
-    delete process.env.NO_PROXY;
-    expect(refused(() => http("http://127.0.0.1:4318"))).toBe("");
+  test.each(["http_proxy", "https_proxy", "grpc_proxy"])("%s does not refuse gRPC, whose channel is built with proxies off", name => {
+    process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env[name] = "http://proxy.internal.example:3128";
+    expect(refused(() => rpc("http://collector.example:4317"))).toBe("");
+  });
+  test("a caller's dispatcher is where the proxy rules apply (see the decision table)", async () => {
+    class ProxyAgent {}
+    process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1";
+    await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { dispatcher: new ProxyAgent() });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -201,10 +192,10 @@ describe("the custom eval checks follow the same rules", () => {
     await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
-  test("through a proxy the opt-in does not apply", async () => {
+  test("the proxy environment does not route the check, which is sent direct", async () => {
     process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
     await checkCustomEvalConfigExists("p", [tag()]);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
   test("loopback and https bases are checked", async () => {
     process.env.FI_BASE_URL = "http://127.0.0.1:9"; await checkCustomEvalConfigExists("p", [tag()]);
@@ -241,10 +232,11 @@ describe("only a literal loopback host is loopback", () => {
     });
     expect(warnings.filter(w => /FI_ALLOW_INSECURE_HTTP/.test(w))).toHaveLength(1);
   });
-  test.each(WRITTEN)("(b) %s: still refused through a proxy", host => {
-    process.env.HTTP_PROXY = "http://proxy.internal.example:3128"; process.env.http_proxy = "http://proxy.internal.example:3128";
-    expect(refused(() => http(`http://${host}:4318`, { allowInsecureHttp: true }))).not.toBe("");
-    expect(refused(() => rpc(`http://${host}:4317`, { allowInsecureHttp: true }))).not.toBe("");
+  test.each(WRITTEN)("(b) %s: still refused through a caller's proxy dispatcher", async host => {
+    class ProxyAgent {}
+    process.env.FI_BASE_URL = `http://${host}:8000`;
+    await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true, dispatcher: new ProxyAgent() });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
   test.each(WRITTEN)("%s as an eval-check base: no request by default, a request with the opt-in", async host => {
     process.env.FI_BASE_URL = `http://${host}:8000`;

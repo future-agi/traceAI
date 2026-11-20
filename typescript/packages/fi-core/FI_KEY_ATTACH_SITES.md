@@ -52,3 +52,15 @@ FI key environment variables or writes key-named headers/metadata, and it return
 (HTTP headers, or the built gRPC `Metadata`). Sites 1-7 collapse into it; sites 8-15 take its result;
 sites 16, 18 and 19 are pinned by `fiKeyAttachPoints.test.ts` (route factory, auto side). The test uses the
 TypeScript compiler API to assert the exact set of functions that mention the key names.
+
+## Checks that sit beside the decider
+
+- `assertDirectFetch` (`fi-request-policy.ts`) runs right before each fetch that carries keys (the deprecated
+  `HTTPSpanExporter.export`, `checkCustomEvalConfigExists`, `checkCustomEvalTemplateExists`): a plaintext request to a host
+  that is not loopback is refused when the dispatcher in use (the caller's, else the global one, read at send time) would proxy it.
+  Those fetches use `redirect: "manual"` and treat a 3xx answer as an error.
+- `connectGrpcDirect` (`otlp-header-isolation.ts`) builds the gRPC channel of an exporter that sends keys in plaintext under the opt-in
+  with `grpc.enable_http_proxy: 0`.
+- `assertNoKeysInAmbientHeaders` (`fi-request-policy.ts`) runs in the constructors of the exporters for another collector, where
+  the OTLP exporter reads `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS`: it refuses a key header name or a known
+  secret in those variables. It reads the key values only to refuse them; it sends nothing.

@@ -354,7 +354,8 @@ export function init(options: Options = {}): TracerProvider | undefined {
         delete process.env.OTEL_TRACES_SAMPLER;
         delete process.env.OTEL_TRACES_SAMPLER_ARG;
         agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
-          setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor], sampler });
+          setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor], sampler,
+          allowInsecureHttp: options.allowInsecureHttp === true });
       } finally {
         if (samplerName === undefined) delete process.env.OTEL_TRACES_SAMPLER;
         else process.env.OTEL_TRACES_SAMPLER = samplerName;

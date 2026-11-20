@@ -61,7 +61,7 @@ describe("a caller's dispatcher: proxied when the library or Python says so", ()
     expect(fetchSpy).not.toHaveBeenCalled();
   });
   test("a lower-case and upper-case mix", async () => {
-    process.env.HTTP_PROXY = PROXY; process.env.http_proxy = ""; process.env.NO_PROXY = "collector.example"; process.env.no_proxy = "";
+    process.env.HTTP_PROXY = PROXY; process.env.NO_PROXY = "collector.example"; process.env.no_proxy = ""; // Python reads the empty lower-case value as "no exemptions"
     await check("http://collector.example:8000", new EnvHttpProxyAgent());
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -161,7 +161,7 @@ describe("a request the SDK builds itself goes direct, with a proxy in the envir
     const port = await new Promise<number>((ok, bad) => server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (e, p) => e ? bad(e) : ok(p)));
     try {
       process.env.HTTP_PROXY = `http://127.0.0.1:${proxy.port}`; process.env.http_proxy = process.env.HTTP_PROXY; process.env.https_proxy = process.env.HTTP_PROXY; process.env.grpc_proxy = process.env.HTTP_PROXY;
-      const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: `127.1:${port}`, headers: { ...KEYS }, allowInsecureHttp: true });
+      const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: `http://127.1:${port}`, headers: { ...KEYS }, allowInsecureHttp: true });
       const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
       provider.getTracer("t").startSpan("one").end();
       await provider.forceFlush(); await provider.shutdown();

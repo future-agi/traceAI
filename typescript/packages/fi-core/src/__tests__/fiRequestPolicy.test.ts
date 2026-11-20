@@ -23,6 +23,8 @@ interface Row {
   name: string; target: string; transport: "http" | "grpc"; keys: Source; optIn?: "env" | "option"; proxy?: Record<string, string>;
   /** the target is the one the FI environment selects (FI_BASE_URL / FI_GRPC_COLLECTOR_ENDPOINT) */
   fiEnv?: boolean;
+  /** a dispatcher the caller supplies, by its undici class name (the decider reads the name): the proxy rules then apply */
+  dispatcher?: string;
   expect: { decision: "allow" | "refuse"; code?: string; host?: string; tls?: boolean; keysSent?: boolean };
 }
 const A = (name: string, target: string, keys: Source, expectation: Row["expect"], more: Partial<Row> = {}): Row => ({ name, target, transport: "http", keys, expect: expectation, ...more });
@@ -31,6 +33,8 @@ const PROXY = "http://proxy.internal.example:3128";
 const ok = (host: string, tls: boolean, keysSent = true) => ({ decision: "allow" as const, host, tls, keysSent });
 const no = (code: string) => ({ decision: "refuse" as const, code });
 
+// A request the SDK builds itself is built with proxies off, so no proxy environment refuses it; the rows below this table
+// apply the proxy rules to a request that goes through a dispatcher the caller supplies.
 const ROWS: Row[] = [
   // TLS, loopback, Future AGI host
   A("https FI host, env keys", "https://api.futureagi.com", "env", ok("api.futureagi.com", true)),
@@ -49,10 +53,10 @@ const ROWS: Row[] = [
   A("http self-hosted env route, env keys, no opt-in", "http://collector.example:4318", "env", no("FI_PLAINTEXT_NOT_ALLOWED"), { fiEnv: true }),
   A("http self-hosted env route, env keys, opt-in", "http://collector.example:4318", "env", ok("collector.example", false), { fiEnv: true, optIn: "env" }),
   // the one proxy rule
-  A("HTTP_PROXY", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { HTTP_PROXY: PROXY } }),
-  A("http_proxy", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { http_proxy: PROXY } }),
-  A("ALL_PROXY alone", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { ALL_PROXY: PROXY } }),
-  A("all_proxy alone", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { all_proxy: PROXY } }),
+  A("HTTP_PROXY", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY } }),
+  A("http_proxy", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { http_proxy: PROXY } }),
+  A("ALL_PROXY alone", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { ALL_PROXY: PROXY } }),
+  A("all_proxy alone", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { all_proxy: PROXY } }),
   A("HTTPS_PROXY alone does not route http", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTPS_PROXY: PROXY } }),
   A("https_proxy alone does not route http", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { https_proxy: PROXY } }),
   A("empty HTTP_PROXY is not a proxy", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: "  " } }),
@@ -61,9 +65,9 @@ const ROWS: Row[] = [
   A("NO_PROXY leading dot matches the bare domain", "http://example.com:4318", "explicit", ok("example.com", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: ".example.com" } }),
   A("NO_PROXY *", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "*" } }),
   A("NO_PROXY host:port", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "other.test, Collector.Example:4318 " } }),
-  A("NO_PROXY non-matching port", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "collector.example:9999" } }),
-  A("NO_PROXY other host", "http://collector.example:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "other.example" } }),
-  A("NO_PROXY is not CIDR", "http://203.0.113.7:4318", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "203.0.113.0/24" } }),
+  A("NO_PROXY non-matching port", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "collector.example:9999" } }),
+  A("NO_PROXY other host", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "other.example" } }),
+  A("NO_PROXY is not CIDR", "http://203.0.113.7:4318", "explicit", ok("203.0.113.7", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "203.0.113.0/24" } }),
   A("loopback never needs NO_PROXY", "http://127.0.0.1:4318", "explicit", ok("127.0.0.1", false), { proxy: { HTTP_PROXY: PROXY } }),
   // written vs parsed host: finding 1/2 shapes and the cross-language shapes, on HTTP
   A("backslash before @ (special scheme)", "http://collector.example\\@api.futureagi.com", "explicit", no("FI_HOST_MISMATCH"), { optIn: "env" }),
@@ -87,12 +91,12 @@ const ROWS: Row[] = [
   G("metadata pair with headers: {}", "http://collector.example:4317", "metadata+empty-headers", no("FI_PLAINTEXT_NOT_ALLOWED")),
   G("pair split across metadata and headers", "http://collector.example:4317", "split", no("FI_PLAINTEXT_NOT_ALLOWED")),
   G("metadata pair with headers: {} and the opt-in", "http://collector.example:4317", "metadata+empty-headers", ok("collector.example", false), { optIn: "env" }),
-  G("split pair through a gRPC proxy", "http://collector.example:4317", "split", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { http_proxy: PROXY } }),
+  G("split pair through a gRPC proxy", "http://collector.example:4317", "split", ok("collector.example", false), { optIn: "env", proxy: { http_proxy: PROXY } }),
   G("metadata pair with headers: {} to a FI host is TLS", "http://grpc.futureagi.com:4317", "metadata+empty-headers", ok("grpc.futureagi.com", true)),
   // gRPC proxy: the channel's own environment (grpc_proxy, https_proxy, http_proxy, lower case) decides
-  G("grpc_proxy", "http://collector.example:4317", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { grpc_proxy: PROXY } }),
-  G("https_proxy routes a gRPC channel", "http://collector.example:4317", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { https_proxy: PROXY } }),
-  G("http_proxy routes a gRPC channel", "http://collector.example:4317", "explicit", no("FI_PLAINTEXT_PROXIED"), { optIn: "env", proxy: { http_proxy: PROXY } }),
+  G("grpc_proxy", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { grpc_proxy: PROXY } }),
+  G("https_proxy routes a gRPC channel", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { https_proxy: PROXY } }),
+  G("http_proxy routes a gRPC channel", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { http_proxy: PROXY } }),
   G("GRPC_PROXY upper case is not read by gRPC", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { GRPC_PROXY: PROXY } }),
   G("ALL_PROXY is not read by gRPC", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { ALL_PROXY: PROXY } }),
   G("no_proxy bypasses the gRPC proxy", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { grpc_proxy: PROXY, no_proxy: "collector.example" } }),
@@ -103,6 +107,36 @@ const ROWS: Row[] = [
   G("localhost with backslash then @ evil, opt-in", "grpc://localhost\\@evil.example:4317", "explicit", no("FI_HOST_MISMATCH"), { optIn: "env" }),
   G("percent-encoded backslash before @", "grpc://collector.example%5C@api.futureagi.com:4317", "explicit", no("FI_HOST_MISMATCH"), { optIn: "env" }),
   G("@ inside the path", "http://collector.example:4317/x@grpc.futureagi.com", "explicit", no("FI_HOST_MISMATCH"), { optIn: "env" }),
+];
+
+class Agent {}
+class EnvHttpProxyAgent {}
+class ProxyAgent {}
+const DISPATCHERS: Record<string, new () => object> = { Agent, EnvHttpProxyAgent, ProxyAgent };
+const D = (name: string, target: string, expectation: Row["expect"], proxy: Record<string, string>, dispatcher = "EnvHttpProxyAgent"): Row =>
+  ({ name: `${name}, through a ${dispatcher}`, target, transport: "http", keys: "explicit", optIn: "env", proxy, dispatcher, expect: expectation });
+const COLLECTOR = "http://collector.example:4318";
+/** Through a dispatcher the caller supplies: proxied when the library's own rule OR Python's proxy_bypass_environment says so; unknown counts as proxied. */
+const DISPATCHER_ROWS: Row[] = [
+  D("HTTP_PROXY", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY }),
+  D("http_proxy", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { http_proxy: PROXY }),
+  D("ALL_PROXY alone", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { ALL_PROXY: PROXY }),
+  D("all_proxy alone, a plain Agent", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { all_proxy: PROXY }, "Agent"),
+  D("HTTPS_PROXY alone does not route http", COLLECTOR, ok("collector.example", false), { HTTPS_PROXY: PROXY }),
+  D("no proxy at all", COLLECTOR, ok("collector.example", false), {}),
+  D("no proxy at all, a plain Agent", COLLECTOR, ok("collector.example", false), {}, "Agent"),
+  D("a ProxyAgent", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), {}, "ProxyAgent"),
+  D("NO_PROXY exact host", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example" }),
+  D("NO_PROXY leading dot", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: ".example" }),
+  D("NO_PROXY leading dot does not match the bare domain for undici", "http://example.com:4318", no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: ".example.com" }),
+  D("NO_PROXY leading dot matches the bare domain for Python, but a plain Agent has no proxy of its own", "http://example.com:4318", ok("example.com", false), { HTTP_PROXY: PROXY, NO_PROXY: ".example.com" }, "Agent"),
+  D("NO_PROXY *", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: "*" }),
+  D("NO_PROXY host:port", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: "other.test, Collector.Example:4318 " }),
+  D("NO_PROXY non-matching port", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example:9999" }),
+  D("NO_PROXY other host", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "other.example" }),
+  D("NO_PROXY is not CIDR", "http://203.0.113.7:4318", no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "203.0.113.0/24" }),
+  D("an empty lower-case no_proxy removes the upper-case one for Python", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example", no_proxy: "" }),
+  D("loopback never needs NO_PROXY", "http://127.0.0.1:4318", ok("127.0.0.1", false), { HTTP_PROXY: PROXY }),
 ];
 
 /** What the transport the exporter built will actually send and dial. */
@@ -136,12 +170,12 @@ function setup(row: Row): { options: Record<string, unknown>; metadata?: grpc.Me
 }
 
 describe("the one decider, over the table", () => {
-  test.each(ROWS)("$name", row => {
+  test.each([...ROWS, ...DISPATCHER_ROWS])("$name", row => {
     const { metadata, headers } = setup(row);
     let decision: ReturnType<typeof decideFiRequest> | undefined, error: any;
     try {
       decision = decideFiRequest({ target: row.target, transport: row.transport, headers, metadata, allowInsecureHttp: row.optIn === "option" ? true : undefined,
-        envRoute: row.fiEnv ? row.target : undefined });
+        envRoute: row.fiEnv ? row.target : undefined, ...(row.dispatcher ? { dispatcher: new DISPATCHERS[row.dispatcher]() } : {}) });
     } catch (e) { error = e; }
     if (row.expect.decision === "refuse") {
       expect(error?.code).toBe(row.expect.code);
@@ -178,7 +212,7 @@ describe("the same table, end to end through each transport", () => {
   });
 });
 
-describe("finding 1: a refused target sends no key anywhere", () => {
+describe("a refused target sends no key anywhere", () => {
   test("grpc://grpc.futureagi.com\\@evil.example:4317 with the environment's keys builds nothing", () => {
     Object.assign(process.env, ENV_KEYS);
     expect(() => createSpanExporter({ transport: Transport.GRPC, endpoint: "grpc://grpc.futureagi.com\\@evil.example:4317" } as any)).toThrow(expect.objectContaining({ code: "FI_HOST_MISMATCH" }));
@@ -186,7 +220,7 @@ describe("finding 1: a refused target sends no key anywhere", () => {
   });
 });
 
-describe("finding 4: allowInsecureHttp reaches every constructor path", () => {
+describe("allowInsecureHttp reaches every constructor path", () => {
   test("register on HTTP", () => {
     const provider = register({ projectName: "p", endpoint: "http://collector.example:4318", headers: { ...KEYS }, allowInsecureHttp: true, setGlobalTracerProvider: false });
     expect(provider).toBeDefined();

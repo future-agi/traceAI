@@ -61,6 +61,7 @@ describe("the functions that mention the key names are exactly the pinned ones",
     expect(sites(node => { const text = textOf(node); return text !== undefined && MENTIONS.test(text); })).toEqual([
       // fi-core: the decider module (names, reader), and the privacy placeholder text
       "fi-core/fi-request-policy.ts::<top level>", // KEY_NAMES
+      "fi-core/fi-request-policy.ts::assertNoKeysInAmbientHeaders", // reads the key values only to refuse them in ambient OTLP headers; sends nothing
       "fi-core/fi-request-policy.ts::fiBoundHeaders",
       "fi-core/fi-request-policy.ts::hasCompleteKeyPair",
       "fi-core/fi-request-policy.ts::readEnvKeys",
@@ -189,7 +190,7 @@ describe("loopback is decided on the host as written, in the pinned places only"
   test("only these functions name the loopback set or call the literal-loopback decider", () => {
     expect(sites(node => ts.isIdentifier(node) && /^(?:LOOPBACK_HOSTS|isLiteralLoopback)$/.test(node.text))).toEqual([
       "fi-core/fi-endpoint.ts::<top level>", "fi-core/fi-endpoint.ts::isLiteralLoopback", "fi-core/fi-request-policy.ts::<top level>" /* the import */,
-      "fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-request-policy.ts::plaintextRule"]);
+      "fi-core/fi-request-policy.ts::assertDirectFetch", "fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-request-policy.ts::plaintextRule"]);
   });
   test("the decider reads the written host and agrees it with the parsed one; it never reads the parsed host alone", () => {
     const parsed = PARSED.find(p => p.id === "fi-core/fi-endpoint.ts")!.sf;

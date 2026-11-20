@@ -27,10 +27,10 @@ import {
 } from "@opentelemetry/sdk-trace-node";
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
-import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
+import { connectGrpcDirect, isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
-import { decideFiRequest, metadataStrings, FiKeyRefusal, type FiDecision, type FiRequest } from "./fi-request-policy";
+import { assertDirectFetch, assertNoKeysInAmbientHeaders, decideFiRequest, hasCompleteKeyPair, isRedirect, metadataStrings, FiKeyRefusal, type FiDecision, type FiRequest } from "./fi-request-policy";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -260,13 +260,25 @@ class HTTPSpanExporter implements SpanExporter {
         diag.info("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
     }
 
+    // A request that carries Future AGI keys is not routed through a proxy dispatcher (read now: the global one can change)
+    // and does not follow a redirect.
+    try { assertDirectFetch(this.endpoint, hasCompleteKeyPair(this.headers)); }
+    catch (error) {
+      diag.error(`HTTPSpanExporter: not sent: ${(error as Error).message}`);
+      resultCallback({ code: ExportResultCode.FAILED });
+      return;
+    }
     fetch(this.endpoint, {
       method: "POST",
       headers: this.headers,
       body: JSON.stringify(spansData),
+      redirect: "manual",
     })
       .then((response) => {
-        if (response.ok) {
+        if (isRedirect(response) && hasCompleteKeyPair(this.headers)) {
+          diag.error(`HTTPSpanExporter: ${new FiKeyRefusal("FI_REDIRECT").message}`);
+          resultCallback({ code: ExportResultCode.FAILED });
+        } else if (response.ok) {
           resultCallback({ code: ExportResultCode.SUCCESS });
         } else {
           diag.error(
@@ -321,6 +333,8 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     // One decision, on the target and the final outgoing set (the caller's metadata merged with the headers).
     const decision = decide({ target: endpoint, transport: "grpc", headers: callerHeaders, metadata: callerMetadata, credentials: callerCredentials, allowInsecureHttp, declaredFi: isFiRouteDeclared(options) });
     const { fiBound, metadata, credentials: channelCredentials } = decision;
+    // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
+    if (!fiBound) assertNoKeysInAmbientHeaders([...Object.values(callerHeaders ?? {}), ...metadataKnown]);
     const headers = decision.headers ?? {};
     const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
@@ -338,6 +352,8 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       throw error;
     }
     if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
+    // A plaintext channel that carries keys under the opt-in is built with proxies off: no environment can route it.
+    if (decision.plaintextOptIn) connectGrpcDirect(this);
     
     this.verbose = verbose;
     this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers }, metadataKnown);
@@ -471,6 +487,9 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
     const named = resolveTarget(options, false);
     const url = constructFullEndpoint(named);
     const { headers, fiBound } = decide({ target: url, written: named, transport: "http", headers: options.headers, declaredFi: isFiRouteDeclared(options), allowInsecureHttp: options.allowInsecureHttp });
+    // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
+    // (It sends with its own http.Agent, which does not consult a proxy environment.)
+    if (!fiBound) assertNoKeysInAmbientHeaders(Object.values(options.headers ?? {}));
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);
@@ -905,13 +924,20 @@ async function checkCustomEvalConfigExists(
   }
 
   try {
+    try { assertDirectFetch(url, hasCompleteKeyPair(headers), options.dispatcher); }
+    catch (error) { diag.warn(`checkCustomEvalConfigExists: skipped: ${(error as Error).message}`); return false; }
     const response = await fetch(url, {
       ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}),
       method: "POST",
       headers: headers,
       body: JSON.stringify(payload),
+      redirect: "manual",
     });
 
+    if (isRedirect(response) && hasCompleteKeyPair(headers)) {
+      diag.error(`checkCustomEvalConfigExists: ${new FiKeyRefusal("FI_REDIRECT").message}`);
+      return false;
+    }
     if (!response.ok) {
       const errorText = await response.text();
       diag.error(
@@ -975,13 +1001,23 @@ export async function checkCustomEvalTemplateExists(
   }
 
   try {
+    try { assertDirectFetch(url, hasCompleteKeyPair(headers), options.dispatcher); }
+    catch (error) {
+      diag.warn(`checkCustomEvalTemplateExists: skipped: ${(error as Error).message}`);
+      return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+    }
     const response = await fetch(url, {
       ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}),
       method: "POST",
       headers: headers,
       body: JSON.stringify(payload),
+      redirect: "manual",
     });
 
+    if (isRedirect(response) && hasCompleteKeyPair(headers)) {
+      diag.error(`checkCustomEvalTemplateExists: ${new FiKeyRefusal("FI_REDIRECT").message}`);
+      return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+    }
     if (!response.ok) {
       const errorText = await response.text();
       diag.error(
