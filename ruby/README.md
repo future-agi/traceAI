@@ -211,6 +211,7 @@ content, and a file that does not exist prints nothing.
 | --- | --- |
 | `FI_API_KEY`, `FI_SECRET_KEY` | Future AGI credentials. Used only as a complete pair from one source. |
 | `FI_BASE_URL` | Collector base URL. A `base_url` in the config file is used only when the key pair comes from the same file. |
+| `FI_ALLOW_INSECURE_HTTP` | Exactly `1` allows keys over plaintext `http://` to a non-loopback, non-Future-AGI `FI_BASE_URL`. Future AGI hosts always require `https://`. |
 | `FI_PROJECT_NAME`, `FI_PROJECT_TYPE`, `FI_PROJECT_VERSION_NAME` | Project routing. The default name is `OTEL_SERVICE_NAME`, then the working directory name. |
 | `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Allow or deny integrations. `wire` covers both transports; `net_http` or `httpx` alone enables the wire layer for that transport only; `rack` controls server spans. `ruby_llm` controls the RubyLLM spans. An allowlist must name every integration you want, for example `wire,rack,ruby_llm`. |
 | `FI_WIRE_CAPTURE` | `false` turns off wire capture. |

@@ -2,6 +2,7 @@
 require_relative 'test_helper'
 require 'minitest/mock'
 require 'traceai/auto/agent'
+require 'traceai/auto/wire'
 require 'traceai/auto/export'
 
 # FI keys leave the process only over a checked transport: the decision runs on
@@ -20,10 +21,13 @@ class KeyTransportTest < Minitest::Test
     %w[FI_ALLOW_INSECURE_HTTP HTTP_PROXY http_proxy HTTPS_PROXY https_proxy].each { |name| ENV.delete(name) }
   end
 
-  def span
+  # Exports through the same resource wrapper production uses, so records are encodable.
+  def send_span(config)
     tracer = OpenTelemetry::SDK::Trace::TracerProvider.new.tracer('app')
     s = tracer.start_span('chat'); s.finish
-    s.to_span_data
+    wire = A::WireExporter.new
+    exporter = A::ResourceExporter.new(wire, A::ExportResource.new({'project_name' => 'kt'}))
+    [wire, ->(timeout) { exporter.export([s.to_span_data], timeout: timeout) }]
   end
 
   # Runs one export and reports whether any connection was attempted and to whom.
@@ -34,10 +38,10 @@ class KeyTransportTest < Minitest::Test
     result = nil
     err = capture_io do
       A.stub(:config, config) do
-        exporter = A::WireExporter.new
-        socket_class = exporter.send(:load_socket)
+        wire, send = send_span(config)
+        socket_class = wire.send(:load_socket)
         fake = ->(host, port, **) { attempts << [host, port]; raise IOError, 'stopped before any bytes' }
-        socket_class.stub(:tcp, fake) { result = exporter.export([span], timeout: 1) }
+        socket_class.stub(:tcp, fake) { result = send.call(1) }
       end
     end.last
     [result, attempts, err]
@@ -69,7 +73,10 @@ class KeyTransportTest < Minitest::Test
     'at after authority' => 'http://127.0.0.1#@collector.test',
     'userinfo' => 'http://user:pass@127.0.0.1:4318',
     'empty authority' => 'http:///tracer',
-    'empty host with port' => 'http://:4318'
+    'empty host with port' => 'http://:4318',
+    'bracketed name' => 'http://[localhost]:4318',
+    'bracketed ipv4' => 'http://[127.0.0.1]:4318',
+    'empty port' => 'http://collector.test:'
   }.freeze
 
   ALLOWED.each do |name, base|
@@ -125,6 +132,18 @@ class KeyTransportTest < Minitest::Test
     refute_includes err, 'collector.test'
   end
 
+  # The gate decides on the endpoint the socket is opened to, not on later config.
+  def test_gate_uses_the_endpoint_fixed_at_construction
+    config = {'base_url' => 'http://collector.test:4318', 'api_key' => KEY, 'secret_key' => SECRET}
+    attempts = []
+    A.stub(:config, config) do
+      wire, send = send_span(config)
+      config['base_url'] = 'http://localhost:4318'
+      wire.send(:load_socket).stub(:tcp, ->(h, pt, **) { attempts << h; raise IOError }) { send.call(1) }
+    end
+    assert_empty attempts
+  end
+
   def test_decision_function_is_the_single_gate
     assert A.const_defined?(:KeyTransport)
     assert_equal true, A::KeyTransport.allowed?('http://127.0.0.1:4318')
@@ -139,7 +158,7 @@ class KeyTransportTest < Minitest::Test
     ENV['FI_ALLOW_INSECURE_HTTP'] = '1'
     config = {'base_url' => "http://127.1:#{collector.port}", 'api_key' => KEY, 'secret_key' => SECRET}
     result = nil
-    A.stub(:config, config) { result = A::WireExporter.new.export([span], timeout: 3) }
+    A.stub(:config, config) { _, send = send_span(config); result = send.call(3) }
     assert_equal 0, result
     assert_equal 1, collector.requests.size
     assert_equal 0, proxy.requests.size
@@ -153,7 +172,7 @@ class KeyTransportTest < Minitest::Test
     collector = MockHTTP.new { |_| [302, {'Location' => "#{target.url}/sink"}, ''] }
     config = {'base_url' => collector.url, 'api_key' => KEY, 'secret_key' => SECRET}
     result = nil
-    A.stub(:config, config) { result = A::WireExporter.new.export([span], timeout: 3) }
+    A.stub(:config, config) { _, send = send_span(config); result = send.call(3) }
     assert_equal 1, result
     assert_equal 1, collector.requests.size
     assert_equal 0, target.requests.size

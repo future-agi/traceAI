@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require_relative 'privacy'
+require_relative 'key_transport'
 module TraceAI
   module Auto
     # Internal serialization records, shared by SDK forwarding and dependency-free
@@ -77,6 +78,8 @@ module TraceAI
         return 1 if @shutdown
         url = Wire.parse_url(@endpoint)
         return 1 unless url && !url.path.match?(/[\r\n\0 ]/)
+        # The only gate for FI keys: decided on the written target before any key header exists.
+        KeyTransport.check(@endpoint)
         socket_class = native_class('Socket') || load_socket
         return 1 unless socket_class
         # Use the application's already-loaded socket/TLS implementation. Even
@@ -95,6 +98,10 @@ module TraceAI
                    'Content-Length' => payload.bytesize.to_s, 'X-Api-Key' => Auto.config['api_key'], 'X-Secret-Key' => Auto.config['secret_key']}
         return 1 unless headers.values.all? { |value| Codec.type(value) == String && !value.match?(/[\r\n\0]/) }
         socket = socket_class.tcp(url.host, url.port, connect_timeout: timeout)
+        unless KeyTransport.peer_agrees?(KeyTransport.written_host(@endpoint), socket)
+          socket.close
+          raise KeyTransport::Refused, 'connected peer is not loopback'
+        end
         io = socket
         if tls_socket
           context = tls_context.new
@@ -131,6 +138,7 @@ module TraceAI
             wait_for(io, part, deadline)
           end
         end
+        raise KeyTransport::Refused, 'redirect answered a key-carrying send' if KeyTransport.refuses_redirect?(response)
         response.match?(/\AHTTP\/1\.[01] 2\d\d(?: |\r)/) ? 0 : 1
       rescue StandardError => e
         Auto.debug(e); 1
