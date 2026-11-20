@@ -42,4 +42,15 @@ describe("the resolved base URL", () => {
     expect(await runInit({ FI_TEST_BASE_URL: "https://code.test.invalid" })).not.toContain("code.test.invalid");
     expect(await runInit({ FI_BASE_URL: "https://env.test.invalid", FI_TEST_CONFIG_FILE: join(dir, "missing.toml") })).not.toContain("env.test.invalid");
   });
+  test("a base URL without a scheme logs the host the exporter dials", async () => {
+    // The HTTP exporter cannot read a scheme-less base URL and uses the environment's or the default route, so that is the host named.
+    writeFileSync(file, 'base_url = "scheme-less.test.invalid:8443"\n');
+    const stderr = await runInit({ FI_TEST_CONFIG_FILE: file });
+    const lines = stderr.split("\n").filter(line => line.includes("Sending traces to"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("api.futureagi.com");
+    expect(lines[0]).not.toContain("scheme-less.test.invalid");
+    const withEnv = await runInit({ FI_TEST_CONFIG_FILE: file, FI_TRACES_URL: "https://traces.test.invalid:9443" });
+    expect(withEnv.split("\n").filter(line => line.includes("Sending traces to")).join("\n")).toContain("traces.test.invalid:9443");
+  });
 });

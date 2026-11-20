@@ -138,6 +138,22 @@ test('gRPC FI endpoint: an explicit headers pair wins over metadata and env, met
   assert.deepEqual(sink.received[0].get('x-secret-key'), [FI['x-secret-key']]);
   assert.deepEqual(sink.received[0].get('x-caller-meta'), ['from-metadata']);
 });
+test('gRPC FI endpoint: a complete key pair in caller metadata is explicit and env keys do not overwrite it', async () => {
+  envKeys();
+  const sink = await grpcSink(); fiEndpoint(sink, true);
+  const metadata = new grpc.Metadata(); metadata.set('x-api-key', 'metadata-key-synthetic'); metadata.set('x-secret-key', 'metadata-secret-synthetic');
+  await exportThrough(createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, metadata }));
+  assert.deepEqual(sink.received[0].get('x-api-key'), ['metadata-key-synthetic']);
+  assert.deepEqual(sink.received[0].get('x-secret-key'), ['metadata-secret-synthetic']);
+});
+test('gRPC FI endpoint: an incomplete key pair in caller metadata is completed by neither half of the env pair', async () => {
+  envKeys();
+  const sink = await grpcSink(); fiEndpoint(sink, true);
+  const metadata = new grpc.Metadata(); metadata.set('x-api-key', 'metadata-key-only-synthetic');
+  await exportThrough(createSpanExporter({ transport: Transport.GRPC, endpoint: sink.endpoint, metadata }));
+  assert.deepEqual(sink.received[0].get('x-api-key'), ['synthetic-env-key']);
+  assert.deepEqual(sink.received[0].get('x-secret-key'), ['synthetic-env-secret']);
+});
 test('gRPC FI endpoint: caller metadata keeps repeated and binary values', async () => {
   envKeys();
   const sink = await grpcSink(); fiEndpoint(sink, true);
