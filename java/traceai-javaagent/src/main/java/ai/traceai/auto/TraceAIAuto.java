@@ -442,6 +442,10 @@ public final class TraceAIAuto {
     // Called reflectively from advice woven into application methods annotated with ai.traceai.annotations.*.
     public static Object enterAnnotated(java.lang.reflect.Method method, Object[] arguments) { return AnnotationTracing.enter(method, arguments); }
     public static Object exitAnnotated(Object state, Object returned, Throwable error) { return AnnotationTracing.exit(state, returned, error); }
+    /** True when this copy of the engine is running and its own settings switch annotations on: the advice prefers such a copy. */
+    public static boolean annotationsActive() { return currentRuntime() != null && annotationsEnabled(); }
+    /** Another copy of the engine in this JVM holds the annotation transformer; this copy leaves annotations to it. */
+    static void annotationsHeldElsewhere() { STATUS.put("annotations", "instrumented (by another copy of the agent in this JVM)"); }
     static boolean annotationsEnabled() { return config != null && config.enabled("annotations"); }
     public static void installOkHttp(Object builder) {
         try { if (transportEnabled("okhttp") && !besideOtelJavaAgent()) OkHttpTransport.install(builder); } catch (Throwable ignored) { integrationFailed("okhttp"); }

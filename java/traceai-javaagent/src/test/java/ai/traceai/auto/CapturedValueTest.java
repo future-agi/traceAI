@@ -121,7 +121,7 @@ class CapturedValueTest {
         Escapy.CALLS.set(0); Accessors.CALLS.set(0);
         String json = AnnotationTracing.render(new Escapy(), 100);
         assertEquals("\"" + CapturedValue.CUT + "\"", json, "every budget was tried and the last one fell back: " + json);
-        assertEquals(1, Escapy.CALLS.get(), "toString() once, though the text was cut at three budgets");
+        assertEquals(1, Escapy.CALLS.get(), "toString() once, though the text was cut again at a smaller budget");
         String record = AnnotationTracing.render(new EscapyRecord("x"), 100);
         assertDoesNotThrow(() -> com.google.gson.JsonParser.parseString(record));
         assertEquals(1, Accessors.CALLS.get(), "the accessor once");
@@ -224,8 +224,8 @@ class CapturedValueTest {
         String sk = "sk-SYNTHKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         String bearer = "Bearer SYNTHBEARERTOKENAAAAAAAAAAAAAAAA";
         for (String credential : List.of(jwt, sk, bearer)) {
-            String value = "a".repeat(40) + credential + "c".repeat(300);
-            for (int budget = 16; budget < 40 + credential.length() + 6; budget++) {
+            String value = "a".repeat(40) + " " + credential + " " + "c".repeat(300);
+            for (int budget = 16; budget < 41 + credential.length() + 6; budget++) {
                 String captured = new com.google.gson.GsonBuilder().disableHtmlEscaping().create().toJson(CapturedValue.of(value, budget));
                 assertFalse(captured.contains("eyJ"), "budget " + budget + ": " + captured);
                 assertFalse(captured.contains("sk-S"), "budget " + budget + ": " + captured);

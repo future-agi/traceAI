@@ -85,6 +85,19 @@ final class KnownSecrets {
     record Snapshot(List<Secret> secrets, boolean unavailable) {
         /** The length of the longest registered secret, 0 when none. */
         int longest() { return secrets.isEmpty() ? 0 : secrets.get(0).value.length(); }
+        /** How many characters at the end of {@code text} could be the start of a registered secret that continues past the end. */
+        int trailingPartial(String text) {
+            int best = 0;
+            for (Secret secret : secrets) {
+                int n = secret.value.length(), j = 0;
+                for (int i = Math.max(0, text.length() - (n - 1)); i < text.length(); i++) {
+                    while (j > 0 && text.charAt(i) != secret.value.charAt(j)) j = secret.prefix[j - 1];
+                    if (text.charAt(i) == secret.value.charAt(j)) j++;
+                }
+                best = Math.max(best, j);
+            }
+            return best;
+        }
         String scrub(String text) {
             if (unavailable) throw new IllegalStateException("Privacy registry unavailable");
             if ((long)text.length() * (secrets.size() + 1) > 16 * 1024 * 1024) return "<redacted>";

@@ -30,7 +30,10 @@ public final class TraceAIAgent {
         GoogleAdk.install(instrumentation);
         // Shade relocates this property along with ByteBuddy: it cannot alter an application's copy.
         if (Runtime.version().feature() > 24) System.setProperty("net.bytebuddy.experimental", "true");
-        boolean annotations = claimAnnotationTransformer();
+        // Claimed only by a copy that will really weave annotations (its own settings have them on): a copy with
+        // annotations disabled must not keep another copy from weaving.
+        boolean annotations = TraceAIAuto.annotationsEnabled();
+        if (annotations && !claimAnnotationTransformer()) { annotations = false; TraceAIAuto.annotationsHeldElsewhere(); }
         AgentBuilder base = new AgentBuilder.Default().disableClassFormatChanges()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .ignore(nameStartsWith("ai.traceai.auto.").and(not(hasSuperType(namedOneOf("okio.Source", "okhttp3.ResponseBody"))))
@@ -93,11 +96,18 @@ public final class TraceAIAgent {
     public static class AnnotatedMethodAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)
         public static Object enter(@Advice.Origin java.lang.reflect.Method method, @Advice.AllArguments Object[] arguments) throws Exception {
-            Class<?> bridge;
-            // The system class path first (the agent flag puts the jar there); else the annotated class's own loader chain (a jar
-            // that is on the application's class path only, such as a fat jar's, or a web application's).
+            Class<?> bridge = null;
+            // An active engine first: the system class path (the agent flag puts the jar there), else the annotated class's own loader
+            // chain (a jar that is on the application's class path only, such as a fat jar's, or a web application's). An engine that
+            // is not running, or has annotations off, is used only when no other one is found.
             try { bridge = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto"); }
-            catch (ClassNotFoundException missing) { bridge = Class.forName("ai.traceai.auto.TraceAIAuto", false, method.getDeclaringClass().getClassLoader()); }
+            catch (ClassNotFoundException missing) { }
+            if (bridge == null || !((Boolean)bridge.getMethod("annotationsActive").invoke(null)).booleanValue()) {
+                try {
+                    Class<?> own = Class.forName("ai.traceai.auto.TraceAIAuto", false, method.getDeclaringClass().getClassLoader());
+                    if (bridge == null || ((Boolean)own.getMethod("annotationsActive").invoke(null)).booleanValue()) bridge = own;
+                } catch (ClassNotFoundException missing) { if (bridge == null) throw missing; }
+            }
             return bridge.getMethod("enterAnnotated", java.lang.reflect.Method.class, Object[].class).invoke(null, method, arguments);
         }
         @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)

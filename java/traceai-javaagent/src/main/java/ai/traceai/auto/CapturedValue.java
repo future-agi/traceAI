@@ -58,8 +58,9 @@ final class CapturedValue {
                 return number(number);
             }
             if (value instanceof String string) return text(string);
+            if (value instanceof java.net.URI uri) return text(uriText(uri));
             if (value instanceof Character || value instanceof Enum<?> || value instanceof UUID || value instanceof Class<?>
-                || value instanceof java.net.URI || value instanceof java.nio.file.Path || value instanceof Date || value instanceof Locale
+                || value instanceof java.nio.file.Path || value instanceof Date || value instanceof Locale
                 || value.getClass().getName().startsWith("java.time.")) {
                 return text(value instanceof Enum<?> e ? e.name() : value instanceof Class<?> c ? c.getName() : value.toString());
             }
@@ -80,35 +81,61 @@ final class CapturedValue {
         }
     }
 
+    /** A URI without its user information, its fragment and its query values: query keys stay, each with the placeholder for a value. */
+    private static String uriText(java.net.URI uri) {
+        if (uri.isOpaque()) return (uri.getScheme() == null ? "" : uri.getScheme() + ":") + "<opaque>";
+        StringBuilder out = new StringBuilder();
+        if (uri.getScheme() != null) out.append(uri.getScheme()).append(':');
+        String authority = uri.getRawAuthority();
+        if (authority != null) out.append("//").append(authority.substring(authority.lastIndexOf('@') + 1));
+        if (uri.getRawPath() != null) out.append(uri.getRawPath());
+        String query = uri.getRawQuery();
+        if (query != null) {
+            StringBuilder keys = new StringBuilder();
+            for (String pair : query.split("&")) {
+                if (keys.length() > 0) keys.append('&');
+                int equals = pair.indexOf('=');
+                keys.append(equals < 0 ? pair : pair.substring(0, equals + 1) + "<redacted>");
+            }
+            out.append('?').append(keys);
+        }
+        return out.toString();
+    }
+
     private static Object number(Number number) {
         double d = number.doubleValue();
         Object shown = Double.isNaN(d) || Double.isInfinite(d) ? number.toString() : number;
         return shown;
     }
 
+    /** How far past the cut a credential that starts before it is still read, so that it is replaced whole. */
+    private static final int SHAPE_REACH = 8192;
+
     /**
-     * A string, cut to what the character budget still allows while it is read; the rest is never copied. Known secrets are
-     * replaced before the cut (in the part that is read, and in as many more characters as the longest secret), so a secret that
-     * straddles the cut leaves no part of itself behind.
+     * A string, cut to what the character budget still allows while it is read; the rest is never copied. Known secrets and
+     * the catalog's credential shapes (keys, JWTs, Bearer and Basic values, private keys) are replaced in the window that is
+     * read, which reaches past the cut so that a credential that straddles it is replaced whole; the cut is then made on the
+     * replaced text, and what could still be the start of a known secret is dropped before the marker (as the core registry
+     * does), so no part of a credential is left behind.
      */
     private String text(String value) {
         long room = Math.max(maxChars - chars, 0);
         if (value.length() <= room) { chars += value.length(); return value; }
         chars = maxChars;
-        int end = (int)room;
-        String read;
         try {
             KnownSecrets.Snapshot snapshot = KnownSecrets.PROCESS.snapshot();
-            int reach = (int)Math.min((long)value.length(), room + snapshot.longest());
-            read = snapshot.scrub(value.substring(0, reach));
+            int reach = (int)Math.min((long)value.length(), room + Math.max(snapshot.longest(), SHAPE_REACH));
+            String read = PrivacyCatalog.INSTANCE.scrubValueShapes(snapshot.scrub(value.substring(0, reach)));
+            if (reach == value.length() && read.length() <= room) return read; // all read, and it fits once replaced
+            int end = (int)Math.min((long)read.length(), room);
+            if (end > 0 && end < read.length() && Character.isHighSurrogate(read.charAt(end - 1))) end--;
+            String kept = read.substring(0, end);
+            kept = kept.substring(0, kept.length() - snapshot.trailingPartial(kept));
+            // A cut that lands inside a placeholder drops the part of it.
+            int open = kept.lastIndexOf('<');
+            if (open >= 0 && "<redacted>".startsWith(kept.substring(open)) && !kept.substring(open).equals("<redacted>")) kept = kept.substring(0, open);
+            return kept + "..." + CUT;
         } catch (RuntimeException unavailable) { return CUT; }
-        if (read.length() < end) end = read.length();
-        if (end > 0 && end < read.length() && Character.isHighSurrogate(read.charAt(end - 1))) end--;
-        String kept = read.substring(0, end);
-        // A cut that lands inside a placeholder drops the part of it.
-        int open = kept.lastIndexOf('<');
-        if (open >= 0 && "<redacted>".startsWith(kept.substring(open)) && !kept.substring(open).equals("<redacted>")) kept = kept.substring(0, open);
-        return kept + "..." + CUT;
     }
 
     /** An accessor that threw. */
@@ -209,27 +236,69 @@ final class CapturedValue {
     }
 
     private static final java.util.regex.Pattern PAIR = java.util.regex.Pattern.compile("(?<![\\w.\\-])([A-Za-z_][\\w.\\-]*)(\\s*[=:]\\s*)");
+    private static final java.util.regex.Pattern NEXT_PAIR = java.util.regex.Pattern.compile("\\G\\s*[A-Za-z_][\\w.\\-]*\\s*[=:]");
+    private static final java.util.regex.Pattern NEXT_PAIR_TIGHT = java.util.regex.Pattern.compile("\\G[A-Za-z_][\\w.\\-]*[=:]");
 
-    /** The value of every {@code name=value} / {@code name: value} pair whose name is a credential name becomes the placeholder. */
+    /**
+     * The value of every {@code name=value} / {@code name: value} pair whose name is a credential name becomes the placeholder.
+     * The value ends where it really ends: a value that starts with a quote, a bracket, a brace or a parenthesis runs to its
+     * matching close (across line breaks, with escapes in quotes); a private key runs to its END line; any other value runs to
+     * the next pair at the same nesting level (so a comma inside it does not end it) or to the close of the enclosing group.
+     * If the end cannot be found, the rest of the text is the value.
+     */
     static String redactCredentialPairs(String text) {
         java.util.regex.Matcher matcher = PAIR.matcher(text);
         StringBuilder out = null; int copied = 0, from = 0;
         while (from <= text.length() && matcher.find(from)) {
             int start = matcher.end();
             if (!WirePrivacy.credentialKey(matcher.group(1))) { from = start; continue; }
-            int end = start;
-            if (start < text.length() && (text.charAt(start) == '"' || text.charAt(start) == '\'')) {
-                int close = text.indexOf(text.charAt(start), start + 1);
-                end = close < 0 ? text.length() : close + 1;
-            } else {
-                while (end < text.length() && ",;)]}\n\r".indexOf(text.charAt(end)) < 0) end++;
-            }
+            int end = valueEnd(text, start);
             if (out == null) out = new StringBuilder(text.length());
             out.append(text, copied, start).append("<redacted>");
             copied = end; from = Math.max(end, start);
             if (from >= text.length()) break;
         }
         return out == null ? text : out.append(text, copied, text.length()).toString();
+    }
+
+    private static int valueEnd(String text, int start) {
+        int length = text.length();
+        if (start >= length) return length;
+        char first = text.charAt(start);
+        if (text.startsWith("-----BEGIN", start)) {
+            int end = text.indexOf("-----END", start);
+            if (end < 0) return length;
+            int close = text.indexOf("-----", end + 8);
+            return close < 0 ? length : close + 5;
+        }
+        if (first == '"' || first == '\'') return quotedEnd(text, start);
+        boolean bracketed = first == '(' || first == '[' || first == '{';
+        int depth = 0;
+        for (int i = start; i < length; i++) {
+            char c = text.charAt(i);
+            if (c == '"' || c == '\'') { i = quotedEnd(text, i) - 1; continue; }
+            if (c == '(' || c == '[' || c == '{') depth++;
+            else if (c == ')' || c == ']' || c == '}') {
+                if (depth == 0) return i; // the group around the pair closes here
+                if (--depth == 0 && bracketed) return i + 1; // the value's own group closes here
+            } else if (depth == 0 && i > start) {
+                boolean separator = c == ',' || c == ';' || c == '\n' || c == '\r';
+                if (separator && NEXT_PAIR.matcher(text).region(i + 1, length).lookingAt()) return i;
+                if (c == ' ' && NEXT_PAIR_TIGHT.matcher(text).region(i + 1, length).lookingAt()) return i;
+            }
+        }
+        return length;
+    }
+
+    /** The index after the quote that closes the one at {@code start} (backslash escapes), or the end of the text. */
+    private static int quotedEnd(String text, int start) {
+        char quote = text.charAt(start);
+        for (int i = start + 1; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\\') i++;
+            else if (c == quote) return i + 1;
+        }
+        return text.length();
     }
 
     /** JDK collections that hold their elements in memory: iterating one runs no I/O and cannot consume it. */

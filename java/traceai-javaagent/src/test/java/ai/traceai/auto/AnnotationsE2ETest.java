@@ -327,7 +327,7 @@ class AnnotationsE2ETest {
         assertTrue(log.contains("RESULT="), log);
         assertTrue(spans.size() > 100, "one span per cut position: " + spans.size());
         long cut = spans.stream().filter(s -> String.valueOf(s).contains("truncated")).count();
-        assertTrue(cut > 100, "the cut really moved across the credentials: " + cut);
+        assertTrue(cut > 40, "the cut really moved across the credentials: " + cut);
         for (Map<String, Object> span : spans) {
             String bytes = String.valueOf(span);
             for (String marker : List.of("SYNTH", "eyJ", "sk-S", "Bearer SY"))

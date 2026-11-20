@@ -39,12 +39,12 @@ final class AnnotationTracing {
 
     /** What the exit advice needs; handed back to it as an opaque object. */
     private static final class Started {
-        final Span span; final Scope scope; final AutoConfig config; final boolean returnsVoid; final int limit;
+        final Span span; final Scope scope; final AutoConfig config; final boolean returnsVoid; final Class<?> returnType; final int limit;
         final AtomicBoolean ended = new AtomicBoolean();
         /** Characters of text one captured input or output may hold: the configured body limit, and never more than 64 KiB. */
         int chars() { return limit > 0 ? Math.min(limit, MAX_CAPTURE) : MAX_CAPTURE; }
-        Started(Span span, Scope scope, AutoConfig config, boolean returnsVoid) {
-            this.span = span; this.scope = scope; this.config = config; this.returnsVoid = returnsVoid; this.limit = config.maxBodyBytes;
+        Started(Span span, Scope scope, AutoConfig config, Class<?> returnType) {
+            this.span = span; this.scope = scope; this.config = config; this.returnType = returnType; this.returnsVoid = returnType == void.class; this.limit = config.maxBodyBytes;
         }
     }
     /** The annotated method's span kind and names, from its annotations. */
@@ -66,7 +66,7 @@ final class AnnotationTracing {
             Started started;
             // At every annotated entry, nested ones included: the application's own span that is current right here.
             Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).with(APP_SPAN, snapshot.appSpanId()).makeCurrent();
-            try { started = new Started(span, scope, state.config(), method.getReturnType() == void.class); }
+            try { started = new Started(span, scope, state.config(), method.getReturnType()); }
             catch (Throwable error) { scope.close(); span.end(); return null; }
             if (span.isRecording()) {
                 try {
@@ -98,7 +98,12 @@ final class AnnotationTracing {
                 return null;
             }
             Object wrapped = Reactor.wrap(started, returned);
-            if (wrapped != null) return wrapped;
+            if (wrapped != null) {
+                if (started.returnType.isInstance(wrapped)) return wrapped;
+                // A method declared to return a subtype of Mono or Flux cannot return the wrapper: end the span now, without an output.
+                finish(started, null, null, false, false);
+                return null;
+            }
             finish(started, returned, null);
         } catch (Throwable ignored) { finish(started, null, null); }
         return null;
@@ -212,7 +217,10 @@ final class AnnotationTracing {
             Class<?> flux = ancestor(returned.getClass(), "reactor.core.publisher.Flux");
             if (flux == null) return null;
             List<Object> items = Collections.synchronizedList(new ArrayList<>());
-            Object result = call(flux, returned, "doOnNext", Consumer.class, (Consumer<Object>) item -> { if (items.size() < MAX_ITEMS && started.span.isRecording() && !TraceAIAuto.hidden("output.value", "v", null, started.config)) items.add(CapturedValue.of(item, Math.max(started.chars() / MAX_ITEMS, 256))); });
+            Object result = call(flux, returned, "doOnNext", Consumer.class, (Consumer<Object>) item -> {
+                try { if (items.size() < MAX_ITEMS && started.span.isRecording() && !TraceAIAuto.hidden("output.value", "v", null, started.config)) items.add(CapturedValue.of(item, Math.max(started.chars() / MAX_ITEMS, 256))); }
+                catch (Throwable ignored) { } // capturing an item must never fail the application's stream
+            });
             result = call(flux, result, "doOnComplete", Runnable.class, (Runnable) () -> finish(started, new ArrayList<>(items), null));
             result = call(flux, result, "doOnError", Consumer.class, (Consumer<Throwable>) error -> finish(started, null, error));
             return call(flux, result, "doOnCancel", Runnable.class, (Runnable) () -> { List<Object> seen = new ArrayList<>(items); finish(started, seen, null, true, !seen.isEmpty()); });
