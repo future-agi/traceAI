@@ -661,6 +661,12 @@ def _ambient_headers() -> dict[str, str]:
     return found
 
 
+def _caller_headers(headers: Any) -> dict[str, Any]:
+    """The headers a caller passed to an exporter, keyed by lower-case name."""
+    pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
+    return {(k.decode() if isinstance(k, bytes) else str(k)).lower(): v for k, v in pairs}
+
+
 def _is_future_agi_endpoint(endpoint: str | None) -> bool:
     """True when ``endpoint`` is a Future AGI endpoint.
 
@@ -723,7 +729,7 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
     )
 
 
-def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_headers: Any = None) -> None:
     """Make an HTTP exporter send the OTLP defaults plus exactly ``sdk_headers``.
 
     OpenTelemetry 1.29 sends from ``exporter._session.headers`` (and
@@ -740,7 +746,8 @@ def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
         _OTLP_HTTP_HEADERS = {}
     defaults = {k.lower(): v for k, v in _OTLP_HTTP_HEADERS.items()}
     sdk = {str(k).lower(): v for k, v in sdk_headers.items()}
-    ambient = _ambient_headers()
+    # Headers the exporter took from the environment or from the caller, which the SDK headers replace.
+    ambient = {**_ambient_headers(), **_caller_headers(caller_headers)}
 
     pinned_any = False
     client = getattr(exporter, "_client", None)
@@ -771,7 +778,7 @@ def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
         raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-http")
 
 
-def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_headers: Any = None) -> None:
     """Make a gRPC exporter send its metadata from exactly ``sdk_headers``.
 
     The metadata is ``exporter._headers`` in 1.29 and 1.4x. Both take environment
@@ -786,7 +793,7 @@ def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
         return
     if not isinstance(current, (tuple, list)):
         raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-grpc")
-    ambient = _ambient_headers()
+    ambient = {**_ambient_headers(), **_caller_headers(caller_headers)}
     kept = [
         (k, v)
         for k, v in current
@@ -807,23 +814,17 @@ class GRPCSpanExporter(_GRPCSpanExporter):
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        sig = _get_class_signature(_GRPCSpanExporter, "grpc")
-        bound_args = sig.bind_partial(*args, **kwargs)
-        bound_args.apply_defaults()
+        bound_args = _get_class_signature(_GRPCSpanExporter, "grpc").bind_partial(*args, **kwargs)
+        caller_headers = bound_args.arguments.get("headers")
 
         if bound_args.arguments.get("endpoint") is None:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
-        future_agi = _is_future_agi_endpoint(bound_args.arguments["endpoint"])
-        sdk_headers = _with_fi_auth_headers(bound_args.arguments.get("headers"), add_env_keys=future_agi)
-        bound_args.arguments["headers"] = sdk_headers or None
 
+        # Built once, with the caller's own arguments; the Future AGI headers are set afterwards,
+        # and only when the exporter resolved a Future AGI endpoint.
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        # Decide on the endpoint the exporter resolved; the guess above only chose the headers to pass in.
         if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
-            _pin_grpc_headers(self, sdk_headers)
-        elif future_agi:
-            # The exporter resolved a collector the user chose: build it as asked, without Future AGI keys.
-            super().__init__(*args, **kwargs)
+            _pin_grpc_headers(self, _with_fi_auth_headers(caller_headers, add_env_keys=True), caller_headers)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -854,24 +855,17 @@ class HTTPSpanExporter(_HTTPSpanExporter):
 
     def __init__(self, *args: Any, **kwargs: Any):
         bound_args = _get_class_signature(_HTTPSpanExporter, "http").bind_partial(*args, **kwargs)
-        endpoint = bound_args.arguments.get("endpoint")
-        headers = bound_args.arguments.get("headers")
+        caller_headers = bound_args.arguments.get("headers")
 
-        if endpoint is None:
+        if bound_args.arguments.get("endpoint") is None:
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
-        future_agi = _is_future_agi_endpoint(endpoint)
-        sdk_headers = _with_fi_auth_headers(headers, add_env_keys=future_agi)
-        bound_args.arguments["headers"] = sdk_headers or None
-
+        # Built once, with the caller's own arguments: nothing Future AGI specific reaches the
+        # session or the headers a caller supplied until the resolved endpoint is known.
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        # Decide on the endpoint the exporter resolved; the guess above only chose the headers to pass in.
         if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
-            _pin_http_headers(self, sdk_headers)
-        elif future_agi:
-            # The exporter resolved a collector the user chose: build it as asked, without Future AGI keys.
-            super().__init__(*args, **kwargs)
+            _pin_http_headers(self, _with_fi_auth_headers(caller_headers, add_env_keys=True), caller_headers)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -915,17 +909,36 @@ def _normalized_endpoint(endpoint: Optional[str]) -> Tuple[ParseResult, str]:
     return parsed, parsed.geturl()
 
 
+_EXPORTER_PACKAGES = {
+    "http": "opentelemetry-exporter-otlp-proto-http",
+    "grpc": "opentelemetry-exporter-otlp-proto-grpc",
+}
+
+
+def _installed_minor(kind: str) -> int | None:
+    """The minor version of the installed exporter package (1.<minor>.x), if it can be read."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        parts = version(_EXPORTER_PACKAGES[kind]).split(".")
+        return int(parts[1]) if parts[0] == "1" else None
+    except (PackageNotFoundError, ValueError, IndexError):  # pragma: no cover - metadata unavailable or unusual
+        return None
+
+
 def _documented_init_signature(kind: str) -> inspect.Signature:
     """The ``__init__`` parameters the OTLP span exporters document, without ``self``.
 
     Used when the class's ``__init__`` is wrapped by a bare ``(self, *args, **kwargs)``
-    function, so its own signature names none of them. Only parameters every supported
-    release has are named; later ones (``channel_options`` and so on) pass through
-    ``**kwargs`` unchanged.
+    function, so its own signature names none of them. The positional order is the
+    one of the installed release: ``channel_options`` follows ``compression`` from 1.35
+    and ``retryable_error_codes`` follows it from 1.42 (gRPC). Parameters a release
+    does not have pass through ``**kwargs`` unchanged.
     """
     P = inspect.Parameter
-    names = {
-        "http": (
+    minor = _installed_minor(kind)
+    if kind == "http":
+        names = [
             "endpoint",
             "certificate_file",
             "client_key_file",
@@ -934,16 +947,13 @@ def _documented_init_signature(kind: str) -> inspect.Signature:
             "timeout",
             "compression",
             "session",
-        ),
-        "grpc": (
-            "endpoint",
-            "insecure",
-            "credentials",
-            "headers",
-            "timeout",
-            "compression",
-        ),
-    }[kind]
+        ]
+    else:
+        names = ["endpoint", "insecure", "credentials", "headers", "timeout", "compression"]
+        if minor is None or minor >= 35:
+            names.append("channel_options")
+        if minor is None or minor >= 42:
+            names.append("retryable_error_codes")
     params = [P(n, P.POSITIONAL_OR_KEYWORD, default=None) for n in names]
     params.append(P("kwargs", P.VAR_KEYWORD))
     return inspect.Signature(params)
