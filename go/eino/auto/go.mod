@@ -6,6 +6,7 @@ require (
 	github.com/cloudwego/eino v0.9.19
 	github.com/future-agi/traceAI/go/auto v0.2.0
 	github.com/future-agi/traceAI/go/eino v0.1.0
+	go.opentelemetry.io/otel v1.47.0
 )
 
 require (
@@ -38,7 +39,6 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect

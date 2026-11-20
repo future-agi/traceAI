@@ -16,9 +16,11 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 	"github.com/future-agi/traceAI/go/auto"
 	_ "github.com/future-agi/traceAI/go/eino/auto"
 
@@ -106,6 +108,11 @@ func run(ctx context.Context) error {
 			return err
 		}
 	}
+	if os.Getenv("APP_RETRIEVER") == "1" {
+		if err := retrieve(ctx); err != nil {
+			return err
+		}
+	}
 	report, _ := json.Marshal(auto.Report().Integrations)
 	fmt.Println("REPORT " + string(report))
 	// Go has no exit hook: flush what the agent queued.
@@ -152,4 +159,25 @@ func ask(ctx context.Context, agent adk.Agent, opts ...adk.AgentRunOption) error
 			return ev.Err
 		}
 	}
+}
+
+// fakeRetriever answers every query with one document.
+type fakeRetriever struct{}
+
+var _ retriever.Retriever = fakeRetriever{}
+
+func (fakeRetriever) Retrieve(context.Context, string, ...retriever.Option) ([]*schema.Document, error) {
+	return []*schema.Document{{ID: "doc-1", Content: "RETRIEVED-DOC-TEXT-88", MetaData: map[string]any{"source": "test"}}}, nil
+}
+
+// retrieve runs one retriever node with a fixed query (APP_RETRIEVER=1).
+func retrieve(ctx context.Context) error {
+	chain := compose.NewChain[string, []*schema.Document]()
+	chain.AppendRetriever(fakeRetriever{}, compose.WithNodeName("docs"))
+	r, err := chain.Compile(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = r.Invoke(ctx, "RETRIEVE-QUERY-77")
+	return err
 }

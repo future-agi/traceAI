@@ -331,6 +331,42 @@ func TestPrivacyAppliesToEinoSpansOnBothCopies(t *testing.T) {
 	}
 }
 
+// The retriever's query and the retrieved text follow the input and output switches on both copies.
+func TestRetrieverContentIsHiddenOnBothCopies(t *testing.T) {
+	query := []string{"gen_ai.retrieval.query", "input."}
+	docs := []string{"retrieval.documents.", "output."}
+	for _, tc := range []struct {
+		env, hidden string
+		families    []string
+	}{
+		{"FI_HIDE_INPUTS", "RETRIEVE-QUERY-77", query},
+		{"FI_HIDE_INPUT_MESSAGES", "RETRIEVE-QUERY-77", query},
+		{"FI_HIDE_INPUT_TEXT", "RETRIEVE-QUERY-77", query},
+		{"FI_HIDE_OUTPUTS", "RETRIEVED-DOC-TEXT-88", docs},
+		{"FI_HIDE_OUTPUT_MESSAGES", "RETRIEVED-DOC-TEXT-88", docs},
+		{"FI_HIDE_OUTPUT_TEXT", "RETRIEVED-DOC-TEXT-88", docs},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			r := runApp(t, "APP_MODE=ownprovider", "APP_RETRIEVER=1", tc.env+"=true")
+			retrievers := 0
+			for _, s := range inScope(r.fi, einoScope) {
+				if s.attrs["gen_ai.span.kind"] == "RETRIEVER" {
+					retrievers++
+				}
+			}
+			if retrievers == 0 {
+				t.Fatal("no retriever span reached Future AGI")
+			}
+			if got := shown(r.fi, tc.hidden, tc.families...); len(got) != 0 {
+				t.Errorf("%s=true: %q reached Future AGI in %v", tc.env, tc.hidden, got)
+			}
+			if got := shown(r.app, tc.hidden, tc.families...); len(got) != 0 {
+				t.Errorf("%s=true: %q reached the application's exporter in %v", tc.env, tc.hidden, got)
+			}
+		})
+	}
+}
+
 // A secret the agent knows is replaced in what Future AGI receives, even when
 // it appears in a prompt: the FI key pair is known from the start, the model
 // key once the model call is made.
