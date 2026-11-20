@@ -68,7 +68,8 @@ const ROWS: Row[] = [
   A("NO_PROXY non-matching port", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "collector.example:9999" } }),
   A("NO_PROXY other host", "http://collector.example:4318", "explicit", ok("collector.example", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "other.example" } }),
   A("NO_PROXY is not CIDR", "http://203.0.113.7:4318", "explicit", ok("203.0.113.7", false), { optIn: "env", proxy: { HTTP_PROXY: PROXY, NO_PROXY: "203.0.113.0/24" } }),
-  A("loopback never needs NO_PROXY", "http://127.0.0.1:4318", "explicit", ok("127.0.0.1", false), { proxy: { HTTP_PROXY: PROXY } }),
+  A("loopback built by the SDK goes direct with HTTP_PROXY set", "http://127.0.0.1:4318", "explicit", ok("127.0.0.1", false), { proxy: { HTTP_PROXY: PROXY } }),
+  A("[::1] built by the SDK goes direct with HTTP_PROXY set", "http://[::1]:4318", "explicit", ok("::1", false), { proxy: { HTTP_PROXY: PROXY } }),
   // written vs parsed host: finding 1/2 shapes and the cross-language shapes, on HTTP
   A("backslash before @ (special scheme)", "http://collector.example\\@api.futureagi.com", "explicit", no("FI_HOST_MISMATCH"), { optIn: "env" }),
   A("percent-encoded backslash before @", "http://collector.example%5C@api.futureagi.com", "explicit", no("FI_HOST_MISMATCH"), { optIn: "env" }),
@@ -113,32 +114,39 @@ class Agent {}
 class EnvHttpProxyAgent {}
 class ProxyAgent {}
 const DISPATCHERS: Record<string, new () => object> = { Agent, EnvHttpProxyAgent, ProxyAgent };
-// An environment-reading dispatcher is always proxied (what it reads can change, and an option can name a proxy): whatever the table
-// row says about the environment, a send through one is refused.
-const D = (name: string, target: string, expectation: Row["expect"], proxy: Record<string, string>, dispatcher = "EnvHttpProxyAgent"): Row =>
-  ({ name: `${name}, through a ${dispatcher}`, target, transport: "http", keys: "explicit", optIn: "env", proxy, dispatcher, expect: dispatcher === "EnvHttpProxyAgent" && !/\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(target) ? no("FI_PLAINTEXT_PROXIED") : expectation });
+// An environment-reading dispatcher (EnvHttpProxyAgent) or a proxy agent is always proxied, loopback included: what it reads can change,
+// and an option can name a proxy. A plain Agent never proxies on its own, so the NO_PROXY rows below use one and Python's
+// proxy_bypass_environment decides them; a row's outcome is the one its name states.
+const D = (name: string, target: string, expectation: Row["expect"], proxy: Record<string, string>, dispatcher = "Agent"): Row =>
+  ({ name: `${name}, through a ${dispatcher}`, target, transport: "http", keys: "explicit", optIn: "env", proxy, dispatcher, expect: dispatcher === "EnvHttpProxyAgent" || dispatcher === "ProxyAgent" ? no("FI_PLAINTEXT_PROXIED") : expectation });
 const COLLECTOR = "http://collector.example:4318";
 /** Through a dispatcher the caller supplies: any proxy or environment-reading agent is proxied; for a direct one Python's proxy_bypass_environment decides; unknown counts as proxied. */
 const DISPATCHER_ROWS: Row[] = [
   D("HTTP_PROXY", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY }),
+  D("HTTP_PROXY", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY }, "EnvHttpProxyAgent"),
   D("http_proxy", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { http_proxy: PROXY }),
   D("ALL_PROXY alone", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { ALL_PROXY: PROXY }),
-  D("all_proxy alone, a plain Agent", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { all_proxy: PROXY }, "Agent"),
+  D("all_proxy alone", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { all_proxy: PROXY }),
   D("HTTPS_PROXY alone does not route http", COLLECTOR, ok("collector.example", false), { HTTPS_PROXY: PROXY }),
   D("no proxy at all", COLLECTOR, ok("collector.example", false), {}),
-  D("no proxy at all, a plain Agent", COLLECTOR, ok("collector.example", false), {}, "Agent"),
-  D("a ProxyAgent", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), {}, "ProxyAgent"),
+  D("no proxy at all", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), {}, "EnvHttpProxyAgent"),
+  D("no proxy at all", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), {}, "ProxyAgent"),
   D("NO_PROXY exact host", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example" }),
   D("NO_PROXY leading dot", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: ".example" }),
-  D("NO_PROXY leading dot does not match the bare domain for undici", "http://example.com:4318", no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: ".example.com" }),
-  D("NO_PROXY leading dot matches the bare domain for Python, but a plain Agent has no proxy of its own", "http://example.com:4318", ok("example.com", false), { HTTP_PROXY: PROXY, NO_PROXY: ".example.com" }, "Agent"),
+  D("NO_PROXY leading dot matches the bare domain", "http://example.com:4318", ok("example.com", false), { HTTP_PROXY: PROXY, NO_PROXY: ".example.com" }),
   D("NO_PROXY *", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: "*" }),
   D("NO_PROXY host:port", COLLECTOR, ok("collector.example", false), { HTTP_PROXY: PROXY, NO_PROXY: "other.test, Collector.Example:4318 " }),
-  D("NO_PROXY non-matching port", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example:9999" }),
-  D("NO_PROXY other host", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "other.example" }),
-  D("NO_PROXY is not CIDR", "http://203.0.113.7:4318", no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "203.0.113.0/24" }),
-  D("an empty lower-case no_proxy removes the upper-case one for Python", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example", no_proxy: "" }),
-  D("loopback never needs NO_PROXY", "http://127.0.0.1:4318", ok("127.0.0.1", false), { HTTP_PROXY: PROXY }),
+  D("NO_PROXY non-matching port is refused", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example:9999" }),
+  D("NO_PROXY other host is refused", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "other.example" }),
+  D("NO_PROXY is not CIDR, so the host is refused", "http://203.0.113.7:4318", no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "203.0.113.0/24" }),
+  D("an empty lower-case no_proxy removes the upper-case one, so the host is refused", COLLECTOR, no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY, NO_PROXY: "collector.example", no_proxy: "" }),
+  // Loopback keeps only the opt-in exemption: every proxy rule still runs.
+  D("loopback 127.0.0.1", "http://127.0.0.1:4318", no("FI_PLAINTEXT_PROXIED"), {}, "ProxyAgent"),
+  D("loopback 127.0.0.1", "http://127.0.0.1:4318", no("FI_PLAINTEXT_PROXIED"), { HTTP_PROXY: PROXY }, "EnvHttpProxyAgent"),
+  D("loopback localhost", "http://localhost:4318", no("FI_PLAINTEXT_PROXIED"), {}, "EnvHttpProxyAgent"),
+  D("loopback [::1]", "http://[::1]:4318", no("FI_PLAINTEXT_PROXIED"), {}, "ProxyAgent"),
+  D("loopback 127.0.0.1 with HTTP_PROXY set is direct", "http://127.0.0.1:4318", ok("127.0.0.1", false), { HTTP_PROXY: PROXY }),
+  D("loopback [::1] with HTTP_PROXY set is direct", "http://[::1]:4318", ok("::1", false), { HTTP_PROXY: PROXY }),
 ];
 
 /** What the transport the exporter built will actually send and dial. */
