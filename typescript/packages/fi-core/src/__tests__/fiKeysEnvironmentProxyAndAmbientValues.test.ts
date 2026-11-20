@@ -4,6 +4,7 @@ import { checkCustomEvalConfigExists, createSpanExporter, Transport } from "../i
 import { isRedirect } from "../fi-request-policy";
 import * as secrets from "../secrets";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
+import { Agent } from "undici";
 
 /**
  * Environment-reading dispatchers always count as proxied, an SDK-built fetch gets one outcome whether or not the global
@@ -27,7 +28,6 @@ afterEach(() => {
 });
 const tag = () => ({ type: EvalTagType.OBSERVATION_SPAN, value: EvalSpanKind.LLM, eval_name: EvalName.CHUNK_ATTRIBUTION, config: {}, custom_eval_name: "Chunk_Attribution",
   mapping: { context: "raw.input", output: "raw.output" }, model: ModelChoices.TURING_SMALL, toDict: () => ({ eval_name: EvalName.CHUNK_ATTRIBUTION, custom_eval_name: "Chunk_Attribution" }) });
-class Agent {}
 class EnvHttpProxyAgent { constructor(public options: Record<string, unknown> = {}) {} }
 const send = (dispatcher?: unknown) => {
   process.env.FI_BASE_URL = "http://collector.example:8000";

@@ -1,5 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -152,7 +152,18 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
   test("(pin) a 302 from an approved https target to http:// is refused and the redirect target sees 0 bytes", async () => {
     const redirected = await sink();
     const approved = await sink({ tls, respond: res => { res.statusCode = 302; res.setHeader("location", `${redirected.url}/leak`); res.end(); } });
-    await check(`https://localhost:${approved.port}`, { dispatcher: new Agent({ connect: { ca: tls.cert } }) });
+    // The approved target has a throwaway certificate and the process environment of a jest test does not reach Node's TLS, so the send runs in a
+    // child process of the built package with certificate checking off (nothing else about the send differs).
+    const script = `const { guardedFetch } = require(${JSON.stringify(path.join(__dirname, "..", "..", "dist", "src", "fi-send-guard"))});
+      const keys = { "x-api-key": "synthetic-fi-key-0001", "x-secret-key": "synthetic-fi-secret-0001" };
+      guardedFetch({ url: process.argv[1], init: { method: "POST", headers: keys }, intended: { keys: new Map(Object.entries(keys)), values: Object.values(keys) } })
+        .then(r => console.log("STATUS " + r.status), e => console.log("REFUSED " + e.code));`;
+    // Asynchronous: the servers of this test live in this process and must keep answering while the child runs.
+    const output = await new Promise<string>(done => {
+      const child = spawn(process.execPath, ["-e", script, `https://localhost:${approved.port}/x`], { env: { PATH: process.env.PATH, NODE_TLS_REJECT_UNAUTHORIZED: "0" }, timeout: 20000 });
+      let text = ""; child.stdout.on("data", chunk => { text += chunk; }); child.on("close", () => done(text));
+    });
+    expect(output).toContain("REFUSED FI_REDIRECT");
     expect(approved.requests).toHaveLength(1);
     seenNothing(redirected);
   });
@@ -407,12 +418,15 @@ describe("no raw URL, userinfo or query in any log level", () => {
     expect(text).not.toMatch(/alice|hunter2|query-token|token=|99999|127\.0\.0\.1/);
   });
   test("a failed guarded fetch logs no URL: the error from the transport is reduced to its class", async () => {
-    const dead = await counter();
+    const dropping = net.createServer(socket => { socket.on("error", () => {}); socket.destroy(); });
+    await new Promise<void>(done => dropping.listen(0, "127.0.0.1", done)); cleanups.push(() => new Promise<void>(done => dropping.close(() => done())));
+    const port = (dropping.address() as AddressInfo).port;
     Object.assign(process.env, ENV_KEYS);
-    process.env.FI_BASE_URL = `http://127.0.0.1:${dead.port}`;
+    process.env.FI_BASE_URL = `http://127.0.0.1:${port}`;
     // The listener accepts and drops the connection: the error comes from the transport.
     await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, true, {});
     const text = messages.join("\n");
-    expect(text).not.toMatch(new RegExp(`127\\.0\\.0\\.1|${dead.port}`));
+    expect(text).toMatch(/Error checking custom eval config/);
+    expect(text).not.toMatch(new RegExp(`127\\.0\\.0\\.1|${port}`));
   });
 });

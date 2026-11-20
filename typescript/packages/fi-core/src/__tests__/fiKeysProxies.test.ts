@@ -6,6 +6,7 @@ import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-tra
 import "../fi-route";
 import { checkCustomEvalConfigExists, createSpanExporter, HTTPSpanExporter, Transport } from "../otel";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
+import { Agent } from "undici";
 
 /**
  * A plaintext request that carries Future AGI keys under the opt-in never goes through a proxy.
@@ -37,7 +38,6 @@ afterEach(() => {
 const tag = () => ({ type: EvalTagType.OBSERVATION_SPAN, value: EvalSpanKind.LLM, eval_name: EvalName.CHUNK_ATTRIBUTION, config: {}, custom_eval_name: "Chunk_Attribution",
   mapping: { context: "raw.input", output: "raw.output" }, model: ModelChoices.TURING_SMALL, toDict: () => ({ eval_name: EvalName.CHUNK_ATTRIBUTION, custom_eval_name: "Chunk_Attribution" }) });
 // Stand-ins for undici's dispatchers, named as undici names them (the SDK reads the name: undici is not a dependency).
-class Agent {}
 class ProxyAgent {}
 class EnvHttpProxyAgent {}
 const check = (base: string, dispatcher?: unknown) => {

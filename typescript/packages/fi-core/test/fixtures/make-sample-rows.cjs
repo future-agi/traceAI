@@ -47,9 +47,16 @@ const rows = [
   H('http-caller-proxy-agent-loopback', 'http://127.0.0.1:4318', refuse('FI_PLAINTEXT_PROXIED'), { dispatcher: 'proxy' }),
   H('http-caller-env-proxy-agent-loopback', 'http://localhost:4318', refuse('FI_PLAINTEXT_PROXIED'), { dispatcher: 'envproxy' }),
   H('http-caller-agent-loopback-with-http-proxy', 'http://127.0.0.1:4318', allow('127.0.0.1:4318', false), { proxyEnv: { HTTP_PROXY: PROXY }, dispatcher: 'agent' }),
-  H('http-caller-pool-same-origin', 'http://127.0.0.1:4318', allow('127.0.0.1:4318', false), { dispatcher: 'pool-same' }),
-  H('http-caller-pool-other-origin', 'http://127.0.0.1:4318', refuse('FI_PLAINTEXT_PROXIED'), { dispatcher: 'pool-other' }),
-  H('http-caller-pool-unknown-origin', 'http://127.0.0.1:4318', refuse('FI_PLAINTEXT_PROXIED'), { dispatcher: 'pool-unknown' }),
+  // A dispatcher whose dial can be redirected is unknown and refused (plaintext and https alike); an origin-bound pool or client cannot be shown to dial its origin.
+  H('http-caller-pool-same-origin-is-opaque', 'http://127.0.0.1:4318', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'pool-same' }),
+  H('http-caller-pool-other-origin', 'http://127.0.0.1:4318', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'pool-other' }),
+  H('http-caller-pool-unknown-origin', 'http://127.0.0.1:4318', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'pool-unknown' }),
+  H('http-caller-agent-with-connect-function', 'http://127.0.0.1:4318', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'agent-connect' }),
+  H('http-caller-agent-with-socket-path', 'http://127.0.0.1:4318', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'agent-socketpath' }),
+  H('http-caller-agent-with-custom-factory', 'http://127.0.0.1:4318', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'agent-factory' }),
+  H('https-caller-pool-is-refused', 'https://api.futureagi.com', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'pool-other' }),
+  H('https-caller-agent-with-connect-function', 'https://api.futureagi.com', refuse('FI_DISPATCHER_UNKNOWN'), { dispatcher: 'agent-connect' }),
+  H('https-caller-plain-agent', 'https://api.futureagi.com', allow('api.futureagi.com:443', true), { dispatcher: 'agent' }),
   H('http-https-through-caller-proxy-agent-is-allowed', 'https://collector.example:4318', allow('collector.example:4318', true), { dispatcher: 'proxy' }),
   // disputed hosts are refused whatever the opt-in says
   H('http-backslash-before-at', 'http://collector.example\\@api.futureagi.com', refuse('FI_HOST_MISMATCH'), { optIn: 'env' }),
@@ -68,7 +75,7 @@ const rows = [
 ];
 const header = { format: 'fi-plaintext-rule-rows', version: 1, sample: true,
   note: 'SAMPLE rows written by hand from the cross-SDK plaintext rules, to exercise the row runner. They are not the sealed cross-language fixture.',
-  rowShape: { input: ['target', 'transport (http|grpc)', 'keys (explicit|env|none)', 'optIn (none|env|option)', 'proxyEnv (object of environment variables)', 'dispatcher (none|agent|proxy|envproxy|pool-same|pool-other|pool-unknown)'],
+  rowShape: { input: ['target', 'transport (http|grpc)', 'keys (explicit|env|none)', 'optIn (none|env|option)', 'proxyEnv (object of environment variables)', 'dispatcher (none|agent|agent-connect|agent-socketpath|agent-factory|proxy|envproxy|pool-same|pool-other|pool-unknown)'],
     expect: ['decision (allow|refuse)', 'code (FI_* | null)', 'dialed (host:port)', 'tls (boolean)', 'keysOnWire (boolean)'] } };
 const file = path.join(__dirname, 'plaintext-rule-SAMPLE.rows.json.gz');
 // Fixed gzip header fields (mtime 0) so the bytes, and the sidecar sum, are reproducible.

@@ -21,7 +21,7 @@ import { parseKeyPairsIntoRecord } from "@opentelemetry/core";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 
-export type FiKeyRefusalCode = "FI_HOST_MISMATCH" | "FI_EMPTY_AUTHORITY" | "FI_PLAINTEXT_FI_HOST" | "FI_PLAINTEXT_NOT_ALLOWED" | "FI_PLAINTEXT_PROXIED" | "FI_AMBIENT_KEY_HEADERS" | "FI_REDIRECT";
+export type FiKeyRefusalCode = "FI_HOST_MISMATCH" | "FI_EMPTY_AUTHORITY" | "FI_PLAINTEXT_FI_HOST" | "FI_PLAINTEXT_NOT_ALLOWED" | "FI_PLAINTEXT_PROXIED" | "FI_AMBIENT_KEY_HEADERS" | "FI_REDIRECT" | "FI_DISPATCHER_UNKNOWN";
 const MESSAGES: Record<FiKeyRefusalCode, string> = {
   FI_HOST_MISMATCH: "The endpoint names its host in a way parsers read differently (a backslash, a percent-encoded backslash or an @ outside the host part), so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.",
   FI_EMPTY_AUTHORITY: "The endpoint has an empty host (scheme followed by no host), so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.",
@@ -30,6 +30,7 @@ const MESSAGES: Record<FiKeyRefusalCode, string> = {
   FI_PLAINTEXT_PROXIED: "FI_ALLOW_INSECURE_HTTP and allowInsecureHttp do not apply when the request would go through an HTTP or HTTPS proxy; use TLS, or send without a proxy dispatcher.",
   FI_AMBIENT_KEY_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS carries a Future AGI key header or a Future AGI key value, so no exporter is created for this collector. Remove it from those variables, or send the traces to Future AGI.",
   FI_REDIRECT: "The collector answered with a redirect, which is not followed when Future AGI keys are sent; nothing further was sent.",
+  FI_DISPATCHER_UNKNOWN: "The dispatcher for this request cannot be shown to connect to the request's own origin (a custom connect function, a socket path, a factory, or an origin-bound pool or client), so no Future AGI key is sent through it. Use a plain undici Agent, or send without a dispatcher.",
 };
 export class FiKeyRefusal extends Error {
   readonly code: FiKeyRefusalCode;

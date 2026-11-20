@@ -7,6 +7,7 @@ import "../fi-route";
 import { checkCustomEvalConfigExists, createSpanExporter, FITracerProvider, Transport } from "../otel";
 import { decideFiRequest, FiKeyRefusal } from "../fi-request-policy";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
+import { Agent } from "undici";
 
 /**
  * Loopback keeps only the plaintext opt-in exemption: a plaintext request that carries Future AGI keys is never proxied, loopback
@@ -32,7 +33,6 @@ afterEach(() => {
   if (savedGlobal === undefined) delete (globalThis as any)[GLOBAL]; else (globalThis as any)[GLOBAL] = savedGlobal;
 });
 
-class Agent {}
 class ProxyAgent {}
 class EnvHttpProxyAgent {}
 const tag = () => ({ type: EvalTagType.OBSERVATION_SPAN, value: EvalSpanKind.LLM, eval_name: EvalName.CHUNK_ATTRIBUTION, config: {}, custom_eval_name: "Chunk_Attribution",

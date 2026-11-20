@@ -28,7 +28,7 @@ import {
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
-import { guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
+import { describeFailure, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
 import { assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
@@ -190,7 +190,7 @@ class HTTPSpanExporter implements SpanExporter {
     try {
       return JSON.parse(JSON.stringify(attributes));
     } catch (e) {
-      diag.error(`HTTPSpanExporter: Error converting attributes: ${e}`);
+      diag.error(`HTTPSpanExporter: Error converting attributes: ${describeFailure(e)}`);
       return {};
     }
   }
@@ -274,13 +274,11 @@ class HTTPSpanExporter implements SpanExporter {
           diag.error(
             `HTTPSpanExporter: Failed to export spans: ${response.status} ${response.statusText}`,
           );
-          response.text().then(text => diag.error(`HTTPSpanExporter: Server response: ${text}`));
           resultCallback({ code: ExportResultCode.FAILED });
         }
       })
       .catch((errorCaught) => {
-        if (errorCaught instanceof FiKeyRefusal) diag.error(`HTTPSpanExporter: not sent: ${errorCaught.message}`);
-        else diag.error(`HTTPSpanExporter: Error exporting spans: ${errorCaught}`);
+        diag.error(`HTTPSpanExporter: ${errorCaught instanceof FiKeyRefusal ? "not sent" : "Error exporting spans"}: ${describeFailure(errorCaught)}`);
         resultCallback({ code: ExportResultCode.FAILED });
       });
   }
@@ -771,7 +769,7 @@ if (!projectName) {
       }
     }).catch(error => {
         // Log any error from the check itself
-        diag.error(`register: Error during background checkCustomEvalConfigExists for project '${projectName}': ${error}`);
+        diag.error(`register: Error during background checkCustomEvalConfigExists for project '${projectName}': ${describeFailure(error)}`);
     });
   }
 
@@ -898,7 +896,7 @@ async function checkCustomEvalConfigExists(
   let keys: FIHeaders | undefined;
   try { keys = decide({ target: url, transport: "http", declaredFi: true, allowInsecureHttp: options.allowInsecureHttp, dispatcher: options.dispatcher }).headers; }
   catch (error) {
-    diag.warn(`checkCustomEvalConfigExists: skipped: ${(error as Error).message}`);
+    diag.warn(`checkCustomEvalConfigExists: skipped: ${describeFailure(error)}`);
     return false;
   }
   const headers: FIHeaders = {
@@ -921,13 +919,12 @@ async function checkCustomEvalConfigExists(
       response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp,
         init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
     } catch (error) {
-      if (error instanceof FiKeyRefusal) { diag.warn(`checkCustomEvalConfigExists: skipped: ${error.message}`); return false; }
+      if (error instanceof FiKeyRefusal) { diag.warn(`checkCustomEvalConfigExists: skipped: ${describeFailure(error)}`); return false; }
       throw error;
     }
     if (!response.ok) {
-      const errorText = await response.text();
       diag.error(
-        `checkCustomEvalConfigExists: Failed to check custom eval config: ${response.status} ${response.statusText} - ${errorText}`,
+        `checkCustomEvalConfigExists: Failed to check custom eval config: ${response.status} ${response.statusText}`,
       );
       return false; 
     }
@@ -938,7 +935,7 @@ async function checkCustomEvalConfigExists(
     }
     return result?.result?.exists === true;
   } catch (error) {
-    diag.error(`checkCustomEvalConfigExists: Error checking custom eval config: ${error}`);
+    diag.error(`checkCustomEvalConfigExists: Error checking custom eval config: ${describeFailure(error)}`);
     return false;
   }
 }
@@ -970,7 +967,7 @@ export async function checkCustomEvalTemplateExists(
   let keys: FIHeaders | undefined;
   try { keys = decide({ target: url, transport: "http", declaredFi: true, allowInsecureHttp: options.allowInsecureHttp, dispatcher: options.dispatcher }).headers; }
   catch (error) {
-    diag.warn(`checkCustomEvalTemplateExists: skipped: ${(error as Error).message}`);
+    diag.warn(`checkCustomEvalTemplateExists: skipped: ${describeFailure(error)}`);
     return { result: { isUserEvalTemplate: false, evalTemplate: null } };
   }
   const headers: FIHeaders = {
@@ -993,15 +990,14 @@ export async function checkCustomEvalTemplateExists(
         init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
     } catch (error) {
       if (error instanceof FiKeyRefusal) {
-        diag.warn(`checkCustomEvalTemplateExists: skipped: ${error.message}`);
+        diag.warn(`checkCustomEvalTemplateExists: skipped: ${describeFailure(error)}`);
         return { result: { isUserEvalTemplate: false, evalTemplate: null } };
       }
       throw error;
     }
     if (!response.ok) {
-      const errorText = await response.text();
       diag.error(
-        `checkCustomEvalTemplateExists: Failed to check custom eval template: ${response.status} ${response.statusText} - ${errorText}`,
+        `checkCustomEvalTemplateExists: Failed to check custom eval template: ${response.status} ${response.statusText}`,
       );
       return {
         result: {
@@ -1017,7 +1013,7 @@ export async function checkCustomEvalTemplateExists(
     }
     return result;
   } catch (error) {
-    diag.error(`checkCustomEvalTemplateExists: Error checking custom eval template: ${error}`);
+    diag.error(`checkCustomEvalTemplateExists: Error checking custom eval template: ${describeFailure(error)}`);
     return {
       result: {
         isUserEvalTemplate: false,

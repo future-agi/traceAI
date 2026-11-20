@@ -5,7 +5,7 @@
 //
 // File shape: { header: { format: "fi-plaintext-rule-rows", version: 1, ... }, rows: [{ id, input, expect }] }
 //   input:  { target, transport: "http"|"grpc", keys: "explicit"|"env"|"none", optIn: "none"|"env"|"option",
-//             proxyEnv: { NAME: value }, dispatcher: "none"|"agent"|"proxy"|"envproxy"|"pool-same"|"pool-other"|"pool-unknown" }
+//             proxyEnv: { NAME: value }, dispatcher: "none"|"agent"|"agent-connect"|"agent-socketpath"|"agent-factory"|"proxy"|"envproxy"|"pool-same"|"pool-other"|"pool-unknown" }
 //   expect: { decision: "allow"|"refuse", code: "FI_..."|null, dialed: "host:port", tls: boolean, keysOnWire: boolean }
 //   dialed: the host as the transport receives it (the URL parser's normalised host, one trailing dot dropped, IPv6 in brackets) and the port
 //   (written, else the scheme's default; 443 for a bare gRPC target). A refused row has dialed "", tls false, keysOnWire false.
@@ -21,11 +21,21 @@ const guard = load('./dist/src/fi-send-guard');
 const policy = load('./dist/src/fi-request-policy');
 const endpoint = load('./dist/src/fi-endpoint');
 
-// Stand-ins named as undici names its dispatchers: the guard reads a dispatcher's constructor name and, for an origin-bound one, its url symbol.
-class Agent {}
+// Stand-ins shaped like undici's dispatchers: the guard reads a dispatcher's class name and its recorded options and factory as data, and an
+// origin-bound one's url symbol. An Agent is "plain" when it records no connect, socketPath or factory option and has the default factory.
+function defaultFactory(origin, opts) { return opts && opts.connections === 1 ? new Client(origin, opts) : new Pool(origin, opts) }
+class Client {}
+class Pool { constructor(origin) { if (origin) Object.defineProperty(this, Symbol('url'), { value: new URL(origin), enumerable: false }); } }
+function agent(options = {}, factory = defaultFactory) {
+  class Agent {}
+  Object.defineProperty(Agent, 'name', { value: 'Agent' });
+  const value = new Agent();
+  Object.defineProperty(value, Symbol('options'), { value: options, enumerable: false });
+  Object.defineProperty(value, Symbol('factory'), { value: factory, enumerable: false });
+  return value;
+}
 class ProxyAgent {}
 class EnvHttpProxyAgent {}
-class Pool { constructor(origin) { if (origin) Object.defineProperty(this, Symbol('url'), { value: new URL(origin), enumerable: false }); } }
 const SCOPED = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy', 'GRPC_PROXY', 'grpc_proxy', 'no_grpc_proxy',
   'NODE_USE_ENV_PROXY', 'FI_API_KEY', 'FI_SECRET_KEY', 'FI_ALLOW_INSECURE_HTTP', 'FI_BASE_URL', 'FI_GRPC_COLLECTOR_ENDPOINT', 'OTEL_EXPORTER_OTLP_HEADERS', 'OTEL_EXPORTER_OTLP_TRACES_HEADERS'];
 const KEYS = { 'x-api-key': 'synthetic-fi-key-0001', 'x-secret-key': 'synthetic-fi-secret-0001' };
@@ -41,7 +51,8 @@ function evaluateRow(row) {
     const headers = row.keys === 'explicit' ? { ...KEYS } : row.keys === 'none' ? {} : undefined;
     const allowInsecureHttp = row.optIn === 'option' ? true : undefined;
     const origin = row.transport === 'http' ? new URL(row.target).origin : undefined;
-    const dispatcher = { none: undefined, agent: new Agent(), proxy: new ProxyAgent(), envproxy: new EnvHttpProxyAgent(),
+    const dispatcher = { none: undefined, agent: agent(), 'agent-connect': agent({ connect() {} }), 'agent-socketpath': agent({ connect: { socketPath: '/tmp/x.sock' } }),
+      'agent-factory': agent({}, function customFactory(origin, opts) { return new Pool(origin, opts); }), proxy: new ProxyAgent(), envproxy: new EnvHttpProxyAgent(),
       'pool-same': origin ? new Pool(origin) : undefined, 'pool-other': new Pool('http://elsewhere.example:9'), 'pool-unknown': new Pool() }[row.dispatcher];
     const decision = policy.decideFiRequest({ target: row.target, transport: row.transport, headers, allowInsecureHttp, dispatcher });
     const entries = decision.metadata ? guard.metadataEntries(decision.metadata) : guard.headerEntries(decision.headers);
