@@ -101,7 +101,7 @@ func TestKeyTransportZoneLiterals(t *testing.T) {
 		t.Fatalf("a plaintext send was proxied: %v", proxy)
 	}
 	// Anything else that is ambiguous stays refused.
-	for _, base := range []string{"https://[fe80::1%2565]:4318", "https://[fe80::1%41]:4318", "https://[fe80::1%25]x:4318"} {
+	for _, base := range []string{"https://[fe80::1%41]:4318", "https://[fe80::1%25]x:4318", "https://[fe80::1%25]:4318"} {
 		if _, err := collectorEndpoint(Config{BaseURL: base}); err == nil {
 			t.Fatalf("%s must stay refused", base)
 		}

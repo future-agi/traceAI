@@ -171,6 +171,9 @@ func collectorEndpoint(c Config) (*url.URL, error) {
 	if err := keyTransport(c.BaseURL, u); err != nil {
 		return nil, err
 	}
+	if err := ambientHeaderKeys(c); err != nil {
+		return nil, err
+	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/tracer/v1/traces"
 	u.RawPath, u.Fragment, u.RawFragment = "", "", ""
 	return u, nil

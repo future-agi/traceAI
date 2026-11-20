@@ -2,6 +2,7 @@ package auto
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"syscall"
@@ -68,5 +69,10 @@ func dialChecked(ctx context.Context, network, addr string) (net.Conn, error) {
 		return nil, refuse("unreadable target")
 	}
 	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: func(_, peer string, _ syscall.RawConn) error { return checkDialAddress(host, peer) }}
-	return d.DialContext(ctx, network, dialAddress(addr))
+	conn, err := d.DialContext(ctx, network, dialAddress(addr))
+	if errors.Is(err, errKeyTransport) {
+		// The dialer's own error names the peer it refused; the refusal says only that the peer was not loopback.
+		return nil, refuse("connected peer is not loopback")
+	}
+	return conn, err
 }

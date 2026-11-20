@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"golang.org/x/net/http/httpproxy"
 )
@@ -27,11 +27,23 @@ import (
 //  5. A plaintext send is never proxied; an https send uses the environment proxy
 //     (a CONNECT tunnel, with the host verified against the written name).
 //  6. A 3xx answer to a key-carrying send is refused.
-var insecureWarning sync.Once
+//  7. Ambient OTLP headers (OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_TRACES_HEADERS) that name a
+//     Future AGI key header or carry a Future AGI key value refuse the configuration.
 
-// dialAddress maps the address the transport asks for to the one dialed. It is the identity; tests replace it to
-// model a name that resolves somewhere other than loopback, which the dial guard must refuse.
-var dialAddress = func(addr string) string { return addr }
+// insecureWarned is set by the first opted-in plaintext decision, which logs the one warning.
+var insecureWarned atomic.Bool
+
+// dialAddressHook maps the address the transport asks for to the one dialed. It is unset (the identity) in production; tests
+// store a function to model a name that resolves somewhere other than loopback, which the dial guard must refuse. An atomic
+// pointer, so a test storing it cannot race an exporter goroutine reading it.
+var dialAddressHook atomic.Pointer[func(string) string]
+
+func dialAddress(addr string) string {
+	if f := dialAddressHook.Load(); f != nil {
+		return (*f)(addr)
+	}
+	return addr
+}
 
 var errKeyTransport = errors.New("traceai auto: refusing to send Future AGI keys over this transport")
 
@@ -62,7 +74,9 @@ func writtenHost(raw string) (host string, ok bool) {
 		if end < 0 {
 			return "", false
 		}
-		return rest[1:end], true
+		// A zone is written %25<zone>; url.Hostname decodes that one escape, so the written host is read the same way. Any
+		// other percent escape stays as written and disagrees with the parsed host.
+		return strings.Replace(rest[1:end], "%25", "%", 1), true
 	}
 	if c := strings.LastIndex(rest, ":"); c >= 0 {
 		rest = rest[:c]
@@ -103,9 +117,9 @@ func keyTransport(written string, u *url.URL) error {
 	case literalLoopback(host):
 		return nil
 	case os.Getenv("FI_ALLOW_INSECURE_HTTP") == "1":
-		insecureWarning.Do(func() {
+		if insecureWarned.CompareAndSwap(false, true) {
 			log.Print("traceai auto: FI_ALLOW_INSECURE_HTTP=1 sends Future AGI keys over plaintext HTTP to a non-loopback target")
-		})
+		}
 		return nil
 	}
 	return refuse("plaintext target; set FI_ALLOW_INSECURE_HTTP=1 only for a trusted private network")
@@ -140,4 +154,52 @@ func checkDialAddress(written, addr string) error {
 		return refuse("connected peer is not loopback")
 	}
 	return nil
+}
+
+// ambientHeaderKeys refuses a configuration whose ambient OTLP headers name a Future AGI key header (X-Api-Key, X-Secret-Key,
+// any case, percent-decoded) or carry a Future AGI key value (this configuration's keys and FI_API_KEY / FI_SECRET_KEY, as written
+// or percent-decoded). Other headers, other vendors' keys and other credential variables are not judged. The error names no value.
+func ambientHeaderKeys(c Config) error {
+	var keys []string
+	for _, v := range []string{c.APIKey, c.SecretKey, os.Getenv("FI_API_KEY"), os.Getenv("FI_SECRET_KEY")} {
+		if len(strings.TrimSpace(v)) >= 8 {
+			keys = append(keys, v, strings.TrimSpace(v))
+		}
+	}
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"} {
+		raw := os.Getenv(name)
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		forms := []string{raw}
+		if d, err := url.PathUnescape(raw); err == nil {
+			forms = append(forms, d)
+		}
+		if d, err := url.QueryUnescape(raw); err == nil {
+			forms = append(forms, d)
+		}
+		for _, pair := range strings.Split(raw, ",") {
+			key, _, _ := strings.Cut(pair, "=")
+			for _, n := range []string{key, unescapeHeader(key)} {
+				if l := strings.ToLower(strings.TrimSpace(n)); l == "x-api-key" || l == "x-secret-key" {
+					return refuse("ambient OTLP headers name a Future AGI key header")
+				}
+			}
+		}
+		for _, form := range forms {
+			for _, key := range keys {
+				if strings.Contains(form, key) {
+					return refuse("ambient OTLP headers carry a Future AGI key")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func unescapeHeader(s string) string {
+	if d, err := url.PathUnescape(s); err == nil {
+		return d
+	}
+	return s
 }

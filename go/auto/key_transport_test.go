@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -23,8 +22,8 @@ func resetInsecureWarning(t *testing.T) *bytes.Buffer {
 	var buf bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&buf)
-	insecureWarning = sync.Once{}
-	t.Cleanup(func() { log.SetOutput(previous); insecureWarning = sync.Once{} })
+	insecureWarned.Store(false)
+	t.Cleanup(func() { log.SetOutput(previous); insecureWarned.Store(false) })
 	return &buf
 }
 

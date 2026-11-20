@@ -319,9 +319,9 @@ func TestKeyTransportProxyDecision(t *testing.T) {
 func TestKeyTransportDialGuardIsWiredIntoTheExporter(t *testing.T) {
 	clearProxyEnv(t)
 	// Stands in for a hosts-file or DNS answer that sends the name "localhost" somewhere else.
-	previous := dialAddress
-	dialAddress = func(addr string) string { return strings.Replace(addr, "localhost", "10.255.255.1", 1) }
-	t.Cleanup(func() { dialAddress = previous })
+	hook := func(addr string) string { return strings.Replace(addr, "localhost", "10.255.255.1", 1) }
+	dialAddressHook.Store(&hook)
+	t.Cleanup(func() { dialAddressHook.Store(nil) })
 	started := time.Now()
 	resp, err := post(exporterClient("", false), "http://localhost:4318/tracer/v1/traces")
 	if err == nil {
