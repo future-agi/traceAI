@@ -62,6 +62,13 @@ import {
 
 const MODULE_NAME = "openai";
 
+/**
+ * The SDK as passed to manuallyInstrument: its default export (`import OpenAI from "openai"`)
+ * or its module namespace (`import * as OpenAI from "openai"`). Both expose the client class
+ * as `OpenAI`, which is what the patch reads.
+ */
+type OpenAIModule = typeof openai | typeof import("openai");
+
 // Both public package entry points (and duplicate package installations) must
 // agree on the owner. A module-local WeakMap lets one build overwrite another's
 // wrappers. Key by SDK class, without writing to immutable module namespaces.
@@ -109,7 +116,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   private _traceConfig?: TraceConfigOptions;
   // Lazily initialized: InstrumentationBase can patch during super().
   // A Set is needed so disable() also undoes every manually patched ESM SDK.
-  private patchedModules?: Set<typeof openai>;
+  private patchedModules?: Set<OpenAIModule>;
 
   constructor({
     instrumentationConfig,
@@ -153,9 +160,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
 
   /**
    * Manually instruments the OpenAI module. This is needed when the module is not loaded via require (commonjs)
-   * @param {openai} module
+   * @param module The SDK's default export or its module namespace (`import * as OpenAI from "openai"`)
    */
-  manuallyInstrument(module: typeof openai) {
+  manuallyInstrument(module: OpenAIModule) {
     this.patch(module);
   }
 
@@ -170,7 +177,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    * Patches the OpenAI module
    */
   private patch(
-    module: typeof openai,
+    module: OpenAIModule,
     moduleVersion?: string,
   ) {
     // diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
@@ -640,7 +647,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   /**
    * Un-patches the OpenAI module's chat completions API
    */
-  private unpatch(moduleExports: typeof openai, moduleVersion?: string) {
+  private unpatch(moduleExports: OpenAIModule, moduleVersion?: string) {
     const sdk = moduleExports?.OpenAI;
     if (!sdk || patchRegistry.owners.get(sdk) !== this) return;
     this._unwrap(sdk.Chat.Completions.prototype, "create");
