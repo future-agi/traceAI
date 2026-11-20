@@ -29,7 +29,7 @@ import { Resource, ResourceDetector, resourceFromAttributes, detectResources, de
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
-import { endpointTarget, guardFiKeys, isFiEndpoint, isLoopbackTarget, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
+import { guardFiKeys, isFiEndpoint, isLoopbackTarget, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
 import { credentialSecrets } from "./privacy-runtime";
 import { hasCompleteKeyPair } from "./fi-key-pair";
 import { seedSecrets } from "./secrets";
@@ -133,6 +133,8 @@ interface HTTPSpanExporterOptions extends ExportPrivacyOptions {
   endpoint: string; // This should be the full URL
   headers?: FIHeaders;
   verbose?: boolean;
+  /** Allows plaintext to a self-hosted collector that is not a Future AGI host; see FI_ALLOW_INSECURE_HTTP. */
+  allowInsecureHttp?: boolean;
 }
 
 // --- Custom ID Generator (using UUIDs) ---
@@ -157,7 +159,7 @@ class HTTPSpanExporter implements SpanExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
   constructor(options: HTTPSpanExporterOptions) {
-    const { headers } = headersForEndpoint(options.endpoint, false, options.headers);
+    const { headers } = headersForEndpoint(options.endpoint, false, options.headers, false, options.allowInsecureHttp);
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
@@ -319,14 +321,38 @@ function copyMetadata(metadata: unknown, target: grpc.Metadata): void {
   } catch { /* An unreadable metadata object adds nothing. */ }
 }
 
+/**
+ * The channel credentials of a gRPC exporter, or undefined for the exporter's own choice. A Future AGI host always gets TLS,
+ * whatever the scheme, the `credentials` or OTEL_EXPORTER_OTLP_(TRACES_)INSECURE say. Loopback keeps a plaintext channel.
+ * Another host, when FI keys travel with the requests, gets the channel the options ask for (an http:// scheme, insecure
+ * `credentials`, or OTEL_EXPORTER_OTLP_(TRACES_)INSECURE=true mean plaintext), and a plaintext request is refused
+ * unless the opt-in allows it (see guardFiKeys). Without FI keys the exporter's own choice applies.
+ */
+function grpcChannelCredentials(endpoint: string, fiBound: boolean, keys: boolean, callerCredentials: unknown, allowInsecureHttp: unknown): grpc.ChannelCredentials | undefined {
+  if (isFiEndpoint(endpoint, "grpc")) return grpc.credentials.createSsl();
+  const loopback = isLoopbackTarget(endpoint);
+  if (loopback && (fiBound || callerCredentials === undefined)) return grpc.credentials.createInsecure();
+  const supplied = callerCredentials as grpc.ChannelCredentials | undefined;
+  if (!keys) return supplied ?? undefined;
+  const insecureEnv = (getEnv("OTEL_EXPORTER_OTLP_TRACES_INSECURE") ?? getEnv("OTEL_EXPORTER_OTLP_INSECURE"))?.toLowerCase() === "true";
+  const scheme = /^([\w]{1,8}):\/\//.exec(endpoint.trim())?.[1]?.toLowerCase();
+  const plaintext = supplied !== undefined ? !supplied._isSecure() : scheme === "https" ? false : scheme === "http" || insecureEnv;
+  if (plaintext) {
+    if (loopback) return supplied ?? grpc.credentials.createInsecure();
+    guardFiKeys(endpoint, "grpc", { plaintext: true, allowInsecureHttp });
+    return supplied ?? grpc.credentials.createInsecure();
+  }
+  return supplied ?? grpc.credentials.createSsl();
+}
+
 // --- Custom GRPCSpanExporter extending OTLP gRPC exporter ---
 class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; verbose?: boolean; allowInsecureHttp?: boolean; [key: string]: any }) {
     const { endpoint: givenEndpoint, url: givenUrl, metadata: callerMetadata, credentials: callerCredentials, headers: callerHeaders,
-      verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
+      verbose = false, traceConfig, resourceAttributes, allowInsecureHttp, ...restOptions } = options;
     delete restOptions.fiEndpoint; // never an option: only the SDK's own FI route (fi-route.ts) declares an FI endpoint
     // The target is the one the options name (endpoint, or the standard url option), so the classification
     // below is made on the host that is dialled.
@@ -339,8 +365,9 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     // A complete key pair in the caller's metadata is as explicit as one in the headers option.
     const requested = callerHeaders === undefined && hasCompleteKeyPair(callerStrings)
       ? Object.fromEntries(Object.entries(callerStrings).filter(([name]) => /^(?:x-api-key|x-secret-key)$/i.test(name))) : callerHeaders;
-    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, requested, isFiRouteDeclared(options));
+    const { headers: resolvedHeaders, fiBound } = headersForEndpoint(endpoint, true, requested, isFiRouteDeclared(options), allowInsecureHttp);
     const headers = resolvedHeaders ?? {};
+    const channelCredentials = grpcChannelCredentials(endpoint, fiBound, hasCompleteKeyPair(headers), callerCredentials, allowInsecureHttp);
     const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
     const metadata = new grpc.Metadata();
@@ -353,12 +380,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       ...restOptions,
       url: endpoint,
       metadata: metadata,
-      // A Future AGI bound exporter uses TLS, whatever the endpoint's scheme or OTEL_EXPORTER_OTLP_(TRACES_)INSECURE say, except
-      // on a loopback target (a local collector). Another target uses the caller's credentials, or the exporter's own choice.
-      ...(fiBound
-        ? { credentials: isLoopbackTarget(endpoint) ? grpc.credentials.createInsecure() : grpc.credentials.createSsl() }
-        : callerCredentials !== undefined ? { credentials: callerCredentials }
-        : isLoopbackTarget(endpoint) ? { credentials: grpc.credentials.createInsecure() } : {}),
+      ...(channelCredentials ? { credentials: channelCredentials } : {}),
     };
 
     try {
@@ -421,22 +443,22 @@ function getEnvFiAuthHeader(): FIHeaders | undefined {
  * The environment's FI keys for a request to `endpoint`: the one place they are obtained for a request. It
  * throws, naming no value, when the endpoint is one they are not sent to (an http:// Future AGI host).
  */
-function fiEnvKeysFor(endpoint: string, transport: EndpointTransport): FIHeaders | undefined {
+function fiEnvKeysFor(endpoint: string, transport: EndpointTransport, allowInsecureHttp?: unknown): FIHeaders | undefined {
   const keys = getEnvFiAuthHeader();
-  if (hasCompleteKeyPair(keys)) guardFiKeys(endpoint, transport);
+  if (hasCompleteKeyPair(keys)) guardFiKeys(endpoint, transport, { allowInsecureHttp });
   return keys;
 }
-function resolveFiHeaders(endpoint: string, transport: EndpointTransport, headers?: FIHeaders): FIHeaders | undefined {
+function resolveFiHeaders(endpoint: string, transport: EndpointTransport, headers?: FIHeaders, allowInsecureHttp?: unknown): FIHeaders | undefined {
   // Selection is atomic, but ignored halves remain known FI secrets (ROUND5 B2).
   seedSecrets(process.env, credentialSecrets(headers ?? {}));
-  if (headers === undefined) return fiEnvKeysFor(endpoint, transport);
+  if (headers === undefined) return fiEnvKeysFor(endpoint, transport, allowInsecureHttp);
   const items = Object.entries(headers), pair = items.filter(([name]) => /^(?:x-api-key|x-secret-key)$/i.test(name));
   if (!pair.length) return headers; // Explicit bearer/custom/empty headers remain host-owned.
   const key = pair.find(([name]) => name.toLowerCase() === "x-api-key")?.[1];
   const secret = pair.find(([name]) => name.toLowerCase() === "x-secret-key")?.[1];
   if (key?.trim() && secret?.trim()) return headers;
   if (key?.trim() || secret?.trim()) diag.warn(`Ignoring incomplete FI credentials from explicit headers: missing ${key?.trim() ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`);
-  return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...fiEnvKeysFor(endpoint, transport) };
+  return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...fiEnvKeysFor(endpoint, transport, allowInsecureHttp) };
 }
 
 /**
@@ -469,17 +491,20 @@ function resolveTarget(options: { endpoint?: unknown; url?: unknown }, grpcTrans
  * caller's explicit ones; any other gets exactly what the caller passed, with nothing added or
  * filled in from the FI environment.
  */
-function headersForEndpoint(endpoint: string, grpcTransport: boolean, headers?: FIHeaders, declaredFi = false): { headers: FIHeaders | undefined; fiBound: boolean } {
+function headersForEndpoint(endpoint: string, grpcTransport: boolean, headers?: FIHeaders, declaredFi = false, allowInsecureHttp?: unknown): { headers: FIHeaders | undefined; fiBound: boolean } {
   const fiBound = isFiBound(endpoint, grpcTransport, declaredFi);
+  const transport = grpcTransport ? "grpc" : "http";
+  let resolved: FIHeaders | undefined;
   if (fiBound) {
-    const transport = grpcTransport ? "grpc" : "http";
-    const resolved = resolveFiHeaders(endpoint, transport, headers);
-    // Whatever pair the headers end up carrying, explicit or from the environment, is sent only where the rule allows.
-    if (hasCompleteKeyPair(resolved)) guardFiKeys(endpoint, transport);
-    return { headers: resolved, fiBound };
+    resolved = resolveFiHeaders(endpoint, transport, headers, allowInsecureHttp);
+  } else {
+    seedSecrets(process.env, credentialSecrets(headers ?? {}));
+    resolved = headers;
   }
-  seedSecrets(process.env, credentialSecrets(headers ?? {}));
-  return { headers, fiBound };
+  // Whatever pair the headers end up carrying, explicit or from the environment, goes only where the rule allows. A gRPC
+  // exporter applies the same rule once it knows its channel (see GRPCSpanExporter).
+  if (!grpcTransport && hasCompleteKeyPair(resolved)) guardFiKeys(endpoint, transport, { allowInsecureHttp });
+  return { headers: resolved, fiBound };
 }
 
 function getEnvGrpcCollectorEndpoint(): string {
@@ -546,9 +571,9 @@ function constructFullEndpoint(customEndpoint?: string): string {
 /** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders } = {}) {
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; allowInsecureHttp?: boolean } = {}) {
     const url = constructFullEndpoint(resolveTarget(options, false));
-    const { headers, fiBound } = headersForEndpoint(url, false, options.headers, isFiRouteDeclared(options));
+    const { headers, fiBound } = headersForEndpoint(url, false, options.headers, isFiRouteDeclared(options), options.allowInsecureHttp);
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     this.sanitize = exportPrivacy(options, headers);
@@ -566,6 +591,11 @@ export function createSpanExporter(options: ExportPrivacyOptions & {
   headers?: FIHeaders;
   transport?: Transport;
   verbose?: boolean;
+  /**
+   * Allows FI keys to go in plaintext to a self-hosted collector that is not a Future AGI host and not loopback
+   * (the environment's FI_ALLOW_INSECURE_HTTP=1 does the same). Never applies to a Future AGI host or through a proxy.
+   */
+  allowInsecureHttp?: boolean;
 } = {}): SpanExporter {
   // Whether the endpoint is the FI route is the SDK's own wiring (see fi-route.ts), carried by the
   // identity of the options object; no property of a caller's options can say so.
@@ -590,6 +620,8 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
   transport?: Transport; // Transport type
   sampler?: Sampler;
   spanProcessors?: SpanProcessor[];
+  /** See `createSpanExporter`. */
+  allowInsecureHttp?: boolean;
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -737,6 +769,8 @@ class BatchSpanProcessor extends OTelBatchSpanProcessor {
 }
 
 export interface RegisterOptions extends ExportPrivacyOptions {
+  /** See `createSpanExporter`: plaintext to a self-hosted collector that is not a Future AGI host. */
+  allowInsecureHttp?: boolean;
   /** Preserve application service identity; FI project routing is separate. */
   resource?: Resource;
   projectName?: string;
@@ -816,7 +850,8 @@ if (!projectName) {
       projectName,
       preparedEvalTags,
       optEndpoint,
-      verbose
+      verbose,
+      { allowInsecureHttp: options.allowInsecureHttp },
     ).then(customEvalConfigExists => {
       if (customEvalConfigExists) {
         // Log an error instead of throwing, as register has already returned.
@@ -866,6 +901,7 @@ if (!projectName) {
     spanProcessors: options.spanProcessors,
     traceConfig: options.traceConfig,
     resourceAttributes: options.resourceAttributes,
+    allowInsecureHttp: options.allowInsecureHttp,
   });
 
   if (setGlobalTracerProvider) {
@@ -936,7 +972,8 @@ async function checkCustomEvalConfigExists(
   projectName: string,
   evalTags: any[], // Expects result of prepareEvalTags
   customEndpoint?: string, // Can be base or full URL for the API call itself
-  verbose?: boolean
+  verbose?: boolean,
+  options: { allowInsecureHttp?: boolean } = {},
 ): Promise<boolean> {
   if (!evalTags || evalTags.length === 0) {
     return false;
@@ -950,9 +987,9 @@ async function checkCustomEvalConfigExists(
   const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_CONFIG_CHECK_PATH}`;
 
   let keys: FIHeaders | undefined;
-  try { keys = fiEnvKeysFor(url, "http"); }
-  catch {
-    diag.warn("checkCustomEvalConfigExists: skipped: Future AGI keys are sent only over TLS; use an https:// Future AGI base URL.");
+  try { keys = fiEnvKeysFor(url, "http", options.allowInsecureHttp); }
+  catch (error) {
+    diag.warn(`checkCustomEvalConfigExists: skipped: ${(error as Error).message}`);
     return false;
   }
   const headers: FIHeaders = {
@@ -999,6 +1036,7 @@ export async function checkCustomEvalTemplateExists(
   eval_template_name: string,
   verbose?: boolean,
   customEndpoint?: string,
+  options: { allowInsecureHttp?: boolean } = {},
 ): Promise<CheckCustomEvalTemplateExistsResponse> {
   if (!eval_template_name || eval_template_name.length === 0) {
     const response: CheckCustomEvalTemplateExistsResponse = {
@@ -1018,9 +1056,9 @@ export async function checkCustomEvalTemplateExists(
   const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH}`;
 
   let keys: FIHeaders | undefined;
-  try { keys = fiEnvKeysFor(url, "http"); }
-  catch {
-    diag.warn("checkCustomEvalTemplateExists: skipped: Future AGI keys are sent only over TLS; use an https:// Future AGI base URL.");
+  try { keys = fiEnvKeysFor(url, "http", options.allowInsecureHttp); }
+  catch (error) {
+    diag.warn(`checkCustomEvalTemplateExists: skipped: ${(error as Error).message}`);
     return { result: { isUserEvalTemplate: false, evalTemplate: null } };
   }
   const headers: FIHeaders = {

@@ -1,5 +1,6 @@
 import * as grpc from "@grpc/grpc-js";
 import { diag, DiagLogLevel } from "@opentelemetry/api";
+import "../fi-route";
 import { checkCustomEvalConfigExists, createSpanExporter, HTTPSpanExporter, register, Transport } from "../otel";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
 
@@ -101,7 +102,8 @@ describe("another host in plaintext with FI keys is refused by default", () => {
     ["a self-hosted target named by the environment", {}, { FI_GRPC_COLLECTOR_ENDPOINT: "collector.example:4317", OTEL_EXPORTER_OTLP_INSECURE: "true" }],
   ])("gRPC with %s", (_name, options, env) => {
     Object.assign(process.env, env);
-    expect(refused(() => rpc((options as any).endpoint ?? "", options))).toMatch(/FI_ALLOW_INSECURE_HTTP/);
+    const endpoint = (options as any).endpoint as string | undefined;
+    expect(refused(() => endpoint === undefined ? createSpanExporter({ transport: Transport.GRPC, headers: { ...KEYS } } as any) : rpc(endpoint, options))).toMatch(/FI_ALLOW_INSECURE_HTTP/);
   });
   test("gRPC over TLS to a self-hosted collector is unaffected", () => {
     expect(channel(rpc("collector.example:4317")).secure).toBe(true);
@@ -159,6 +161,15 @@ describe("the opt-in does not apply when the request would go through a proxy", 
     expect(refused(() => http("http://collector.example:4318"))).not.toBe("");
     delete process.env.NO_PROXY;
     expect(refused(() => http("http://127.0.0.1:4318"))).toBe("");
+  });
+});
+
+describe("the route factory used by @traceai/auto follows the same rules", () => {
+  const factory = () => (globalThis as any)[Symbol.for("traceai.fi-core.fi-route-factory.v1")];
+  test("a self-hosted http:// base is refused unless the option allows it", () => {
+    expect(refused(() => factory()({ endpoint: "http://collector.example:4318", headers: { ...KEYS } }))).toMatch(/FI_ALLOW_INSECURE_HTTP/);
+    expect(refused(() => factory()({ endpoint: "http://collector.example:4318", headers: { ...KEYS }, allowInsecureHttp: true }))).toBe("");
+    expect(refused(() => factory()({ endpoint: "http://api.futureagi.com", headers: { ...KEYS }, allowInsecureHttp: true }))).not.toBe("");
   });
 });
 

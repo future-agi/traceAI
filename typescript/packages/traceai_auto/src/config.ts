@@ -7,6 +7,8 @@ import type { PrivacyOptions as TraceConfigOptions } from "./export-privacy";
 import { compileOutgoingPolicy, type OutgoingPolicy, type OutgoingPropagationMode } from "./outgoing-policy";
 
 export interface Options {
+  /** Allows FI keys in plaintext to a self-hosted base URL that is not a Future AGI host (FI_ALLOW_INSECURE_HTTP=1 does the same); never through a proxy. */
+  allowInsecureHttp?: boolean;
   /** Experimental node:http/node:https propagation; off until explicitly selected. */
   propagateOutgoingAdapters?: boolean;
   /** default/all retain mandatory vendor-host, provider-port and redirect vetoes. */

@@ -69,7 +69,28 @@ function scan() {
   return { sites, calls };
 }
 
+/** The functions that apply the guard: obtaining the environment's keys, resolving an exporter's final headers, and a gRPC exporter's channel. */
+const GUARD_CALLERS = ["otel.ts::fiEnvKeysFor", "otel.ts::grpcChannelCredentials", "otel.ts::headersForEndpoint"];
+function guardCallers(): string[] {
+  const found = new Set<string>();
+  for (const path of sourceFiles(SRC)) {
+    const file = relative(SRC, path);
+    const text = readFileSync(path, "utf8").split("\n");
+    const fns = functions(text, file);
+    text.forEach((line, i) => {
+      const code = line.replace(/\/\/.*$/, "");
+      if (/^\s*(\*|\/\*)/.test(code) || !/guardFiKeys\(/.test(code) || /function\s+guardFiKeys/.test(code)) return;
+      found.add([...fns].reverse().find(f => f.start <= i)?.site ?? `${file}::<top level>`);
+    });
+  }
+  return [...found].sort();
+}
+
 describe("every place Future AGI keys are read or attached goes through the shared guard", () => {
+  test("the guard is applied in exactly the pinned places", () => {
+    expect(guardCallers()).toEqual(GUARD_CALLERS);
+  });
+
   const { sites, calls } = scan();
 
   test("the set of sites is exactly the pinned one", () => {

@@ -5,6 +5,8 @@
  * One trailing dot is part of the same host in every decision. Only the host decides; no environment
  * is consulted here.
  */
+import { diag } from "@opentelemetry/api";
+
 const FI_HOST = /(?:^|\.)futureagi\.com$/i;
 
 /** The host in the one form every Future AGI host decision compares: lower case, one trailing dot removed. */
@@ -50,21 +52,6 @@ export function isFiEndpoint(endpoint: string, transport: EndpointTransport): bo
   return target !== undefined && FI_HOST.test(fiHostname(target.hostname));
 }
 
-/**
- * The one rule for sending Future AGI keys: an http:// endpoint on a Future AGI host is not sent them. A gRPC
- * Future AGI target is always connected with TLS (see otel.ts), so only the HTTP transport can break the rule.
- */
-export function fiKeysRefused(endpoint: string, transport: EndpointTransport): boolean {
-  if (transport !== "http") return false;
-  const target = httpTarget(endpoint);
-  return target !== undefined && target.protocol === "http:" && FI_HOST.test(fiHostname(target.hostname));
-}
-
-/** Throws, naming no value, when `endpoint` is one the keys are not sent to (see fiKeysRefused). */
-export function guardFiKeys(endpoint: string, transport: EndpointTransport): void {
-  if (fiKeysRefused(endpoint, transport)) throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
-}
-
 /** True when both spellings dial the same host and port. */
 export function sameEndpointTarget(a: string, b: string, transport: EndpointTransport): boolean {
   const left = endpointTarget(a, transport), right = endpointTarget(b, transport);
@@ -76,4 +63,60 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 export function isLoopbackTarget(endpoint: string): boolean {
   const target = grpcTarget(endpoint);
   return target !== undefined && LOOPBACK_HOSTS.has(target.hostname.toLowerCase());
+}
+
+/** True when the host is exactly localhost, 127.0.0.1 or ::1 (the parsed host, not the text). */
+export function isLoopbackHost(hostname: string): boolean { return LOOPBACK_HOSTS.has(hostname.toLowerCase()); }
+
+const PROXY_ENV = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "GRPC_PROXY", "grpc_proxy"];
+/** Whether a request to `hostname:port` would go through a proxy named by the environment, honouring NO_PROXY. */
+function viaProxy(hostname: string, port: string): boolean {
+  const env = process.env;
+  if (!PROXY_ENV.some(name => (env[name] ?? "").trim() !== "")) return false;
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  for (const raw of (env.NO_PROXY ?? env.no_proxy ?? "").split(",")) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry === "*") return false;
+    const colon = entry.lastIndexOf(":");
+    const [name, entryPort] = colon > 0 && !entry.endsWith("]") ? [entry.slice(0, colon), entry.slice(colon + 1)] : [entry, ""];
+    if (entryPort && entryPort !== port) continue;
+    const domain = name.replace(/^\*?\./, "").replace(/^\[|\]$/g, "");
+    if (host === domain || host.endsWith(`.${domain}`)) return false;
+  }
+  return true;
+}
+
+export interface FiKeyGuardOptions {
+  /** Set for a gRPC target whose channel is not TLS; an HTTP target is plaintext when its scheme is http. */
+  plaintext?: boolean;
+  /** The `allowInsecureHttp` option; the environment's FI_ALLOW_INSECURE_HTTP=1 is read here. */
+  allowInsecureHttp?: unknown;
+}
+
+let warnedInsecure = false;
+/**
+ * The one rule for a request that carries Future AGI keys. Over TLS anything goes. In plaintext: loopback is
+ * allowed; a Future AGI host (one trailing dot stripped) never is; any other host only with
+ * FI_ALLOW_INSECURE_HTTP=1 (exactly) or `allowInsecureHttp: true`, never through a proxy, with one warning per
+ * process. Throws, naming no value, when the request is refused.
+ */
+export function guardFiKeys(endpoint: string, transport: EndpointTransport, options: FiKeyGuardOptions = {}): void {
+  const target = endpointTarget(endpoint, transport);
+  if (target === undefined) return;
+  const plaintext = transport === "http" ? target.protocol === "http:" : options.plaintext === true;
+  if (!plaintext) return;
+  const host = fiHostname(target.hostname);
+  if (FI_HOST.test(host)) throw new Error("Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.");
+  if (LOOPBACK_HOSTS.has(host)) return;
+  if (options.allowInsecureHttp !== true && process.env.FI_ALLOW_INSECURE_HTTP !== "1") {
+    throw new Error("Future AGI keys are sent over a plaintext channel only to loopback. For a self-hosted collector without TLS, set FI_ALLOW_INSECURE_HTTP=1 or pass allowInsecureHttp: true.");
+  }
+  if (viaProxy(target.hostname, target.port)) {
+    throw new Error("FI_ALLOW_INSECURE_HTTP and allowInsecureHttp do not apply when the request would go through an HTTP or HTTPS proxy; list the collector in NO_PROXY or use TLS.");
+  }
+  if (!warnedInsecure) {
+    warnedInsecure = true;
+    diag.warn(`Sending Future AGI keys in plaintext to ${transport === "http" ? target.protocol : "grpc:"}//${target.hostname}:${target.port} because FI_ALLOW_INSECURE_HTTP or allowInsecureHttp is set.`);
+  }
 }

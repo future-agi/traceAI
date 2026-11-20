@@ -75,7 +75,7 @@ describe("an http:// Future AGI HTTP endpoint is not used with FI keys", () => {
     expect(() => createSpanExporter({})).toThrow();
   });
   test("https Future AGI, loopback and own collectors are unaffected", async () => {
-    for (const endpoint of ["https://api.futureagi.com", "http://127.0.0.1:1", "http://localhost:1", "http://collector.example:4318"]) {
+    for (const endpoint of ["https://api.futureagi.com", "http://127.0.0.1:1", "http://localhost:1", "https://collector.example:4318"]) {
       const exporter = createSpanExporter({ endpoint, headers: { ...KEYS } });
       await exporter.shutdown();
     }

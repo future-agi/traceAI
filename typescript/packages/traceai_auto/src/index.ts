@@ -303,7 +303,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
         try { host = new URL(resolveTraceEndpoint(config.baseUrl)).host || host; } catch { /* Reported as invalid. */ }
         warn("base-host", `Sending traces to ${host} (base URL from the ${config.baseUrlSource}).`);
       }
-      const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl,
+      const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl, allowInsecureHttp: options.allowInsecureHttp === true,
         headers: { "x-api-key": config.apiKey!, "x-secret-key": config.secretKey! }, verbose: false, traceConfig: config.traceConfig,
         resourceAttributes: { project_name: config.projectName, project_type: config.projectType } }), agent, options, failedCaptures);
       processor = new BatchSpanProcessor(exporter);

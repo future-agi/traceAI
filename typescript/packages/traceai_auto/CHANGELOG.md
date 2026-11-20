@@ -4,7 +4,7 @@
 - `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
 
 ### Changed
-- Uses `@traceai/fi-core` 1.4.2. `baseUrl` (or `FI_BASE_URL`) is the Future AGI route and gets only the Future AGI headers, sent over TLS to a Future AGI host; a collector of your own goes through `init({ provider })` and gets only the headers configured on its exporter.
+- Uses `@traceai/fi-core` 1.4.2. `baseUrl` (or `FI_BASE_URL`) is the Future AGI route and gets only the Future AGI headers, sent over TLS to a Future AGI host and in plaintext only to loopback, or to a self-hosted collector when `allowInsecureHttp: true` or `FI_ALLOW_INSECURE_HTTP=1` is set; a collector of your own goes through `init({ provider })` and gets only the headers configured on its exporter.
 - When the base URL comes from a config file or an fi profile, `init()` logs the host it resolved, once and with no other part of the URL. The host logged is the one the exporter dials, resolved by the exporter's own rule; a base URL that is not a full URL resolves to the route `FI_TRACES_URL`, `FI_BASE_URL`, `FI_COLLECTOR_ENDPOINT` or the default selects. Documented in the README.
 - Reports a clear message when the loaded `@traceai/fi-core` does not provide a compatible Future AGI route (protocol v1).
 
