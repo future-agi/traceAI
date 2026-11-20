@@ -28,7 +28,7 @@ const MESSAGES: Record<FiKeyRefusalCode, string> = {
   FI_PLAINTEXT_FI_HOST: "Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.",
   FI_PLAINTEXT_NOT_ALLOWED: "Future AGI keys are sent over a plaintext channel only to loopback. For a self-hosted collector without TLS, set FI_ALLOW_INSECURE_HTTP=1 or pass allowInsecureHttp: true.",
   FI_PLAINTEXT_PROXIED: "FI_ALLOW_INSECURE_HTTP and allowInsecureHttp do not apply when the request would go through an HTTP or HTTPS proxy; use TLS, or send without a proxy dispatcher.",
-  FI_AMBIENT_KEY_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS carries a Future AGI key header or a known credential, so no exporter is created for this collector. Remove it from those variables, or send the traces to Future AGI.",
+  FI_AMBIENT_KEY_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS carries a Future AGI key header or a Future AGI key value, so no exporter is created for this collector. Remove it from those variables, or send the traces to Future AGI.",
   FI_REDIRECT: "The collector answered with a redirect, which is not followed when Future AGI keys are sent; nothing further was sent.",
 };
 export class FiKeyRefusal extends Error {
@@ -55,6 +55,15 @@ export function metadataStrings(metadata: unknown): FIHeaders {
     for (const [name, value] of Object.entries(map)) if (typeof value === "string") strings[name] = value;
   } catch { /* An unreadable metadata object adds nothing. */ }
   return strings;
+}
+/** Every string value a gRPC Metadata carries under a Future AGI key header name, repeated values included. */
+export function metadataKeyValues(metadata: unknown): string[] {
+  const found: string[] = [];
+  try {
+    const source = metadata as { getMap?: () => Record<string, unknown>; get?: (name: string) => unknown[] } | undefined;
+    for (const name of Object.keys(source?.getMap?.() ?? {})) if (isKeyName(name)) for (const value of source?.get?.(name) ?? []) if (typeof value === "string") found.push(value);
+  } catch { /* An unreadable metadata object adds nothing. */ }
+  return found;
 }
 /** Whether a gRPC Metadata carries a complete pair, in any of its (repeated) values. */
 function metadataHasPair(metadata: grpc.Metadata): boolean {
@@ -171,6 +180,11 @@ export function dispatcherProxied(dispatcher: unknown, host: string, port: strin
   if (!DIRECT_DISPATCHERS.has(name)) return true;
   return proxiedByPython(host, port, env);
 }
+/** Whether a dispatcher may route a request through a proxy on its own: a proxy or environment-reading agent, one this code does not know to be direct, or one that cannot be inspected. */
+function dispatcherReadsProxy(dispatcher: unknown): boolean {
+  const name = dispatcherName(dispatcher);
+  return name === undefined || /Proxy/.test(name) || !DIRECT_DISPATCHERS.has(name);
+}
 /** The dispatcher a global fetch uses right now (undici's global slot), whatever installed it, or undefined when none is set. */
 function globalDispatcher(): unknown {
   try { return (globalThis as Record<symbol, unknown>)[Symbol.for("undici.globalDispatcher.1")]; } catch { return undefined; }
@@ -181,20 +195,24 @@ function globalDispatcher(): unknown {
 let warnedInsecure = false;
 /**
  * The plaintext rule for a request that carries Future AGI keys. Over TLS anything goes (not asked). In plaintext:
- * loopback is allowed; a Future AGI host (one trailing dot stripped) never is; any other host only with
- * FI_ALLOW_INSECURE_HTTP=1 (exactly) or `allowInsecureHttp: true`, with one warning per process. A request the SDK builds
- * itself is then built with proxies off (see the callers); a request through a dispatcher the caller supplies is refused when it
- * would be proxied. Returns whether the opt-in allowed the request.
+ * a Future AGI host (one trailing dot stripped) never is allowed; any host that is not literal loopback needs
+ * FI_ALLOW_INSECURE_HTTP=1 (exactly) or `allowInsecureHttp: true`, with one warning per process; literal loopback needs
+ * no opt-in. Nothing plaintext that carries keys goes through a proxy, loopback included: a request the SDK builds itself is
+ * built with proxies off (see the callers), and a request through a dispatcher the caller supplies is refused when that
+ * dispatcher would proxy it. Returns whether the opt-in allowed the request.
  */
 function plaintextRule(target: string, transport: EndpointTransport, allowInsecureHttp: unknown, dispatcher: unknown): boolean {
   const parsed = endpointTarget(target, transport);
   if (parsed === undefined) return false;
   const host = fiHostname(parsed.hostname), written = writtenHost(target, transport);
   if (isFiHostName(host) || (written !== undefined && isFiHostName(written))) throw new FiKeyRefusal("FI_PLAINTEXT_FI_HOST");
-  if (isLiteralLoopback(target, transport)) return false;
-  if (allowInsecureHttp !== true && process.env.FI_ALLOW_INSECURE_HTTP !== "1") throw new FiKeyRefusal("FI_PLAINTEXT_NOT_ALLOWED");
+  const loopback = isLiteralLoopback(target, transport);
+  if (!loopback && allowInsecureHttp !== true && process.env.FI_ALLOW_INSECURE_HTTP !== "1") throw new FiKeyRefusal("FI_PLAINTEXT_NOT_ALLOWED");
   const explicitPort = transport === "http" ? (() => { try { return new URL(target.trim()).port; } catch { return ""; } })() : parsed.port;
-  if (dispatcher !== undefined && dispatcherProxied(dispatcher, parsed.hostname, explicitPort)) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+  // Loopback is exempt from the opt-in only: a dispatcher that may read a proxy is refused for it too, while a plain agent
+  // (which never proxies on its own) is direct whatever the proxy environment says.
+  if (dispatcher !== undefined && (loopback ? dispatcherReadsProxy(dispatcher) : dispatcherProxied(dispatcher, parsed.hostname, explicitPort))) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+  if (loopback) return false;
   if (!warnedInsecure) {
     warnedInsecure = true;
     const message = `Sending Future AGI keys in plaintext to ${transport === "http" ? parsed.protocol : "grpc:"}//${parsed.hostname}:${parsed.port} because FI_ALLOW_INSECURE_HTTP or allowInsecureHttp is set.`;
@@ -205,21 +223,26 @@ function plaintextRule(target: string, transport: EndpointTransport, allowInsecu
 }
 
 /**
- * Called by every fetch that carries Future AGI keys, right before it is sent: a plaintext request to a host that is not
- * loopback must not go through a proxy. The dispatcher is the caller's, or else the global one, read now (a global dispatcher
+ * Called by every fetch that carries Future AGI keys, right before it is sent: a plaintext request, loopback included, must
+ * not go through a proxy. The dispatcher is the caller's, or else the global one, read now (a global dispatcher
  * can be set at any time), and Node's own environment-proxy switch counts. Throws FiKeyRefusal("FI_PLAINTEXT_PROXIED").
  */
 export function assertDirectFetch(url: string, keysAttached: boolean, callerDispatcher?: unknown): void {
   if (!keysAttached) return;
   const parsed = endpointTarget(url, "http");
-  if (parsed === undefined || parsed.protocol !== "http:" || isLiteralLoopback(url, "http")) return;
+  if (parsed === undefined || parsed.protocol !== "http:") return;
+  const loopback = isLiteralLoopback(url, "http");
   const port = (() => { try { return new URL(url.trim()).port; } catch { return ""; } })();
   const active = callerDispatcher !== undefined ? callerDispatcher : globalDispatcher();
   // Node's own environment-proxy switch makes the global fetch read the proxy variables itself: such a send is proxied.
   const nodeEnvProxy = callerDispatcher === undefined && ["1", "true"].includes((process.env.NODE_USE_ENV_PROXY ?? "").toLowerCase());
   if (nodeEnvProxy) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
   // An empty global slot is the default Agent: the same rule as a plain Agent installed there (Python's proxy_bypass_environment).
-  if (active === undefined ? proxiedByPython(parsed.hostname, port) : dispatcherProxied(active, parsed.hostname, port)) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+  // Loopback is exempt from the opt-in only. An empty slot is the default Agent, which sends loopback direct; a dispatcher that may read a
+  // proxy is refused; for any other host the cross-language rule (Python's proxy_bypass_environment) applies.
+  const proxied = loopback ? (active !== undefined && dispatcherReadsProxy(active))
+    : active === undefined ? proxiedByPython(parsed.hostname, port) : dispatcherProxied(active, parsed.hostname, port);
+  if (proxied) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
 }
 
 /** Whether a response is a redirect (3xx): not followed when keys were sent. */
@@ -228,6 +251,15 @@ export function isRedirect(response: { status?: number; type?: string } | undefi
 }
 
 // --- ambient OTLP headers --------------------------------------------------------------------------------------
+
+/** What may be said about an endpoint in a log line: its host class only, never the URL, userinfo, query or keys. */
+export function hostClass(endpoint: string): string {
+  try {
+    if (isFiEndpoint(endpoint, "http")) return "Future AGI host";
+    if (isLiteralLoopback(endpoint, "http")) return "loopback";
+  } catch { /* unreadable: another host */ }
+  return "other host";
+}
 
 /** The headers an OTLP exporter merges in from OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS, parsed as the exporter parses them (the traces variable wins). */
 function ambientOtlpHeaders(): Record<string, string> {
@@ -303,8 +335,10 @@ export interface FiDecision {
   metadata?: grpc.Metadata;
   /** gRPC only: the channel credentials, or undefined for the exporter's own choice. */
   credentials?: grpc.ChannelCredentials;
-  /** A plaintext request that carries keys was allowed by the opt-in: the SDK builds its transport with proxies off. */
+  /** A plaintext request that carries keys to a host that is not literal loopback was allowed by the opt-in. */
   plaintextOptIn: boolean;
+  /** The request is plaintext and carries keys, loopback included: the SDK builds its transport with proxies off. */
+  plaintextDirect: boolean;
 }
 
 /**
@@ -345,24 +379,24 @@ export function decideFiRequest(request: FiRequest): FiDecision {
   if (transport === "http") {
     const tls = parsed?.protocol === "https:";
     const plaintextOptIn = keys && !tls ? plaintextRule(target, transport, request.allowInsecureHttp, request.dispatcher) : false;
-    return { fiBound, keys, tls, dialedHost: parsed ? comparableHost(parsed.hostname) : "", headers, plaintextOptIn };
+    return { fiBound, keys, tls, dialedHost: parsed ? comparableHost(parsed.hostname) : "", headers, plaintextOptIn, plaintextDirect: keys && !tls };
   }
 
   // gRPC channel. A Future AGI host always gets TLS, whatever the scheme, the credentials or OTEL_EXPORTER_OTLP_(TRACES_)INSECURE say.
-  // Loopback keeps a plaintext channel. Another host gets the channel the options ask for (an http:// scheme, insecure credentials, or
-  // the INSECURE environment variable mean plaintext); a plaintext channel that carries keys needs the opt-in.
+  // Caller-supplied credentials are never replaced: TLS stays TLS. Without credentials, a plaintext channel is the one the target asks for
+  // (an http:// scheme, the INSECURE environment variable, or literal loopback without an https:// scheme); a plaintext channel that
+  // carries keys is built with proxies off, and needs the opt-in unless it is literal loopback.
   const supplied = request.credentials as grpc.ChannelCredentials | undefined;
   const dialedHost = parsed ? comparableHost(parsed.hostname) : "";
-  const done = (credentials: grpc.ChannelCredentials | undefined, tls: boolean, plaintextOptIn = false): FiDecision => ({ fiBound, keys, tls, dialedHost, headers, metadata, credentials, plaintextOptIn });
+  const done = (credentials: grpc.ChannelCredentials | undefined, tls: boolean, plaintextOptIn = false): FiDecision => ({ fiBound, keys, tls, dialedHost, headers, metadata, credentials, plaintextOptIn, plaintextDirect: keys && !tls });
   if (isFiEndpoint(target, transport)) return done(grpc.credentials.createSsl(), true);
   const loopback = isLiteralLoopback(target, transport);
-  if (loopback && (fiBound || supplied === undefined)) return done(grpc.credentials.createInsecure(), false);
   const insecureEnv = (process.env.OTEL_EXPORTER_OTLP_TRACES_INSECURE ?? process.env.OTEL_EXPORTER_OTLP_INSECURE)?.toLowerCase() === "true";
   const scheme = /^([\w]{1,8}):\/\//.exec(target.trim())?.[1]?.toLowerCase();
-  const plaintext = supplied !== undefined ? !supplied._isSecure() : scheme === "https" ? false : scheme === "http" || insecureEnv;
-  if (!keys) return done(supplied ?? undefined, !plaintext);
+  const plaintext = supplied !== undefined ? !supplied._isSecure() : scheme === "https" ? false : scheme === "http" || insecureEnv || loopback;
+  if (!keys) return done(supplied ?? (plaintext && loopback ? grpc.credentials.createInsecure() : undefined), !plaintext);
   if (plaintext) {
-    const optIn = !loopback && plaintextRule(target, transport, request.allowInsecureHttp, request.dispatcher);
+    const optIn = plaintextRule(target, transport, request.allowInsecureHttp, request.dispatcher);
     return done(supplied ?? grpc.credentials.createInsecure(), false, optIn);
   }
   return done(supplied ?? grpc.credentials.createSsl(), true);

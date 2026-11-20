@@ -81,10 +81,14 @@ describe("a caller url does not redirect the exporter's Future AGI classificatio
     expect(seen[0].get("x-api-key")).toEqual([KEY]); expect(seen[0].get("x-secret-key")).toEqual([SECRET]);
     expect(seen[0].get("x-caller-custom")).toEqual(["from-the-caller"]);
   });
-  test("caller credentials do not change how a Future AGI bound exporter connects", async () => {
-    const seen = await withGrpcSink(endpoint => { process.env.FI_GRPC_COLLECTOR_ENDPOINT = endpoint; return exportWith(createSpanExporter({ transport: Transport.GRPC, credentials: grpc.credentials.createSsl() } as any)); });
+  test("caller insecure credentials connect to a plaintext loopback target and carry the keys", async () => {
+    const seen = await withGrpcSink(endpoint => { process.env.FI_GRPC_COLLECTOR_ENDPOINT = endpoint; return exportWith(createSpanExporter({ transport: Transport.GRPC, credentials: grpc.credentials.createInsecure() } as any)); });
     expect(seen).toHaveLength(1);
     expect(seen[0].get("x-api-key")).toEqual([KEY]);
+  });
+  test("caller TLS credentials are kept: a plaintext loopback sink receives nothing", async () => {
+    const seen = await withGrpcSink(endpoint => { process.env.FI_GRPC_COLLECTOR_ENDPOINT = endpoint; return exportWith(createSpanExporter({ transport: Transport.GRPC, credentials: grpc.credentials.createSsl() } as any)); });
+    expect(seen).toHaveLength(0);
   });
   test("a header with the same name as an ambient one wins over it", async () => {
     process.env.OTEL_EXPORTER_OTLP_HEADERS = "x-caller-custom=ambient-value";

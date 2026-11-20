@@ -30,7 +30,7 @@ import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { connectGrpcDirect, isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
-import { assertDirectFetch, assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, hasCompleteKeyPair, isRedirect, metadataStrings, FiKeyRefusal, type FiDecision, type FiRequest } from "./fi-request-policy";
+import { assertDirectFetch, assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, hasCompleteKeyPair, isRedirect, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
@@ -334,7 +334,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     const decision = decide({ target: endpoint, transport: "grpc", headers: callerHeaders, metadata: callerMetadata, credentials: callerCredentials, allowInsecureHttp, declaredFi: isFiRouteDeclared(options) });
     const { fiBound, metadata, credentials: channelCredentials } = decision;
     // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
-    if (!fiBound) assertNoKeysInAmbientHeaders(fiKeyHeaderValues(callerHeaders, callerStrings));
+    if (!fiBound) assertNoKeysInAmbientHeaders([...fiKeyHeaderValues(callerHeaders, callerStrings), ...metadataKeyValues(callerMetadata)]);
     const headers = decision.headers ?? {};
     const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
@@ -352,15 +352,15 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       throw error;
     }
     if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
-    // A plaintext channel that carries keys under the opt-in is built with proxies off: no environment can route it.
-    if (decision.plaintextOptIn) connectGrpcDirect(this);
+    // A plaintext channel that carries keys, loopback included, is built with proxies off: no environment can route it.
+    if (decision.plaintextDirect) connectGrpcDirect(this);
     
     this.verbose = verbose;
     this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers }, metadataKnown);
     privacyDestinations.add(this);
 
     if (this.verbose) {
-      diag.info(`GRPCSpanExporter: Configured for endpoint: ${endpoint}`);
+      diag.info(`GRPCSpanExporter: Configured for endpoint: ${loggable(endpoint)}`);
       diag.info(`GRPCSpanExporter: Authentication: ${Object.keys(lower_case_auth_header).length > 0 ? 'Enabled' : 'None'}`);
     }
   }
@@ -565,10 +565,13 @@ class FITracerProvider extends BasicTracerProvider {
       endpoint = constructFullEndpoint(named);
     }
     
-    const { headers } = decide({ target: endpoint, written: named, transport: transport === Transport.GRPC ? "grpc" : "http", headers: config.headers, allowInsecureHttp: config.allowInsecureHttp });
+    // The key decision belongs to the SDK exporter that carries the keys: with explicit span processors none is built.
+    const headers = config.spanProcessors === undefined
+      ? decide({ target: endpoint, written: named, transport: transport === Transport.GRPC ? "grpc" : "http", headers: config.headers, allowInsecureHttp: config.allowInsecureHttp }).headers
+      : config.headers;
 
     if (verbose) {
-      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${endpoint}`);
+      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${loggable(endpoint)}`);
     }
 
     // Explicit lists, including [], never construct a hidden default exporter.
@@ -598,7 +601,7 @@ class FITracerProvider extends BasicTracerProvider {
 
     // Log to confirm processor and exporter details
     if (verbose) {
-      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${endpoint}`);
+      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${loggable(endpoint)}`);
     }
 
     if (verbose) {
@@ -866,7 +869,7 @@ function evalCheckBase(name: string, checkPath: string, customEndpoint: string |
     try {
       const parsedCustom = new URL(customEndpoint);
       if (parsedCustom.pathname.endsWith(checkPath)) {
-        if (verbose) diag.info(`${name}: Using custom full endpoint: ${customEndpoint}`);
+        if (verbose) diag.info(`${name}: Using custom full endpoint: ${hostClass(customEndpoint)}`);
         candidate = customEndpoint.substring(0, customEndpoint.lastIndexOf(checkPath));
       } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") {
         candidate = writtenOrigin(customEndpoint, parsedCustom);
@@ -874,7 +877,7 @@ function evalCheckBase(name: string, checkPath: string, customEndpoint: string |
         candidate = customEndpoint;
       }
     } catch (e) {
-      if (verbose) diag.warn(`${name}: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
+      if (verbose) diag.warn(`${name}: The custom endpoint is not a valid URL. Falling back to environment or default.`);
     }
     if (candidate !== undefined) {
       if (isFiEndpoint(candidate, "http") || sameEndpointTarget(candidate, fiApiBase(), "http")) return candidate;
