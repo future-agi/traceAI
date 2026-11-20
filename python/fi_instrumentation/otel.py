@@ -622,7 +622,7 @@ def _with_fi_auth_headers(headers: Any, add_env_keys: bool = True) -> Dict[str, 
     Authorization, X-Api-Key or X-Secret-Key header was passed. A credential
     header with an empty value is dropped rather than treated as a credential,
     so an empty Authorization no longer hides valid environment keys. Keys are
-    lower-cased on both sides, so the request never carries case-variant
+    lower-cased on both sides, so the request carries no case-variant
     duplicates such as ``x-api-key`` and ``X-Api-Key``.
     """
     pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
@@ -630,7 +630,7 @@ def _with_fi_auth_headers(headers: Any, add_env_keys: bool = True) -> Dict[str, 
     for key, value in pairs:
         name = (key.decode() if isinstance(key, bytes) else str(key)).lower()
         # Skip a blank credential before collapsing case variants, so an empty
-        # duplicate can never erase an explicit one and pull in the env pair.
+        # duplicate cannot erase an explicit one and pull in the env pair.
         if name in _CREDENTIAL_HEADERS and _is_blank(value):
             continue
         merged[name] = value
@@ -685,7 +685,7 @@ def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | 
         name = key.decode() if isinstance(key, bytes) else str(key)
         folded = name.lower()
         if folded in given:
-            # Names that differ only in case are one header: a blank duplicate never replaces a value
+            # Names that differ only in case are one header: a blank duplicate does not replace a value
             # that was given, and a given value replaces an earlier blank one.
             if _is_blank(value):
                 continue
@@ -696,9 +696,12 @@ def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | 
 
 
 def _caller_headers(headers: Any) -> dict[str, Any]:
-    """The headers a caller passed to an exporter, keyed by lower-case name."""
-    pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
-    return {(k.decode() if isinstance(k, bytes) else str(k)).lower(): v for k, v in pairs}
+    """The headers a caller passed to an exporter, keyed by lower-case name.
+
+    Read by the same rules as ``_materialize_headers``: names that differ only in case are one header,
+    a blank duplicate does not replace a given value, and a value of None is left out.
+    """
+    return _materialize_headers(headers, lower=True) or {}
 
 
 class UnsupportedFutureAGIEndpointError(ValueError):
@@ -724,13 +727,53 @@ def _normalize_host(host: str | None) -> str | None:
     return host if host and all(_HOST_LABEL.match(label) for label in labels) else None
 
 
-def _looks_like_future_agi(endpoint: str) -> bool:
-    """True when the text names Future AGI under any common escaping or width form."""
+_DOT_FORMS = "\u3002\uff0e\uff61"
+
+
+def _host_forms(token: str) -> set[str]:
+    """The spellings of one host token a client may resolve: unescaped, width-folded, dots unified, ``xn--`` labels decoded."""
     import unicodedata
 
-    variants = {endpoint, unquote(endpoint), unicodedata.normalize("NFKC", endpoint)}
-    variants.add(unicodedata.normalize("NFKC", unquote(endpoint)))
-    return any("futureagi" in variant.lower() for variant in variants)
+    forms: set[str] = set()
+    for variant in {token, unquote(token), unicodedata.normalize("NFKC", token), unicodedata.normalize("NFKC", unquote(token))}:
+        text = variant.lower()
+        for dot in _DOT_FORMS:
+            text = text.replace(dot, ".")
+        text = text.rstrip(".")
+        forms.add(text)
+        decoded = []
+        for label in text.split("."):
+            if label.startswith("xn--"):
+                try:
+                    label = unicodedata.normalize("NFKC", label[4:].encode("ascii").decode("punycode")).lower()
+                except (UnicodeError, ValueError):
+                    pass
+            decoded.append(label)
+        forms.add(".".join(decoded))
+    return forms
+
+
+def _names_future_agi_host(endpoint: str, grpc: bool = False) -> bool:
+    """True when the host of ``endpoint``, in any escaping, width or ``xn--`` spelling, is futureagi.com or a subdomain.
+
+    Only the host is read: an HTTP URL's authority, or the whole gRPC target (its grammar can place the host after a
+    prefix). A path, a query, a fragment or a longer name such as ``myfutureagi.corp`` does not count.
+    """
+    if grpc:
+        text = endpoint
+    else:
+        rest = endpoint.split("//", 1)[1] if "//" in endpoint else endpoint
+        text = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    candidates = {text}
+    unescaped = text
+    for _ in range(3):
+        unescaped = unquote(unescaped)
+        candidates.add(unescaped)
+    for candidate in candidates:
+        for token in re.split(r"[@\\:/?#,\s]+", candidate):
+            if token and any(_is_futureagi_host(form) for form in _host_forms(token)):
+                return True
+    return False
 
 
 def _http_origin(endpoint: str | None) -> tuple[str, str, int] | None:
@@ -763,7 +806,7 @@ def _grpc_target(endpoint: str | None) -> tuple[str, str, int] | None:
     """(scheme, host, port) of the exact target grpc receives, or None unless it is a plain host[:port].
 
     The exporters pass ``urlparse(endpoint).netloc`` to grpc when there is one, so that is the string read
-    here; a target-grammar prefix (dns:, ipv4:, unix:, xds: ...), userinfo or a backslash is never plain.
+    here; a target-grammar prefix (dns:, ipv4:, unix:, xds: ...), userinfo or a backslash is not plain.
     """
     if not endpoint:
         return None
@@ -810,7 +853,8 @@ def _future_agi_decision(endpoint: str | None, grpc: bool = False) -> str:
 
     ``endpoint`` is the URL (HTTP) or the target an exporter received or resolved (gRPC; either
     spelling). It is Future AGI only when it is a plain target on exact host and port the Future AGI
-    environment or defaults name; a Future AGI host reached over http is not verified either.
+    environment or defaults name. A Future AGI HTTP host is reached over https only; a gRPC target of any
+    scheme is bound and uses TLS (see ``_force_tls_for_future_agi``).
     """
     if not endpoint:
         return "other"
@@ -818,16 +862,16 @@ def _future_agi_decision(endpoint: str | None, grpc: bool = False) -> str:
         target = _grpc_target(endpoint)
         host = target[1] if target else None
         origin = (target[1], target[2]) if target else None
-        clear_text = bool(target and target[0] == "http")
+        clear_text = False
     else:
         parsed = _http_origin(endpoint)
         host = parsed[1] if parsed else None
         origin = (parsed[1], parsed[2]) if parsed else None
         clear_text = bool(parsed and parsed[0] == "http")
     if origin is not None and origin in _known_future_agi_origins(grpc):
-        # A futureagi.com host is reached over https; a self-hosted base the environment names may use http.
+        # A futureagi.com HTTP host is reached over https; a self-hosted base the environment names may use http.
         return "refuse" if clear_text and _is_futureagi_host(host or "") else "fi"
-    if _looks_like_future_agi(endpoint) or (host is not None and _is_futureagi_host(host)):
+    if _names_future_agi_host(endpoint, grpc) or (host is not None and _is_futureagi_host(host)):
         return "refuse"
     return "other"
 
@@ -873,8 +917,8 @@ class UnsupportedOTLPExporterError(RuntimeError):
 def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporterError:
     """The error for an exporter bound for Future AGI whose headers cannot be pinned.
 
-    The message names the exporter class, the package version and the setting
-    that could leak, and no header or environment value.
+    The message names the exporter class, the package version and the supported
+    versions, and no header or environment value.
     """
     try:
         from importlib.metadata import version
@@ -884,15 +928,22 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
         installed = "unknown version"
     return UnsupportedOTLPExporterError(
         f"Cannot send traces to Future AGI with {type(exporter).__name__} from {package} {installed}: "
-        "its header handling is not one this release can set, so settings from "
-        "OTEL_EXPORTER_OTLP_HEADERS could reach Future AGI. "
+        "its header handling is not one this release can set, so headers from "
+        "OTEL_EXPORTER_OTLP_HEADERS cannot be kept out of its requests. "
         f"Supported versions are {_SUPPORTED_OTLP_EXPORTERS}."
     )
 
 
 def _copy_session(session: requests.Session) -> requests.Session:
-    """A new session with the caller's settings and adapters, whose headers can be changed freely."""
-    copy = requests.Session()
+    """A new session with the caller's settings and adapters, whose headers can be changed freely.
+
+    The copy is an instance of the caller's session class when that class can be created without arguments, and a
+    ``requests.Session`` otherwise.
+    """
+    try:
+        copy = type(session)()
+    except (TypeError, ValueError, AttributeError):  # a subclass that needs arguments
+        copy = requests.Session()
     copy.headers = session.headers.copy()
     copy.auth = session.auth
     copy.proxies = dict(session.proxies)
@@ -986,6 +1037,74 @@ def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_head
     exporter._headers = tuple(kept) + tuple(sdk.items())
 
 
+def _is_loopback_host(host: str | None) -> bool:
+    """True for ``localhost`` and loopback addresses."""
+    import ipaddress
+
+    if not host:
+        return False
+    host = host.strip("[]").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _force_tls_for_future_agi(endpoint: str | None, insecure: Any) -> bool:
+    """True when a gRPC exporter for this Future AGI target is built with TLS whatever the plain-text settings say.
+
+    Every Future AGI target other than loopback uses TLS, whatever its scheme, ``OTEL_EXPORTER_OTLP_INSECURE`` and
+    ``OTEL_EXPORTER_OTLP_TRACES_INSECURE`` say. Asking for plain text with the ``insecure`` argument raises
+    UnsupportedFutureAGIEndpointError, which names the argument.
+    """
+    target = _grpc_target(endpoint)
+    if target is None or _is_loopback_host(target[1]):
+        return False
+    if insecure:
+        raise UnsupportedFutureAGIEndpointError(
+            "A Future AGI gRPC endpoint is reached over TLS, so the insecure option cannot be turned on for it. "
+            "Remove the insecure option, or set FI_GRPC_URL to your own collector."
+        )
+    return True
+
+
+_PLAIN_TEXT_WARNED: set[str] = set()
+
+
+def _warn_plain_text_once(endpoint: str | None) -> None:
+    """One log warning per process when Future AGI credentials go over http to a host other than loopback.
+
+    It names FI_BASE_URL and the origin (scheme, host and port) and no path, query, userinfo or key.
+    """
+    origin = _http_origin(endpoint)
+    if origin is None or origin[0] != "http" or _is_loopback_host(origin[1]) or _PLAIN_TEXT_WARNED:
+        return
+    _PLAIN_TEXT_WARNED.add(f"{origin[0]}://{origin[1]}:{origin[2]}")
+    logger.warning(
+        "Future AGI credentials are sent over http to %s://%s:%s, the endpoint named by FI_BASE_URL (or FI_TRACES_URL). "
+        "Use an https URL to send them over TLS.",
+        origin[0],
+        origin[1],
+        origin[2],
+    )
+
+
+def _close_after_refusal(exporter: Any, base: Any) -> None:
+    """Close what an exporter opened while it was being built, before its constructor raises."""
+    steps = [lambda: base.shutdown(exporter)]
+    for attribute in ("_channel", "_session"):
+        held = getattr(exporter, attribute, None)
+        if held is not None:
+            steps.append(held.close)
+    for step in steps:
+        try:
+            step()
+        except (OSError, ValueError, AttributeError, RuntimeError):  # best effort; the refusal is what the caller needs
+            logger.debug("exporter cleanup after a refusal failed", exc_info=True)
+
+
 class GRPCSpanExporter(_GRPCSpanExporter):
     """
     OTLP span exporter using gRPC.
@@ -1009,9 +1128,24 @@ class GRPCSpanExporter(_GRPCSpanExporter):
 
         # Built once, with the caller's own arguments; the Future AGI headers are set afterwards,
         # and only when the exporter resolved a Future AGI endpoint.
-        _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers)
+        decision = _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers)
+        forced = False
+        if decision == "fi" and _force_tls_for_future_agi(bound_args.arguments["endpoint"], bound_args.arguments.get("insecure")):
+            # TLS for a Future AGI target: the argument and both OTEL_EXPORTER_OTLP*_INSECURE variables are not read.
+            bound_args.arguments["insecure"] = False
+            forced = True
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        if _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers) == "fi":
+        try:
+            resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers)
+            if resolved == "fi" and not forced and not _is_loopback_host((_grpc_target(self._endpoint) or ("", ""))[1]):
+                raise UnsupportedFutureAGIEndpointError(
+                    "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
+                    "credentials are not sent to it. Set FI_GRPC_URL to the Future AGI gRPC target, or remove the credentials."
+                )
+        except UnsupportedFutureAGIEndpointError:
+            _close_after_refusal(self, _GRPCSpanExporter)
+            raise
+        if resolved == "fi":
             _pin_grpc_headers(self, _with_fi_auth_headers(caller_headers, add_env_keys=True), caller_headers)
 
     def shutdown(self) -> None:
@@ -1055,7 +1189,13 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         # session or the headers a caller supplied until the resolved endpoint is known.
         _check_future_agi_endpoint(bound_args.arguments["endpoint"], False, caller_headers)
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        if _check_future_agi_endpoint(getattr(self, "_endpoint", None), False, caller_headers) == "fi":
+        try:
+            resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), False, caller_headers)
+        except UnsupportedFutureAGIEndpointError:
+            _close_after_refusal(self, _HTTPSpanExporter)
+            raise
+        if resolved == "fi":
+            _warn_plain_text_once(self._endpoint)
             _pin_http_headers(
                 self,
                 _with_fi_auth_headers(caller_headers, add_env_keys=True),
