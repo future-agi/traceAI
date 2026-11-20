@@ -30,6 +30,9 @@ public sealed class AutoOptions
     public int? WireMaxBodyBytes { get; set; }
     public double? SampleRate { get; set; }
     public bool? Debug { get; set; }
+    /// <summary>Allows the Future AGI keys to go in plaintext to a self-hosted collector that is not a Future AGI host (FI_ALLOW_INSECURE_HTTP=1 does the same).
+    /// Loopback needs no setting and a Future AGI host is always TLS.</summary>
+    public bool? AllowInsecureHttp { get; set; }
     /// <summary>Optional exporter for embedding or tests; otherwise OTLP HTTP/protobuf is used.</summary>
     public BaseExporter<Activity>? Exporter { get; set; }
     /// <summary>Optional caller-owned provider. Configure its source subscriptions

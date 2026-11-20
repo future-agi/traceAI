@@ -79,7 +79,13 @@ public static class TraceAIAuto
                 else if(!config.Disabled) Warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required for the default collector; no exporter or provider was supplied, so auto-instrumentation is disabled.");
             }
             catch(BlankBaseUrlException) { s_failed=true; Warn("base-url-blank","FI_BASE_URL is set but empty; the agent did not start and no traces are sent. Unset it or give it a URL."); }
-            catch { s_failed=true; Warn("init", "Agent initialization failed; application continues without tracing."); }
+            catch (Exception error)
+            {
+                s_failed=true;
+                // A refused destination names the setting to change and no value.
+                if(error is FiKeyRefusedException refused) Warn("route",refused.Message);
+                Warn("init", "Agent initialization failed; application continues without tracing.");
+            }
         }
     }
     /// <summary>Registers an additional credential for process-wide export redaction.
@@ -212,12 +218,15 @@ internal sealed class Agent : IDisposable
             foreach(var integration in Integrations.Where(i=>config.Enabled(i.Name))) foreach(var prefix in integration.Sources) builder.AddSource(integration.Exact?prefix:prefix+"*");
         }
         BaseExporter<Activity>? exporter=null;
-        if(config.Options.Exporter!=null) exporter=new BorrowedExporter(config.Options.Exporter,privacy,_completion);
-        else if(_ownsProvider) exporter=_otlp=new TrackingOtlpExporter(new OtlpExporterOptions {
-            Endpoint=new Uri(config.Get("BASE_URL").TrimEnd('/')+"/tracer/v1/traces"), Protocol=OtlpExportProtocol.HttpProtobuf,
-            Headers="X-Api-Key="+Uri.EscapeDataString(config.Get("API_KEY"))+",X-Secret-Key="+Uri.EscapeDataString(config.Get("SECRET_KEY"))+",fi-project-name="+Uri.EscapeDataString(config.Get("PROJECT_NAME")),
-            TimeoutMilliseconds=2000
-        },privacy,_completion);
+        if(config.Options.Exporter!=null)
+        {
+            // A collector of the caller's own: the OTLP exporter it may be built on merges OTEL_EXPORTER_OTLP_(TRACES_)HEADERS, so those must carry no
+            // Future AGI key header and no known secret.
+            string[] known; try { known=KnownSecrets.Snapshot(); } catch { known=[]; }
+            FiKeyTransport.AssertNoFiKeysInAmbientHeaders(known.Concat(config.CredentialValues));
+            exporter=new BorrowedExporter(config.Options.Exporter,privacy,_completion);
+        }
+        else if(_ownsProvider) exporter=_otlp=new TrackingOtlpExporter(FiRouteOptions(config),privacy,_completion);
         if(exporter!=null)
         {
             _batch=new PrivacyBatchProcessor(exporter,sampler,requireRecorded:!_ownsProvider,()=>Volatile.Read(ref _disposed)==0);
@@ -259,6 +268,19 @@ internal sealed class Agent : IDisposable
         if(config.Enabled("openai")) AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry",true);
         if(config.Enabled("semantic_kernel")) AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics",true);
         if(config.Enabled("azure_inference")||config.Enabled("azure_openai")) AppContext.SetSwitch("Azure.Experimental.EnableActivitySource",true);
+    }
+    /// <summary>
+    /// The options of the Future AGI route: the one decision (FiKeyTransport.Decide) is taken on the base URL before the keys are put in the headers, and the
+    /// route's HTTP client follows no redirect and, for a plaintext send under FI_ALLOW_INSECURE_HTTP, uses no proxy.
+    /// </summary>
+    internal static OtlpExporterOptions FiRouteOptions(AutoConfig config)
+    {
+        var decision=FiKeyTransport.Decide(config.Get("BASE_URL").TrimEnd('/')+"/tracer/v1/traces",grpc:false,keys:true,allowInsecureHttp:config.Options.AllowInsecureHttp==true);
+        return new OtlpExporterOptions {
+            Endpoint=new Uri(decision.Endpoint), Protocol=OtlpExportProtocol.HttpProtobuf,
+            Headers="X-Api-Key="+Uri.EscapeDataString(config.Get("API_KEY"))+",X-Secret-Key="+Uri.EscapeDataString(config.Get("SECRET_KEY"))+",fi-project-name="+Uri.EscapeDataString(config.Get("PROJECT_NAME")),
+            TimeoutMilliseconds=2000, HttpClientFactory=FiKeyTransport.HttpClientFactory(decision)
+        };
     }
     internal static Integration? IntegrationForSource(string source) => Integrations.FirstOrDefault(i=>i.Sources.Any(p=>i.Exact?source==p:source.StartsWith(p,StringComparison.Ordinal)));
     /// <summary>The agent's own wire source and every AI integration source.</summary>

@@ -6,6 +6,11 @@ Release notes are added here by the release process.
 
 ## Unreleased
 
+### Changed
+- Future AGI keys go to a Future AGI host (`*.futureagi.com`) only over TLS: plaintext http to Future AGI is refused unless `FI_ALLOW_INSECURE_HTTP=1`, and the option never applies to a Future AGI host. Plaintext is allowed to a literal loopback host (`localhost`, `127.0.0.1`, `::1`) with no setting. A self-hosted collector without TLS needs `FI_ALLOW_INSECURE_HTTP=1` (exactly `1`) or `AutoOptions.AllowInsecureHttp`; one warning per process names the setting and the collector's `scheme://host:port`. A base URL whose host a second parser reads differently (a backslash before an `@`, `%5C`, an `@` after the host part, an empty host) is refused. `init` reports a refused route with the setting to change and no value.
+- Key-carrying requests do not follow redirects (a 3xx answer is a failed export and nothing goes to the address it names) and a plaintext request sent under `FI_ALLOW_INSECURE_HTTP` does not use a proxy. An https export keeps the normal proxy behaviour.
+- An `AutoOptions.Exporter` you supply is refused when `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_TRACES_HEADERS` carries an `X-Api-Key` or `X-Secret-Key` header, or a value that contains a Future AGI key or another known secret.
+
 ### Added
 - ASP.NET Core hosts are traced with no application code: the startup hook activates the companion assembly `TraceAI.AutoInstrumentation.HostingStartup`, which wraps registered `IChatClient`, `IEmbeddingGenerator<,>` and `AIAgent` services in the libraries' own OpenTelemetry wrappers when `extensions_ai` or `agents` is enabled. An application that already calls `UseOpenTelemetry()` is not wrapped twice, no hide setting is overridden, and an existing `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` value is kept.
 - The agent starts next to `System.Diagnostics.DiagnosticSource` 11, which `Microsoft.Extensions.AI` 11 ships.
