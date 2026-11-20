@@ -11,6 +11,7 @@ import (
 // preserving escaping, duplicate parameters and CloseIdleConnections ownership.
 type collectorTransport struct {
 	*http.Transport
+	keyed      http.RoundTripper
 	rawQuery   string
 	forceQuery bool
 }
