@@ -4,6 +4,12 @@
 - Zero-code auto-instrumentation turns on the `deepseek`, `fireworks`, `xai`, `minimax` and `vllm` integrations by default, and every model call through an OpenAI-compatible client yields exactly one span: the xAI and MiniMax integrations now defer to the `openai` integration while it is on (as the other three already did), and MiniMax hosts are labelled `minimax` on the shared spans. Each of these five turns on by default only when the installed provider package declares `DEFERS_TO_SHARED_OPENAI` (and the installed `traceai-openai` has the capabilities it needs); with an older provider package it keeps its previous state, so one span per call holds with any mix of installed versions. Uninstrumenting at shutdown runs in the reverse of the installation order, so each wrapper restores the callable it captured.
 - Raw input and raw output (`raw.input`, `raw.output`, and their children) are not recorded while any of `hide_inputs`, `hide_outputs`, `hide_input_messages`, `hide_output_messages`, `hide_input_text`, `hide_output_text`, `hide_input_images`, `hide_embedding_vectors` or `hide_llm_invocation_parameters` is on.
 
+### Fixed
+- Trace export to Future AGI sends the Future AGI keys and the headers passed to register(); OTLP headers from the environment (OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_EXPORTER_OTLP_HEADERS), which are meant for other backends, are not included. An exporter you point at your own collector keeps standard OpenTelemetry environment behaviour.
+- The Future AGI keys from `FI_API_KEY` and `FI_SECRET_KEY` are added only to exporters that send to Future AGI; an exporter you point at another collector sends the headers you pass.
+- An exporter bound for Future AGI whose OpenTelemetry exporter release keeps its headers in a layout this release cannot set raises `UnsupportedOTLPExporterError` instead of sending.
+- The OTLP exporter dependencies (`opentelemetry-exporter-otlp-proto-http`, and `opentelemetry-exporter-otlp-proto-grpc` for the `grpc` extra) are bounded to the versions this release is tested with, below 1.46.
+
 ## [1.5.0] - 2026-11-18
 
 ### Added
