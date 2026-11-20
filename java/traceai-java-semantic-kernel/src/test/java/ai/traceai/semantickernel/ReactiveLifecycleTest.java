@@ -32,6 +32,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ReactiveLifecycleTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     private static final AttributeKey<Boolean> CANCELLED = AttributeKey.booleanKey("semantic_kernel.cancelled");
     InMemorySpanExporter exporter;
     SdkTracerProvider sdk;
@@ -198,7 +205,7 @@ class ReactiveLifecycleTest {
         var result = traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
         assertThat(result).containsExactly(chunk);
         var span = exporter.getFinishedSpanItems().get(0);
-        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value"))).hasSizeBetween(32000 - 4096, 32000)
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value"))).hasSize(32000)
             .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
         assertThat(span.getAttributes().get(AttributeKey.booleanKey("semantic_kernel.output_truncated"))).isTrue();
     }

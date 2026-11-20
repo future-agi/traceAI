@@ -128,6 +128,18 @@ public final class KnownSecrets {
         return out == null ? value : out.toString();
     }
 
+    /** Test hook: empties the process-wide registry and forgets the one-time warnings, so a test starts from a known state. */
+    static void resetProcessForTest() {
+        synchronized (PROCESS) {
+            PROCESS.values.clear();
+            PROCESS.characters = 0;
+            PROCESS.unavailable = false;
+            PROCESS.failure = "the registry was marked unavailable";
+            PROCESS.cached = null;
+        }
+        resetWarningsForTest();
+    }
+
     /** Test hook: forgets which one-time warnings were already logged. */
     static void resetWarningsForTest() {
         WARNED_SHORT.set(false);
@@ -151,6 +163,16 @@ public final class KnownSecrets {
      */
     public static String sealCut(String cutText) {
         return PROCESS.snapshot().sealCut(cutText);
+    }
+
+    /**
+     * Finishes already-cut text like {@link #sealCut(String)}, with the result at most {@code limit} characters.
+     * @param cutText the retained prefix
+     * @param limit the longest result, marker included
+     * @return the replaced text ending with the marker
+     */
+    public static String sealCut(String cutText, int limit) {
+        return PROCESS.snapshot().sealCut(cutText, limit);
     }
 
     /** @return an immutable view of the secrets known now */
@@ -282,6 +304,17 @@ public final class KnownSecrets {
             }
             // Scrubbed with the marker in place, so a secret that is cut off here also loses its trailing prefix.
             return scrubOrRaw(cutText.substring(0, keep) + TRUNCATION_MARKER);
+        }
+
+        /**
+         * Finishes already-cut text like {@link #sealCut(String)}, with the result at most {@code limit} characters
+         * (the marker included): when replacing a trailing partial secret lengthens the text, the cut is moved back.
+         * @param cutText the retained prefix, may be null
+         * @param limit the longest result; below the marker's length nothing safe fits and the result is empty
+         * @return the replaced text ending with the marker, or null for null
+         */
+        public String sealCut(String cutText, int limit) {
+            return sealCut(cutText);
         }
 
         /**

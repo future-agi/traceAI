@@ -42,13 +42,14 @@ class KnownSecretsCapTest {
 
     @BeforeEach
     void attach() {
-        KnownSecrets.resetWarningsForTest();
+        KnownSecrets.resetProcessForTest();
         logger.addHandler(handler);
     }
 
     @AfterEach
     void detach() {
         logger.removeHandler(handler);
+        KnownSecrets.resetProcessForTest();
     }
 
     private static KnownSecrets registry(String... values) {
@@ -237,5 +238,33 @@ class KnownSecretsCapTest {
         assertThat(one.getLinks().get(0).getAttributes().get(AttributeKey.stringArrayKey("link.arr")))
             .containsExactly("a-" + R);
         provider.close();
+    }
+
+    /** Replacing a trailing partial secret lengthens the text; the final length is still the limit at most. */
+    @Test
+    void capAndSealCutNeverRunPastTheLimitWhenAPartialSecretIsReplaced() {
+        // Eight-character secrets become the ten-character placeholder: a one-character partial before the marker grows by nine.
+        KnownSecrets.Snapshot snapshot = registry("QWERTY12", "ASDFGH34", "ZXCVBN56").snapshot();
+        for (String start : new String[] {"Q", "A", "Z", "QW", "ASD"}) {
+            String value = "a".repeat(31_978 + 1 - start.length()) + start + "z".repeat(200);
+            String capped = snapshot.cap(value, 32_000);
+            assertThat(capped).as("partial %s at the cut", start).hasSizeLessThanOrEqualTo(32_000).endsWith(M);
+            String cutText = value.substring(0, 32_000 - M.length());
+            assertThat(snapshot.sealCut(cutText, 32_000)).as("sealCut with a limit, partial %s", start)
+                .hasSizeLessThanOrEqualTo(32_000).endsWith(M);
+        }
+    }
+
+    @Test
+    void capWithManyShortSecretsStaysWithinTheLimit() {
+        String[] secrets = new String[200];
+        for (int i = 0; i < secrets.length; i++) secrets[i] = String.format("SECRET%03d", i);
+        KnownSecrets.Snapshot snapshot = registry(secrets).snapshot();
+        StringBuilder value = new StringBuilder();
+        for (int i = 0; value.length() < 40_000; i++) value.append("pad ").append(secrets[i % secrets.length]).append(' ');
+        for (int limit : new int[] {32_000, 20_000, 1_000, 100}) {
+            assertThat(snapshot.cap(value.toString(), limit)).as("limit %d", limit).hasSizeLessThanOrEqualTo(limit).endsWith(M);
+        }
+        assertThat(snapshot.sealCut("x", 5)).isEmpty();
     }
 }

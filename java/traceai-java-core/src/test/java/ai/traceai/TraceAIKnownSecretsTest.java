@@ -27,6 +27,7 @@ class TraceAIKnownSecretsTest {
 
     @BeforeEach
     void start() throws IOException {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
         TraceAI.shutdown();
         GlobalOpenTelemetry.resetForTest();
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -42,6 +43,7 @@ class TraceAIKnownSecretsTest {
 
     @AfterEach
     void stop() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
         TraceAI.shutdown();
         server.stop(0);
         GlobalOpenTelemetry.resetForTest();

@@ -7,6 +7,13 @@ import org.springframework.ai.chat.prompt.Prompt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SpringAIObservationFilterTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     @Test void unrelatedObservationsAreUnchanged() {
         Observation.Context context = new Observation.Context();
         assertThat(new SpringAIObservationFilter(true, true).map(context)).isSameAs(context);
@@ -20,8 +27,8 @@ class SpringAIObservationFilterTest {
         context.setResponse(response);
         var filter = new SpringAIObservationFilter(true, true);
         assertThat(filter.map(context)).isSameAs(context);
-        assertThat(context.getHighCardinalityKeyValue("input.value").getValue()).hasSizeBetween(28_000, 32_000);
-        assertThat(context.getHighCardinalityKeyValue("output.value").getValue()).hasSizeBetween(28_000, 32_000);
+        assertThat(context.getHighCardinalityKeyValue("input.value").getValue()).hasSize(32_000);
+        assertThat(context.getHighCardinalityKeyValue("output.value").getValue()).hasSize(32_000);
         assertThat(context.getResponse()).isSameAs(response);
         assertThat(response.getResult().getOutput().getText()).hasSize(50_000);
         filter.map(context);

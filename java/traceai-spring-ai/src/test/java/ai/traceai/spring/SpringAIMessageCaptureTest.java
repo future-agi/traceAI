@@ -18,6 +18,13 @@ import org.springframework.ai.chat.prompt.Prompt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SpringAIMessageCaptureTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     @ParameterizedTest @ValueSource(strings = {"text", "\"\\\n\u0001<&>", "😀"})
     void largeEscapedValuesRemainBoundedValidJsonAndLeaveOriginalUntouched(String fragment) {
         String large = fragment.repeat(100_000);
@@ -150,5 +157,23 @@ class SpringAIMessageCaptureTest {
             assertThat(exported).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
         }
         assertThat(exported).contains("<redacted>" + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+    }
+
+    /** One registry snapshot serves the budget probe and the seal of a field: the capture asks for it once per field, and uses it throughout. */
+    @Test
+    void aFieldIsProbedAndSealedWithOneSnapshot() {
+        ai.traceai.privacy.KnownSecrets registry = new ai.traceai.privacy.KnownSecrets();
+        registry.register("SNAPSHOT-SECRET-1234");
+        int[] calls = {0};
+        var capture = new SpringAIMessageCapture(() -> { calls[0]++; return registry.snapshot(); });
+        // Larger than the budget, so the content is cut and sealed with that snapshot's secrets.
+        String text = ("filler SNAPSHOT-SECRET-1234 ").repeat(3_000);
+        capture.add(AssistantMessage.builder().content(text).build());
+        // One call for the role and one for the content: never one per probe step.
+        assertThat(calls[0]).isEqualTo(2);
+        String json = capture.json();
+        assertThat(json).doesNotContain("SNAPSHOT-SECRET-1234").contains(ai.traceai.privacy.KnownSecrets.PLACEHOLDER);
+        assertThat(json.length()).isLessThanOrEqualTo(32_000);
+        assertThat(JsonParser.parseString(json).getAsJsonArray()).hasSize(1);
     }
 }

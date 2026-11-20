@@ -247,4 +247,28 @@ class SecretReplacingSpanExporterTest {
         SpanExporter once = SecretReplacingSpanExporter.wrap(InMemorySpanExporter.create(), registry);
         assertThat(SecretReplacingSpanExporter.wrap(once, registry)).isSameAs(once);
     }
+
+    /** The deprecated library-info view of a rewritten scope keeps its schema URL, like the scope itself. */
+    @Test
+    @SuppressWarnings("deprecation")
+    void aRewrittenScopeKeepsItsSchemaUrlInBothViews() {
+        String secret = "PFX-SCOPE-SCHEMA-SECRET";
+        KnownSecrets registry = new KnownSecrets();
+        registry.register(secret);
+        InMemorySpanExporter raw = InMemorySpanExporter.create();
+        List<SpanData> captured;
+        try (SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(raw)).build()) {
+            Span span = provider.tracerBuilder("scope-" + secret).setInstrumentationVersion("1.0")
+                .setSchemaUrl("https://schemas.example/1.0").build().spanBuilder("one").startSpan();
+            span.end();
+            captured = raw.getFinishedSpanItems();
+        }
+        InMemorySpanExporter out = InMemorySpanExporter.create();
+        SecretReplacingSpanExporter.wrap(out, registry).export(captured);
+        SpanData exported = out.getFinishedSpanItems().get(0);
+        assertThat(exported.getInstrumentationScopeInfo().getName()).doesNotContain("PFX");
+        assertThat(exported.getInstrumentationScopeInfo().getSchemaUrl()).isEqualTo("https://schemas.example/1.0");
+        assertThat(exported.getInstrumentationLibraryInfo().getSchemaUrl()).isEqualTo("https://schemas.example/1.0");
+        assertThat(exported.getInstrumentationLibraryInfo().getName()).doesNotContain("PFX");
+    }
 }

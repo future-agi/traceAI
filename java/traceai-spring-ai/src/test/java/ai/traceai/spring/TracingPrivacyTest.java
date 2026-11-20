@@ -20,6 +20,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TracingPrivacyTest {
 
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
+
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
     private static final AttributeKey<String> INPUT_VALUE = AttributeKey.stringKey(SemanticConventions.INPUT_VALUE);
     private static final AttributeKey<String> INPUT_MESSAGES = AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES);
@@ -112,7 +119,7 @@ class TracingPrivacyTest {
                 .expectComplete()
                 .verify(TIMEOUT);
             String captured = support.single().getAttributes().get(OUTPUT_VALUE);
-            assertThat(captured).hasSizeBetween(28_000, 32_000).endsWith("...[truncated]");
+            assertThat(captured).hasSize(32_000).endsWith("...[truncated]");
         }
     }
 

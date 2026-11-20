@@ -14,8 +14,17 @@ final class SpringAIMessageCapture {
     // No HTML escaping: a secret containing = & < > ' must appear as written for the export pass to find it.
     private static final Gson JSON = new GsonBuilder().disableHtmlEscaping().create();
     private final JsonArray messages = new JsonArray();
+    private final java.util.function.Supplier<KnownSecrets.Snapshot> snapshots;
     // Reserve closing delimiters up front, including one comma per item/field (conservative for the first).
     private int remaining = SpringAIObservationFilter.MAX_CONTENT_LENGTH - 2;
+
+    SpringAIMessageCapture() {
+        this(() -> KnownSecrets.process().snapshot());
+    }
+
+    SpringAIMessageCapture(java.util.function.Supplier<KnownSecrets.Snapshot> snapshots) {
+        this.snapshots = snapshots;
+    }
 
     boolean add(Message message) {
         if (remaining < 64) return false;
