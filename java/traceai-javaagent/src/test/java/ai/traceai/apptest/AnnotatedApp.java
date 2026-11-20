@@ -70,7 +70,7 @@ public final class AnnotatedApp {
                 for (String shape : List.of(key, jwt)) {
                     for (int edge = Integer.parseInt(args[1]) - 60; edge <= Integer.parseInt(args[1]) + 6; edge++) {
                         String head = secret + " " + secret + " " + secret + " ";
-                        service.sink(head + "a".repeat(Math.max(1, edge - head.length())) + shape + " tail tail tail"); count++;
+                        service.sink(head + "a".repeat(Math.max(1, edge - head.length())) + " " + shape + " tail tail tail"); count++;
                     }
                 }
                 System.out.println("RESULT=" + count);
