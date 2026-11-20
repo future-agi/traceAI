@@ -71,7 +71,7 @@ FORMS = [
     ("grpc-trailing-dot-http-other-port", "grpc", "http://grpc.futureagi.com.:4317", "refuse"),
     ("grpc-trailing-dot-other-port", "grpc", "grpc.futureagi.com.:4317", "refuse"),
     ("grpc-trailing-newline", "grpc", "grpc.futureagi.com:443\n", "refuse"),
-    ("grpc-trailing-newline-scheme", "grpc", "https://grpc.futureagi.com:443\n", "refuse"),
+    ("grpc-trailing-newline-scheme", "grpc", "https://grpc.futureagi.com:443\n", "fi"),  # urlsplit drops the newline, as the exporter does
     ("grpc-own-trailing-newline", "grpc", "collector.example:4317\n", "other"),
     ("grpc-own-collector", "grpc", "collector.example:4317", "other"),
     ("grpc-loopback-collector", "grpc", "127.0.0.1:4317", "other"),

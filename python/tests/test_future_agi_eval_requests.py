@@ -156,3 +156,13 @@ def test_no_key_bytes_reach_an_own_collector(site, listener):
     site(f"http://evil.example:{listener.port}")
     assert listener.received and FI_KEY.encode() not in bytes(listener.received)
     assert FI_SECRET.encode() not in bytes(listener.received)
+
+
+@pytest.mark.parametrize("host", ["api.futureagi.com.", "FUTUREAGI.COM.", "grpc.futureagi.com"])
+def test_one_trailing_dot_is_read_as_absent_for_a_futureagi_host(host):
+    assert otel._is_futureagi_host(host)
+
+
+@pytest.mark.parametrize("host", ["localhost.", "127.0.0.1.", "LOCALHOST"])
+def test_one_trailing_dot_is_read_as_absent_for_a_loopback_host(host):
+    assert otel._is_loopback_host(host)

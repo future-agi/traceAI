@@ -708,8 +708,8 @@ class UnsupportedFutureAGIEndpointError(ValueError):
     """An endpoint that resembles Future AGI's but cannot be verified, used with Future AGI credentials."""
 
 
-_HOST_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
-_PLAIN_GRPC_TARGET = re.compile(r"^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?$")
+_HOST_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?")
+_PLAIN_GRPC_TARGET = re.compile(r"([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?")
 
 
 def _normalize_host(host: str | None) -> str | None:
@@ -724,7 +724,7 @@ def _normalize_host(host: str | None) -> str | None:
     if host.startswith("[") and host.endswith("]"):
         return host if re.fullmatch(r"\[[0-9a-f:.]+\]", host) else None
     labels = host.split(".")
-    return host if host and all(_HOST_LABEL.match(label) for label in labels) else None
+    return host if host and all(_HOST_LABEL.fullmatch(label) for label in labels) else None
 
 
 _DOT_FORMS = "\u3002\uff0e\uff61"
@@ -816,7 +816,7 @@ def _grpc_target(endpoint: str | None) -> tuple[str, str, int] | None:
         return None
     target = parsed.netloc or endpoint
     scheme = parsed.scheme.lower() if parsed.netloc else ""
-    match = _PLAIN_GRPC_TARGET.match(target)
+    match = _PLAIN_GRPC_TARGET.fullmatch(target)
     if match is None:
         return None
     host = _normalize_host(match.group(1))
@@ -844,6 +844,8 @@ def _known_future_agi_origins(grpc: bool) -> set[tuple[str, int]]:
 
 
 def _is_futureagi_host(host: str) -> bool:
+    """True for futureagi.com and its subdomains; one trailing dot is read as absent."""
+    host = host.lower().removesuffix(".")
     return host == "futureagi.com" or host.endswith(".futureagi.com")
 
 
@@ -1060,7 +1062,7 @@ def _is_loopback_host(host: str | None) -> bool:
 
     if not host:
         return False
-    host = host.strip("[]").lower()
+    host = host.strip("[]").lower().removesuffix(".")
     if host == "localhost" or host.endswith(".localhost"):
         return True
     try:
