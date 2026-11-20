@@ -15,7 +15,8 @@ final class OtlpJsonExporter implements SpanExporter {
     private final AutoConfig config;
     private volatile HttpClient client;
     volatile String lastExport = "not_tested (no startup network request)";
-    OtlpJsonExporter(AutoConfig config) {
+    OtlpJsonExporter(AutoConfig config) { this(config, Duration.ofSeconds(5)); }
+    OtlpJsonExporter(AutoConfig config, Duration waitLimit) {
         this.config = config;
         config.credentialValues.forEach(KnownSecrets.PROCESS::register);
     }

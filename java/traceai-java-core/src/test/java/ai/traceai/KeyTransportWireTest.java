@@ -124,7 +124,7 @@ class KeyTransportWireTest {
         assertThat(err.toString()).doesNotContain("FI_ALLOW_INSECURE_HTTP");
     }
 
-    @Test void anHttpsExportKeepsTheEnvironmentProxy() throws Exception {
+    @Test void anHttpsExportKeepsTheJdkProxySettings() throws Exception {
         List<String> connects = new CopyOnWriteArrayList<>();
         try (java.net.ServerSocket proxy = new java.net.ServerSocket(0, 5, InetAddress.getByName("127.0.0.1"))) {
             Thread acceptor = new Thread(() -> {

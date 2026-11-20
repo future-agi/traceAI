@@ -224,6 +224,8 @@ public final class AutoConfig {
         return line;
     }
     String get(String key) { return values.get(key); }
+    /** Refuses a target or ambient OTLP headers that may not receive the keys (nothing is checked yet). */
+    void checkKeyTransport() { }
     boolean flag(String key) { return "true".equalsIgnoreCase(get(key)); }
     boolean credentials() { return WireCore.truth(get("FI_API_KEY")) && WireCore.truth(get("FI_SECRET_KEY")); }
     boolean enabled(String name) {

@@ -29,6 +29,10 @@ final class KeyedOtlpSpanExporter implements SpanExporter {
     private final Map<String, String> headers = new LinkedHashMap<>();
 
     KeyedOtlpSpanExporter(KeyTransport.Target target, String apiKey, String secretKey, String projectName) {
+        this(target, apiKey, secretKey, projectName, Duration.ofSeconds(10));
+    }
+
+    KeyedOtlpSpanExporter(KeyTransport.Target target, String apiKey, String secretKey, String projectName, Duration waitLimit) {
         this.endpoint = target.endpoint("/tracer/v1/traces");
         this.client = KeyTransport.client(target, TIMEOUT);
         headers.put("X-Api-Key", apiKey);

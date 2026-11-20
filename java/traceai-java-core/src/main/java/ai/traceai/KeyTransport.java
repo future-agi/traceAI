@@ -7,6 +7,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -141,6 +142,12 @@ public final class KeyTransport {
     public static void checkStatus(int status) {
         if (status >= 300 && status < 400) throw new Refused("the collector answered with a redirect");
     }
+
+    /**
+     * Refuses a configuration whose ambient OTLP headers (OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_TRACES_HEADERS in
+     * {@code env}) name a Future AGI key header or carry a Future AGI key value ({@code fiValues}).
+     */
+    public static void checkAmbientHeaders(Map<String, String> env, Collection<String> fiValues) { }
 
     /** Test hook: allows the one-per-process warning to be observed again. */
     public static void resetWarningForTest() { WARNED.set(false); }

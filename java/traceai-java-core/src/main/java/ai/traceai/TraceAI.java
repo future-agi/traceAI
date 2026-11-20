@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
@@ -59,6 +60,10 @@ public final class TraceAI {
      * @throws IllegalArgumentException if config is null
      */
     public static void init(TraceConfig config) {
+        initWithEnvironment(config, System.getenv());
+    }
+
+    static void initWithEnvironment(TraceConfig config, Map<String, String> env) {
         if (config == null) {
             throw new IllegalArgumentException("TraceConfig cannot be null");
         }
@@ -75,7 +80,7 @@ public final class TraceAI {
             if (config.getBaseUrl() != null && config.getApiKey() != null) {
                 boolean complete = !config.getApiKey().isBlank() && config.getSecretKey() != null && !config.getSecretKey().isBlank();
                 if (complete) {
-                    exportTarget = KeyTransport.check(config.getBaseUrl(), true, System.getenv(), config.isAllowInsecureHttp());
+                    exportTarget = KeyTransport.check(config.getBaseUrl(), true, env, config.isAllowInsecureHttp());
                 } else {
                     logger.warn("TraceAI export is off: both the API key and the secret key are required");
                 }
