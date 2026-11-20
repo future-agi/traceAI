@@ -78,10 +78,11 @@ module TraceAI
       end
       def export(records, timeout: nil)
         return 1 if @shutdown
+        # The only gate for FI keys: decided on the written target before any key header exists, and before the
+        # target is parsed for anything else, so a URL that cannot be parsed is refused with the same warning.
+        KeyTransport.check(@endpoint, opt_in: @insecure_opt_in)
         url = Wire.parse_url(@endpoint)
         return 1 unless url && !url.path.match?(/[\r\n\0 ]/)
-        # The only gate for FI keys: decided on the written target before any key header exists.
-        KeyTransport.check(@endpoint, opt_in: @insecure_opt_in)
         socket_class = native_class('Socket') || load_socket
         return 1 unless socket_class
         # Use the application's already-loaded socket/TLS implementation. Even
@@ -102,7 +103,7 @@ module TraceAI
         socket = socket_class.tcp(url.host, url.port, connect_timeout: timeout)
         unless KeyTransport.peer_agrees?(KeyTransport.written_host(@endpoint), socket)
           socket.close
-          raise KeyTransport::Refused, 'connected peer is not loopback'
+          raise KeyTransport::Refused.new('connected peer is not loopback', reason: 'peer not loopback')
         end
         io = socket
         if tls_socket
@@ -140,7 +141,7 @@ module TraceAI
             wait_for(io, part, deadline)
           end
         end
-        raise KeyTransport::Refused, 'redirect answered a key-carrying send' if KeyTransport.refuses_redirect?(response)
+        raise KeyTransport::Refused.new('redirect answered a key-carrying send', reason: 'redirect') if KeyTransport.refuses_redirect?(response)
         response.match?(/\AHTTP\/1\.[01] 2\d\d(?: |\r)/) ? 0 : 1
       rescue KeyTransport::Refused => e
         KeyTransport.warn_refused(e); Auto.debug(e); 1
