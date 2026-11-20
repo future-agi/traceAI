@@ -246,6 +246,8 @@ public final class TraceAIAuto {
     static void warn(String text) { if (WARNED.compareAndSet(false, true)) System.err.println("[traceai-auto] " + text); }
     static void debug(String text) { if (config != null && config.flag("FI_AUTO_DEBUG")) System.err.println("[traceai-auto] " + text); }
     static boolean transportEnabled(String name) { return config != null && config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains(name); }
+    /** A tool-span integration is on once its library's first class is rewritten; the chat calls themselves stay wire-captured. */
+    static void toolIntegrationInstrumented(String name) { STATUS.put(name, config != null && config.enabled(name) ? "instrumented (execute_tool spans; chat calls through wire)" : "disabled"); }
     static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
     static void integrationFailed(String name) {
         STATUS.put(name, "failed");
