@@ -13,14 +13,18 @@ pip install traceAI-exa
 It accepts `exa-py>=2.25.0,<3` and is tested with `exa-py` 2.25.0 on Python
 3.10, 3.11, 3.12 and 3.13. The test suite also passes on `exa-py` 2.26.0.
 
-Live vendor verification (2026-10-17): a real run against `api.exa.ai` with
-`exa-py` 2.25.0 (`search`, `get_contents`, `answer`, both streams, `AsyncExa.search`
-and an invalid-key 401 recorded as ERROR) exported the expected spans to Future
-AGI, and `FI_HIDE_INPUTS=true` kept the query out of every stored column.
+## Configure and trace
 
-## Usage
+Set your Future AGI and Exa credentials in your application environment:
+
+```bash
+export FI_API_KEY="your-futureagi-api-key"
+export FI_SECRET_KEY="your-futureagi-secret-key"
+export EXA_API_KEY="your-exa-api-key"
+```
 
 ```python
+import os
 from exa_py import Exa
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
@@ -29,9 +33,15 @@ from traceai_exa import ExaInstrumentor
 tracer_provider = register(project_name="exa-search", project_type=ProjectType.OBSERVE)
 ExaInstrumentor().instrument(tracer_provider=tracer_provider)
 
-client = Exa(api_key="your-exa-api-key")
+client = Exa(api_key=os.environ["EXA_API_KEY"])
 client.search("recent retrieval research", num_results=5)
+tracer_provider.force_flush()
 ```
+
+Open the `exa-search` project in Future AGI's Observe view and select the
+`exa.search` span. By default, it shows the query, result count, duration,
+status, and cost when Exa reports one. Enable response previews below to
+inspect retrieved content.
 
 ## Instrumented calls
 
@@ -60,11 +70,57 @@ under it.
 | `exa.result_count` | successful calls | `results` for `search` and `get_contents`, `citations` for `answer`, and the citations summed over every chunk of a fully read stream. Absent when the count is unknown (an error or a cancellation), never 0 for unknown. |
 | `exa.cancelled` | cancelled calls and streams | `true`; see [Errors and cancellation](#errors-and-cancellation). |
 
-The spans never carry response content: no result titles, text, highlights or
-summaries, no answer or stream text, no cost, token count or model name. There
-is no setting that adds them. The Exa API key is never recorded; it is
-replaced by `[redacted]` wherever it appears verbatim in a recorded query, URL
-or error text.
+Response content is off by default. The instrumentor never invents a model
+name or token usage. The client's Exa key is replaced by `[redacted]` wherever
+it appears verbatim in recorded text.
+
+### Response previews
+
+Opt in to content capture when you first instrument the client:
+
+```python
+ExaInstrumentor().instrument(
+    tracer_provider=tracer_provider,
+    capture_outputs=True,
+    capture_urls=True,  # Optional: also include returned document URL fields.
+)
+```
+
+`output.value` is a JSON preview (`output.mime_type=application/json`):
+
+- `search`, `search_and_contents`, and `get_contents`: `results` containing
+  available titles, text, summaries, and highlights.
+- `answer`: answer text and `citations` containing available titles and text.
+  A structured answer is serialized into a bounded text preview.
+- Fully consumed streams: accumulated text in `answer` and returned `citations`.
+  A failed or cancelled stream does not export partial output.
+
+Previews include at most 20 documents or citations, 10 highlights per document,
+1 KiB of UTF-8 per document field or highlight, and 8 KiB of answer text. The
+entire JSON preview is capped at 16 KiB; trailing documents or answer text may
+be omitted to fit. `exa.output_truncated=true` marks a shortened preview.
+`exa.result_count` still describes the full response, and your returned objects
+and stream chunks are unchanged. Structured answers also have depth and item
+limits; previews are not a replacement for storing application results.
+
+Returned URL fields require both `capture_outputs=True` and `capture_urls=True`.
+Document IDs are not copied because Exa IDs can themselves contain URLs.
+`capture_urls` controls URL fields, not links embedded in captured text.
+
+`FI_HIDE_OUTPUTS=true` or `TraceConfig(hide_outputs=True)` overrides this opt-in
+and prevents response previews. `hide_output_text=True` also disables previews.
+`hide_inputs=True` suppresses URL fields and removes verbatim request echoes
+from captured output. `pii_redaction=True` applies before text is serialized.
+
+### Reported cost
+
+When Exa returns `cost_dollars.total`, `gen_ai.cost.total` records that amount
+in USD, independently of content capture. Available breakdowns use
+`exa.cost.search.neural`, `exa.cost.search.keyword`, `exa.cost.contents.text`,
+and `exa.cost.contents.summary`. These are vendor request charges, not inferred
+LLM input/output token costs. Only finite, non-negative numbers are recorded;
+a missing cost stays absent, while a reported zero stays zero. Streaming chunks
+do not expose cost metadata, so stream cost is absent.
 
 ### get_contents URLs
 
@@ -137,7 +193,9 @@ example `aclose = getattr(stream, "aclose", None)`.
 A missing API key raises `ValueError` in `Exa()` or `AsyncExa()` itself,
 before any traced method runs, so no span is recorded for it.
 
-`find_similar` and `find_similar_and_contents` are not traced.
+`find_similar` and `find_similar_and_contents` are deprecated upstream and
+are not traced. Use `client.search("pages similar to " + url)` instead; pass
+`contents={"text": True}` when you need page text.
 
 Do not use this package together with another instrumentor that wraps the same
 Exa client methods, or duplicate spans may result.
