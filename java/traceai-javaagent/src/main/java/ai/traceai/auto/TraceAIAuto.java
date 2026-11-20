@@ -246,6 +246,15 @@ public final class TraceAIAuto {
     static void warn(String text) { if (WARNED.compareAndSet(false, true)) System.err.println("[traceai-auto] " + text); }
     static void debug(String text) { if (config != null && config.flag("FI_AUTO_DEBUG")) System.err.println("[traceai-auto] " + text); }
     static boolean transportEnabled(String name) { return config != null && config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains(name); }
+    /** A tool-span integration is on once its library's first class is rewritten; the chat calls themselves stay wire-captured. */
+    static void toolIntegrationInstrumented(String name) {
+        if (config == null || !config.enabled(name)) { STATUS.put(name, "disabled"); return; }
+        String before = STATUS.get(name);
+        if (before != null && before.startsWith("instrumented")) return;
+        // Chat calls are covered only when wire capture is on; the manual-wrapper hint for chat spans stays.
+        STATUS.put(name, "instrumented (execute_tool spans" + (transportEnabled(name) ? "; chat calls through wire" : "") + ")"
+            + (before != null && before.startsWith("manual") ? "; chat spans: " + before : ""));
+    }
     static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
     static void integrationFailed(String name) {
         STATUS.put(name, "failed");
@@ -327,6 +336,8 @@ public final class TraceAIAuto {
         if (hidesContent(config) && RAW_KEYS.stream().anyMatch(raw -> key.equals(raw) || key.startsWith(raw + "."))) return true;
         if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
         if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
+        // The tool name identifies the span, as the span name does: it is not content, and every wrapper and Python keep it.
+        if (key.equals("gen_ai.tool.name")) return false;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
         boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
