@@ -1,0 +1,272 @@
+name: Compatibility canary
+
+# Cron becomes active only after a separate, authorized main rollout. A cron on
+# dev is dormant. Branch/PR self-tests use frozen discovery fixtures, not floating
+# vendor/registry discovery. No live provider calls or secrets are used.
+on:
+  schedule:
+    - cron: '17 3 * * 0-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Stable weekday or weekly boundaries and released artifacts
+        type: choice
+        options: [stable, weekly]
+        default: stable
+      exploratory_allowlist:
+        description: 'Weekly only: JSON of integration IDs to complete upstream specifier maps; default disabled'
+        type: string
+        default: '{}'
+      source_ref:
+        description: Source commit/ref to build (resolved once to immutable SHA)
+        type: string
+        default: dev
+      self_test:
+        description: Use frozen discovery fixtures, including real SDK installs
+        type: boolean
+        default: true
+  pull_request:
+    branches: [dev, main]
+    paths: ['.github/compat/**', '.github/workflows/compatibility-canary.yml']
+  push:
+    branches: ['ci/compat-*']
+    paths: ['.github/compat/**', '.github/workflows/compatibility-canary.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-canary-${{ github.event_name == 'schedule' && github.event.schedule || github.head_ref || github.ref_name }}-${{ inputs.mode || 'auto' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  PIP_NO_CACHE_DIR: '1'
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    if: github.event_name != 'schedule' || (github.ref_name == github.event.repository.default_branch && github.ref_name == 'main')
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'packaging==24.2' 'jsonschema==4.23.0' 'tomli==2.2.1' 'pytest==8.4.2'
+      - run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+      - name: Trusted canonical source for clean combined probes
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: canonical-source
+          persist-credentials: false
+      - name: Fixture and negative controls (no external calls)
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          combined=()
+          if [[ "$EVENT" == workflow_dispatch ]]; then combined=(--source-root "$PWD/canonical-source"); fi
+          python .github/compat/selftest.py "${combined[@]}"
+
+  plan:
+    needs: selftest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      matrix: ${{ steps.emit.outputs.matrix }}
+      source_sha: ${{ steps.emit.outputs.source_sha }}
+    steps:
+      - name: Canary implementation (immutable workflow commit)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: tools
+          persist-credentials: false
+      - name: Source to build (recorded independently)
+        if: github.run_attempt == 1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.event_name == 'schedule' && 'dev' || github.event.pull_request.head.sha || github.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        id: py310
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        id: py313
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        id: py311
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'packaging==24.2' 'jsonschema==4.23.0' 'tomli==2.2.1'
+      - name: Recover the original immutable plan on a retry
+        if: github.run_attempt > 1
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: compatibility-plan
+          path: plan
+      - name: Discover once, build development wheels, resolve complete locks
+        if: github.run_attempt == 1
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_SELF_TEST: ${{ inputs.self_test }}
+          EXPLORATORY_ALLOWLIST: ${{ inputs.exploratory_allowlist || '{}' }}
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PY310: ${{ steps.py310.outputs.python-path }}
+          PY311: ${{ steps.py311.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+        run: |
+          mode="${INPUT_MODE:-stable}"
+          if [[ "$EVENT" == schedule && $(date -u +%w) == 0 ]]; then mode=weekly; fi
+          fixture=(); self_test=()
+          if [[ "$EVENT" == push || "$EVENT" == pull_request || "$INPUT_SELF_TEST" == true ]]; then
+            fixture=(--fixtures "$PWD/tools/.github/compat/fixtures")
+            self_test=(--self-test)
+          fi
+          python -c 'import json,os,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"allowlist.json").write_text(json.dumps(json.loads(os.environ["EXPLORATORY_ALLOWLIST"])))'
+          python tools/.github/compat/discover.py --root "$PWD/source" --output "$RUNNER_TEMP/discovery.json" "${fixture[@]}"
+          python tools/.github/compat/plan.py --root "$PWD/source" --out "$PWD/plan" \
+            --discovery "$RUNNER_TEMP/discovery.json" --mode "$mode" "${self_test[@]}" --resolve \
+            --allowlist "$RUNNER_TEMP/allowlist.json" \
+            --python "3.10=$PY310" --python "3.11=$PY311" --python "3.13=$PY313"
+      - name: Preserve exact plan bytes, registry, discovery, wheels and full reports
+        if: github.run_attempt == 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-plan
+          path: plan/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Read bounded matrix from the frozen plan (also on retry)
+        id: emit
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'tools/.github/compat')
+          from plan import validate_plan
+          p = validate_plan(json.load(open('plan/compat-plan.json')))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('source_sha=' + p['source_sha'] + '\n')
+              f.write('matrix=' + json.dumps({'include': [{'case_id': c['case_id'], 'python': c['runtime_identity']['version'], 'non_blocking': c['non_blocking']} for c in p['cases']]}) + '\n')
+          PY
+
+  case:
+    needs: plan
+    name: Canary (${{ matrix.case_id }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    continue-on-error: ${{ matrix.non_blocking }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: tools
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install 'packaging==24.2' 'jsonschema==4.23.0' 'tomli==2.2.1'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: compatibility-plan
+          path: plan
+      - name: Preserve original case evidence on retry
+        if: github.run_attempt > 1
+        continue-on-error: true # Missing first upload is recorded as an automation failure.
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: compatibility-case-${{ matrix.case_id }}-attempt-1
+          path: previous
+      - name: Install filesystem and network sandbox
+        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+      - name: Offline hash-locked install and loopback-only real-SDK contract
+        env:
+          CASE_ID: ${{ matrix.case_id }}
+        run: |
+          retry=()
+          if [[ "$GITHUB_RUN_ATTEMPT" -gt 1 ]]; then retry=(--previous "$PWD/previous"); fi
+          python tools/.github/compat/run_case.py --root "$PWD/source" --plan-dir "$PWD/plan" \
+            --case-id "$CASE_ID" --out "$PWD/result" "${retry[@]}"
+      - name: Preserve every result, including resolution/install/namespace failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-case-${{ matrix.case_id }}-attempt-${{ github.run_attempt }}
+          path: result/
+          if-no-files-found: error
+          retention-days: 30
+          # Immutable: a killed retry cannot delete or replace attempt 1.
+
+  collect:
+    name: Compatibility results
+    if: always()
+    needs: [selftest, plan, case]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # Only the collector may read authoritative job-attempt metadata.
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'packaging==24.2' 'jsonschema==4.23.0' 'tomli==2.2.1'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: compatibility-plan
+          path: plan
+      - name: Download available case evidence (collector requires every planned ID)
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: compatibility-case-*
+          path: cases
+      - name: Trusted source contract from the original plan
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Reconcile every job attempt (including failures before artifact upload)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=all&per_page=100" > jobs.json
+      - name: Aggregate without dropping missing or failed cases
+        run: python .github/compat/collect_results.py --plan-dir "$PWD/plan" --artifacts "$PWD/cases" --out "$PWD/aggregate" --source-root "$PWD/source" --jobs "$PWD/jobs.json"
+      - name: Canonical results ABI for the separate, trusted reporter
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-results
+          path: aggregate/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: ${{ github.run_attempt > 1 }}
