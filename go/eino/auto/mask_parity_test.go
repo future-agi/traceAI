@@ -2,6 +2,10 @@ package auto
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,6 +15,8 @@ import (
 )
 
 // switches are the privacy switches, one at a time, as the two modules spell them.
+var noContentKeys []string
+
 var switches = []struct {
 	name string
 	eino traceaieino.TraceConfig
@@ -72,4 +78,47 @@ func TestAgentMaskHidesEverythingTheEinoMaskHides(t *testing.T) {
 		}
 	}
 	t.Log("\n" + table.String())
+}
+
+// Every attribute key constant go/eino declares is classified here as content-bearing (it is in contentKeys, so the
+// parity test above checks the agent's mask hides it wherever go/eino's does) or as carrying no content. A key
+// go/eino adds later fails this test until it is classified.
+func TestEveryEinoAttributeKeyIsClassified(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "../attributes.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classified := map[string]bool{}
+	for _, k := range contentKeys() {
+		classified[k] = true
+		// The base constants of indexed families (gen_ai.input.messages, retrieval.documents, ...) are prefixes of content keys.
+		for _, base := range []string{traceaieino.GenAIInputMessages, traceaieino.GenAIOutputMessages, traceaieino.RetrievalDocuments, traceaieino.GenAIToolDefinitions} {
+			if strings.HasPrefix(k, base+".") {
+				classified[base] = true
+			}
+		}
+	}
+	for _, k := range noContentKeys {
+		classified[k] = true
+	}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value := spec.(*ast.ValueSpec)
+			for i, name := range value.Names {
+				lit, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				key, _ := strconv.Unquote(lit.Value)
+				if !classified[key] {
+					t.Errorf("attributes.go: %s = %q is not classified in mask_parity_test.go", name.Name, key)
+				}
+			}
+		}
+	}
 }
