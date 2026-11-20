@@ -9,6 +9,10 @@ Welcome to the traceAI documentation. This guide covers installation, configurat
 - [Python Quickstart](getting-started/quickstart-python.md) - Get started with Python
 - [TypeScript Quickstart](getting-started/quickstart-typescript.md) - Get started with TypeScript
 
+### Zero-code tracing
+- [Overview](auto-tracing/README.md) - Trace an app's AI calls without changing its code, in every language
+- [Python](auto-tracing/python.md) · [Node.js and TypeScript](auto-tracing/node.md) · [Java](auto-tracing/java.md) · [Go](auto-tracing/go.md) · [.NET](auto-tracing/dotnet.md) · [Ruby](auto-tracing/ruby.md)
+
 ### Configuration
 - [TraceConfig](configuration/trace-config.md) - Privacy and data redaction settings
 - [Environment Variables](configuration/environment-variables.md) - All configuration options
