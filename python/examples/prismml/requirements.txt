@@ -1,4 +1,4 @@
-# Installation pins; see README for source verification and the SDK floor.
-openai==3.24.0
-traceAI-openai==0.1.10
-fi-instrumentation-otel==1.1.0
+# Published dependencies for the local Bonsai server recipe.
+openai==3.42.1
+traceAI-openai==0.1.12
+fi-instrumentation-otel==1.2.2
