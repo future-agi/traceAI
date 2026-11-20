@@ -132,10 +132,6 @@ public class HostingStartupPlanTests
             Assert.Equal(expected, WithFile(toml, file => new AutoConfig(new AutoOptions { ConfigFile = file }).Get(key), (variable, blank), ("FI_API_KEY", "k"), ("FI_SECRET_KEY", "s")));
     }
 
-    [Fact]
-    public void ABlankEnvironmentValueWithNoFileFallsBackToTheDefault() =>
-        Assert.Equal(FIInstrumentation.Settings.DefaultBaseUrl, WithFile("", file => new AutoConfig(new AutoOptions { ConfigFile = file }).Get("BASE_URL"), ("FI_BASE_URL", "  ")));
-
     [Theory]
     [InlineData("false")]
     [InlineData("'false'")]

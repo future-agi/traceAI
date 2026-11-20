@@ -78,6 +78,7 @@ public static class TraceAIAuto
                 }
                 else if(!config.Disabled) Warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required for the default collector; no exporter or provider was supplied, so auto-instrumentation is disabled.");
             }
+            catch(BlankBaseUrlException) { s_failed=true; Warn("base-url-blank","FI_BASE_URL is set but empty; the agent did not start and no traces are sent. Unset it or give it a URL."); }
             catch { s_failed=true; Warn("init", "Agent initialization failed; application continues without tracing."); }
         }
     }

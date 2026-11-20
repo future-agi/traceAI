@@ -13,7 +13,7 @@ application needs only its own runtime.
 Prompt and response content is recorded by default in ASP.NET Core hosts that use `Microsoft.Extensions.AI` or
 `Microsoft.Agents.AI`, as in every other traceAI language. The libraries' switch that does this puts content on their spans for
 every listener in the application, so other OpenTelemetry listeners and exporters in the app receive it unscrubbed; the agent
-prints one line at startup saying so. Set `FI_AUTO_CAPTURE_CONTENT=false` to keep content off, or set any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true` (or supply a `TraceConfig` with any of those hides). A blank `FI_*` environment value counts as not set, so it never overrides the config file.
+prints one line when it first turns the switch on for a service it keeps (factory and type registrations print it on first resolve). Set `FI_AUTO_CAPTURE_CONTENT=false` to keep content off, or set any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true` (or supply a `TraceConfig` with any of those hides; a supplied `TraceConfig` is used instead of the variables). A blank `FI_*` environment value is read per key, as the table under Configuration lists.
 
 ### Option 1: install the NuGet package
 
@@ -154,8 +154,8 @@ Precedence is **code > environment > file > defaults**. The config file is
 `./futureagi.toml`, or `FI_CONFIG_FILE`/`AutoOptions.ConfigFile`. The supported flat
 TOML subset is double-quoted strings, booleans, numbers and single-line arrays of
 strings. Comments outside strings and table-heading lines are ignored; this is not a
-full TOML parser. Malformed lines are ignored, with one exception: a `hide_*` line
-is always read (see the hide switches below). Keep credentials out of committed files.
+full TOML parser. Malformed lines are ignored, with two exceptions: a `hide_*` line
+and an `auto_capture_content` line are always read (see the hide switches below). Keep credentials out of committed files.
 `FI_API_KEY` and `FI_SECRET_KEY` resolve as one atomic pair: explicit arguments,
 then environment, then file. An incomplete or blank pair is ignored as a whole
 with one warning naming the source and missing half; halves never mix across sources.
@@ -185,6 +185,24 @@ debug = false
 | `FI_SAMPLE_RATE` | When set, `ParentBased(TraceIdRatio(rate))`, clamped to 0–1; otherwise standard OTel sampler configuration below. It never changes the application's own sampler. |
 | `FI_AUTO_DEBUG` | `false`; print masked configuration/integration diagnostics at startup. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent entirely, without missing-key warnings. |
+
+A blank (empty or whitespace) environment value counts as not set, so the config file's value or the default applies, except where that
+would be the less cautious reading. What a blank value means for each key:
+
+| Key | A blank value means |
+| --- | --- |
+| `FI_BASE_URL` | The agent does not start, even when the file sets `base_url` or the default would apply: it prints one line that names `FI_BASE_URL` and says traces are off, and the application keeps running untraced. Does not apply when `AutoOptions.BaseUrl`, `Exporter` or `Provider` is supplied. |
+| `FI_CONFIG_FILE` | No config file is read, not even `./futureagi.toml`. When it is unset, `./futureagi.toml` is read. |
+| `FI_WIRE_CAPTURE` | Off, even when the file sets `wire_capture = true`. |
+| `FI_API_KEY`, `FI_SECRET_KEY` | Not set for the environment: the file's pair is used. An incomplete pair is ignored with one warning. |
+| `FI_PROJECT_NAME`, `FI_PROJECT_TYPE`, `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | Not set: the file's value, then the default. |
+| `FI_EVAL_TAGS`, `FI_METADATA` | Not set: the file's value, then the default (`[]`, `{}`). |
+| `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Not set: the file's list, then the default (all integrations, none disabled). |
+| `FI_WIRE_MAX_BODY_BYTES` | Not set: the file's value, then `4194304`. |
+| `FI_SAMPLE_RATE` | Not set: the file's `sample_rate`, otherwise `OTEL_TRACES_SAMPLER` applies. |
+| `FI_AUTO_DEBUG` | Not set: the file's `debug` decides. |
+| `FI_AUTO_CAPTURE_CONTENT` | Not set: the file's `auto_capture_content`, otherwise content is recorded. |
+| `FI_HIDE_*` | Not set: the file's value, otherwise the content is not hidden. |
 
 An explicit `AutoOptions.SampleRate`, `FI_SAMPLE_RATE`, or file `sample_rate`
 keeps parent-based ratio sampling and wins over `OTEL_TRACES_SAMPLER`; existing
@@ -411,7 +429,7 @@ runtime and OpenTelemetry members the agent uses are resolved once; at start the
 agent prints one warning naming any that are missing. An unrecognized layout omits
 telemetry rather than reverting to the unsafe shared Activity. These privacy rules
 apply to the agent's exporter, not an application's separately configured exporters.
-In ASP.NET Core hosts the agent turns the libraries' sensitive-content diagnostics on by default, so prompt and response content is recorded like in every other traceAI language (see Web hosts below). `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, keeps that capture off.
+In ASP.NET Core hosts the agent turns the libraries' sensitive-content diagnostics on by default, so prompt and response content is recorded like in every other traceAI language (see Web hosts below). `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, keeps that capture off, as does a supplied `TraceConfig` with any of those hides (a supplied `TraceConfig` is used instead of the variables).
 
 ## Library layer and transactions
 
@@ -463,7 +481,7 @@ replacing it). Just before the host builds its container, that assembly wraps ev
 
 - A registration whose instance already carries the wrapper (the application called `UseOpenTelemetry()`) is left as it is, so each call produces one span.
 - It is off when the agent is not running (`OTEL_SDK_DISABLED`, missing credentials) and per kind when `extensions_ai` or `agents` is disabled (`FI_DISABLED_INSTRUMENTATIONS`, or left out of `FI_INSTRUMENTATIONS`).
-- Prompt and response content is recorded by default, like in every other traceAI language. The libraries' sensitive-content switch (`EnableSensitiveData`) puts content on the span for every listener the application has, not only this agent, so an application's other listeners or exporters on `Experimental.Microsoft.Extensions.AI` and `Experimental.Microsoft.Agents.AI` receive the content too, unscrubbed. When the agent turns the switch on it prints one line at startup saying so. Set `FI_AUTO_CAPTURE_CONTENT=false` (or `0`, `no`, `off`) to leave it off. The startup never switches it on against the standard `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` when it is set to anything but `true` (`false`, `False`, `0`). Setting any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` to `true` keeps it off too, and a `TraceConfig` supplied to the agent is used instead of the hide variables. The agent's own privacy rules (the hide settings and known-secret scrubbing) still apply to what it exports.
+- Prompt and response content is recorded by default, like in every other traceAI language. The libraries' sensitive-content switch (`EnableSensitiveData`) puts content on the span for every listener the application has, not only this agent, so an application's other listeners or exporters on `Experimental.Microsoft.Extensions.AI` and `Experimental.Microsoft.Agents.AI` receive the content too, unscrubbed. When the agent first turns the switch on for a service it keeps it prints one line saying so (factory and type registrations print it on first resolve). Set `FI_AUTO_CAPTURE_CONTENT=false` (or `0`, `no`, `off`) to leave it off. The startup never switches it on against the standard `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` when it is set to anything but `true` (`false`, `False`, `0`). Setting any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` to `true` keeps it off too, and a `TraceConfig` supplied to the agent is used instead of the hide variables. The agent's own privacy rules (the hide settings and known-secret scrubbing) still apply to what it exports.
 - The integration status reads `instrumented` with `auto (web host)` once a registered service was wrapped by this startup, and `manual` otherwise, including when the application's own `UseOpenTelemetry()` wrapper is the one tracing.
 - Registrations of open generic types and keyed services are left as registered. An instance the application registers stays the application's to dispose. A type registration (`AddSingleton<IChatClient, MyChat>()`, `AddScoped<AIAgent, MyAgent>()`) becomes a factory with the same lifetime: it builds `MyChat` with `ActivatorUtilities` constructor rules (mark the intended constructor with `[ActivatorUtilitiesConstructor]`), wraps it, and returns a small object the container owns. When the container (or scope) is disposed that object releases the wrapper and `MyChat` exactly once: `DisposeAsync` when `MyChat` is `IAsyncDisposable` and the container is disposed asynchronously, otherwise `Dispose`. This is done by the hook itself because the library's agent wrapper (`OpenTelemetryAgent`) does not dispose the agent it wraps. No descriptor is added and no keyed service is used, so it works on any DI container; your own registrations of `MyChat` are neither used nor changed and `MyChat` does not become resolvable. The container no longer validates that constructor at build time; an unsatisfiable constructor fails when the service is first resolved. A factory registration (`AddSingleton<AIAgent>(sp => new MyAgent(...))`) takes the same path. An `IAsyncDisposable`-only implementation disposed synchronously is released by blocking on `DisposeAsync` (run on the thread pool, so it never captures a synchronization context). A host without dynamic code support leaves these registrations untraced. If the hook cannot build its ownership object for a registration, that registration is built as registered and is not traced (`FI_AUTO_DEBUG=true` prints a `left a registration untraced` line).
 - The startup adds the assembly to `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` in the process environment, so child processes the application starts inherit it. An ASP.NET Core child process that runs without the hook cannot find the assembly and logs a hosting-startup load error; start such children with the variable removed.

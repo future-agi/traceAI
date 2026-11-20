@@ -5,6 +5,12 @@ using System.Diagnostics;
 
 namespace TraceAI.AutoInstrumentation;
 
+/// <summary>FI_BASE_URL is set but blank: the agent does not start.</summary>
+internal sealed class BlankBaseUrlException : ArgumentException
+{
+    internal BlankBaseUrlException() : base("FI_BASE_URL is set but empty") { }
+}
+
 /// <summary>Unset values inherit environment, then futureagi.toml, then defaults.</summary>
 public sealed class AutoOptions
 {
@@ -51,16 +57,24 @@ internal sealed class AutoConfig
     internal AutoConfig(AutoOptions options)
     {
         Options = options;
-        var envConfigFile=Environment.GetEnvironmentVariable("FI_CONFIG_FILE");
-        Values = ReadFile(options.ConfigFile ?? (string.IsNullOrWhiteSpace(envConfigFile)?null:envConfigFile) ?? Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
+        // A blank FI_CONFIG_FILE names no file, so none is read; only an unset one falls back to ./futureagi.toml.
+        Values = ReadFile(options.ConfigFile ?? Environment.GetEnvironmentVariable("FI_CONFIG_FILE") ?? Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
         var fileApi=Values.GetValueOrDefault("FI_API_KEY"); var fileSecret=Values.GetValueOrDefault("FI_SECRET_KEY");
+        bool blankBaseUrl=false;
         foreach (System.Collections.DictionaryEntry pair in Environment.GetEnvironmentVariables())
             if (pair.Key is string key && (key.StartsWith("FI_") || key == "OTEL_SDK_DISABLED"))
             {
                 var value = pair.Value?.ToString() ?? "";
-                // A blank value is not set for any FI_* key (templated environments often export an empty variable), so it
-                // never replaces the file's value; the file or the default applies.
-                if (key.StartsWith("FI_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value)) continue;
+                // A blank value counts as not set, so the file's value or the default applies, except where not set is not the
+                // cautious reading: a blank FI_CONFIG_FILE stays blank (no file is read) and a blank FI_WIRE_CAPTURE is off.
+                // A blank FI_BASE_URL is checked below, once the explicit options are known.
+                if (key.StartsWith("FI_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value))
+                {
+                    if (key == "FI_CONFIG_FILE") Values[key] = "";
+                    else if (key == "FI_WIRE_CAPTURE") Values[key] = "false";
+                    else if (key == "FI_BASE_URL") blankBaseUrl = true;
+                    continue;
+                }
                 Values[key] = value;
             }
         Set("CONFIG_FILE",options.ConfigFile); Values.TryAdd("FI_CONFIG_FILE",Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
@@ -89,6 +103,9 @@ internal sealed class AutoConfig
         Set("DISABLED_INSTRUMENTATIONS",options.DisabledInstrumentations == null ? null : string.Join(',',options.DisabledInstrumentations));
         Set("WIRE_CAPTURE",options.WireCapture?.ToString()); Set("WIRE_MAX_BODY_BYTES",options.WireMaxBodyBytes?.ToString(CultureInfo.InvariantCulture));
         Set("SAMPLE_RATE",options.SampleRate?.ToString(CultureInfo.InvariantCulture)); Set("AUTO_DEBUG",options.Debug?.ToString());
+        // A blank FI_BASE_URL stops the agent, whatever the file or the default says: the collector it names is unknown.
+        // It does not apply when the caller gave the URL, or supplied the exporter or provider that sends the spans.
+        if(blankBaseUrl && options.BaseUrl==null && options.Exporter==null && options.Provider==null && !Disabled) throw new BlankBaseUrlException();
         Values.TryAdd("FI_BASE_URL",FIInstrumentation.Settings.DefaultBaseUrl);
         Values.TryAdd("FI_PROJECT_NAME",DefaultProjectName());
         Values.TryAdd("FI_PROJECT_VERSION_NAME",FIInstrumentation.Settings.DefaultProjectVersionName);
@@ -114,7 +131,7 @@ internal sealed class AutoConfig
     private void Set(string key,string? value) { if(value!=null) Values["FI_"+key]=value; }
     internal string Get(string key) => Values.GetValueOrDefault("FI_"+key)??"";
     /// <summary>Switches other than the hide switches (FI_WIRE_CAPTURE, FI_AUTO_DEBUG): true,
-    /// 1 or yes is on, trimmed and case-insensitive; anything else is off.</summary>
+    /// 1 or yes is on, trimmed and case-insensitive; anything else, including a blank FI_WIRE_CAPTURE, is off.</summary>
     internal bool Bool(string key) => Get(key).Trim().ToLowerInvariant() is "true" or "1" or "yes";
     /// <summary>FI_AUTO_CAPTURE_CONTENT: on when unset or blank, and for true, 1, yes or on; off for false, 0, no or off.
     /// Any other value is off, the cautious reading of a switch someone set, reported with one warning that names only the setting.</summary>
