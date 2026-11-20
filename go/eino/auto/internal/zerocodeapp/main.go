@@ -38,6 +38,7 @@ func main() {
 // application's own global SDK provider exporting to APP_COLLECTOR; "manual"
 // does that and also registers traceaieino.NewHandler() itself.
 func run(ctx context.Context) error {
+	var manual *traceaieino.Handler
 	mode := os.Getenv("APP_MODE")
 	if mode == "ownprovider" || mode == "manual" {
 		exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(os.Getenv("APP_COLLECTOR")+"/v1/traces"))
@@ -49,7 +50,8 @@ func run(ctx context.Context) error {
 		defer tp.Shutdown(ctx)
 	}
 	if mode == "manual" {
-		callbacks.AppendGlobalHandlers(traceaieino.NewHandler())
+		manual = traceaieino.NewHandler()
+		callbacks.AppendGlobalHandlers(manual)
 	}
 	chat, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{APIKey: "sk-model-key-0003", BaseURL: os.Getenv("OPENAI_BASE_URL"), Model: "gpt-test-1", Timeout: time.Minute})
 	if err != nil {
@@ -89,5 +91,8 @@ func run(ctx context.Context) error {
 	// Go has no exit hook: flush what the agent queued.
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	if manual != nil {
+		_ = manual.Shutdown(sctx) // finishes an agent's span, in the background
+	}
 	return auto.Shutdown(sctx)
 }

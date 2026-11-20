@@ -91,6 +91,43 @@ jobs:
           go vet ./...
           go test -race -count=1 ./...
 
+  eino-auto-import:
+    name: eino/auto / one-import Eino tracing
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # A separate module: go/auto and go/eino never require each other. It
+        # resolves both from this working tree until they are released.
+        working-directory: go/eino/auto
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/eino/auto/go.sum
+      - name: Check tidy
+        run: go mod tidy -diff
+      - name: Vet and race tests through the blank import
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: A program that imports only go/auto downloads no Eino
+        run: |
+          dir="$RUNNER_TEMP/auto-only"
+          mkdir -p "$dir"
+          cd "$dir"
+          printf 'package main\n\nimport _ "github.com/future-agi/traceAI/go/auto"\n\nfunc main() {}\n' > main.go
+          go mod init example.com/auto-only
+          go mod edit -require=github.com/future-agi/traceAI/go/auto@v0.0.0 -replace=github.com/future-agi/traceAI/go/auto="$GITHUB_WORKSPACE/go/auto"
+          go mod tidy
+          ! go list -m all | grep -i cloudwego
+          ! grep -i cloudwego go.sum
+
   auto-opentelemetry-latest:
     name: auto / span limits on the latest OpenTelemetry SDK
     runs-on: ubuntu-latest

@@ -75,6 +75,25 @@ var (
 // callbacks.AppendGlobalHandlers (once per process) or to a run's
 // compose.WithCallbacks / adk.WithCallbacks option.
 func NewHandler(opts ...Option) *Handler {
+	manualHandlers.Add(1)
+	return newHandler(opts...)
+}
+
+// manualHandlers counts the handlers an application built itself.
+var manualHandlers atomic.Int64
+
+// ManualHandlers returns how many handlers [NewHandler] has returned in this
+// process. The github.com/future-agi/traceAI/go/eino/auto package, which
+// registers a handler from a blank import, stops starting spans once an
+// application builds its own, so a program that does both gets each span once.
+func ManualHandlers() int { return int(manualHandlers.Load()) }
+
+// NewDefaultHandler is [NewHandler] for a handler that a package registers on
+// the application's behalf (the go/eino/auto blank import): it is not counted
+// by [ManualHandlers]. Applications call [NewHandler].
+func NewDefaultHandler(opts ...Option) *Handler { return newHandler(opts...) }
+
+func newHandler(opts ...Option) *Handler {
 	c := &config{}
 	for _, o := range opts {
 		o(c)

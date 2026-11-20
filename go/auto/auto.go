@@ -373,6 +373,7 @@ func (s *agentState) shutdown(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	s.once.Do(func() {
+		runShutdownHooks(ctx)
 		s.active.Store(false)
 		s.registration.active.Store(false)
 		agent.Lock()

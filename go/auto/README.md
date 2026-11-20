@@ -66,11 +66,27 @@ to your provider, its wire spans, with their captured content, also go to that
 provider's own exporters. `FI_HIDE_*` applies to both copies; known-secret
 replacement applies only to the copy sent to Future AGI.
 
-**traceAI module spans need an SDK tracer provider.** The modules (for example
-`traceaieino` or `traceailangchaingo`) use the global tracer provider unless you
+**Eino needs one more import, and no provider.** For an Eino program, import
+the Eino blank-import package; it links this agent and registers the Eino
+handler for you:
+
+```go
+import _ "github.com/future-agi/traceAI/go/eino/auto"
+```
+
+```sh
+go get github.com/future-agi/traceAI/go/eino/auto@latest
+```
+
+Eino agent, chain, tool and model spans then reach Future AGI through the
+agent's route, with or without a tracer provider of your own, and `Report()`
+shows `eino` as **auto**. Programs that do not import it never download Eino.
+
+**Other traceAI module spans need an SDK tracer provider.** The other modules
+(for example `traceailangchaingo`) use the global tracer provider unless you
 pass them one, and their spans reach Future AGI only through an SDK tracer
 provider the agent attaches to. With only the import and no provider of your
-own, module spans go nowhere. Install one as the global provider before the
+own, their spans go nowhere. Install one as the global provider before the
 first AI call, or pass it to `auto.Init` with `auto.WithTracerProvider(tp)` (and
 to each module's own `WithTracerProvider` option):
 
@@ -298,7 +314,7 @@ can supply a complete profile pair through the environment.
 | `FI_PROJECT_TYPE` | `observe` | `observe` or `experiment`; no experiment registration/startup request |
 | `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | `DEFAULT_PROJECT_VERSION_NAME` / generated UUID | Project resource keys |
 | `FI_SAMPLE_RATE` | unset (fallback `1`) | Explicit parent-based root ratio; overrides the OTEL sampler only for an agent-owned provider |
-| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of `wire`, `openai`, `anthropic`, `genai`, `eino`, `a2a`, `bedrock`, `langchaingo`, `lambda` |
+| `FI_INSTRUMENTATIONS` | all | Comma-separated allowlist of `wire`, `openai`, `anthropic`, `genai`, `eino`, `a2a`, `bedrock`, `langchaingo`, `lambda`. Without `eino`, the `go/eino/auto` import records nothing |
 | `FI_DISABLED_INSTRUMENTATIONS` | none | Comma-separated denylist; `wire` disables all transport capture |
 | `FI_WIRE_CAPTURE` | `true` | Wire-layer switch; `false` also keeps `http.DefaultTransport` an `*http.Transport` |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304` | Per-direction text/JSON capture cap; over-limit spans survive with `traceai.wire.truncated=true` |
@@ -495,7 +511,8 @@ traceAI library span marked `gen_ai.span.kind` suppresses the wire span, includi
 through intermediate native SDK spans tracked by the agent's processor.
 
 Go cannot monkey-patch libraries. `Report()` labels dedicated instrumentations
-**manual**, with these exact one-line integrations (install/import each
+**manual**, except one whose blank-import package is linked (Eino): that one is
+**auto**. These are the exact one-line integrations (install/import each
 corresponding `github.com/future-agi/traceAI/go/<module>` separately). Their
 spans reach Future AGI only through an SDK tracer provider the agent attaches
 to: install one as the global provider before the first AI call, or pass it to
@@ -508,13 +525,13 @@ go nowhere.
 | `openai` | `option.WithMiddleware(traceaiopenai.Middleware())` |
 | `anthropic` | `option.WithMiddleware(traceaianthropic.Middleware())` |
 | `genai` | `genai.ClientConfig{HTTPClient: traceaigenai.NewHTTPClient()}` |
-| `eino` | `callbacks.AppendGlobalHandlers(traceaieino.NewHandler())` |
+| `eino` | `import _ "github.com/future-agi/traceAI/go/eino/auto"` (reported **auto**), or manually `callbacks.AppendGlobalHandlers(traceaieino.NewHandler())` |
 | `a2a` | `a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor())` |
 | `bedrock` | `traceaibedrock.NewClient(bedrockruntimeClient)` |
 | `langchaingo` | `openai.WithCallback(traceailangchaingo.NewHandler())` |
 | `lambda` | `lambda.StartHandler(traceailambda.WrapHandler(handler, provider))` |
 
-Eino agent/chain/tool steps, LangChainGo chain, tool and retriever steps, A2A
+Eino agent/chain/tool steps need `go/eino/auto` (or the manual handler), LangChainGo chain, tool and retriever steps, A2A
 RPCs and Lambda invocations need their manual instrumentors;
 wire coverage fills only their underlying model HTTP calls. `Installed` uses
 Go build info, not runtime package discovery. A standalone doctor binary cannot

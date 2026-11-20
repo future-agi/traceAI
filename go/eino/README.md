@@ -34,6 +34,28 @@ go get github.com/future-agi/traceAI/go/eino@latest
 
 ## Use
 
+**Zero code.** One blank import traces every Eino graph, chain, tool, model and agent run, with no tracer
+provider and no handler registration of your own. It links the zero-code agent
+([`go/auto`](../auto/README.md)) and registers the handler at start-up:
+
+```go
+import _ "github.com/future-agi/traceAI/go/eino/auto"
+```
+
+```sh
+go get github.com/future-agi/traceAI/go/eino/auto@latest
+export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service
+```
+
+Spans leave through the agent's route: your global SDK tracer provider if you install one (your exporters
+get them too), else the agent's private provider. `FI_INSTRUMENTATIONS` without `eino` and
+`OTEL_SDK_DISABLED=true` record nothing; the `FI_HIDE_*` switches and known-secret replacement apply.
+If you also register `traceaieino.NewHandler()` yourself, the import steps aside and you get each span once.
+Call `auto.Shutdown(ctx)` before `main` returns. Only programs that import `go/eino/auto` download
+`go/auto`; `go/eino` itself and `go/auto` stay free of each other.
+
+**Manual.** To choose the provider and options yourself:
+
 ```go
 // tp is an *sdktrace.TracerProvider that exports to Future AGI (see below).
 h := traceaieino.NewHandler(traceaieino.WithTracerProvider(tp))
