@@ -266,6 +266,11 @@ public final class TraceAIAuto {
     }
     /** Test hook: whether this JVM has an installed exporter runtime. */
     static boolean runtimeInstalled() { return RUNTIME.get() != null; }
+    /** Test hook: closes the runtime and forgets every start, so the next start begins as in a new JVM (installed transformers stay). */
+    static synchronized void resetForTest() {
+        shutdown(java.time.Duration.ofSeconds(5));
+        RUNTIME.set(null); initialized = false; REPEATED.set(false); WARNED.set(false); STATUS.clear(); config = null;
+    }
     /** Test hook: one status entry of the doctor report. */
     static String statusOf(String key) { return STATUS.get(key); }
     static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }

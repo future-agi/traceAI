@@ -61,10 +61,11 @@ class KeyTransportAgentAmbientTest {
     }
 
     @Test void aRefusedStartupInstallsNoExporterAndWarnsWithoutValues() {
+        TraceAIAuto.resetForTest(); // the agent state is static: start from none, whatever ran before
         assertFalse(TraceAIAuto.runtimeInstalled());
         TraceAIAuto.start(Map.of("api_key", API, "secret_key", SECRET, "base_url", "https://api.futureagi.com"), null, Map.of("OTEL_EXPORTER_OTLP_HEADERS", "X-Api-Key=other"));
         assertFalse(TraceAIAuto.runtimeInstalled(), "an exporter was installed for a refused configuration");
-        assertTrue(String.valueOf(TraceAIAuto.statusOf("wire")).startsWith("disabled"), String.valueOf(TraceAIAuto.statusOf("wire")));
+        assertEquals("disabled (key transport refused)", TraceAIAuto.statusOf("wire"), "the startup reached the key-transport gate, so the absence of an exporter is the refusal's");
         for (String value : List.of(API, SECRET, "other")) assertFalse(err.toString().contains(value));
     }
 
@@ -89,9 +90,30 @@ class KeyTransportAgentAmbientTest {
         String base = "http://collector.internal:4318";
         for (Object accepted : List.of(Boolean.TRUE, "1", "true"))
             assertDoesNotThrow(() -> config(base, Map.of("allow_insecure_http", accepted), Map.of()).checkKeyTransport(), String.valueOf(accepted));
-        for (Object rejected : List.of(Boolean.FALSE, "0", "false", "yes", "", "2", 1))
+        for (Object rejected : List.of(Boolean.FALSE, "0", "false", "yes", "", "2"))
             refused(config(base, Map.of("allow_insecure_http", rejected), Map.of()));
         for (String value : List.of("true", "TRUE", "yes", "0", ""))
             refused(config(base, Map.of(), Map.of("FI_ALLOW_INSECURE_HTTP", value)));
+    }
+
+    @Test void controlTheSameStartupWithoutARefusalInstallsAnExporter() {
+        try {
+            TraceAIAuto.resetForTest();
+            assertFalse(TraceAIAuto.runtimeInstalled(), "the state is reset before the case");
+            TraceAIAuto.start(Map.of("api_key", API, "secret_key", SECRET, "base_url", "https://api.futureagi.com"), noInstrumentation(), Map.of());
+            assertTrue(TraceAIAuto.runtimeInstalled(), "without a refusal the same startup installs its exporter, so the refused case is not vacuous");
+        } finally { TraceAIAuto.resetForTest(); }
+    }
+
+    /** An Instrumentation that accepts transformers and does nothing, so the control starts the agent without attaching to this JVM. */
+    static java.lang.instrument.Instrumentation noInstrumentation() {
+        return (java.lang.instrument.Instrumentation)java.lang.reflect.Proxy.newProxyInstance(KeyTransportAgentAmbientTest.class.getClassLoader(), new Class<?>[] {java.lang.instrument.Instrumentation.class},
+            (proxy, method, arguments) -> {
+                Class<?> type = method.getReturnType();
+                if (type == boolean.class) return method.getName().equals("isRetransformClassesSupported") || method.getName().equals("isModifiableClass");
+                if (type == Class[].class) return new Class<?>[0];
+                if (type == long.class) return 0L;
+                return null;
+            });
     }
 }

@@ -77,7 +77,7 @@ public final class TraceAI {
             // Keys leave only for an approved target and only as a complete pair; this refuses
             // before any state is created.
             KeyTransport.Target exportTarget = null;
-            if (config.getBaseUrl() != null && config.getApiKey() != null) {
+            if (config.isExportEnabled() && config.getBaseUrl() != null && config.getApiKey() != null) {
                 boolean complete = !config.getApiKey().isBlank() && config.getSecretKey() != null && !config.getSecretKey().isBlank();
                 if (complete) {
                     exportTarget = KeyTransport.check(config.getBaseUrl(), true, env, config.isAllowInsecureHttp());

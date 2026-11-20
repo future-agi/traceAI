@@ -61,6 +61,7 @@ public class TraceAIAutoConfiguration {
         } catch (KeyTransport.Refused refused) {
             if (properties.isFailOnRefusedTransport()) throw refused;
             logger.warn("TraceAI export is disabled: {}", refused.getMessage());
+            // A configuration that cannot read the base URL or the keys from the environment and creates no exporter: nothing is sent anywhere.
             TraceAI.init(configuration(properties, serviceName, false));
         }
 
@@ -71,6 +72,7 @@ public class TraceAIAutoConfiguration {
 
     private static TraceConfig configuration(TraceAIProperties properties, String serviceName, boolean export) {
         return TraceConfig.builder()
+            .exportEnabled(export)
             .baseUrl(export ? properties.getBaseUrl() : null)
             .apiKey(export ? properties.getApiKey() : null)
             .secretKey(export ? properties.getSecretKey() : null)

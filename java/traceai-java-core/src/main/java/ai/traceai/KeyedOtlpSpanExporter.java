@@ -55,14 +55,17 @@ final class KeyedOtlpSpanExporter implements SpanExporter {
                 .header("Content-Type", "application/x-protobuf").POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()));
             headers.forEach(request::header);
             client.sendAsync(request.build(), HttpResponse.BodyHandlers.discarding()).whenComplete((response, failure) -> {
+                // The send ends before its result completes: a callback of the result may call shutdown() and must not wait for this send.
+                boolean ok = false;
                 try {
-                    if (failure != null) { logger.warn("TraceAI export failed"); result.fail(); return; }
-                    int status = response.statusCode();
-                    try { KeyTransport.checkStatus(status); }
-                    catch (KeyTransport.Refused redirect) { logger.warn("TraceAI export refused a redirect"); result.fail(); return; }
-                    if (status >= 200 && status < 300) result.succeed();
-                    else { logger.warn("TraceAI export rejected (HTTP {})", status); result.fail(); }
+                    if (failure != null) logger.warn("TraceAI export failed");
+                    else {
+                        int status = response.statusCode();
+                        try { KeyTransport.checkStatus(status); ok = status >= 200 && status < 300; if (!ok) logger.warn("TraceAI export rejected (HTTP {})", status); }
+                        catch (KeyTransport.Refused redirect) { logger.warn("TraceAI export refused a redirect"); }
+                    }
                 } finally { sends.end(); }
+                if (ok) result.succeed(); else result.fail();
             });
         } catch (Throwable failure) {
             sends.end();

@@ -101,7 +101,7 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_API_KEY`, `FI_SECRET_KEY` | Required as a pair; without them the agent stays off. |
 | `FI_PROFILE` | `default`; selects `[profiles.<name>]` in fi profile files. |
 | `FI_BASE_URL` | `https://api.futureagi.com`; spans are sent to `/tracer/v1/traces` as OTLP/HTTP JSON. |
-| `FI_ALLOW_INSECURE_HTTP` | Set to `1` to allow plaintext `http://` to a host other than literal loopback or Future AGI. Future AGI hosts always require `https://`; export requests do not follow redirects, and a plaintext send does not use a proxy. Read from the environment or the explicit `allow_insecure_http` option, not from `futureagi.toml` or a profile file. |
+| `FI_ALLOW_INSECURE_HTTP` | Set to `1` to allow plaintext `http://` to a host other than literal loopback or Future AGI. Future AGI hosts always require `https://`; export requests do not follow redirects, and a plaintext send does not use a proxy. Read from the environment (exactly `1`) or the explicit `allow_insecure_http` option (a boolean `true`, or the text `1` or `true`), not from `futureagi.toml` or a profile file. |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, then the working directory name, then `DEFAULT_PROJECT_NAME`. |
 | `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | `DEFAULT_PROJECT_VERSION_NAME` and a generated UUID. |
 | `FI_PROJECT_TYPE` | `observe`. |
