@@ -86,6 +86,19 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Test only: the annotated child-JVM applications, and Reactor for the Mono/Flux cases. -->
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-annotations</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+            <version>3.6.11</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-testing</artifactId>
@@ -143,6 +156,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- Test applications keep real parameter names for annotated-method input.value. -->
+                    <parameters>true</parameters>
+                </configuration>
                 <executions>
                     <execution>
                         <id>default-compile</id>

@@ -39,6 +39,7 @@
 
         <!-- Core -->
         <module>traceai-java-core</module>
+        <module>traceai-java-annotations</module>
 
         <!-- Zero-code agent -->
         <module>traceai-javaagent</module>
