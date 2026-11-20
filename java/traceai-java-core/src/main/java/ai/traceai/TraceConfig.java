@@ -33,6 +33,7 @@ public class TraceConfig {
     private int batchSize = 512;
     private long exportIntervalMs = 5000;
     private Sampler sampler;
+    private boolean allowInsecureHttp = false;
 
     /**
      * Creates a new builder for TraceConfig.
@@ -182,6 +183,18 @@ public class TraceConfig {
          */
         public Builder baseUrl(String url) {
             config.baseUrl = url;
+            return this;
+        }
+
+        /**
+         * Allows plaintext http:// export to a host that is neither literal loopback nor a
+         * Future AGI host. Equivalent to FI_ALLOW_INSECURE_HTTP=1. Future AGI hosts always
+         * require https.
+         * @param allow true to permit plaintext http to other hosts
+         * @return this builder
+         */
+        public Builder allowInsecureHttp(boolean allow) {
+            config.allowInsecureHttp = allow;
             return this;
         }
 
@@ -350,6 +363,7 @@ public class TraceConfig {
     public boolean isHideOutputMessages() { return hideOutputMessages; }
     public boolean isHideErrorDetails() { return hideErrorDetails; }
     public String getBaseUrl() { return baseUrl; }
+    public boolean isAllowInsecureHttp() { return allowInsecureHttp; }
     public String getApiKey() { return apiKey; }
     public String getSecretKey() { return secretKey; }
     public String getProjectName() { return projectName; }
