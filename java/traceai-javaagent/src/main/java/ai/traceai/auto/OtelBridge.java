@@ -101,12 +101,26 @@ final class OtelBridge {
                     Object definition = ToolSpans.invoke(context, "getToolDefinition");
                     Object name = definition == null ? null : ToolSpans.invoke(definition, "name");
                     // A different tool's observation does not record this call; an unreadable name is treated as this one's.
-                    if (name == null || tool.equals(String.valueOf(name))) return true;
+                    if ((name == null || tool.equals(String.valueOf(name))) && hasTracingSpan(context)) return true;
                 }
                 Object parent = context == null ? null : ToolSpans.invoke(context, "getParentObservation");
                 observation = observationType.isInstance(parent) ? parent : null;
             }
             return false;
+        } catch (Throwable ignored) { return false; }
+    }
+    private static final String TRACING_CONTEXT = "io.micrometer.tracing.handler.TracingObservationHandler$TracingContext";
+    /**
+     * A tracing handler (Micrometer Tracing's) attached a span to this observation: its {@code TracingContext} is in the observation
+     * context with a non-null span. A registry with only meter handlers (the common Spring Boot actuator setup) opens the observation
+     * but never makes a span, so the call is not traced and the agent must record it. Any absence or failure means "no span".
+     */
+    private static boolean hasTracingSpan(Object context) {
+        try {
+            Class<?> key = Class.forName(TRACING_CONTEXT, false, context.getClass().getClassLoader());
+            Class<?> view = Class.forName("io.micrometer.observation.Observation$ContextView", false, context.getClass().getClassLoader());
+            Object tracing = view.getMethod("get", Object.class).invoke(context, key);
+            return key.isInstance(tracing) && ToolSpans.invoke(tracing, "getSpan") != null;
         } catch (Throwable ignored) { return false; }
     }
     private static boolean isToolContext(Object context) {
