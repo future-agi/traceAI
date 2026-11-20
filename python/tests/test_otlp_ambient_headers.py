@@ -518,3 +518,45 @@ def test_every_positional_grpc_argument_passes_through_a_hidden_wrapper(monkeypa
 
     assert len(seen) == 1, (positional, seen)
     assert seen[0].get("x-user-header") == "1"
+
+
+def _header_shapes():
+    return {
+        "mapping": lambda: {"X-Custom": "v"},
+        "pairs": lambda: [("X-Custom", "v")],
+        "one-shot generator": lambda: (pair for pair in [("X-Custom", "v")]),
+    }
+
+
+@pytest.mark.parametrize("shape", list(_header_shapes()))
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_caller_headers_in_any_shape_reach_a_collector_that_is_not_future_agi(
+    monkeypatch, http_sink, grpc_sink, transport, shape
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    exporter = cls(endpoint=url, headers=_header_shapes()[shape](), timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-custom") == "v"
+    assert "x-api-key" not in seen[0] and "x-secret-key" not in seen[0], seen
+
+
+@pytest.mark.parametrize("shape", list(_header_shapes()))
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_caller_headers_in_any_shape_reach_future_agi_with_the_sdk_headers(
+    monkeypatch, http_sink, grpc_sink, transport, shape
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    _export_one_span(cls(headers=_header_shapes()[shape](), timeout=5))
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-custom") == "v"
+    assert seen[0].get("x-api-key") == "synthetic-env-key"
