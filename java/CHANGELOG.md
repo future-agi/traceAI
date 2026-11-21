@@ -4,6 +4,7 @@
 
 ### Changes
 
+* **javaagent:** Credential value shapes are scanned in time linear in the text, and a token is replaced whole whatever its length. In an annotated method's captured value that is cut at its character budget, a run of token characters that holds a JWT start and continues past the end of the read is dropped from the kept text, and the value is marked truncated.
 * **javaagent:** values that begin with `Negotiate`, `NTLM` or `Digest`, with no credential name in front of them, are replaced as `Bearer` and `Basic` values are. The user-information and JSON-name scans of captured text read only inside the token they belong to.
 * **javaagent (annotations):** the exception of an annotated method sets `error.message`, the status description and the `exception.message` event attribute from `getMessage()` only when the class does not override it (otherwise the simple class name), with known secrets and credential shapes replaced; the stack trace is not exported. Credential shapes are scanned in time linear in the text, so a long run of characters that starts a JWT many times is scanned in linear time.
 * **javaagent (annotations):** a Map key is shown only when it is a boxed primitive, a `String`, a `UUID` or an enum; every other key type is its type placeholder, and no `toString`, `hashCode` or `equals` of the key runs. A `String` key goes through the same replacement as any captured text.

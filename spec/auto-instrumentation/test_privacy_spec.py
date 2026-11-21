@@ -607,6 +607,30 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(expected, (SPEC / "privacy-fixtures.json").read_bytes())
 
 
+class SharedCopyTests(unittest.TestCase):
+    ROOT = SPEC.parents[1]
+    COPIES = (
+        "csharp/src/TraceAI.AutoInstrumentation/Wire/privacy.json",
+        "go/auto/internal/wire/privacy.json",
+        "java/traceai-javaagent/src/main/resources/ai/traceai/auto/privacy.json",
+        "python/fi_instrumentation/auto/wire/privacy.json",
+        "ruby/lib/traceai/auto/privacy.json",
+        "typescript/packages/fi-core/src/privacy.json",
+        "typescript/packages/traceai_auto/src/wire/privacy.json",
+    )
+
+    def test_all_eight_privacy_copies_are_byte_identical(self):
+        expected = (SPEC / "privacy.json").read_bytes()
+        for relative in self.COPIES:
+            self.assertEqual(expected, (self.ROOT / relative).read_bytes(), relative)
+
+    def test_jwt_shape_is_unbounded_and_has_no_trailing_boundary(self):
+        # A token is replaced whole whatever its length; each SDK scans runs once instead of bounding the shape.
+        catalog = json.loads((SPEC / "privacy.json").read_text())
+        jwt = [s["regex"] for s in catalog["credentials"]["value_shapes"] if "eyJ" in s["regex"]]
+        self.assertEqual(["\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"], jwt)
+
+
 class SyncTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="traceai-spec-sync-")

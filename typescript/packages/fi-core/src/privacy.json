@@ -482,7 +482,7 @@
     "value_shapes": [
       {
         "id": "provider-api-key",
-        "regex": "\\bsk-[A-Za-z0-9_-]{20,}\\b",
+        "regex": "\\bsk-[A-Za-z0-9_-]{20,}",
         "flags": "",
         "reason": "Bare long provider-key shape; applies to values, never an exemption."
       },
@@ -494,7 +494,7 @@
       },
       {
         "id": "jwt",
-        "regex": "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b",
+        "regex": "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
         "flags": "",
         "reason": "Three-segment JWT-shaped credential value."
       },

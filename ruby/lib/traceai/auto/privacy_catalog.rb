@@ -57,6 +57,53 @@ module TraceAI
       VALUE_SHAPES = CATALOG['credentials'].fetch('value_shapes', []).map do |item|
         Regexp.new(end_anchored(item['regex']), item['flags'].to_s.include?('i') ? Regexp::IGNORECASE : 0)
       end.freeze
+      # The JWT shape is scanned exactly, in time linear in the text. Its character
+      # classes exclude ".", so each segment is one maximal run of [A-Za-z0-9_-]
+      # and a match is fully determined by three consecutive dot-separated segments
+      # of a run of [A-Za-z0-9_.-]: "eyJ" at a word boundary in the first segment
+      # with 8 or more characters after it, then two segments of 8 or more. Each
+      # segment is examined as a first segment at most once, so repeated starts
+      # such as "eyJ-" * N are never rescanned. A token ends where its third
+      # segment ends, whatever the segment lengths.
+      JWT_RUN = /(?<boundary>(?=eyJ)\b)?[A-Za-z0-9_.-]+/.freeze
+      # Offset of the leftmost start of a token inside the first segment, or nil.
+      def self.jwt_start(segment, boundary_at_zero)
+        found = segment.index('eyJ')
+        while found
+          return nil if segment.length - found - 3 < 8
+          return found if found.zero? ? boundary_at_zero : segment.getbyte(found - 1) == 45
+          found = segment.index('eyJ', found + 1)
+        end
+        nil
+      end
+      def self.jwt_gsub(text)
+        text.gsub(JWT_RUN) do
+          run = $~[0]
+          boundary = !$~[:boundary].nil?
+          next run unless run.include?('eyJ') && run.count('.') >= 2
+          segments = run.split('.', -1)
+          offsets = []
+          position = 0
+          segments.each { |segment| offsets << position; position += segment.length + 1 }
+          out = +''
+          copied = 0
+          index = 0
+          while index + 2 < segments.length
+            if segments[index].length >= 11 && segments[index + 1].length >= 8 && segments[index + 2].length >= 8 &&
+               (start = jwt_start(segments[index], !index.zero? || boundary))
+              out << run[copied...(offsets[index] + start)] << REDACTED
+              copied = offsets[index + 2] + segments[index + 2].length
+              index += 3
+            else
+              index += 1
+            end
+          end
+          out << run[copied..]
+        end
+      end
+      def self.shape_gsub(shape, text)
+        shape.source.start_with?('\\beyJ') ? jwt_gsub(text) : text.gsub(shape, REDACTED)
+      end
       # Version 3: the closed list of provider-response logprob token paths.
       # Only an explicit, parsed provider response root may use them.
       LOGPROB_FORMATS = CATALOG.fetch('logprob_tokens', {}).fetch('formats', []).to_h { |rule| [rule['format'], rule] }.freeze
@@ -537,7 +584,7 @@ module TraceAI
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end
         text = close_fragments(text, plain, [0, 0, budget])
-        VALUE_SHAPES.each { |shape| text = text.gsub(shape, REDACTED) }
+        VALUE_SHAPES.each { |shape| text = shape_gsub(shape, text) }
         text
       end
     end

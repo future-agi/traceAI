@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- Credential value shapes are scanned in time linear in the text, and a token is replaced whole whatever its length.
+
 ## [1.4.2] - 2026-11-20
 
 ### Breaking
