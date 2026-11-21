@@ -360,3 +360,51 @@ def test_a_refused_environment_header_puts_no_key_byte_in_any_log_record(variabl
     text = "\n".join(f"{record.name} {record.getMessage()} {record.args}" for record in caplog.records)
     assert oc.MARKER_KEY not in text and oc.MARKER_SECRET not in text and "mkr-" not in text, text
 
+
+# ---- key header names that a server folds, and delimiters encoded many times ----------------------------------------------------
+
+def _encoded(text, levels):
+    for _ in range(levels):
+        text = quote(text, safe="")
+    return text
+
+
+FOLDED = ["x_api_key={key}", "X_API_KEY={key}", "x_secret_key={key}", "X_Secret_Key={key}", "x-trace=1,x_api_key={key}",
+          "a=b%2Cx_api_key%3D{key}"]
+
+
+@pytest.mark.parametrize("variable", ["OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"])
+@pytest.mark.parametrize("form", FOLDED)
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_key_header_name_that_a_server_folds_to_the_key_header_is_refused(variable, form, transport, listeners):
+    if transport == "grpc":
+        pytest.importorskip("grpc")
+    env = {name: None for name in oc.PROXY_NAMES + oc.OWN_NAMES}
+    env.update({variable: form.format(key="not-a-marker-value"), "FI_API_KEY": oc.MARKER_KEY, "FI_SECRET_KEY": oc.MARKER_SECRET})
+    target = f"127.0.0.1:{listeners.target.port}"
+    with oc.environment(env), pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        if transport == "http":
+            otel.HTTPSpanExporter(endpoint=f"http://{target}/v1/traces", timeout=0.4)
+        else:
+            otel.GRPCSpanExporter(endpoint=target, insecure=True, timeout=0.4)
+    assert raised.value.code == "key_header_in_environment"
+
+
+@pytest.mark.parametrize("value", ["x_trace_id=1", "x_api_keys=1", "my_x_api_key=1", "x-api-key-note=1"])
+def test_names_that_only_look_alike_after_folding_are_not_refused(value, listeners):
+    env = {name: None for name in oc.PROXY_NAMES + oc.OWN_NAMES}
+    env.update({"OTEL_EXPORTER_OTLP_HEADERS": value, "FI_API_KEY": oc.MARKER_KEY, "FI_SECRET_KEY": oc.MARKER_SECRET})
+    with oc.environment(env):
+        otel.HTTPSpanExporter(endpoint=f"http://127.0.0.1:{listeners.target.port}/v1/traces", timeout=0.4).shutdown()
+
+
+@pytest.mark.parametrize("levels", [4, 5, 8])
+@pytest.mark.parametrize("variable", ["OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"])
+def test_a_key_header_carried_in_a_value_encoded_many_times_is_refused(levels, variable, listeners):
+    value = "a=b" + _encoded(",", levels) + "x-api-key" + _encoded("=", levels) + "not-a-marker-value"
+    env = {name: None for name in oc.PROXY_NAMES + oc.OWN_NAMES}
+    env.update({variable: value, "FI_API_KEY": oc.MARKER_KEY, "FI_SECRET_KEY": oc.MARKER_SECRET})
+    with oc.environment(env), pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        otel.HTTPSpanExporter(endpoint=f"http://127.0.0.1:{listeners.target.port}/v1/traces", timeout=0.4)
+    assert raised.value.code == "key_header_in_environment"
+

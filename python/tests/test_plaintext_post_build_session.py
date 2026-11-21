@@ -245,10 +245,10 @@ def _bullets():
 @pytest.mark.parametrize("code", ["insecure_self_hosted_target", "insecure_futureagi_http", "insecure_futureagi_grpc", "empty_authority",
                                   "disputed_authority", "unverified_endpoint", "proxied", "key_header_in_environment"])
 def test_every_default_deny_code_has_a_bullet_that_is_labelled_breaking_with_the_user_action(code):
-    labelled = [b for b in _bullets() if f"`{code}`" in b and "Breaking:" in b and b.split("Breaking:", 1)[1].strip()]
+    labelled = [b for b in _bullets() if "Breaking:" in b and f"`{code}`" in b.split("Breaking:", 1)[1]]
     assert labelled, code
-    # the sentence after the label states the code or the action: it is not empty and names what to change
-    assert any(code in b.split("Breaking:", 1)[1] for b in labelled) or code in ("insecure_futureagi_grpc", "proxied", "key_header_in_environment")
+    # the sentence after the label names the code and states what to change
+    assert any(len(b.split("Breaking:", 1)[1].split(f"`{code}`", 1)[1].strip()) > 20 for b in labelled), code
 
 
 def test_the_redirect_refusal_is_labelled_breaking():
