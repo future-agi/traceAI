@@ -22,6 +22,8 @@ async function main() {
             ELEVENLABS_BASE_URL: f.baseUrl,
             FI_API_KEY: "synthetic-fi-api",
             FI_SECRET_KEY: "synthetic-fi-secret",
+            // Keys go only to a Future AGI endpoint: the host FI_BASE_URL selects is one, a bare collector URL is not.
+            FI_BASE_URL: f.baseUrl,
             OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: f.baseUrl + "/v1/traces",
           },
           stdio: "inherit",
