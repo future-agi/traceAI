@@ -280,8 +280,8 @@ final class CapturedValue {
     private static int jsonName(String text, int colon) {
         int end = colon;
         while (end > 0 && Character.isWhitespace(text.charAt(end - 1)) && colon - end < 8) end--;
-        if (end < 3 || text.charAt(end - 1) != '"') return -1;
-        int open = text.lastIndexOf('"', end - 2);
+        if (end < 3 || text.charAt(end - 1) != '"' && text.charAt(end - 1) != '\'') return -1;
+        int open = text.lastIndexOf(text.charAt(end - 1), end - 2);
         return open >= 0 && end - 1 - open <= 130 ? open : -1;
     }
 
@@ -290,11 +290,11 @@ final class CapturedValue {
         int length = text.length();
         if (start >= length) return start;
         char first = text.charAt(start);
-        if (first == '"') {
+        if (first == '"' || first == '\'') {
             for (int i = start + 1; i < length; i++) {
                 char c = text.charAt(i);
                 if (c == '\\') i++;
-                else if (c == '"') return i + 1;
+                else if (c == first) return i + 1;
             }
             return length;
         }
@@ -302,7 +302,7 @@ final class CapturedValue {
             int depth = 0;
             for (int i = start; i < length; i++) {
                 char c = text.charAt(i);
-                if (c == '"') { i = jsonValueEnd(text, i) - 1; continue; }
+                if (c == '"' || c == '\'') { i = jsonValueEnd(text, i) - 1; continue; }
                 if (c == '{' || c == '[') depth++;
                 else if ((c == '}' || c == ']') && --depth == 0) return i + 1;
             }
@@ -343,12 +343,13 @@ final class CapturedValue {
             int quoted = c == ':' && i > 0 && i < length ? jsonName(text, i) : -1;
             if (quoted >= 0) {
                 // "name": value in JSON text: the value is read exactly (a string, an object or array, or a scalar) and replaced by a JSON string.
-                String name = text.substring(quoted + 1, text.lastIndexOf('"', i - 1));
+                char quote = text.charAt(quoted);
+                String name = text.substring(quoted + 1, text.lastIndexOf(quote, i - 1));
                 if (known.computeIfAbsent(name, CapturedValue::credentialName)) {
                     int valueStart = i + 1;
                     while (valueStart < length && Character.isWhitespace(text.charAt(valueStart))) valueStart++;
                     int end = jsonValueEnd(text, valueStart);
-                    if (end > valueStart) { from = valueStart; to = end; replacement = "\"<redacted>\""; }
+                    if (end > valueStart) { from = valueStart; to = end; replacement = quote + "<redacted>" + quote; }
                 }
                 if (from < 0) { i++; continue; }
             } else if (c == ':' && text.startsWith("//", i + 1)) {
@@ -356,7 +357,16 @@ final class CapturedValue {
                 int limit = Math.min(length, i + 3 + 512), end = i + 3;
                 while (end < limit && "/?# \t\r\n".indexOf(text.charAt(end)) < 0) end++;
                 int at = text.lastIndexOf('@', end - 1);
-                if (at >= i + 3 && at < end) { from = i + 3; to = at; }
+                if (at < i + 3) {
+                    // A password may hold a slash, question mark or hash: when a user:password form precedes an at sign later in the same
+                    // word, the user information runs to that at sign.
+                    int word = i + 3;
+                    while (word < length && word - i < 1024 && !Character.isWhitespace(text.charAt(word))) word++;
+                    int later = text.lastIndexOf('@', word - 1);
+                    int colon = later > i + 3 ? text.indexOf(':', i + 3) : -1;
+                    if (later > i + 3 && colon > i + 3 && colon < later) at = later;
+                }
+                if (at >= i + 3) { from = i + 3; to = at; }
                 else { i += 3; continue; }
             } else if (c == '=' || c == ':') {
                 int nameEnd = i;
@@ -378,10 +388,18 @@ final class CapturedValue {
             } else if (c == '-' && text.startsWith("--", i) && (i == 0 || Character.isWhitespace(text.charAt(i - 1)))) {
                 int end = i + 2;
                 while (end < length && nameChar(text.charAt(end)) && end - i < 130) end++;
-                if (end < length && text.charAt(end) == ' ' && end - i > 2 && known.computeIfAbsent(text.substring(i, end), CapturedValue::credentialName)) {
-                    int valueEnd = end + 1;
-                    while (valueEnd < length && !Character.isWhitespace(text.charAt(valueEnd))) valueEnd++;
-                    if (valueEnd > end + 1) { from = end + 1; to = valueEnd; }
+                if (end < length && (text.charAt(end) == ' ' || text.charAt(end) == '\t') && end - i > 2 && known.computeIfAbsent(text.substring(i, end), CapturedValue::credentialName)) {
+                    int valueStart = end;
+                    while (valueStart < length && (text.charAt(valueStart) == ' ' || text.charAt(valueStart) == '\t')) valueStart++;
+                    int valueEnd = valueStart;
+                    char q = valueStart < length ? text.charAt(valueStart) : 0;
+                    if (q == '"' || q == '\'') {
+                        // A quoted word may hold spaces: it runs to its closing quote.
+                        valueEnd = valueStart + 1;
+                        while (valueEnd < length && text.charAt(valueEnd) != q) valueEnd += text.charAt(valueEnd) == '\\' ? 2 : 1;
+                        valueEnd = Math.min(length, valueEnd + 1);
+                    } else while (valueEnd < length && !Character.isWhitespace(text.charAt(valueEnd))) valueEnd++;
+                    if (valueEnd > valueStart && !(text.charAt(valueStart) == '-' && text.startsWith("--", valueStart))) { from = valueStart; to = valueEnd; }
                 }
                 if (from < 0) { i = end; continue; }
             }

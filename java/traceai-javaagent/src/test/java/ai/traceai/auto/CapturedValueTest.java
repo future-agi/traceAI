@@ -288,7 +288,8 @@ class CapturedValueTest {
         for (String[] c : new String[][] {
             {"Cookie: a=SYNTHONE; b=SYNTHTWO; c=SYNTHTHREE", "SYNTH"}, {"Set-Cookie: sid=SYNTHSID; Path=/", "SYNTH"},
             {"proxy-authorization: Digest username=\"SYNTHU\", response=\"SYNTHR\"", "SYNTH"}, {"run --passphrase SYNTHFLAG now", "SYNTH"},
-            {"x user[pwd]=SYNTHBR&a=1", "SYNTH"}, {"jdbc:postgresql://u:SYNTHUI@h:5432/db", "SYNTH"}, {"{\"pass\": \"SYNTHJ\", \"n\": 1}", "SYNTH"}, {"{\"pin\":{\"a\":\"SYNTHNEST\"},\"n\":1}", "SYNTH"}}) {
+            {"x user[pwd]=SYNTHBR&a=1", "SYNTH"}, {"jdbc:postgresql://u:SYNTHUI@h:5432/db", "SYNTH"}, {"{\"pass\": \"SYNTHJ\", \"n\": 1}", "SYNTH"}, {"run --password  SYNTHTWOSP now", "SYNTH"}, {"run --password\tSYNTHTAB now", "SYNTH"}, {"run --password \"SYNTH multi word\" now", "SYNTH"},
+            {"{'password': 'SYNTHSQ', 'user': 'bob'}", "SYNTH"}, {"postgres://admin:SYNTHPA/SS@db.host/app", "SYNTH"}, {"{\"pin\":{\"a\":\"SYNTHNEST\"},\"n\":1}", "SYNTH"}}) {
             String captured = text(c[0]);
             assertFalse(captured.contains(c[1]), c[0] + " -> " + captured);
         }
