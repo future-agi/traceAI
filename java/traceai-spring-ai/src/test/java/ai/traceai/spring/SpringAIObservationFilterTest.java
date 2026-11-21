@@ -7,6 +7,13 @@ import org.springframework.ai.chat.prompt.Prompt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SpringAIObservationFilterTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     @Test void unrelatedObservationsAreUnchanged() {
         Observation.Context context = new Observation.Context();
         assertThat(new SpringAIObservationFilter(true, true).map(context)).isSameAs(context);
@@ -37,5 +44,23 @@ class SpringAIObservationFilterTest {
         filter.map(second);
         assertThat(second.getHighCardinalityKeyValue("input.value").getValue()).isEqualTo("second-input");
         assertThat(second.getHighCardinalityKeyValue("output.value")).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 9, 20, 31})
+    void aKnownSecretStraddlingTheContentCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-SPRING-FILTER-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        String text = "a".repeat(32_000 - inside) + secret + "tail".repeat(50);
+        var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("openai").build();
+        context.setResponse(SpanTestSupport.response(text));
+        new SpringAIObservationFilter(true, true).map(context);
+        for (String key : new String[] {"input.value", "output.value"}) {
+            assertThat(context.getHighCardinalityKeyValue(key).getValue()).as(key).doesNotContain("PFX")
+                .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+        for (String key : new String[] {"gen_ai.input.messages", "gen_ai.output.messages"}) {
+            assertThat(context.getHighCardinalityKeyValue(key).getValue()).as(key).doesNotContain("PFX");
+        }
     }
 }

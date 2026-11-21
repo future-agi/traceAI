@@ -20,6 +20,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TracingPrivacyTest {
 
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
+
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
     private static final AttributeKey<String> INPUT_VALUE = AttributeKey.stringKey(SemanticConventions.INPUT_VALUE);
     private static final AttributeKey<String> INPUT_MESSAGES = AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES);
@@ -113,6 +120,22 @@ class TracingPrivacyTest {
                 .verify(TIMEOUT);
             String captured = support.single().getAttributes().get(OUTPUT_VALUE);
             assertThat(captured).hasSize(32_000).endsWith("...[truncated]");
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 9, 20, 31})
+    void aKnownSecretStraddlingTheStreamCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-SPRING-STREAM-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            ChatResponse first = SpanTestSupport.response("a".repeat(32_000 - inside));
+            ChatResponse second = SpanTestSupport.response(secret + "tail".repeat(20));
+            StepVerifier.create(new TracedChatModel(SpanTestSupport.streamModel(() -> Flux.just(first, second)), support.tracer, "synthetic")
+                    .stream(new Prompt("hi")))
+                .expectNextCount(2).expectComplete().verify(TIMEOUT);
+            assertThat(support.single().getAttributes().toString()).doesNotContain("PFX");
+            assertThat(support.single().getAttributes().get(OUTPUT_VALUE)).endsWith("...[truncated]");
         }
     }
 }

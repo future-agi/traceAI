@@ -86,7 +86,8 @@ public final class TraceAIAuto {
         try { start(options, null); } catch (Throwable ignored) { warn("Initialization failed; application runs without auto-instrumentation"); }
         RuntimeState state = RUNTIME.get(); return state == null ? null : state.provider();
     }
-    static synchronized void start(Map<String, ?> options, Instrumentation instrumentation) {
+    static synchronized void start(Map<String, ?> options, Instrumentation instrumentation) { start(options, instrumentation, System.getenv()); }
+    static synchronized void start(Map<String, ?> options, Instrumentation instrumentation, Map<String, String> environment) {
         // A later init() after a -javaagent start without keys reuses the JVM's handle instead of attaching again.
         if (instrumentation != null) AGENT_INSTRUMENTATION = instrumentation; else instrumentation = AGENT_INSTRUMENTATION;
         if (initialized) {
@@ -96,8 +97,8 @@ public final class TraceAIAuto {
         }
         initialized = true;
         try {
-            config = AutoConfig.resolve(options);
-            KnownSecrets.PROCESS.seed(config, System.getenv());
+            config = AutoConfig.resolve(options, environment);
+            KnownSecrets.PROCESS.seed(config, environment);
             reportLibraries();
             if (config.flag("OTEL_SDK_DISABLED")) { STATUS.put("wire", "disabled"); return; }
             if (OtelJavaAgent.present()) { offBesideOtelJavaAgent(); return; }
@@ -105,6 +106,15 @@ public final class TraceAIAuto {
                 // Nothing was installed, so a later init() that supplies keys can still start.
                 initialized = false;
                 STATUS.put("wire", "disabled (missing credentials)"); warn("FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is off"); return;
+            }
+            // The target and the ambient OTLP headers are judged once, here, before any exporter or instrumentation exists: a refusal logs one
+            // value-free warning and installs nothing. (The export path judges them again before each send.)
+            try { config.checkKeyTransport(); }
+            catch (ai.traceai.KeyTransport.Refused refused) {
+                initialized = false;
+                STATUS.put("wire", "disabled (key transport refused)");
+                warn("Keys are sent only to a permitted target and without ambient OTLP key headers; auto-instrumentation is off");
+                return;
             }
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
@@ -254,6 +264,15 @@ public final class TraceAIAuto {
         STATUS.put(name, "instrumented (execute_tool spans" + (transportEnabled(name) ? "; chat calls through wire" : "") + ")"
             + (before != null && before.startsWith("manual") ? "; chat spans: " + before : ""));
     }
+    /** Test hook: whether this JVM has an installed exporter runtime. */
+    static boolean runtimeInstalled() { return RUNTIME.get() != null; }
+    /** Test hook: closes the runtime and forgets every start, so the next start begins as in a new JVM (installed transformers stay). */
+    static synchronized void resetForTest() {
+        shutdown(java.time.Duration.ofSeconds(5));
+        RUNTIME.set(null); initialized = false; REPEATED.set(false); WARNED.set(false); STATUS.clear(); config = null;
+    }
+    /** Test hook: one status entry of the doctor report. */
+    static String statusOf(String key) { return STATUS.get(key); }
     static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
     static void integrationFailed(String name) {
         STATUS.put(name, "failed");

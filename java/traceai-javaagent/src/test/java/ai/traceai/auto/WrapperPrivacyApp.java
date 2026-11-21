@@ -35,7 +35,7 @@ public final class WrapperPrivacyApp {
             try (var scope = span.makeCurrent()) { PlainApp.call(args); } finally { span.end(); }
             var own = memory.getFinishedSpanItems().get(0);
             String raw = own.getAttributes().get(AttributeKey.stringKey("fi.raw_input"));
-            if (raw == null || raw.length() != 32001 || !raw.contains("WRAPPER_PRIVATE_PASSWORD")) throw new AssertionError("Application raw input changed");
+            if (raw == null || raw.length() != 32000 || !raw.contains("WRAPPER_PRIVATE_PASSWORD")) throw new AssertionError("Application raw input changed");
             if (!partial.equals(own.getStatus().getDescription()) || !partial.equals(own.getEvents().get(0).getAttributes().get(AttributeKey.stringKey("exception.message")))) throw new AssertionError("Application diagnostics changed");
             if (!"PRIVATE_WRAPPER_EMBEDDING_INPUT".equals(own.getAttributes().get(AttributeKey.stringKey(ai.traceai.SemanticConventions.EMBEDDING_INPUT_TEXT + ".0")))
                 || !"PRIVATE_WRAPPER_RERANK_QUERY".equals(own.getAttributes().get(AttributeKey.stringKey(ai.traceai.SemanticConventions.GEN_AI_RERANKER_QUERY)))) throw new AssertionError("Application wrapper attributes changed");

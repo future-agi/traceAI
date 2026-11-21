@@ -434,11 +434,8 @@ public class FITracer {
      * @return the potentially truncated value
      */
     private String truncateIfNeeded(String value) {
-        int maxLength = 32000; // OpenTelemetry attribute value limit
-        if (value != null && value.length() > maxLength) {
-            return value.substring(0, maxLength - 13) + "...[truncated]";
-        }
-        return value;
+        // Known secrets are replaced in the whole value before it is cut.
+        return ai.traceai.privacy.KnownSecrets.cap(value, 32000); // OpenTelemetry attribute value limit
     }
 
     /**

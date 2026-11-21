@@ -286,7 +286,8 @@ class AgentE2ETest {
             assertEquals(safeUrl, WireCore.get(WireCore.get(WireCore.parse(output), "config"), "FI_BASE_URL"));
             if (premain) {
                 Object report = WireCore.parse(debug.lines().filter(line -> line.startsWith("{")).findFirst().orElseThrow());
-                assertEquals(safeUrl, WireCore.get(WireCore.get(report, "config"), "FI_BASE_URL")); assertEquals(true, WireCore.get(report, "active"));
+                assertEquals(safeUrl, WireCore.get(WireCore.get(report, "config"), "FI_BASE_URL")); // The target carries userinfo, so the startup check refuses it: the report is still printed, scrubbed, with the agent off.
+                assertEquals(false, WireCore.get(report, "active"));
             }
             assertTrue(spans.isEmpty()); assertTrue(collectorPayloads.isEmpty(), "doctor without --check must not export");
         } finally { process.destroyForcibly(); Files.deleteIfExists(stdout); Files.deleteIfExists(stderr); }

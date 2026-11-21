@@ -33,6 +33,8 @@ public class TraceConfig {
     private int batchSize = 512;
     private long exportIntervalMs = 5000;
     private Sampler sampler;
+    private boolean allowInsecureHttp = false;
+    private boolean exportEnabled = true;
 
     /**
      * Creates a new builder for TraceConfig.
@@ -186,6 +188,29 @@ public class TraceConfig {
         }
 
         /**
+         * Turns export off or on. When off, no exporter is created and the configuration never reads the base URL or the keys from
+         * the environment: nothing it builds can send to any target. Default on.
+         * @param enabled false to create no exporter at all
+         * @return this builder
+         */
+        public Builder exportEnabled(boolean enabled) {
+            config.exportEnabled = enabled;
+            return this;
+        }
+
+        /**
+         * Allows plaintext http:// export to a host that is neither literal loopback nor a
+         * Future AGI host. Equivalent to FI_ALLOW_INSECURE_HTTP=1. Future AGI hosts always
+         * require https.
+         * @param allow true to permit plaintext http to other hosts
+         * @return this builder
+         */
+        public Builder allowInsecureHttp(boolean allow) {
+            config.allowInsecureHttp = allow;
+            return this;
+        }
+
+        /**
          * Sets the API key for authentication.
          * @param key the API key
          * @return this builder
@@ -277,15 +302,16 @@ public class TraceConfig {
          * Explicit boolean values (including false) win.
          * @return the configured TraceConfig
          */
-        public TraceConfig build() {
-            if (config.baseUrl == null) {
-                config.baseUrl = System.getenv("FI_BASE_URL");
-            }
-            if (config.apiKey == null) {
-                config.apiKey = System.getenv("FI_API_KEY");
-            }
-            if (config.secretKey == null) {
-                config.secretKey = System.getenv("FI_SECRET_KEY");
+        public TraceConfig build() { return build(System::getenv); }
+
+        /** As {@link #build()}, reading the environment through {@code env}; with export off the base URL and the keys are not read at all. */
+        TraceConfig build(java.util.function.Function<String, String> env) {
+            if (!config.exportEnabled) {
+                config.baseUrl = null; config.apiKey = null; config.secretKey = null;
+            } else {
+                if (config.baseUrl == null) config.baseUrl = env.apply("FI_BASE_URL");
+                if (config.apiKey == null) config.apiKey = env.apply("FI_API_KEY");
+                if (config.secretKey == null) config.secretKey = env.apply("FI_SECRET_KEY");
             }
             if (config.projectName == null) {
                 config.projectName = System.getenv("FI_PROJECT_NAME");
@@ -350,6 +376,9 @@ public class TraceConfig {
     public boolean isHideOutputMessages() { return hideOutputMessages; }
     public boolean isHideErrorDetails() { return hideErrorDetails; }
     public String getBaseUrl() { return baseUrl; }
+    public boolean isAllowInsecureHttp() { return allowInsecureHttp; }
+    /** False when export was turned off: no exporter is created, and the base URL and keys stay unset. */
+    public boolean isExportEnabled() { return exportEnabled; }
     public String getApiKey() { return apiKey; }
     public String getSecretKey() { return secretKey; }
     public String getProjectName() { return projectName; }

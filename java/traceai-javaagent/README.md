@@ -101,6 +101,7 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_API_KEY`, `FI_SECRET_KEY` | Required as a pair; without them the agent stays off. |
 | `FI_PROFILE` | `default`; selects `[profiles.<name>]` in fi profile files. |
 | `FI_BASE_URL` | `https://api.futureagi.com`; spans are sent to `/tracer/v1/traces` as OTLP/HTTP JSON. |
+| `FI_ALLOW_INSECURE_HTTP` | Set to `1` to allow plaintext `http://` to a host other than literal loopback or Future AGI. Future AGI hosts always require `https://`; export requests do not follow redirects, and a plaintext send does not use a proxy. Read from the environment (exactly `1`) or the explicit `allow_insecure_http` option (a boolean `true`, or the text `1` or `true`), not from `futureagi.toml` or a profile file. |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, then the working directory name, then `DEFAULT_PROJECT_NAME`. |
 | `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | `DEFAULT_PROJECT_VERSION_NAME` and a generated UUID. |
 | `FI_PROJECT_TYPE` | `observe`. |
@@ -185,3 +186,5 @@ mvn -B -ntp -f java/pom.xml -pl traceai-javaagent -am verify
 ```
 
 This runs all shared wire fixtures (`spec/auto-instrumentation/fixtures`), all 6,238 shared privacy fixtures with idempotency checks, configuration and buffering safety tests, and child-JVM tests that run the packaged agent against local mock provider and OTLP servers, on OkHttp 3.14.9, 4.12.0 and 5.0.0, beside the existing wrappers' own exporter and beside the OpenTelemetry Java agent. No real provider or Future AGI request is made. The Java SDK's full-reactor runs skip the child-JVM tests with `-Dtraceai.javaagent.skipITs=true`; they run in the agent's own workflow. A build with `-DskipTests`, `-Dmaven.test.skip=true` or `-Dtraceai.javaagent.skipITs=true`, such as the quickstart's, does not download the OkHttp 4 and 5 jars that those tests use.
+
+The agent checks the target and the ambient `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` once at startup. A target or header that may not receive the keys (an `X-Api-Key` / `X-Secret-Key` header name, or a header value that contains a Future AGI key) logs one warning that names no value, installs no exporter and leaves the application unchanged; the same check runs again before each send. Another vendor's keys in those variables are not judged.
