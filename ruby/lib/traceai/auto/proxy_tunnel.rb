@@ -11,7 +11,23 @@ module TraceAI
     # * A refused proxy is a refused send. It never turns into a direct one.
     module ProxyTunnel
       # `authorization` is the complete Proxy-Authorization value, or nil.
-      Config = Struct.new(:scheme, :host, :port, :authorization)
+      #
+      # It prints as the proxy with its user information redacted, wherever it is printed (a console, an error reporter,
+      # a message that interpolates it), and holds no decoded user or password.
+      Config = Struct.new(:scheme, :host, :port, :authorization) do
+        def to_s
+          host_text = host.to_s.include?(':') ? "[#{host}]" : host.to_s
+          "#{scheme}://#{'[redacted]@' if authorization}#{host_text}:#{port}"
+        end
+
+        def inspect
+          "#<#{self.class.name} #{self}>"
+        end
+
+        def pretty_print(queue)
+          queue.text(inspect)
+        end
+      end
       # A proxy setting that cannot be used. It carries no part of the setting.
       Unsupported = Struct.new(:reason)
       DIRECT = :direct
