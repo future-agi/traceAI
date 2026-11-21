@@ -421,7 +421,16 @@ class AnnotationsE2ETest {
         assertFalse(bytes.contains(key), bytes);
         assertTrue(bytes.contains("fails_overridden") && bytes.contains("fails_plain"), bytes);
         assertTrue(bytes.contains("plain failure carrying"), "a plain message is kept with the secret replaced: " + bytes);
-        assertTrue(bytes.contains("ai.traceai.apptest.AnnotatedApp$OverriddenMessage"), "the class name stands in for an overridden message: " + bytes);
+        Map<String, Object> overridden = span("fails_overridden");
+        assertEquals("OverriddenMessage", WireCore.map(overridden.get("status")).get("message"), "the simple class name is the status description: " + overridden);
+        assertEquals("OverriddenMessage", attrs(overridden).get("error.message"), "the simple class name is error.message: " + overridden);
+        List<Object> events = WireCore.list(overridden.get("events"));
+        assertEquals(1, events.size(), String.valueOf(events));
+        Object eventAttributes = WireCore.get(events.get(0), "attributes");
+        Map<String, Object> event = new LinkedHashMap<>();
+        for (Object a : WireCore.list(eventAttributes)) event.put(String.valueOf(WireCore.get(a, "key")), WireCore.map(WireCore.get(a, "value")).values().iterator().next());
+        assertEquals("OverriddenMessage", event.get("exception.message"), "the simple class name is exception.message, not the error type: " + event);
+        assertEquals("ai.traceai.apptest.AnnotatedApp$OverriddenMessage", event.get("exception.type"));
         assertFalse(bytes.contains("stacktrace"), "the stack trace carries the message and is not exported: " + bytes);
     }
 }

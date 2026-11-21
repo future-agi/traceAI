@@ -367,7 +367,7 @@ class CapturedValueTest {
     @Test void onlyKnownJdkValueTypesAreShownAsKeys() {
         Map<Object, Object> map = new LinkedHashMap<>();
         map.put(1, "a"); map.put(2L, "b"); map.put((short)3, "c"); map.put((byte)4, "d"); map.put(1.5d, "e"); map.put(2.5f, "f");
-        map.put(true, "g"); map.put('c', "h"); map.put("text", "i"); map.put(Mode.FAST, "j");
+        map.put(true, "g"); map.put('c', "h"); map.put("text", "i"); map.put(Speed.FAST, "j");
         map.put(java.util.UUID.fromString("123e4567-e89b-12d3-a456-426614174000"), "k");
         String captured = text(map);
         for (String key : List.of("\"1\"", "\"2\"", "\"3\"", "\"4\"", "\"1.5\"", "\"2.5\"", "\"true\"", "\"c\"", "\"text\"", "\"FAST\"", "\"123e4567-e89b-12d3-a456-426614174000\""))
@@ -408,6 +408,70 @@ class CapturedValueTest {
         assertFalse(shown.contains("eyJ"), shown);
         assertFalse(shown.contains("aaaa"), shown);
         assertTrue(shown.endsWith(CapturedValue.CUT), shown);
+    }
+
+    // ---- value shapes scan in linear time on the application thread ------------------------------------------------------------
+
+    private static final Map<String, String> REPEATED_STARTS = new LinkedHashMap<>();
+    static {
+        REPEATED_STARTS.put("jwt start after a dash", "eyJ-".repeat(10_000));
+        REPEATED_STARTS.put("jwt segments of eight without a dot", "eyJaaaaaaaa-".repeat(3_400));
+        REPEATED_STARTS.put("jwt one dot", "eyJ-".repeat(9_000) + "." + "eyJ-".repeat(500));
+        REPEATED_STARTS.put("jwt two dots", "eyJ-".repeat(5_000) + "." + "eyJ-".repeat(2_500) + "." + "eyJ-".repeat(100));
+        REPEATED_STARTS.put("sk prefix", "sk-".repeat(13_000));
+        REPEATED_STARTS.put("sk prefix then dashes", "sk-" + "-".repeat(40_000));
+        REPEATED_STARTS.put("access key id", "AKIA".repeat(10_000));
+        REPEATED_STARTS.put("bearer", "Bearer ".repeat(5_800));
+        REPEATED_STARTS.put("bearer then spaces", "Bearer" + " ".repeat(40_000));
+        REPEATED_STARTS.put("basic", "Basic ".repeat(6_800));
+        REPEATED_STARTS.put("negotiate", "Negotiate ".repeat(4_000));
+        REPEATED_STARTS.put("ntlm", "NTLM ".repeat(8_000));
+        REPEATED_STARTS.put("digest", "Digest a=".repeat(4_500));
+        REPEATED_STARTS.put("digest long values", ("Digest a=" + "b".repeat(600)).repeat(65));
+        REPEATED_STARTS.put("private key header", "-----BEGIN PRIVATE KEY-----".repeat(1_500));
+        REPEATED_STARTS.put("private key header per line", "-----BEGIN RSA PRIVATE KEY-----\n".repeat(1_200));
+    }
+
+    @Test void everyValueShapeScansRepeatedStartsInTimeThatDoesNotGrowWithTheSquareOfTheText() {
+        CapturedValue.of("eyJ-".repeat(100), 70_000); // loads and warms the shapes
+        List<String> slow = new ArrayList<>();
+        for (Map.Entry<String, String> input : REPEATED_STARTS.entrySet()) {
+            long start = System.nanoTime();
+            String shown = String.valueOf(CapturedValue.of(input.getValue(), 70_000));
+            long millis = (System.nanoTime() - start) / 1_000_000;
+            assertTrue(shown.length() <= 70_000 + 64, input.getKey() + ": output length " + shown.length());
+            if (millis >= 200) slow.add(input.getKey() + " took " + millis + " ms");
+        }
+        assertEquals(List.of(), slow);
+    }
+
+    @Test void aJwtThatEndsInADashOrFollowsADashIsStillReplaced() {
+        String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl-";
+        for (String input : List.of(jwt, "prefix-" + jwt + " tail", "key-" + jwt, "eyJ-" + jwt, "eyJ-eyJ-" + jwt)) {
+            String shown = text(input);
+            assertFalse(shown.contains("eyJhbGci"), shown);
+            assertFalse(shown.contains("c2lnbmF0dXJl"), shown);
+            assertTrue(shown.contains("<redacted>"), shown);
+        }
+    }
+
+    @Test void theJwtShapeReplacesTheSameTextAsTheCatalogPattern() {
+        java.util.regex.Pattern catalog = java.util.regex.Pattern.compile("\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b");
+        String[] pieces = {"eyJ", "eyJaaaaaaaa", "aaaaaaaa", ".", ".", "-", "-", " ", "_", "x", "eyJ-"};
+        java.util.Random random = new java.util.Random(7);
+        PrivacyCatalog catalogUnderTest = PrivacyCatalog.INSTANCE;
+        int replaced = 0;
+        for (int round = 0; round < 20_000; round++) {
+            StringBuilder builder = new StringBuilder();
+            for (int n = random.nextInt(14) + 1; n > 0; n--) builder.append(pieces[random.nextInt(pieces.length)]);
+            String input = builder.toString();
+            java.util.regex.Matcher only = catalog.matcher(input);
+            // The other shapes of the catalog do not touch these inputs (no sk-, AKIA, Bearer, key or scheme words in the pieces).
+            String expected = only.find() ? only.replaceAll(java.util.regex.Matcher.quoteReplacement("<redacted>")) : input;
+            if (!expected.equals(input)) replaced++;
+            assertEquals(expected, catalogUnderTest.scrubValueShapes(input), input);
+        }
+        assertTrue(replaced > 50, "the generator must produce replacements: " + replaced);
     }
 
     // ---- parameters compiled without -parameters ---------------------------------------------------------------------------------
@@ -453,7 +517,34 @@ class CapturedValueTest {
         Map<String, Object> values = inputValues(login, "SYNTHPASSWORD", 3, "SYNTHPIN".toCharArray(), "SYNTHKEY".getBytes(), new StringBuilder("SYNTHNOTE"), (CharSequence)"SYNTHPHRASE", "SYNTHOTHER");
         String shown = AnnotationTracing.render(values, 4096);
         for (String secret : List.of("SYNTHPASSWORD", "SYNTHPIN", "SYNTHKEY", "SYNTHNOTE", "SYNTHPHRASE")) assertFalse(shown.contains(secret), shown);
-        assertTrue(shown.contains("\"arg1\":3"), "a number keeps its value: " + shown);
+        assertFalse(shown.contains("\"arg1\":3"), "a number is redacted too: " + shown);
+    }
+
+    public enum Speed { FAST }
+    public record Holder(String text) { }
+    private static final String MANY = "public class CLASSNAME { public String many(String[] array, java.util.List<String> list, java.util.Optional<String> optional, java.util.Map<String,String> map, Object holder, java.util.UUID id, int pin, Boolean flag, Object mode, long big, double ratio, java.math.BigDecimal amount, String... rest) { return \"ok\"; } }";
+
+    @Test void everyArgumentExceptNullBooleansAndEnumsIsRedactedWhenTheClassHasNoParameterNames() throws Exception {
+        Method many = compiled(false, MANY, "many", String[].class, List.class, Optional.class, Map.class, Object.class, java.util.UUID.class, int.class, Boolean.class,
+            Object.class, long.class, double.class, java.math.BigDecimal.class, String[].class);
+        assertFalse(many.getParameters()[0].isNamePresent());
+        resetNameWarning();
+        Map<String, Object> values = inputValues(many, new String[] {"SYNTHARRAY"}, List.of("SYNTHLIST"), Optional.of("SYNTHOPTIONAL"), Map.of("k", "SYNTHMAPVALUE"),
+            new Holder("SYNTHRECORD"), java.util.UUID.fromString("123e4567-e89b-12d3-a456-426614174000"), 424242, Boolean.TRUE, Speed.FAST, 987654321L, 3.14159, new java.math.BigDecimal("55555.5"),
+            new String[] {"SYNTHVARARG"});
+        String shown = AnnotationTracing.render(values, 4096);
+        for (String secret : List.of("SYNTHARRAY", "SYNTHLIST", "SYNTHOPTIONAL", "SYNTHMAPVALUE", "SYNTHRECORD", "123e4567", "424242", "987654321", "3.14159", "55555.5", "SYNTHVARARG"))
+            assertFalse(shown.contains(secret), secret + " in " + shown);
+        assertTrue(shown.contains("\"arg7\":true"), "a Boolean is exported: " + shown);
+        assertTrue(shown.contains("\"arg8\":\"FAST\""), "an enum constant is exported by name: " + shown);
+    }
+
+    @Test void aNullArgumentIsStillNullWhenTheClassHasNoParameterNames() throws Exception {
+        Method many = compiled(false, MANY, "many", String[].class, List.class, Optional.class, Map.class, Object.class, java.util.UUID.class, int.class, Boolean.class,
+            Object.class, long.class, double.class, java.math.BigDecimal.class, String[].class);
+        Map<String, Object> values = inputValues(many, null, null, null, null, null, null, 1, null, null, 2L, 1.5, null, null);
+        assertNull(values.get("arg0"));
+        assertTrue(values.containsKey("arg0"));
     }
 
     @Test void theNameWarningIsOnePerProcessAndNamesTheFixAndNoValue() throws Exception {
