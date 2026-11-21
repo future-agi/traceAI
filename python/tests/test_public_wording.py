@@ -113,5 +113,5 @@ def test_the_changelog_names_why_a_futures_session_is_refused_and_the_user_actio
     section = changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.5.2")
     assert "`requests_futures.FuturesSession` is refused because it overrides `request`, `send` and `prepare_request`" in section
     for phrase in ("a custom `auth` callable", "routing function replaced on the session or adapter object itself",
-                   "`requests.Session` subclass that overrides a routing function"):
+                   "subclass of `requests.Session` that overrides a routing function"):
         assert phrase in section, phrase
