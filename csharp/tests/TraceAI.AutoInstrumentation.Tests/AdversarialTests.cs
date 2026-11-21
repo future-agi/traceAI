@@ -322,7 +322,8 @@ public class AdversarialTests : InitIsolation
         {
             Environment.SetEnvironmentVariable("FI_BASE_URL","not a URL"); Environment.SetEnvironmentVariable("FI_PROJECT_TYPE","invalid"); Environment.SetEnvironmentVariable("FI_SAMPLE_RATE","invalid");
             Environment.SetEnvironmentVariable("FI_API_KEY","env-api-key"); Environment.SetEnvironmentVariable("FI_SECRET_KEY","env-secret-key");
-            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS","X-Api-Key=wrong-env-api,X-Secret-Key=wrong-env-secret");
+            // Ambient key headers are refused for the agent's own route (see KeyTransportAutoTests); a non-key ambient header is ignored.
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS","x-tenant=wrong-env-tenant");
             Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT","not a URL");
             await using var server=new MockServer([],"application/json");
             using var agent=new Agent(new AutoConfig(new AutoOptions { BaseUrl=server.Url,ProjectType="observe",SampleRate=1,ApiKey="code-api-key",SecretKey="code-secret-key",ProjectName="code-project" }));
