@@ -425,6 +425,8 @@ class GoogleAdkE2ETest {
         String everything = spans.toString();
         for (String content : List.of(PROMPT, ANSWER, TOOL_RESULT, "Kyoto", "test-secret-key")) assertFalse(everything.contains(content), content + " in " + everything);
         assertEquals("11", String.valueOf(attributes(named("call_llm").get(0)).get("gen_ai.usage.input_tokens")), "counts stay");
+    }
+
 
     // ---- TracedLlm and TracedTool beside the agent ------------------------------------------------------------
 
