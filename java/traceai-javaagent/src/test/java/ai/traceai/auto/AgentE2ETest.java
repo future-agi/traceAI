@@ -239,6 +239,7 @@ class AgentE2ETest {
             var foreign = jar.stream().map(java.util.zip.ZipEntry::getName)
                 .filter(name -> !name.startsWith("ai/traceai/auto/") && !name.startsWith("META-INF/") && !name.equals("ai/") && !name.equals("ai/traceai/")).toList();
             assertEquals(List.of(), foreign);
+            assertNotNull(jar.getEntry("ai/traceai/auto/shaded/googleadk/AdkAttributes.class"), "the attribute mapping is bundled, relocated");
             for (String helper : List.of("SamplingRatioSampler.class", "SamplingRatioSampler$KnownRatioSampler.class",
                     "SamplingRatioSampler$1.class")) {
                 assertNotNull(jar.getEntry("ai/traceai/auto/shaded/core/" + helper),

@@ -44,6 +44,11 @@
             </dependency>
             <dependency>
                 <groupId>com.futureagi</groupId>
+                <artifactId>traceai-java-google-adk</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-ollama</artifactId>
                 <version>${project.version}</version>
             </dependency>

@@ -55,6 +55,12 @@
             </exclusions>
         </dependency>
         <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-google-adk</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
             <version>${byte-buddy.version}</version>
@@ -348,6 +354,12 @@
                                     <pattern>org.slf4j</pattern>
                                     <shadedPattern>ai.traceai.auto.shaded.slf4j</shadedPattern>
                                 </relocation>
+                                <!-- The attribute mapping is also a public module; an application using both must
+                                     not get one of the two copies. -->
+                                <relocation>
+                                    <pattern>ai.traceai.googleadk</pattern>
+                                    <shadedPattern>ai.traceai.auto.shaded.googleadk</shadedPattern>
+                                </relocation>
                                 <relocation>
                                     <pattern>ai.traceai.TraceConfig</pattern>
                                     <shadedPattern>ai.traceai.auto.shaded.core.TraceConfig</shadedPattern>
@@ -370,6 +382,16 @@
                                 </relocation>
                             </relocations>
                             <filters>
+                                <filter>
+                                    <artifact>com.futureagi:traceai-java-google-adk</artifact>
+                                    <excludes>
+                                        <!-- Only the attribute mapping is bundled; the library wrappers need ADK itself. -->
+                                        <exclude>ai/traceai/googleadk/TracedLlm*.class</exclude>
+                                        <exclude>ai/traceai/googleadk/TracedTool*.class</exclude>
+                                        <exclude>ai/traceai/googleadk/AdkJson.class</exclude>
+                                        <exclude>ai/traceai/googleadk/SpanAttributes.class</exclude>
+                                    </excludes>
+                                </filter>
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>
