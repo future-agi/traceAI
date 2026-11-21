@@ -63,7 +63,7 @@ jobs:
           sudo unshare --net sh -c '
             ip link set lo up
             export FI_CORE_PACKAGE_JSON="$1/node_modules/@traceai/fi-core/package.json"
-            "$2" --test "$3/typescript/packages/fi-core/test/provider-lifecycle.test.cjs" "$3/typescript/packages/fi-core/test/ambient-headers.test.cjs" "$3/typescript/packages/fi-core/test/fixture-rows.test.cjs" &&
+            "$2" --test "$3/typescript/packages/fi-core/test/provider-lifecycle.test.cjs" "$3/typescript/packages/fi-core/test/ambient-headers.test.cjs" "$3/typescript/packages/fi-core/test/fixture-rows.test.cjs" "$3/typescript/packages/fi-core/test/plaintext-oracle.test.cjs" &&
             "$2" "$3/typescript/node_modules/jest/bin/jest.js" --config "$3/typescript/packages/fi-semantic-conventions/jest.config.js" --runInBand --no-cache &&
             "$2" "$3/typescript/node_modules/jest/bin/jest.js" --config "$3/typescript/packages/fi-core/jest.config.js" --runInBand
           ' sh "$RUNNER_TEMP/sdk-fixture" "$NODE" "$GITHUB_WORKSPACE"

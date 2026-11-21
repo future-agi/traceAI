@@ -209,7 +209,7 @@ async function listener(label) {
   };
   const first = net.createServer(handler);
   await new Promise((resolve, reject) => { first.once('error', reject); first.listen(0, '127.0.0.1', resolve); });
-  state.port = first.address().port; state.servers.push(first);
+  state.port = first.address().port; state.url = `http://127.0.0.1:${state.port}`; state.servers.push(first);
   const second = net.createServer(handler); // the same port on ::1, where the machine has it, so a [::1] target reaches the sink too
   await new Promise(resolve => { second.once('error', resolve); second.listen(state.port, '::1', resolve); });
   if (second.listening) state.servers.push(second);
@@ -261,6 +261,9 @@ test('RED: a deliberately unguarded send makes the counters non-zero', async () 
   } finally { restore(); await target.close(); await proxy.close(); }
 });
 
+const EXPORT_SPAN = { name: 'x', kind: 0, spanContext: () => ({ traceId: '0'.repeat(31) + '1', spanId: '0'.repeat(15) + '1', traceFlags: 1 }), startTime: [0, 0], endTime: [0, 1], status: { code: 0 },
+  attributes: {}, links: [], events: [], duration: [0, 1], ended: true, resource: { attributes: {} }, instrumentationLibrary: { name: 't' }, instrumentationScope: { name: 't' },
+  droppedAttributesCount: 0, droppedEventsCount: 0, droppedLinksCount: 0 };
 const measuredClasses = new Map();
 test('every refused HTTP row sends 0 bytes to the target sink and to both proxy listeners', async () => {
   const target = await listener('target'), proxyA = await listener('proxyA'), proxyB = await listener('proxyB');
@@ -317,6 +320,9 @@ test('every refused gRPC row is refused at construction, with 0 bytes and 0 conn
         if (input.insecureEnv) process.env.OTEL_EXPORTER_OTLP_INSECURE = 'true';
         const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: input.target, headers: { ...MARKER }, ...(input.credentials ? { credentials: input.credentials } : {}), timeoutMillis: 500 });
         outcome = 'built';
+        // A row the guard builds is exported once, so a send the guard should have refused puts bytes on a listener and fails the row.
+        await new Promise(done => { exporter.export([EXPORT_SPAN], () => done()); setTimeout(done, 1500); });
+        await pause(60);
         await exporter.shutdown().catch(() => {});
       } catch (error) { outcome = error && error.name === 'FiKeyRefusal' ? 'refused' : `error ${error && error.name}`; }
       finally { for (const name of SCOPED) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } }
@@ -332,6 +338,25 @@ test('every refused gRPC row is refused at construction, with 0 bytes and 0 conn
   assert.equal(clean, rows);
   for (const entry of classesSeen.values()) { assert.equal(entry.bytes, 0); assert.equal(entry.connections, 0); assert.deepEqual([...entry.outcomes], ['refused']); }
   assert.deepEqual(Object.fromEntries([...classesSeen].map(([name, entry]) => [name, entry.count])), PINNED_GRPC_CLASSES);
+});
+// The gRPC measurement can fail: the proxy variables name a real counting listener, and a row the guard builds is exported once, which puts the
+// marker key on a listener. A literal-loopback plaintext target is built, so its export is the positive control for the same steps.
+test('CONTROL: a gRPC row the guard builds, exported through the measurement steps, puts bytes on the target listener; the proxy variables name the proxy listener', async () => {
+  const { createSpanExporter, Transport } = load('./dist/src/otel');
+  const target = await listener('target'), proxy = await listener('proxy');
+  assert.match(proxy.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+  const saved = {};
+  for (const name of SCOPED) { saved[name] = process.env[name]; delete process.env[name]; }
+  try {
+    Object.assign(process.env, { grpc_proxy: proxy.url, https_proxy: proxy.url, http_proxy: proxy.url });
+    const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: `http://127.0.0.1:${target.port}`, headers: { ...MARKER }, timeoutMillis: 500 });
+    await new Promise(done => { exporter.export([EXPORT_SPAN], () => done()); setTimeout(done, 1500); });
+    await pause(60);
+    await exporter.shutdown().catch(() => {});
+    assert.ok(target.connections > 0 && target.bytes > 0, 'the built row reached the target listener');
+    assert.equal(proxy.bytes, 0, 'a plaintext channel that carries keys is built with proxies off');
+    note(`CONTROL measured: a built gRPC row -> ${target.connections} connections, ${target.bytes} bytes at the target listener, ${proxy.bytes} at the proxy listener`);
+  } finally { for (const name of SCOPED) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } await Promise.all([target.close(), proxy.close()]); }
 });
 // Exact per-class counts of the refused gRPC rows: error code | source | host class (s1_* and s3_* by name, every other host together).
 const PINNED_GRPC_CLASSES = {
