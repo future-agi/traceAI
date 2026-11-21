@@ -194,7 +194,8 @@ const PINNED_CODE_PAIRS = {
 // A send the guard lets through for a row the oracle refuses is a failure of that row whatever the count says.
 const net = require('node:net');
 const dns = require('node:dns');
-const undici = load('undici');
+// undici is a development dependency of the workspace: the packed fixture does not install it, so it is read from the workspace when the fixture has none.
+const undici = (() => { try { return load('undici'); } catch { return require('undici'); } })();
 const MARKER = { 'x-api-key': 'MARKER-KEY-7f3a91c2-api', 'x-secret-key': 'MARKER-KEY-7f3a91c2-secret' };
 async function listener(label) {
   const state = { label, bytes: 0, connections: 0, servers: [], port: 0 };
