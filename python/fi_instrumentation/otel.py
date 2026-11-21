@@ -1252,13 +1252,29 @@ _PLAIN_TEXT_WARNED: set[str] = set()
 _ALLOW_INSECURE_HTTP = "FI_ALLOW_INSECURE_HTTP"
 
 
-_SESSION_ROUTING = ("request", "send", "get_adapter", "merge_environment_settings", "rebuild_proxies")
+_SESSION_ROUTING = ("request", "send", "prepare_request", "get_adapter", "merge_environment_settings", "rebuild_proxies")
 _ADAPTER_ROUTING = ("send", "get_connection", "get_connection_with_tls_context", "proxy_manager_for", "init_poolmanager")
 
 
 def _routing_is_stock(owner: Any, stock: Any, names: tuple[str, ...]) -> bool:
-    """True when ``owner``'s class overrides none of the routing methods of ``stock`` that ``owner`` is a kind of."""
+    """True when ``owner``'s class overrides none of the routing methods of ``stock`` that ``owner`` is a kind of, and no
+    instance attribute of ``owner`` replaces one of them (a patched ``send`` on the object itself is not the library's)."""
+    instance = getattr(owner, "__dict__", None)
+    if not isinstance(instance, dict) or any(name in instance for name in names):
+        return False
     return all(getattr(type(owner), name, None) is getattr(stock, name, None) for name in names)
+
+
+def _auth_is_stock(auth: Any) -> bool:
+    """True when a session's ``auth`` is unset, a ``(user, password)`` pair or one of the authentication handlers of
+    ``requests``. Any other callable can rewrite the request, URL included, so it cannot be inspected."""
+    from requests import auth as requests_auth
+
+    if auth is None:
+        return True
+    if isinstance(auth, (tuple, list)):
+        return len(auth) == 2
+    return type(auth) in (requests_auth.HTTPBasicAuth, requests_auth.HTTPProxyAuth, requests_auth.HTTPDigestAuth)
 
 
 def _session_is_stock(session: Any) -> bool:
@@ -1266,6 +1282,8 @@ def _session_is_stock(session: Any) -> bool:
     from requests.adapters import HTTPAdapter
 
     if not isinstance(session, requests.Session) or not _routing_is_stock(session, requests.Session, _SESSION_ROUTING):
+        return False
+    if not _auth_is_stock(getattr(session, "auth", None)):
         return False
     adapters = getattr(session, "adapters", None)
     return hasattr(adapters, "values") and all(
@@ -1298,6 +1316,12 @@ def _client_may_proxy(session: Any, host: str, port: int) -> bool:
         return bool((proxies.get("http") or proxies.get("all")) and not urllib.request.proxy_bypass_environment(f"{host}:{port}"))
     except Exception:  # an environment that cannot be read counts as proxied
         return True
+
+
+def _session_may_leave_its_route(session: Any, host: str, port: int) -> bool:
+    """The judgement of ``_client_may_proxy``, taken again at send time for a session the caller passed: the session and the
+    environment are read as they are when the export runs, so a change made after the exporter was built is judged too."""
+    return _client_may_proxy(session, host, port)
 
 
 def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None, grpc: bool = False) -> None:
@@ -1341,6 +1365,28 @@ def _authorize_http_endpoint(endpoint: str | None, allow: bool = False, session:
         _authorize_plain_text(_written_host(endpoint) or origin[1], origin[2], allow, session)
 
 
+def _environment_names_a_key_header_by_an_encoded_delimiter() -> bool:
+    """True when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS``, read after URL decoding (once, twice
+    or three times), has an entry whose name is a Future AGI key header. That covers a name joined to its value by an encoded
+    ``=`` (``x-api-key%3D...``) and a pair carried inside another header's value (``a=b%2Cx-api-key%3D...``), which a consumer
+    that decodes the text again reads as a key header."""
+    from urllib.parse import unquote
+
+    for var in _AMBIENT_HEADER_ENV_VARS:
+        text = os.environ.get(var)
+        for _ in range(4):
+            if not text:
+                break
+            for entry in text.replace(";", ",").split(","):
+                if entry.split("=", 1)[0].strip().lower() in _FI_KEY_HEADER_NAMES:
+                    return True
+            decoded = unquote(text)
+            if decoded == text:
+                break
+            text = decoded
+    return False
+
+
 def _refuse_fi_header_names_in_environment() -> None:
     """Raise when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS`` carry a Future AGI key header name.
 
@@ -1348,7 +1394,7 @@ def _refuse_fi_header_names_in_environment() -> None:
     that exporter is configured for.
     """
     names = {name for name in _ambient_headers() if name in _FI_KEY_HEADER_NAMES}
-    if names:
+    if names or _environment_names_a_key_header_by_an_encoded_delimiter():
         raise UnsupportedFutureAGIEndpointError(
             "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS names a Future AGI key header (x-api-key or "
             "x-secret-key) while this exporter does not send to Future AGI, so OpenTelemetry would send it to that collector. "
@@ -1581,7 +1627,9 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         allow_insecure_http (bool): Allow Future AGI keys over plain http to a self-hosted host other than
             loopback, like ``FI_ALLOW_INSECURE_HTTP=1``. It does not apply to a Future AGI host. A plain
             channel with a session this exporter builds reads no proxy; a session you pass that may use a proxy,
-            or cannot be inspected, raises ``UnsupportedFutureAGIEndpointError`` (code ``proxied``).
+            or cannot be inspected, raises ``UnsupportedFutureAGIEndpointError`` (code ``proxied``). The session is judged
+            again on every export: a change made after the exporter was built (proxies, an environment proxy, a mounted
+            adapter, a replaced routing method, an ``auth`` hook) makes that export send nothing and return a failure.
     """
 
     def __init__(self, *args: Any, allow_insecure_http: bool = False, **kwargs: Any):
@@ -1613,10 +1661,31 @@ class HTTPSpanExporter(_HTTPSpanExporter):
                     bound_args.arguments.get("session"),
                 )
                 origin = _http_origin(getattr(self, "_endpoint", None))
-                _secure_http_transport(self, bool(origin and origin[0] == "http"), bound_args.arguments.get("session"))
+                plain = bool(origin and origin[0] == "http")
+                _secure_http_transport(self, plain, bound_args.arguments.get("session"))
+                caller_session = bound_args.arguments.get("session")
+                if plain and origin is not None and caller_session is not None:
+                    # The caller keeps its session and may change it, or the environment, after this point: every export
+                    # judges it again (see ``export``).
+                    self._fi_session_watch = (caller_session, _written_host(getattr(self, "_endpoint", None)) or origin[1], origin[2])
         except (UnsupportedFutureAGIEndpointError, UnsupportedOTLPExporterError):
             _close_after_refusal(self, _HTTPSpanExporter)
             raise
+
+    def export(self, spans: Any, *args: Any, **kwargs: Any) -> Any:
+        """Export ``spans``. On a plain channel that carries Future AGI keys with a session the caller passed, the session is
+        judged again first, as it is when the export runs: one that may send through a proxy, or whose routing cannot be
+        inspected, sends nothing and the export fails with ``UnsupportedFutureAGIEndpointError`` code ``proxied`` logged."""
+        watch = self.__dict__.get("_fi_session_watch")
+        if watch is not None and _session_may_leave_its_route(*watch):
+            logger.error(
+                "Future AGI keys are not sent over a plain channel with the requests session passed to the exporter: it may "
+                "send through a proxy, or cannot be inspected (code proxied). Use https, or do not pass a session."
+            )
+            from opentelemetry.sdk.trace.export import SpanExportResult
+
+            return SpanExportResult.FAILURE
+        return super().export(spans, *args, **kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""

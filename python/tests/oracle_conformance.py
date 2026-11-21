@@ -319,11 +319,11 @@ class Recorder:
         target = f"127.0.0.1:{self.listeners.target.port}"
 
         def secure(addr, credentials, *args, **kwargs):
-            self.channels.append(("tls", addr, kwargs.get("options") or (args[0] if args else None)))
+            self.channels.append(("tls", addr, kwargs.get("options") or (args[0] if args else None), isinstance(credentials, grpc.ChannelCredentials)))
             return real_secure(target, credentials, *args, **kwargs)
 
         def insecure(addr, *args, **kwargs):
-            self.channels.append(("plain", addr, kwargs.get("options") or (args[0] if args else None)))
+            self.channels.append(("plain", addr, kwargs.get("options") or (args[0] if args else None), False))
             return real_insecure(target, *args, **kwargs)
 
         with contextlib.ExitStack() as stack:
@@ -345,11 +345,15 @@ def send_grpc(exporter):
         pass
 
 
+PORTS_SEEN = {}
+
+
 def run_row(oracle, row, listeners, opt_in, caller, unguarded=False):
     """Execute one row. Returns ``{"decision", "error", "dialed", "marker_bytes", "channel"}``."""
     dims = oracle["dimensions"]
     transport, source = row["transport"], row["source"]
     ports = {"A": listeners.a.port, "B": listeners.b.port, "T": listeners.target.port}
+    PORTS_SEEN.update(ports)
     authority, path = endpoint_for(oracle, row, ports, source != "tls")
     env = {name: None for name in PROXY_NAMES + OWN_NAMES}
     env.update(env_for(oracle, row, ports))
@@ -417,10 +421,23 @@ def run_row(oracle, row, listeners, opt_in, caller, unguarded=False):
 # ---- the rows to run and the comparison --------------------------------------------------------------------------------
 
 CALLERS = ("none", "client_with_proxy", "uninspectable_transport")
-# A row of the oracle that this package answers more strictly, listed by host so the list is the only place a difference lives.
-# The oracle builds these (TLS) or refuses them as a self-hosted plain target; this package refuses every URL that has an
-# ``@`` after its authority as ``disputed_authority``, so no key reaches any sink for these rows either way.
-STRICTER_THAN_ORACLE = {"s1_at_in_path": "disputed_authority"}
+# Rows of the oracle that a ruling decides, listed by host so the list is the only place a difference lives. The ruling is
+# ORACLE-S1-AT-IN-PATH-RULED-EXCEPTION-r1-FISEC.json (fi-security): a URL with an ``@`` after its authority is refused as
+# ``disputed_authority`` on every row of the host, whatever the oracle row says, and no key reaches any sink. These rows are
+# counted as ``ruled_exception``; every other row must match the oracle (https rows included).
+RULING = "ORACLE-S1-AT-IN-PATH-RULED-EXCEPTION-r1-FISEC.json"
+RULED_EXCEPTION = {"s1_at_in_path": "disputed_authority"}
+# The NO_PROXY value of a row with a bypass list is not stated by the oracle; ``env_for`` reconstructs it from the host of the
+# row (see ``NO_PROXY_VALUES``). Such rows are counted as ``derived``, apart from the rows whose environment the oracle states.
+CATEGORIES = ("matched", "ruled_exception", "derived")
+
+
+def classify(row):
+    """The category of a row: ``ruled_exception`` (decided by the ruling), ``derived`` (its NO_PROXY value is reconstructed) or
+    ``matched`` (its environment is stated by the oracle and the answer must equal the row's)."""
+    if row["host"] in RULED_EXCEPTION:
+        return "ruled_exception"
+    return "matched" if row["no_proxy"] == "none" else "derived"
 
 
 def cases(oracle, transport):
@@ -467,8 +484,10 @@ def problems(oracle, row, transport, caller, outcome):
     want = expected(row, transport, caller)
     got = (outcome["decision"], outcome["error"], outcome["dialed"])
     group = oracle["dimensions"]["hosts"][row["host"]]["group"]
-    stricter = STRICTER_THAN_ORACLE.get(row["host"])
-    if stricter and got[:2] == ("refuse", stricter) and outcome["marker_bytes"] == 0:
+    ruled = RULED_EXCEPTION.get(row["host"])
+    if ruled:
+        if got[:2] != ("refuse", ruled) or outcome["marker_bytes"]:
+            return [f"the ruling {RULING} says refuse {ruled} with no marker byte, answered {got} with {outcome['marker_bytes']} bytes"]
         return []
     if want[2] == "unchecked":
         want, got = want[:2], got[:2]
@@ -479,10 +498,20 @@ def problems(oracle, row, transport, caller, outcome):
             found.append(f"{outcome['marker_bytes']} marker bytes at a sink")
     elif outcome["decision"] == "build" and not outcome["marker_bytes"]:
         found.append("a built plain channel delivered no key")
-    if transport == "grpc" and row["source"] == "tls" and outcome["decision"] == "build" and outcome["channel"]:
-        options = dict(o for o in (outcome["channel"][2] or ()) if isinstance(o, tuple))
-        if any(name in options for name in ("grpc.enable_http_proxy", "grpc.http_proxy")):
-            found.append("a TLS channel was given a proxy option")
+    if transport == "grpc" and row["source"] == "tls" and outcome["decision"] == "build":
+        channel = outcome["channel"]
+        if not channel:
+            found.append("a built TLS row opened no channel")
+        else:
+            kind, address, raw_options, has_credentials = channel[0], channel[1], channel[2], channel[3]
+            options = dict(o for o in (raw_options or ()) if isinstance(o, tuple))
+            configured = oracle["dimensions"]["hosts"][row["host"]]["authority"].replace("{T}", str(PORTS_SEEN.get("T", "")))
+            if kind != "tls" or not has_credentials:
+                found.append(f"the channel is {kind!r} (credentials: {has_credentials}), not TLS with credentials")
+            if address != configured:
+                found.append(f"the channel targets {address!r}, the configured host is {configured!r}")
+            if any(name in options for name in ("grpc.enable_http_proxy", "grpc.http_proxy")):
+                found.append("a TLS channel was given a proxy option")
     if row["source"] != "tls" and transport == "grpc" and outcome["decision"] == "build":
         options = dict(o for o in (outcome["channel"][2] or ()) if isinstance(o, tuple)) if outcome["channel"] else {}
         if options.get("grpc.enable_http_proxy") != 0 or outcome["channel"][0] != "plain":

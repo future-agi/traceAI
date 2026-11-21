@@ -72,11 +72,23 @@ def _cells(transport):
     return cells
 
 
+# What the cells measured: per transport and category, the executions, the distinct rows and the executions with a marker byte
+# at a sink (a refused row must have none).
+TALLY = {t: {c: {"executions": 0, "rows": set(), "conforming": 0, "refused_with_marker_bytes": 0} for c in oc.CATEGORIES}
+         for t in TRANSPORTS}
+
+
 def _run_cell(transport, cell, listeners):
     mismatches = []
     for row, opt_in, caller in _cells(transport)[cell]:
         outcome = oc.run_row(ORACLE, row, listeners, opt_in, caller)
-        for problem in oc.problems(ORACLE, row, transport, caller, outcome):
+        found = oc.problems(ORACLE, row, transport, caller, outcome)
+        tally = TALLY[transport][oc.classify(row)]
+        tally["executions"] += 1
+        tally["rows"].add(id(row))
+        tally["conforming"] += not found
+        tally["refused_with_marker_bytes"] += bool(outcome["decision"] == "refuse" and outcome["marker_bytes"])
+        for problem in found:
             mismatches.append(f"{row['host']}|{row['env']}|{row['no_proxy']}|opt-in={opt_in!r}|caller={caller}: {problem}")
     assert mismatches == [], f"{len(mismatches)} rows differ, first: {mismatches[:5]}"
 
@@ -103,10 +115,42 @@ def test_the_eval_config_request_answers_every_row(cell, listeners):
     _run_cell("eval-config", cell, listeners)
 
 
-def test_the_only_rows_this_package_answers_differently_are_the_ones_listed():
-    assert oc.STRICTER_THAN_ORACLE == {"s1_at_in_path": "disputed_authority"}
+def test_the_only_rows_this_package_answers_differently_are_the_ones_the_ruling_lists():
+    assert oc.RULED_EXCEPTION == {"s1_at_in_path": "disputed_authority"}
+    assert oc.RULING == "ORACLE-S1-AT-IN-PATH-RULED-EXCEPTION-r1-FISEC.json"
     hosts = {row["host"] for row in ORACLE["rows"] if row["decision"] == "build" and row["source"] == "tls"}
-    assert "s1_at_in_path" in hosts  # the oracle builds these, this package refuses them: they are the listed difference
+    assert "s1_at_in_path" in hosts  # the oracle builds these (https), the ruling refuses them: ruled_exception, not a mismatch
+    # https rows of every other host still match the oracle: only the ruled host has an exception.
+    assert {oc.classify(row) for row in ORACLE["rows"] if row["host"] != "s1_at_in_path"} == {"matched", "derived"}
+    assert {oc.classify(row) for row in ORACLE["rows"] if row["host"] == "s1_at_in_path"} == {"ruled_exception"}
+
+
+def test_the_not_applicable_rows_are_counted_per_transport():
+    counts = {t: oc.cases(ORACLE, t)[1] for t in TRANSPORTS}
+    assert counts == {"http": 0, "grpc": 7456, "eval-config": 7406}
+    assert sum(counts.values()) == 14862
+
+
+def test_the_conformance_counts(capsys):
+    """The table of what the cells above drove. It needs every cell to have run in this process."""
+    expected_rows = {t: len({id(r) for r, _, _ in oc.cases(ORACLE, t)[0]}) for t in TRANSPORTS}
+    expected_executions = {t: len(oc.cases(ORACLE, t)[0]) for t in TRANSPORTS}
+    done = {t: sum(c["executions"] for c in TALLY[t].values()) for t in TRANSPORTS}
+    if done != expected_executions:
+        pytest.skip(f"only {done} of {expected_executions} executions ran in this process: run the whole file")
+    lines = ["", "plain-channel conformance (OpenTelemetry exporter release in use; oracle rows: %d)" % len(ORACLE["rows"]),
+             "transport     | rows driven | executions | matched rows | ruled_exception rows | derived rows | not-applicable rows | refused with marker bytes"]
+    for t in TRANSPORTS:
+        by = TALLY[t]
+        lines.append("%-13s | %11d | %10d | %12d | %20d | %12d | %19d | %d" % (
+            t, expected_rows[t], expected_executions[t], len(by["matched"]["rows"]), len(by["ruled_exception"]["rows"]),
+            len(by["derived"]["rows"]), oc.cases(ORACLE, t)[1], sum(c["refused_with_marker_bytes"] for c in by.values())))
+        assert sum(len(c["rows"]) for c in by.values()) == expected_rows[t]
+        assert sum(c["conforming"] for c in by.values()) == expected_executions[t]
+        assert sum(c["refused_with_marker_bytes"] for c in by.values()) == 0
+    lines.append("ruled_exception: %s (%s); derived = NO_PROXY value reconstructed from the host, not stated by the oracle" % (oc.RULING, ", ".join(oc.RULED_EXCEPTION)))
+    with capsys.disabled():
+        print("\n".join(lines))
 
 
 # ---- the counter works: an unguarded send makes it non-zero ------------------------------------------------------------
