@@ -333,3 +333,30 @@ def test_a_change_to_the_callers_session_after_the_build_does_not_fail_the_expor
     listeners.settle()
     assert listeners.a.marker_bytes == 0 and listeners.a.connections == 0 and listeners.target.marker_bytes > 0
 
+
+# ---- the environment value is parsed without logging it -----------------------------------------------------------------------
+
+LOGGED_FORMS = ["x-api-key%3D{key}", "X-API-KEY%3D{key}", "x-api-key%3d{key}", "x-api-key+%3D+{key}", "x-api-key%20%3D%20{key}",
+                "x-secret-key%3D{key}", "X-SECRET-KEY%3D{key}"]
+
+
+@pytest.mark.parametrize("variable", ["OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"])
+@pytest.mark.parametrize("form", LOGGED_FORMS)
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_refused_environment_header_puts_no_key_byte_in_any_log_record(variable, form, transport, listeners, caplog):
+    if transport == "grpc":
+        pytest.importorskip("grpc")
+    env = {name: None for name in oc.PROXY_NAMES + oc.OWN_NAMES}
+    env.update({variable: form.format(key=oc.MARKER_KEY), "FI_API_KEY": oc.MARKER_KEY, "FI_SECRET_KEY": oc.MARKER_SECRET})
+    target = f"127.0.0.1:{listeners.target.port}"
+    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="opentelemetry")
+    with oc.environment(env), pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        if transport == "http":
+            otel.HTTPSpanExporter(endpoint=f"http://{target}/v1/traces", timeout=0.4)
+        else:
+            otel.GRPCSpanExporter(endpoint=target, insecure=True, timeout=0.4)
+    assert raised.value.code == "key_header_in_environment"
+    text = "\n".join(f"{record.name} {record.getMessage()} {record.args}" for record in caplog.records)
+    assert oc.MARKER_KEY not in text and oc.MARKER_SECRET not in text and "mkr-" not in text, text
+
