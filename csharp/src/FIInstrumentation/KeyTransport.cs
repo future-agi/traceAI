@@ -23,7 +23,7 @@ public sealed record FiKeyDecision(bool Keys, bool Tls, bool PlaintextOptIn, boo
 /// <list type="bullet">
 /// <item>a literal loopback host (localhost, 127.0.0.1, ::1, exactly as written) may use plaintext;</item>
 /// <item>a Future AGI host (*.futureagi.com, one trailing dot allowed) always uses TLS: gRPC is made https, plaintext HTTP is refused;</item>
-/// <item>a target whose written and parsed host disagree (a backslash before an @, %5C, an @ after the authority, an empty authority) is refused;</item>
+/// <item>a target whose written and parsed host disagree is refused: a backslash or %5C in the authority, an @ in the path, query or fragment, an empty authority, or a host name whose Host and IdnHost differ (non-ASCII letters, full-width dots);</item>
 /// <item>any other host over plaintext is refused unless FI_ALLOW_INSECURE_HTTP is exactly 1 or the option is set, with one warning per process;</item>
 /// <item>a plaintext request that carries keys is sent with proxies off (loopback or opted in), and no key-carrying request follows a redirect (see <see cref="CreateHttpClient"/>).</item>
 /// </list>
@@ -35,11 +35,11 @@ public static class FiKeyTransport
     private static int s_warned;
     private static readonly object Gate = new();
 
-    private const string MismatchMessage = "The endpoint names its host in a way parsers read differently (a backslash, a percent-encoded backslash or an @ outside the host part), so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.";
+    private const string MismatchMessage = "The endpoint names its host in a way parsers read differently (a backslash or %5C in the authority, an @ in the path, query or fragment, or a host name that is not plain ASCII), so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.";
     private const string EmptyAuthorityMessage = "The endpoint has an empty host, so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.";
     private const string UnreadableMessage = "The endpoint is not an http or https URL, so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.";
     private const string PlaintextFiMessage = "Future AGI keys are sent only over TLS: use an https:// endpoint for a Future AGI host.";
-    private const string PlaintextNotAllowedMessage = "Future AGI keys are sent over a plaintext channel only to loopback. For a self-hosted collector without TLS, set FI_ALLOW_INSECURE_HTTP=1 or pass the allow-insecure-http option.";
+    private const string PlaintextNotAllowedMessage = "Future AGI keys are sent over a plaintext channel only to loopback. For a self-hosted collector without TLS, set FI_ALLOW_INSECURE_HTTP=1, RegisterOptions.AllowInsecureHttp or AutoOptions.AllowInsecureHttp.";
     private const string AmbientMessage = "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS carries a Future AGI key header or a known credential, so no exporter is created for this collector. Remove it from those variables, or send the traces to Future AGI.";
 
     /// <summary>Whether <paramref name="host"/> (any case, one trailing dot allowed) is futureagi.com or one of its subdomains.</summary>
@@ -109,6 +109,10 @@ public static class FiKeyTransport
         if (ambiguous) throw new FiKeyRefusedException("FI_HOST_MISMATCH", MismatchMessage);
         if (!Uri.TryCreate(target.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             throw new FiKeyRefusedException("FI_TARGET_UNREADABLE", UnreadableMessage);
+        // The checks below read uri.Host; the transport connects to uri.IdnHost. For a name they must be the same text: a homograph or a
+        // full-width dot is refused, never judged on IdnHost alone. IP literals (zone ids included) have no such form.
+        if (uri.HostNameType == UriHostNameType.Dns && !string.Equals(uri.Host, uri.IdnHost, StringComparison.Ordinal))
+            throw new FiKeyRefusedException("FI_HOST_MISMATCH", MismatchMessage);
         var written = WrittenHost(target);
         var fiParsed = IsFiHostName(uri.Host);
         var fiWritten = written != null && IsFiHostName(written);
@@ -137,7 +141,7 @@ public static class FiKeyTransport
             if (s_warned == 1) return;
             s_warned = 1;
         }
-        try { Console.Error.WriteLine($"[traceAI] Sending Future AGI keys in plaintext to {origin} because FI_ALLOW_INSECURE_HTTP or the allow-insecure-http option is set."); } catch { }
+        try { Console.Error.WriteLine($"[traceAI] Sending Future AGI keys in plaintext to {origin} because FI_ALLOW_INSECURE_HTTP, RegisterOptions.AllowInsecureHttp or AutoOptions.AllowInsecureHttp is set."); } catch { }
     }
 
     /// <summary>
@@ -176,26 +180,37 @@ public static class FiKeyTransport
         var raw = new[] { Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"), Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_HEADERS") }
             .Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToArray();
         if (raw.Length == 0) return;
-        var values = new List<string>();
-        foreach (var text in raw)
-        {
-            values.Add(text);
-            foreach (var pair in text.Split(',', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var split = pair.IndexOf('=');
-                if (split <= 0) continue;
-                var name = pair[..split].Trim();
-                if (name.Equals("x-api-key", StringComparison.OrdinalIgnoreCase) || name.Equals("x-secret-key", StringComparison.OrdinalIgnoreCase))
-                    throw new FiKeyRefusedException("FI_AMBIENT_KEY_HEADERS", AmbientMessage);
-                var value = pair[(split + 1)..].Trim();
-                values.Add(value);
-                try { values.Add(Uri.UnescapeDataString(value)); } catch (UriFormatException) { }
-            }
-        }
         var secrets = new HashSet<string>(knownSecrets ?? Array.Empty<string>(), StringComparer.Ordinal);
         foreach (var name in new[] { "FI_API_KEY", "FI_SECRET_KEY" })
             if (Environment.GetEnvironmentVariable(name) is { } v && v.Trim().Length >= 8) secrets.Add(v);
+        secrets.RemoveWhere(secret => secret.Length < 8);
+        var values = new List<string>();
+        foreach (var text in raw)
+        {
+            // The exporter unescapes the whole string and then splits it, so both views are screened: the text as written, and the text
+            // with every percent escape resolved. A pair counts as Future AGI if either view says so.
+            var views = new List<string> { text };
+            try { views.Add(Uri.UnescapeDataString(text)); }
+            // A string that cannot be unescaped is refused when there is a Future AGI key to protect.
+            catch (UriFormatException) when (secrets.Count > 0) { throw new FiKeyRefusedException("FI_AMBIENT_KEY_HEADERS", AmbientMessage); }
+            catch (UriFormatException) { }
+            foreach (var view in views)
+            {
+                values.Add(view);
+                foreach (var pair in view.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var split = pair.IndexOf('=');
+                    if (split <= 0) continue;
+                    var name = pair[..split].Trim();
+                    if (name.Equals("x-api-key", StringComparison.OrdinalIgnoreCase) || name.Equals("x-secret-key", StringComparison.OrdinalIgnoreCase))
+                        throw new FiKeyRefusedException("FI_AMBIENT_KEY_HEADERS", AmbientMessage);
+                    var value = pair[(split + 1)..].Trim();
+                    values.Add(value);
+                    try { values.Add(Uri.UnescapeDataString(value)); } catch (UriFormatException) { }
+                }
+            }
+        }
         foreach (var secret in secrets)
-            if (secret.Length >= 8 && values.Any(value => value.Contains(secret, StringComparison.Ordinal))) throw new FiKeyRefusedException("FI_AMBIENT_KEY_HEADERS", AmbientMessage);
+            if (values.Any(value => value.Contains(secret, StringComparison.Ordinal))) throw new FiKeyRefusedException("FI_AMBIENT_KEY_HEADERS", AmbientMessage);
     }
 }

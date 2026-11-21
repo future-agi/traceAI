@@ -83,7 +83,7 @@ public static class TraceAIAuto
             {
                 s_failed=true;
                 // A refused destination names the setting to change and no value.
-                if(error is FiKeyRefusedException refused) Warn("route",refused.Message);
+                if(error is FiKeyRefusedException refused) Warn("route-"+refused.Code,refused.Message);
                 Warn("init", "Agent initialization failed; application continues without tracing.");
             }
         }
@@ -276,6 +276,8 @@ internal sealed class Agent : IDisposable
     /// </summary>
     internal static OtlpExporterOptions FiRouteOptions(AutoConfig config)
     {
+        // The Future AGI exporter is built on the OTLP exporter, which merges OTEL_EXPORTER_OTLP_(TRACES_)HEADERS: those carry no key header and no known secret.
+        FiKeyTransport.AssertNoFiKeysInAmbientHeaders(config.CredentialValues.Concat(KnownSecrets.Registered()));
         var decision=FiKeyTransport.Decide(config.Get("BASE_URL").TrimEnd('/')+"/tracer/v1/traces",grpc:false,keys:true,allowInsecureHttp:config.Options.AllowInsecureHttp==true);
         return new OtlpExporterOptions {
             Endpoint=new Uri(decision.Endpoint), Protocol=OtlpExportProtocol.HttpProtobuf,

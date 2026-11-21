@@ -29,6 +29,9 @@ public static class TraceAI
     /// <summary>
     /// Primary entry point. Creates a TracerProvider, configures exporters, and returns an FITracer.
     /// </summary>
+    /// <exception cref="FiKeyRefusedException">The keys may not go to the endpoint (see <see cref="FiKeyTransport.Decide"/>), or
+    /// <c>OTEL_EXPORTER_OTLP_HEADERS</c> or <c>OTEL_EXPORTER_OTLP_TRACES_HEADERS</c> carries an <c>x-api-key</c> or <c>x-secret-key</c> header,
+    /// or a value that contains one of the Future AGI keys. The message names the setting to change and no value; nothing is sent and no provider is created.</exception>
     public static FITracer Register(Action<RegisterOptions>? configure = null)
     {
         lock (s_lock)
@@ -114,6 +117,12 @@ public static class TraceAI
             ?? (options.Transport == Transport.Grpc ? Settings.GetGrpcEndpoint() : Settings.GetCollectorEndpoint());
         var decision = FiKeyTransport.Decide(options.Transport == Transport.Grpc ? target : target.TrimEnd('/') + "/tracer/v1/traces",
             options.Transport == Transport.Grpc, carriesKeys, options.AllowInsecureHttp);
+
+        // The exporter merges OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS into what it sends: refuse when they carry a Future AGI
+        // key header or a value that contains one of the keys this registration uses.
+        FiKeyTransport.AssertNoFiKeysInAmbientHeaders(headers
+            .Where(h => h.Key.Equals("X-Api-Key", StringComparison.OrdinalIgnoreCase) || h.Key.Equals("X-Secret-Key", StringComparison.OrdinalIgnoreCase))
+            .Select(h => h.Value));
 
         // Build TracerProvider
         var builder = Sdk.CreateTracerProviderBuilder()
