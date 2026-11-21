@@ -38,5 +38,5 @@ model = GenerativeModel("gemini-1.5-flash")
 
 
 if __name__ == "__main__":
-    response = model.count_tokens("Write an artice on AGI.")
+    response = model.count_tokens("Write an article on AGI.")
     print(response)
