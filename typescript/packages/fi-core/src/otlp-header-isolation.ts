@@ -1,3 +1,4 @@
+/// <reference path="./types/otlp-node-http.d.ts" />
 /**
  * Exporters bound for the Future AGI endpoint send the headers the SDK sets plus any the
  * caller passes in explicitly. The OTLP exporters would also merge OTEL_EXPORTER_OTLP_HEADERS and
