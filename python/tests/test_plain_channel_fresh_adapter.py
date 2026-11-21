@@ -130,34 +130,77 @@ def _retry_that_redirects(port):
     return Redirecting(total=3, connect=3, read=3, other=3, allowed_methods=None)
 
 
-def test_a_retry_subclass_that_moves_the_pool_to_a_proxy_puts_no_marker_byte_on_the_proxy(listeners):
-    closer = _Closer()
+def _retry_subclass(kind, port):
+    if kind == "rewrites the pool":
+        return _retry_that_redirects(port)
+
+    class Plain(Retry):
+        pass
+
+    class Overriding(Retry):
+        def sleep(self, *args, **kwargs):
+            return super().sleep(*args, **kwargs)
+
+    return {"no override": Plain, "overrides a method": Overriding}[kind](total=3)
+
+
+@pytest.mark.parametrize("kind", ["rewrites the pool", "no override", "overrides a method"])
+def test_a_retry_subclass_on_a_mounted_adapter_is_refused_at_build_with_no_byte_anywhere(kind, listeners):
     caller = requests.Session()
-    caller.mount("http://", requests.adapters.HTTPAdapter(max_retries=_retry_that_redirects(listeners.a.port)))
+    caller.mount("http://", requests.adapters.HTTPAdapter(max_retries=_retry_subclass(kind, listeners.a.port)))
     listeners.reset()
+    with oc.environment(_env(listeners)), listeners.shim(), pytest.raises(otel.UnsupportedFutureAGIEndpointError) as raised:
+        _built(listeners, caller)
+    assert raised.value.code == "proxied" and "Redirecting" not in str(raised.value)
+    assert listeners.measure() == {"dialed": None, "marker_bytes": 0}
+
+
+def test_a_retry_subclass_is_not_judged_stock():
+    caller = requests.Session()
+    caller.mount("http://", requests.adapters.HTTPAdapter(max_retries=type("Sub", (Retry,), {})(total=1)))
+    assert otel._session_is_stock(caller) is False
+
+
+@pytest.mark.parametrize("retries", [0, 3, Retry(total=2, backoff_factor=0.5, status_forcelist=[503])], ids=["0", "int", "Retry"])
+def test_an_int_or_an_exact_retry_is_accepted_at_build_and_sends(retries, listeners):
+    caller = requests.Session()
+    caller.mount("http://", requests.adapters.HTTPAdapter(max_retries=retries))
+    listeners.reset()
+    with oc.environment(_env(listeners)), listeners.shim():
+        exporter = _built(listeners, caller)
+        try:
+            held = _sender_adapter(exporter).max_retries
+            assert type(held) is Retry and held.total == (retries if isinstance(retries, int) else retries.total)
+            assert _outcome(exporter) == SUCCESS
+        finally:
+            exporter.shutdown()
+    assert _bytes_at_proxies(listeners) == 0 and listeners.target.marker_bytes > 0
+
+
+def test_a_retry_subclass_is_used_as_built_on_a_channel_with_tls(tmp_path, listeners):
+    from test_plain_channel_isolated_sender import _tls_server
+
+    server, crt = _tls_server(tmp_path)
+    caller = requests.Session()
+    caller.mount("https://", requests.adapters.HTTPAdapter(max_retries=type("Sub", (Retry,), {})(total=1)))
     try:
-        with oc.environment(_env(listeners)), _shim_to(listeners, closer.port):
-            exporter = _built(listeners, caller)
+        with oc.environment(_env(listeners)):
+            exporter = otel.HTTPSpanExporter(endpoint=f"https://127.0.0.1:{server.server_address[1]}/v1/traces", timeout=5,
+                                            session=caller, certificate_file=str(crt))
             try:
-                _outcome(exporter)
+                assert exporter.export([oc.one_span()]) == SUCCESS
             finally:
                 exporter.shutdown()
     finally:
-        closer.close()
-    assert _bytes_at_proxies(listeners) == 0 and listeners.a.connections == 0 and listeners.b.connections == 0
-    assert closer.connections > 0
+        server.shutdown()
 
 
-def test_the_retry_of_the_sending_adapter_is_exactly_retry_with_the_values_of_the_callers():
-    class Custom(Retry):
-        pass
-
+def test_the_retry_of_the_sending_adapter_keeps_the_values_of_an_exact_retry():
     wanted = dict(total=5, connect=4, read=3, redirect=2, status=6, other=7, backoff_factor=0.25, allowed_methods=None,
                   status_forcelist=[502, 503], raise_on_redirect=False, raise_on_status=False)
     caller = requests.Session()
-    caller.mount("http://", requests.adapters.HTTPAdapter(max_retries=Custom(**wanted)))
-    sender = otel._isolated_session(caller)
-    retries = sender.adapters["http://"].max_retries
+    caller.mount("http://", requests.adapters.HTTPAdapter(max_retries=Retry(**wanted)))
+    retries = otel._isolated_session(caller).adapters["http://"].max_retries
     assert type(retries) is Retry
     for name, value in wanted.items():
         held = getattr(retries, name)
