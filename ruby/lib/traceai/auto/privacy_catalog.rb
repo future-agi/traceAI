@@ -334,12 +334,20 @@ module TraceAI
       MATCH_ROUNDS = 8
       MATCH_STEPS = 200_000
       MATCH_WORK = 16_000_000
-      # Four times what the largest ordinary span costs. The text budget of a span is max_text_chars (4 MiB) and
-      # charges each string twice, so a span holds about 2 MiB of text; a value with one fragment next to a
-      # placeholder costs about 4 units a character (12 million for 3 million characters), so such a span costs
-      # about 8 million. Ordinary spans, far smaller, never reach the bound, and it is twice MATCH_WORK, so a single
-      # value can still use all of its own. Matching costs from 20 to 90 nanoseconds a unit, so the bound caps the
-      # matching of one span at roughly one to three seconds on the host's thread.
+      # What the matcher costs scales with the registry, not only with the text: a value that holds a placeholder is
+      # read once for every registered secret (up to 1024), at the length of the secret, and each placeholder is
+      # examined for every secret. A span with a full registry of long credentials and a few hundred placeholders in
+      # its values can therefore reach this bound; the span of a few values with a few placeholders, and the largest
+      # span without them, cannot: the text budget of a span is max_text_chars (4 MiB) and charges each string twice,
+      # so a span holds about 2 MiB of text, and a value with one fragment next to a placeholder costs about 4 units a
+      # character (12 million for 3 million characters), about 8 million for such a span. The bound is 32 million:
+      # twice MATCH_WORK, so a single value can still use all of its own. Matching costs from 20 to 90 nanoseconds a
+      # unit, so the bound caps the matching of one span at roughly one to three seconds on the host's thread.
+      # Past it the value being matched and every later value of the span (and every later name in it) is the
+      # placeholder. Privacy.snapshot scrubs a span's name, status text, resource and scope before its attributes, so
+      # the span keeps its identity. The fallbacks that run only after the snapshot failed (Privacy.safe_metadata, with
+      # one Budget for keys and one for values, and Privacy.recover_identity, with one for the name and one for the
+      # resource) each use a Budget of their own, so the worst case for one span is five times this bound.
       MATCH_SPAN_WORK = 32_000_000
       class MatchLimit < StandardError; end
 
@@ -406,8 +414,10 @@ module TraceAI
         items, tokens, positions = scan
         size = secret.length
         spend(work, tokens.length + 1)
-        spend(work, size) # codepoints reads the whole secret
+        spend(work, 2 * size) # codepoints reads the whole secret, and so does the set of its characters below
         codes = secret.codepoints
+        present = {}
+        codes.each { |code| present[code] = true }
         listed = positions.fetch(codes[0], nil)
         starts = []
         second = codes[1]
@@ -419,8 +429,7 @@ module TraceAI
           if token + 1 >= items.length || following.nil?
             starts << token
           else
-            spend(work, size) # include? reads up to the whole secret
-            starts << token if secret.include?([following].pack('U'))
+            starts << token if present.key?(following) # one hash lookup; the loop is charged above
           end
           next unless listed
           low = token - size + 1
@@ -434,9 +443,11 @@ module TraceAI
           end
         end
         return nil if starts.empty?
-        # The table sets bit `index` of one mask per distinct character: each `|=` copies a mask of up to
-        # size / 64 words, so building it costs about size * (size / 64) / 2 words, on top of one step per character.
-        spend(work, starts.length + size + ((size * size) >> 7))
+        # One step per start, and one per character of the secret for the loop that builds the table. The table sets
+        # bit `index` of one mask per distinct character, and both `1 << index` and the `|=` make a mask of at most
+        # index / 64 + 1 words: at most 2 * (size + size * (size - 1) / 128) words in all, which 2 * size +
+        # size * size / 64 covers.
+        spend(work, starts.length + size + 2 * size + ((size * size) >> 6))
         table = Hash.new(0)
         codes.each_with_index { |code, index| table[code] |= 1 << index }
         full = (1 << (size + 1)) - 1
@@ -459,8 +470,10 @@ module TraceAI
       # The end of the longest match of the automaton from `start` that holds a placeholder and a literal, or nil.
       def match_end(items, start, table, full, accept, work, size)
         mask = 1; position = start; best = nil; token = false; literal = false
-        # A step makes up to four operations on masks of size + 1 bits, each reading up to (size + 1) / 64 + 1 words.
-        step = 1 + 4 * (((size + 1) >> 6) + 1)
+        # A step makes at most seven operations on masks of at most size + 1 bits (the placeholder branch: negate, and,
+        # shift, subtract, complement, and, then the test against `accept`), each reading and writing at most
+        # (size + 1) / 64 + 1 words; 8 words' worth covers them, plus one for the step itself.
+        step = 1 + 8 * (((size + 1) >> 6) + 1)
         while mask != 0 && position < items.length
           work[1] += 1
           raise MatchLimit if work[1] > MATCH_STEPS
@@ -506,8 +519,8 @@ module TraceAI
         end
         # Secrets first, none matching across a placeholder; then whatever of an overlapping secret the first pass left
         # beside a placeholder (see close_fragments).
-        # A secret with bytes that are not valid in its encoding can neither be matched as text nor read as code points.
-        plain = secrets.select { |secret| Codec.type(secret) == String && secret.valid_encoding? && secret.length >= 8 && secret != REDACTED && !secret.include?(REDACTED) }
+        # Secrets are read as the registry reads them (invalid bytes become U+FFFD), never skipped for their bytes.
+        plain = normalize_secrets(secrets).select { |secret| secret != REDACTED && !secret.include?(REDACTED) }
         plain.each do |secret|
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end

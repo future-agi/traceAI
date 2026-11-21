@@ -10,10 +10,10 @@ class SpanWorkBoundTest < Minitest::Test
   P = TraceAI::Auto::Privacy
   PLACEHOLDER = P::REDACTED
 
-  # 300 secrets that never occur in the text, and a value of 200 placeholders each followed by one character: the
-  # matcher examines every candidate for every secret and changes nothing, about 1.3 million units of work, well
-  # under MATCH_WORK for one value.
-  SECRETS = Array.new(300) { |i| format('unrelated-secret-%03d!', i) }.freeze
+  # 300 secrets of 300 characters that never occur in the text, and a value of 200 placeholders each followed by one
+  # character: the matcher reads every secret and changes nothing, under 1 million units of work, well under
+  # MATCH_WORK for one value.
+  SECRETS = Array.new(300) { |i| format('unrelated-secret-%03d-', i) + ('s' * 280) }.freeze
   VALUE = ('x' + PLACEHOLDER) * 200
 
   def timed
@@ -31,13 +31,34 @@ class SpanWorkBoundTest < Minitest::Test
 
   def test_values_past_the_span_work_bound_are_replaced_and_the_scrub_ends_in_bounded_time
     values = Array.new(80) { VALUE } + ['a plain value with no placeholder in it']
-    cleaned, seconds = timed { P.scrub({'messages' => values}, SECRETS)['messages'] }
+    cleaned = P.scrub({'messages' => values}, SECRETS)['messages']
     assert_equal values.length, cleaned.length
     kept = cleaned.take_while { |item| item == VALUE }
     assert_operator kept.length, :>, 0, 'the first values of a span are scrubbed normally'
     assert_operator kept.length, :<, values.length - 10, 'values past the span bound are not scrubbed one by one forever'
     assert_equal [PLACEHOLDER], cleaned.drop(kept.length).uniq, 'every value past the bound is the placeholder, even one with no placeholder in it'
-    assert_operator seconds, :<, 10
+  end
+
+  # Past the bound a value costs nothing, so the time of a scrub stops growing with the number of values: four times
+  # the values take about as long (a scrub with no span bound takes about four times as long, and a quadratic one
+  # sixteen times). Best of three, so a busy machine does not decide.
+  def best_of_three(count)
+    values = Array.new(count) { VALUE }
+    Array.new(3) { timed { P.scrub({'messages' => values}, SECRETS) }.last }.min
+  end
+
+  def with_span_bound(value)
+    saved = P::MATCH_SPAN_WORK
+    P.send(:remove_const, :MATCH_SPAN_WORK); P.const_set(:MATCH_SPAN_WORK, value)
+    yield
+  ensure
+    P.send(:remove_const, :MATCH_SPAN_WORK); P.const_set(:MATCH_SPAN_WORK, saved)
+  end
+
+  def test_the_time_of_a_span_scrub_stops_growing_once_the_bound_is_reached
+    limit = 4_000_000
+    small, large = with_span_bound(limit) { [best_of_three(100), best_of_three(400)] }
+    assert_operator large, :<, small * 2, "100 values took #{small.round(3)}s, 400 values #{large.round(3)}s"
   end
 
   # The largest ordinary span: one value of about 2 MB (the span's text budget charges each string twice) with a
@@ -127,10 +148,14 @@ class SpanWorkBoundTest < Minitest::Test
     copy = TraceAI::Auto::Privacy.snapshot(record, TraceAI::Auto::ExportResource.new({'service.name' => 'checkout-service'}), config, registry)
     assert_equal 'identity-span', copy.name
     assert_equal 'checkout-service', copy.resource.attributes['service.name']
-    values = (0...200).map { |i| copy.attributes["app.value.#{i}"] }
-    kept = values.take_while { |item| item == value }
+    kept = (0...200).take_while { |i| copy.attributes["app.value.#{i}"] == value }
     assert_operator kept.length, :>, 0
     assert_operator kept.length, :<, 200, 'the bound is reached'
-    assert_equal [PLACEHOLDER], values.drop(kept.length).uniq
+    # The value that reached the bound is the placeholder under its own name; past it the names are the placeholder
+    # too, so the later attributes share one entry.
+    named, others = copy.attributes.partition { |key, _| key.start_with?('app.value.') }
+    assert_equal({PLACEHOLDER => PLACEHOLDER}, others.to_h)
+    assert_equal [value, PLACEHOLDER], named.map(&:last).uniq.sort_by { |item| item == PLACEHOLDER ? 1 : 0 }
+    assert_operator named.length, :<=, kept.length + 1
   end
 end

@@ -214,23 +214,27 @@ class OverlappingSecretsTest < Minitest::Test
     assert_operator spent[0], :<=, limit
   end
 
-  # The first scan fits the budget and nothing is ever replaced; the candidate prefilter alone trips it: a secret of
-  # 3000 characters that has none of the characters that follow the placeholders.
+  # The first scan fits the budget and nothing is ever replaced; reading the secret alone trips it: its 3000
+  # characters are read twice (code points, and the set of its characters that the candidate test uses), so the limit
+  # is just under the first scan, the placeholder list and those two reads. The candidates themselves cost one lookup
+  # each, charged with the loop over the placeholders.
   def test_hitting_the_work_cap_in_the_candidate_prefilter_replaces_the_whole_value
     secret = ('abcdefghij' * 300) + 'ABCDEFGH'
     text = '!-!' + (PLACEHOLDER + '!-!') * 500
     assert_equal text, close(text, [secret]) # within the default budget it is left as it is
     spent = [0, 0]
-    limit = text.length + 1 + 100_000
+    limit = text.length + 1 + 501 + 2 * secret.length - 1
     with_limits(MATCH_WORK: limit) { assert_equal PLACEHOLDER, close(text, [secret], spent) }
     assert_operator spent[0], :<=, limit
+    with_limits(MATCH_WORK: limit + 1) { assert_equal text, close(text, [secret]) }
   end
 
-  def dense_text(characters) = ('!-!' + PLACEHOLDER) * (characters / ('!-!' + PLACEHOLDER).length)
+  # Every placeholder is followed by a character the secret has, so every one is a candidate start for it.
+  def dense_text(characters, filler = '!-!') = (filler + PLACEHOLDER) * (characters / (filler + PLACEHOLDER).length)
 
   def test_a_long_secret_and_a_multi_megabyte_value_dense_with_placeholders_are_replaced_whole_in_bounded_time
     spent = [0, 0]
-    result, seconds = timed { close(dense_text(3_000_000), ['k' * 3000 + 'Z'], spent) }
+    result, seconds = timed { close(dense_text(3_000_000, 'kkk'), ['k' * 3000 + 'Z'], spent) }
     assert_equal PLACEHOLDER, result
     assert_operator spent[0], :<=, TraceAI::Auto::Privacy::MATCH_WORK
     assert_operator seconds, :<, 20
@@ -238,7 +242,7 @@ class OverlappingSecretsTest < Minitest::Test
 
   def test_a_four_kib_secret_and_an_eight_megabyte_value_aimed_at_the_prefilter_stay_inside_the_budget
     spent = [0, 0]
-    result, seconds = timed { close(dense_text(8_000_000), [('Q' * 4095) + 'z'], spent) }
+    result, seconds = timed { close(dense_text(8_000_000, 'QQQ'), [('Q' * 4095) + 'z'], spent) }
     assert_equal PLACEHOLDER, result
     assert_operator spent[0], :<=, TraceAI::Auto::Privacy::MATCH_WORK
     assert_operator seconds, :<, 30

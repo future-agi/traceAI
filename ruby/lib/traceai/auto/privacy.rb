@@ -65,6 +65,11 @@ module TraceAI
       def safe_string(value)
         Codec.type(value) == String ? value : Codec.type_name(value)
       end
+      # Secrets a caller hands in are read as the registry reads them (Config.utf8): invalid bytes become U+FFFD and the
+      # valid characters stay, so such a secret still protects the text it was taken from. None is skipped for its bytes.
+      def normalize_secrets(secrets)
+        secrets.select { |secret| Codec.type(secret) == String }.map { |secret| Config.utf8(secret) }.select { |secret| secret.length >= 8 }
+      end
       def secrets(headers, configured = [])
         values = configured.select { |v| Codec.type(v) == String }
         headers.each do |k, v|
@@ -138,7 +143,7 @@ module TraceAI
       # `policy` is set only by scrub_provider_response, for the parsed provider
       # response it was given. Nested JSON strings never inherit it.
       def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil, policy: nil)
-        secrets = secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] } if depth.zero?
+        secrets = normalize_secrets(secrets).uniq.sort_by { |secret| [-secret.length, secret] } if depth.zero?
         budget.spend
         raise Limit if depth > CATALOG['limits']['max_depth']
         path = key || ''
@@ -257,7 +262,7 @@ module TraceAI
       def scrub_provider_response(value, secrets = [], format = 'openai.chat')
         rule = LOGPROB_FORMATS[format]
         return scrub(value, secrets) unless rule
-        secrets = secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] }
+        secrets = normalize_secrets(secrets).uniq.sort_by { |secret| [-secret.length, secret] }
         budget = Budget.new
         policy = ResponsePolicy.new(response_token_parents(value, rule, budget), {}.compare_by_identity, {}.compare_by_identity)
         streaming = Codec.type(value) == Array
@@ -355,6 +360,7 @@ module TraceAI
       # usage, timing or projection-loss metadata. Never infer that arbitrary
       # application attributes are safe; only protected A7 families and an exact,
       # finite fractional sampling double qualify.
+      # Its key Budget and value Budget are its own, apart from the snapshot's (see MATCH_SPAN_WORK).
       def safe_metadata(attributes, secrets = nil, lossy: false)
         return {} unless Codec.type(attributes) == Hash
         ratio = attributes.fetch(SamplingRatio::ATTRIBUTE, nil)
@@ -366,7 +372,7 @@ module TraceAI
         begin
           known = Auto.secret_values
           known += secrets if Codec.type(secrets) == Array
-          known = known.select { |secret| Codec.type(secret) == String && secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] }
+          known = normalize_secrets(known).uniq.sort_by { |secret| [-secret.length, secret] }
         rescue StandardError
           known = nil
         end
@@ -521,6 +527,7 @@ module TraceAI
       # resource identity or the span name. Each recovery has its own bounded
       # traversal; an invalid name cannot erase a safe resource (or vice versa).
       # Registry failure still forbids exporting any recovered string.
+      # The name and the resource each scrub with a Budget of their own, apart from the snapshot's (see MATCH_SPAN_WORK).
       def recover_identity(copy, record, resource, config, secrets)
         known = Auto.secret_values
         known = (known + secrets).uniq if Codec.type(secrets) == Array
@@ -584,19 +591,26 @@ module TraceAI
           known = Auto.secret_values
           secrets = secrets ? (known + secrets).uniq.sort_by { |value| -value.length } : known
           raise Limit if admission[:failed] || evidence.any?(&:failed)
-          attributes = scrub(source, secrets, nil, 0, budget, lossy: lossy)
-          operation = attributes['gen_ai.operation.name']
-          apply = ->(attrs) { mask(scrub(attrs || {}, secrets, nil, 0, budget), config, operation) }
-          apply_media = ->(attrs, decision) { mask(scrub(admitted_attributes(attrs, decision), secrets, nil, 0, budget, lossy: lossy), config, operation) }
+          # Identity (name, status text, resource, scope) is scrubbed before the attributes, so a span whose attribute
+          # values use up the span's matcher work (MATCH_SPAN_WORK) keeps its identity. The hide masks need the
+          # operation name, which comes from the scrubbed attributes, so they are applied after them.
           name = scrub(safe_string(field(record, :name)), secrets, nil, 0, budget)
-          safe_status = LocalStatus.new(copy.status.code, hide_errors?(config) ? '__REDACTED__' : scrub(safe_string(description || ''), secrets, nil, 0, budget))
-          safe_resource = ExportResource.new(apply.call(resource_attributes(record, resource)))
+          status_text = hide_errors?(config) ? '__REDACTED__' : scrub(safe_string(description || ''), secrets, nil, 0, budget)
+          resource_scrubbed = scrub(resource_attributes(record, resource) || {}, secrets, nil, 0, budget)
           scope = field(record, :instrumentation_scope)
           structured = Object.instance_method(:is_a?).bind_call(scope, Struct)
           scope_name = structured ? field(scope, :name) : ivar(scope, :@name)
           scope_version = structured ? field(scope, :version) : ivar(scope, :@version)
           scope_attrs = Codec.type(scope) == ExportScope ? field(scope, :attributes) : ivar(scope, :@attributes)
-          safe_scope = ExportScope.new(scrub(safe_string(scope_name || ''), secrets, nil, 0, budget), scrub(safe_string(scope_version || ''), secrets, nil, 0, budget), apply.call(scope_attrs))
+          scope_name_scrubbed = scrub(safe_string(scope_name || ''), secrets, nil, 0, budget)
+          scope_version_scrubbed = scrub(safe_string(scope_version || ''), secrets, nil, 0, budget)
+          scope_attrs_scrubbed = scrub(scope_attrs || {}, secrets, nil, 0, budget)
+          attributes = scrub(source, secrets, nil, 0, budget, lossy: lossy)
+          operation = attributes['gen_ai.operation.name']
+          apply_media = ->(attrs, decision) { mask(scrub(admitted_attributes(attrs, decision), secrets, nil, 0, budget, lossy: lossy), config, operation) }
+          safe_status = LocalStatus.new(copy.status.code, status_text)
+          safe_resource = ExportResource.new(mask(resource_scrubbed, config, operation))
+          safe_scope = ExportScope.new(scope_name_scrubbed, scope_version_scrubbed, mask(scope_attrs_scrubbed, config, operation))
           events = original_events.map do |event|
             budget.spend
             SafeEvent.new(scrub(safe_string(part(event, :name)), secrets, nil, 0, budget), apply_media.call(part(event, :attributes), event_media[event.object_id]), part(event, :timestamp))
