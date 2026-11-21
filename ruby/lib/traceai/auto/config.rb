@@ -15,6 +15,16 @@ module TraceAI
       attr_reader :values, :warnings, :credential_values, :sample_rate_explicit, :otel_sampler, :otel_sampler_arg
       # Config values are UTF-8 whatever the process locale. Under LANG=C, Ruby
       # tags environment values and paths as US-ASCII even when they hold UTF-8.
+      # The runs of valid characters (8 or more) in a secret that has invalid bytes, for a byte slice that cuts through a
+      # multi-byte character: each run is a secret of its own, as the text it was taken from still holds it.
+      def self.valid_runs(secret)
+        return [] unless secret.instance_of?(String)
+        return [] if secret.valid_encoding? && ![Encoding::UTF_8, Encoding::US_ASCII, Encoding::ASCII_8BIT].include?(secret.encoding)
+        text = secret.b.force_encoding(Encoding::UTF_8)
+        return [] if text.valid_encoding?
+        text.each_char.chunk { |char| char.valid_encoding? }.filter_map { |valid, chars| chars.join if valid }.select { |run| run.length >= 8 }
+      end
+
       def self.utf8(value)
         return value unless value.instance_of?(String)
         encoding = value.encoding

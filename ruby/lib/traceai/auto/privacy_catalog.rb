@@ -12,6 +12,14 @@ module TraceAI
       end
       CATALOG = freeze_catalog(Codec.parse(File.binread(File.join(__dir__, 'privacy.json'))))
       REDACTED = CATALOG.fetch('credentials').fetch('replacement')
+      # A list of secrets already read and sorted (see Privacy.normalized_secrets); `plain` is the part of it that holds no placeholder.
+      class NormalizedSecrets < Array
+        attr_reader :plain
+        def initialize(list)
+          super(list)
+          @plain = list.select { |secret| secret != REDACTED && !secret.include?(REDACTED) }.freeze
+        end
+      end
       PATTERNS = CATALOG['credentials']['patterns'].map { |item| item['contains'] }.freeze
       EXCLUSIONS = CATALOG['credentials']['exclusions'].map do |item|
         guards = item.fetch('unless_contains_patterns', []).map do |id|
@@ -520,7 +528,11 @@ module TraceAI
         # Secrets first, none matching across a placeholder; then whatever of an overlapping secret the first pass left
         # beside a placeholder (see close_fragments).
         # Secrets are read as the registry reads them (invalid bytes become U+FFFD), never skipped for their bytes.
-        plain = normalize_secrets(secrets).select { |secret| secret != REDACTED && !secret.include?(REDACTED) }
+        plain = if secrets.instance_of?(NormalizedSecrets)
+                  secrets.plain
+                else
+                  normalize_secrets(secrets).select { |secret| secret != REDACTED && !secret.include?(REDACTED) }
+                end
         plain.each do |secret|
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end
