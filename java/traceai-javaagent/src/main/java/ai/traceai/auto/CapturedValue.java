@@ -138,9 +138,10 @@ final class CapturedValue {
             int end = (int)Math.min((long)read.length(), room);
             if (end > 0 && end < read.length() && Character.isHighSurrogate(read.charAt(end - 1))) end--;
             String kept = read.substring(0, end);
-            // Replacements shrank the window: the cut is at (or near) its edge, where a shape that began before the cut may have been cut
-            // short and no longer match. Fail closed: drop the trailing token that could start one, and the scheme word before it.
-            if (reach < value.length() && read.length() - end < SHAPE_GUARD) kept = dropShapePrefix(kept);
+            // When replacements bring the cut within the shape reach of the end of the read, a shape that began before the cut may continue
+            // past the end of the read and so not match. Fail closed: drop the trailing token that could start one, and the scheme word
+            // before it; the text is marked truncated.
+            if (reach < value.length() && read.length() - end < SHAPE_REACH) kept = dropShapePrefix(kept);
             kept = kept.substring(0, kept.length() - snapshot.trailingPartial(kept));
             // A cut that lands inside a placeholder drops the part of it.
             int open = kept.lastIndexOf('<');
@@ -149,8 +150,8 @@ final class CapturedValue {
         } catch (RuntimeException unavailable) { return CUT; }
     }
 
-    /** What is left of the window beyond the cut, below which the cut counts as being at the window's edge. */
-    private static final int SHAPE_GUARD = 512, READ_MARGIN = 1024;
+    /** The margin the read window keeps past the cut and the reach. */
+    private static final int READ_MARGIN = 1024;
 
     /** The first {@code reach} characters with known secrets, credential shapes and credential-named pairs replaced, in that order. */
     private static String replaced(KnownSecrets.Snapshot snapshot, String value, int reach) {
@@ -160,13 +161,13 @@ final class CapturedValue {
 
     private static boolean tokenChar(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || "+/_=.-".indexOf(c) >= 0; }
 
-    /** Cuts back to before the last token, and before a scheme word (Bearer, Basic) in front of it. */
+    /** Cuts back to before the last token, and before a scheme word (Bearer, Basic, Negotiate, Digest, NTLM) in front of it. */
     private static String dropShapePrefix(String kept) {
         int end = kept.length();
         while (end > 0 && tokenChar(kept.charAt(end - 1))) end--;
         int word = end;
         while (word > 0 && kept.charAt(word - 1) == ' ') word--;
-        for (String scheme : new String[] {"Bearer", "Basic"}) {
+        for (String scheme : new String[] {"Bearer", "Basic", "Negotiate", "Digest", "NTLM"}) {
             if (word >= scheme.length() && kept.regionMatches(true, word - scheme.length(), scheme, 0, scheme.length())
                 && (word == scheme.length() || !tokenChar(kept.charAt(word - scheme.length() - 1)))) { end = word - scheme.length(); break; }
         }
@@ -219,14 +220,24 @@ final class CapturedValue {
         } finally { path.remove(value); }
     }
 
-    /** A map key: only scalars are shown as themselves, anything else is its type placeholder (no application toString). */
+    /**
+     * A map key. Only the boxed primitives, {@code String}, {@code UUID} and enums are shown, and none of them runs application code: a
+     * String key goes through the same pipeline as any text (known secrets, credential shapes, the pair rule), an enum shows its name.
+     * Every other key type, application types and other {@code java.*} types alike, is its type placeholder: no {@code toString},
+     * {@code hashCode} or {@code equals} of the key runs.
+     */
     private String key(Object key) {
-        Object shown = key == null || key instanceof Number || key instanceof Boolean || key instanceof String || key instanceof Character || key instanceof Enum<?> || key instanceof UUID
-            ? (key instanceof Enum<?> e ? e.name() : String.valueOf(key)) : placeholder(key.getClass());
-        String text = String.valueOf(shown);
-        if (text.length() > 256) text = text.substring(0, 256);
-        chars += text.length();
-        return text;
+        if (key == null) { chars += 4; return "null"; }
+        if (key instanceof String string) return text(string);
+        Class<?> type = key.getClass();
+        String shown;
+        if (type == Integer.class || type == Long.class || type == Short.class || type == Byte.class || type == Double.class || type == Float.class
+            || type == Boolean.class || type == Character.class || type == UUID.class) shown = key.toString();
+        else if (key instanceof Enum<?> constant) shown = constant.name();
+        else shown = placeholder(type);
+        if (shown.length() > 256) shown = shown.substring(0, 256);
+        chars += shown.length();
+        return shown;
     }
 
     private Object record(Object value, Class<?> type, int depth) {
@@ -281,8 +292,20 @@ final class CapturedValue {
         int end = colon;
         while (end > 0 && Character.isWhitespace(text.charAt(end - 1)) && colon - end < 8) end--;
         if (end < 3 || text.charAt(end - 1) != '"' && text.charAt(end - 1) != '\'') return -1;
-        int open = text.lastIndexOf(text.charAt(end - 1), end - 2);
-        return open >= 0 && end - 1 - open <= 130 ? open : -1;
+        // The opening quote is searched for only within the 130 characters a name may have, never back to the start of the text.
+        char quote = text.charAt(end - 1);
+        for (int open = end - 2, floor = Math.max(0, end - 1 - 130); open >= floor; open--) if (text.charAt(open) == quote) return open;
+        return -1;
+    }
+
+    /** The index of the last '@' in {@code [from, to)}, or -1: the search never goes below {@code from}, the start of the token being read. */
+    private static int lastAt(String text, int from, int to) {
+        for (int at = Math.min(to, text.length()) - 1; at >= from; at--) if (text.charAt(at) == '@') return at;
+        return -1;
+    }
+    private static int indexOfBefore(String text, char c, int from, int to) {
+        for (int at = from; at < to; at++) if (text.charAt(at) == c) return at;
+        return -1;
     }
 
     /** The index after the JSON value that starts at {@code start}: a string, a balanced object or array (quote-aware), or a scalar. */
@@ -356,14 +379,14 @@ final class CapturedValue {
                 // scheme://user:password@host: the user information goes, for any scheme.
                 int limit = Math.min(length, i + 3 + 512), end = i + 3;
                 while (end < limit && "/?# \t\r\n".indexOf(text.charAt(end)) < 0) end++;
-                int at = text.lastIndexOf('@', end - 1);
+                int at = lastAt(text, i + 3, end);
                 if (at < i + 3) {
                     // A password may hold a slash, question mark or hash: when a user:password form precedes an at sign later in the same
                     // word, the user information runs to that at sign.
                     int word = i + 3;
                     while (word < length && word - i < 1024 && !Character.isWhitespace(text.charAt(word))) word++;
-                    int later = text.lastIndexOf('@', word - 1);
-                    int colon = later > i + 3 ? text.indexOf(':', i + 3) : -1;
+                    int later = lastAt(text, i + 3, word);
+                    int colon = later > i + 3 ? indexOfBefore(text, ':', i + 3, later) : -1;
                     if (later > i + 3 && colon > i + 3 && colon < later) at = later;
                 }
                 if (at >= i + 3) { from = i + 3; to = at; }
