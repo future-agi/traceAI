@@ -21,7 +21,7 @@ beforeEach(() => {
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
   // A slot that undici defined cannot be deleted; an empty value is Node's own default.
   savedSlot = (globalThis as any)[SLOT]; (globalThis as any)[SLOT] = undefined;
-  fetchSpy = jest.spyOn(require("undici"), "fetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
+  fetchSpy = jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
 const SLOT = Symbol.for("undici.globalDispatcher.1");
 let savedSlot: unknown;
@@ -48,7 +48,7 @@ function withFreshModule<T>(run: (m: typeof import("../otel"), warnings: string[
     const api = require("@opentelemetry/api");
     api.diag.setLogger({ error: () => {}, warn: (m: string) => warnings.push(m), info: () => {}, debug: () => {}, verbose: () => {} }, { logLevel: DiagLogLevel.WARN, suppressOverrideMessage: true });
     // A fresh copy of the package loads its own copy of undici: its fetch is routed to the test's spy so sends are counted.
-    jest.spyOn(require("undici"), "fetch").mockImplementation(((...args: unknown[]) => (fetchSpy as any)(...args)) as any);
+    jest.spyOn(require("../fi-transport"), "ownFetch").mockImplementation(((...args: unknown[]) => (fetchSpy as any)(...args)) as any);
     result = run(require("../otel"), warnings);
   });
   diag.disable();

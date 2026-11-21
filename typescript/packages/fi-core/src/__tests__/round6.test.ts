@@ -28,7 +28,7 @@ function fixture(): any {
 }
 test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "register-default", "register-batch", "direct-provider"])("A2 every owned %s route applies S1 on a detached span; manual policy is preserved", async route => {
   registerSecret("registered-manual-private");
-  const fetch = jest.spyOn(require("undici") as typeof import("undici"), "fetch").mockResolvedValue(new Response("{}") as any);
+  const fetch = jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue(new Response("{}") as any);
   const original = fixture(), before = JSON.stringify(original);
   let provider: FITracerProvider | undefined, exporter: any;
   if (route.startsWith("register")) provider = register({ ...options, batch: route === "register-batch" });

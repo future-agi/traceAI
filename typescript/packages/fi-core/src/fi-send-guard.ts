@@ -24,7 +24,8 @@ import * as grpc from "@grpc/grpc-js";
 import { diag } from "@opentelemetry/api";
 import { OTLPExporterError } from "@opentelemetry/otlp-exporter-base";
 import { gzipSync } from "node:zlib";
-import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+import type { Dispatcher } from "undici";
+import { headerEntries, newDirectAgent, newProxyAgent, ownFetch } from "./fi-transport";
 import { type EndpointTransport } from "./fi-endpoint";
 import { UNSUPPORTED_EXPORTER_LAYOUT } from "./otlp-header-isolation";
 import { decideFiRequest, FiKeyRefusal, isRedirect, matchesNoProxy, undiciNoProxyExempts, type FiDecision } from "./fi-request-policy";
@@ -68,6 +69,17 @@ function firstRefusal(): boolean {
  * The end of a log line for a failed send: for a refusal, the explanatory message the first time in the process and only the code after that
  * (`not sent (FI_...)`); for any other error, its value-free description. Pre-setting the latch only hides the message, never a refusal.
  */
+/**
+ * What an export reports to its caller for a refusal: the refusal's code and nothing else (`not sent (FI_...)`). The explanation is given once per
+ * process by the log line of the refusal (`failureSuffix`), so the error an export returns (which OpenTelemetry passes to its error handler for
+ * every refused batch) and the status details of a gRPC call do not repeat it.
+ */
+export function refusalSummary(error: FiKeyRefusal): string { return `not sent (${error.code})`; }
+function reportedRefusal(error: FiKeyRefusal): FiKeyRefusal {
+  const reported = new FiKeyRefusal(error.code);
+  Object.defineProperty(reported, "message", { value: refusalSummary(error), enumerable: false, writable: true, configurable: true });
+  return reported;
+}
 export function failureSuffix(error: unknown): string {
   if (error instanceof FiKeyRefusal) return firstRefusal() ? `: ${error.message}` : ` (${error.code})`;
   return `: ${describeFailure(error)}`;
@@ -75,20 +87,7 @@ export function failureSuffix(error: unknown): string {
 
 // --- the final set -----------------------------------------------------------------------------------------------
 
-/** The entries of the headers a fetch will send, whatever shape they have (a Headers object, an array of pairs, a record). */
-export function headerEntries(headers: unknown): Entry[] {
-  const entries: Entry[] = [];
-  if (headers === undefined || headers === null) return entries;
-  try {
-    if (typeof (headers as Headers).forEach === "function" && typeof (headers as Headers).get === "function") { (headers as Headers).forEach((value, name) => entries.push([name, String(value)])); return entries; }
-    if (Array.isArray(headers)) { for (const pair of headers) if (Array.isArray(pair) && pair.length >= 2) entries.push([String(pair[0]), String(pair[1])]); return entries; }
-    for (const [name, value] of Object.entries(headers as Record<string, unknown>)) {
-      if (Array.isArray(value)) for (const item of value) entries.push([name, String(item)]);
-      else if (value !== undefined) entries.push([name, String(value)]);
-    }
-  } catch { /* an unreadable container adds nothing */ }
-  return entries;
-}
+export { headerEntries };
 /** The entries of a gRPC Metadata, every value of every name, binary ones skipped. */
 export function metadataEntries(metadata: unknown): Entry[] {
   const entries: Entry[] = [];
@@ -179,13 +178,13 @@ export function resolveProxy(target: string, option: unknown): string | undefine
   return proxy;
 }
 /** The one direct transport for key-carrying sends: its own agent, TLS verification always on whatever NODE_TLS_REJECT_UNAUTHORIZED says. */
-let directAgent: Agent | undefined;
-function direct(): Dispatcher { return directAgent ??= new Agent({ connect: { rejectUnauthorized: true } }); }
+let directAgent: Dispatcher | undefined;
+function direct(): Dispatcher { return directAgent ??= newDirectAgent(); }
 /** One CONNECT-only proxy agent per proxy URL: the destination's certificate and the proxy's own (for an https proxy) are always verified. */
-const proxyAgents = new Map<string, ProxyAgent>();
+const proxyAgents = new Map<string, Dispatcher>();
 function through(proxy: string): Dispatcher {
   let agent = proxyAgents.get(proxy);
-  if (agent === undefined) { agent = new ProxyAgent({ uri: proxy, requestTls: { rejectUnauthorized: true }, proxyTls: { rejectUnauthorized: true } }); proxyAgents.set(proxy, agent); }
+  if (agent === undefined) { agent = newProxyAgent(proxy); proxyAgents.set(proxy, agent); }
   return agent;
 }
 /**
@@ -277,7 +276,7 @@ export async function guardedFetch(request: GuardedFetchRequest): Promise<Respon
     dispatcher: init.dispatcher, allowInsecureHttp: request.allowInsecureHttp });
   const dispatcher = dispatcherFor(request.url, outcome.tls, request.httpsProxy, outcome.keys);
   delete init.dispatcher;
-  const response = await undiciFetch(request.url, { ...(init as object), dispatcher, redirect: "manual" } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
+  const response = await ownFetch(request.url, { ...(init as object), dispatcher, redirect: "manual" } as Parameters<typeof ownFetch>[1]);
   if (outcome.keys && isRedirect(response)) {
     try { await response.body?.cancel(); } catch { /* the body is not read */ }
     throw new FiKeyRefusal("FI_REDIRECT");
@@ -323,15 +322,15 @@ export function guardOtlpHttpExporter(exporter: unknown, intended: Intended, all
       const headers: Record<string, string> = { ...parameters.headers() };
       const body = parameters.compression === "gzip" ? gzipSync(data) : data;
       if (parameters.compression === "gzip") headers["Content-Encoding"] = "gzip";
-      const response = await undiciFetch(url.href, { method: "POST", headers, body, dispatcher, redirect: "manual", signal: AbortSignal.timeout(timeoutMillis) });
+      const response = await ownFetch(url.href, { method: "POST", headers, body, dispatcher, redirect: "manual", signal: AbortSignal.timeout(timeoutMillis) });
       const text = Buffer.from(await response.arrayBuffer());
-      if (outcome.keys && isRedirect(response as unknown as Response)) throw new FiKeyRefusal("FI_REDIRECT");
+      if (outcome.keys && isRedirect(response)) throw new FiKeyRefusal("FI_REDIRECT");
       if (response.status < 299) return { status: "success", data: text };
       if (RETRYABLE.has(response.status)) return { status: "retryable", retryInMillis: retryAfterMillis(response.headers.get("retry-after")) };
       return { status: "failure", error: new OTLPExporterError(response.statusText, response.status, text.toString()) };
     } catch (error) {
       if (error instanceof FiKeyRefusal) diag.error(`OTLP HTTP export not sent${failureSuffix(error)}`);
-      return { status: "failure", error: error instanceof FiKeyRefusal ? error : new Error(error instanceof Error && error.name === "TimeoutError" ? "Request Timeout" : "OTLP HTTP request failed") };
+      return { status: "failure", error: error instanceof FiKeyRefusal ? reportedRefusal(error) : new Error(error instanceof Error && error.name === "TimeoutError" ? "Request Timeout" : "OTLP HTTP request failed") };
     }
   };
 }
@@ -360,7 +359,7 @@ export function guardOtlpGrpcExporter(exporter: unknown, intended: Intended, all
         catch (error) {
           refused = true;
           diag.error(`OTLP gRPC export not sent${failureSuffix(error)}`);
-          listener.onReceiveStatus({ code: grpc.status.PERMISSION_DENIED, details: describeFailure(error), metadata: new grpc.Metadata() });
+          listener.onReceiveStatus({ code: grpc.status.PERMISSION_DENIED, details: error instanceof FiKeyRefusal ? refusalSummary(error) : describeFailure(error), metadata: new grpc.Metadata() });
           return;
         }
         next(metadata, listener);

@@ -11,7 +11,7 @@ let fetchSpy: jest.SpyInstance;
 beforeEach(() => {
   saved = {}; for (const n of NAMES) { saved[n] = process.env[n]; delete process.env[n]; }
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
-  fetchSpy = jest.spyOn(require("undici"), "fetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false, isUserEvalTemplate: false, evalTemplate: null } }), text: async () => "" } as Response);
+  fetchSpy = jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false, isUserEvalTemplate: false, evalTemplate: null } }), text: async () => "" } as Response);
 });
 afterEach(() => { fetchSpy.mockRestore(); for (const n of NAMES) { if (saved[n] === undefined) delete process.env[n]; else process.env[n] = saved[n]; } });
 

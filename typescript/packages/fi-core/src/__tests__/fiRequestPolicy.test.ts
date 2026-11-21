@@ -280,7 +280,7 @@ describe("the eval checks route through the decider", () => {
   const tag = () => ({ type: EvalTagType.OBSERVATION_SPAN, value: EvalSpanKind.LLM, eval_name: EvalName.CHUNK_ATTRIBUTION, config: {}, custom_eval_name: "Chunk_Attribution",
     mapping: { context: "raw.input", output: "raw.output" }, model: ModelChoices.TURING_SMALL, toDict: () => ({ eval_name: EvalName.CHUNK_ATTRIBUTION, custom_eval_name: "Chunk_Attribution" }) });
   test("an ambiguous base URL sends nothing", async () => {
-    const fetchSpy = jest.spyOn(require("undici"), "fetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
+    const fetchSpy = jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
     try {
       Object.assign(process.env, ENV_KEYS);
       for (const base of ["https://api.futureagi.com%5C@collector.example", "http://collector.example/x@api.futureagi.com", "https:///api.futureagi.com"]) {
