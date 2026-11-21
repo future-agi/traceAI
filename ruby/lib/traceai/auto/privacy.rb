@@ -68,16 +68,19 @@ module TraceAI
       # Secrets a caller hands in are read as the registry reads them (Config.utf8): invalid bytes become U+FFFD and the
       # valid characters stay, so such a secret still protects the text it was taken from. None is skipped for its bytes.
       # A secret that is a byte slice cutting through a multi-byte character reads as U+FFFD there, which matches less than
-      # the valid text around it. So every maximal run of valid characters (8 or more) is a secret of its own as well.
+      # the valid text around it. So the longest runs of valid characters (8 or more, at most Config::VALID_RUNS_PER_SECRET of
+      # them) are secrets of their own as well: a secret never adds an unbounded list.
       def normalize_secrets(secrets)
         strings = secrets.select { |secret| Codec.type(secret) == String }
         strings.flat_map { |secret| [Config.utf8(secret), *valid_runs(secret)] }.select { |secret| secret.length >= 8 }.uniq
       end
-      def valid_runs(secret)
-        return [] if secret.valid_encoding? && ![Encoding::UTF_8, Encoding::US_ASCII, Encoding::ASCII_8BIT].include?(secret.encoding)
-        text = secret.b.force_encoding(Encoding::UTF_8)
-        return [] if text.valid_encoding?
-        text.each_char.chunk { |char| char.valid_encoding? }.filter_map { |valid, chars| chars.join if valid }.select { |run| run.length >= 8 }
+      def valid_runs(secret) = Config.valid_runs(secret)
+      def secret_list?(secrets) = [Array, NormalizedSecrets].include?(Codec.type(secrets))
+      # The secrets of a span, read as above and sorted longest first, built once for the span: the copies it makes are made once,
+      # and not again for each of the span's names, values, events and links.
+      def normalized_secrets(secrets)
+        return secrets if secrets.instance_of?(NormalizedSecrets)
+        NormalizedSecrets.new(normalize_secrets(secrets).uniq.sort_by { |secret| [-secret.length, secret] })
       end
       def secrets(headers, configured = [])
         values = configured.select { |v| Codec.type(v) == String }
@@ -151,8 +154,10 @@ module TraceAI
       end
       # `policy` is set only by scrub_provider_response, for the parsed provider
       # response it was given. Nested JSON strings never inherit it.
-      def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil, policy: nil)
-        secrets = normalize_secrets(secrets).uniq.sort_by { |secret| [-secret.length, secret] } if depth.zero?
+      # `hinted` says that `hints` already hold the media context of this value's own siblings, read from the attributes as
+      # they came (before a hide setting replaced any of them), so the value is not indexed again.
+      def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil, policy: nil, hinted: false)
+        secrets = normalized_secrets(secrets) if depth.zero?
         budget.spend
         raise Limit if depth > CATALOG['limits']['max_depth']
         path = key || ''
@@ -165,7 +170,7 @@ module TraceAI
         return REDACTED if credential?(path) && !(depth == 1 && path == SESSION_ID)
         klass = Codec.type(value)
         if klass == Hash
-          hints = index_hints(value, path, hints, budget)
+          hints = index_hints(value, path, hints, budget) unless hinted
           # A provider-root logprob token skips only the key-name rule. Its
           # value still meets registered secrets and credential shapes, and a
           # masked token also masks its bytes, which spell the same text.
@@ -273,7 +278,7 @@ module TraceAI
       def scrub_provider_response(value, secrets = [], format = 'openai.chat')
         rule = LOGPROB_FORMATS[format]
         return scrub(value, secrets) unless rule
-        secrets = normalize_secrets(secrets).uniq.sort_by { |secret| [-secret.length, secret] }
+        secrets = normalized_secrets(secrets)
         budget = Budget.new
         policy = ResponsePolicy.new(response_token_parents(value, rule, budget), {}.compare_by_identity, {}.compare_by_identity)
         streaming = Codec.type(value) == Array
@@ -382,7 +387,7 @@ module TraceAI
                      end
         begin
           known = Auto.secret_values
-          known += secrets if Codec.type(secrets) == Array
+          known += secrets if secret_list?(secrets)
           known = normalize_secrets(known).uniq.sort_by { |secret| [-secret.length, secret] }
         rescue StandardError
           known = nil
@@ -471,13 +476,15 @@ module TraceAI
         return explicit unless explicit.nil?
         %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text].any? { |k| config.hidden?(k) }
       end
-      # The operation name as the attributes carry it (a String), or nil.
+      # The operation name as the attributes carry it (a String), or nil. A String key and a Symbol key that read the same are
+      # one attribute name after `hidden_by_name`, where the last one wins; the operation name is the last one too.
       def operation_name(attributes)
         return nil unless Codec.type(attributes) == Hash
+        found = nil
         attributes.each do |key, value|
-          return value if Codec.type(value) == String && (Codec.type(key) == Symbol ? key.name : key) == 'gen_ai.operation.name'
+          found = value if Codec.type(value) == String && (Codec.type(key) == Symbol ? key.name : key) == 'gen_ai.operation.name'
         end
-        nil
+        found
       end
       # The attributes with the hide settings applied by their own names, before scrubbing renames anything.
       def hidden_by_name(attributes, config, operation)
@@ -555,7 +562,7 @@ module TraceAI
       # The name and the resource each scrub with a Budget of their own, apart from the snapshot's (see MATCH_SPAN_WORK).
       def recover_identity(copy, record, resource, config, secrets)
         known = Auto.secret_values
-        known = (known + secrets).uniq if Codec.type(secrets) == Array
+        known = (known + secrets).uniq if secret_list?(secrets)
         begin
           copy.name = scrub(safe_string(field(record, :name)), known)
         rescue StandardError
@@ -615,10 +622,12 @@ module TraceAI
           copy.status = LocalStatus.new([0, 1, 2].include?(code) ? code : 0, '')
           known = Auto.secret_values
           secrets = secrets ? (known + secrets).uniq.sort_by { |value| -value.length } : known
+          # Read and sorted once for the whole span.
+          secrets = normalized_secrets(secrets)
           raise Limit if admission[:failed] || evidence.any?(&:failed)
           # Identity (name, status text, resource, scope) is scrubbed before the attributes, so a span whose attribute
-          # values use up the span's matcher work (MATCH_SPAN_WORK) keeps its identity. The hide masks need the
-          # operation name, which comes from the scrubbed attributes, so they are applied after them.
+          # values use up the span's matcher work (MATCH_SPAN_WORK) keeps its identity. The hide masks that need the
+          # operation name read it from the attributes as they came (see below), so they do not wait for the scrub.
           name = scrub(safe_string(field(record, :name)), secrets, nil, 0, budget)
           status_text = hide_errors?(config) ? '__REDACTED__' : scrub(safe_string(description || ''), secrets, nil, 0, budget)
           resource_scrubbed = scrub(hidden_by_name(resource_attributes(record, resource) || {}, config, operation_name(source)), secrets, nil, 0, budget)
@@ -635,8 +644,15 @@ module TraceAI
           operation = operation_name(source)
           # The hide settings decide by the attribute's own name, so they apply to the attributes as they came, before any
           # name is replaced by the placeholder; the same masks run again on the scrubbed names below.
-          attributes = scrub(hidden_by_name(source, config, operation), secrets, nil, 0, budget, lossy: lossy)
-          apply_media = ->(attrs, decision) { mask(scrub(hidden_by_name(admitted_attributes(attrs, decision), config, operation), secrets, nil, 0, budget, lossy: lossy), config, operation) }
+          # The media context (a mime type beside a payload) is read from the same original attributes: a hide setting that
+          # replaces a mime type must not take the context from the payload that sits beside it.
+          hints = index_hints(source, '', {}, budget)
+          attributes = scrub(hidden_by_name(source, config, operation), secrets, nil, 0, budget, false, false, hints, lossy: lossy, hinted: true)
+          apply_media = lambda do |attrs, decision|
+            admitted = admitted_attributes(attrs, decision)
+            original_hints = Codec.type(admitted) == Hash ? index_hints(admitted, '', {}, budget) : {}
+            mask(scrub(hidden_by_name(admitted, config, operation), secrets, nil, 0, budget, false, false, original_hints, lossy: lossy, hinted: true), config, operation)
+          end
           safe_status = LocalStatus.new(copy.status.code, status_text)
           safe_resource = ExportResource.new(mask(resource_scrubbed, config, operation))
           safe_scope = ExportScope.new(scope_name_scrubbed, scope_version_scrubbed, mask(scope_attrs_scrubbed, config, operation))
@@ -658,7 +674,14 @@ module TraceAI
           copy.resource = safe_resource; copy.instrumentation_scope = safe_scope
           copy.events = events; copy.links = links; copy.tracestate = tracestate
         rescue StandardError => e
-          copy.attributes = mask(safe_metadata(source, secrets, lossy: lossy), config)
+          # By the names the attributes came with, as the main path does: a registered secret inside a name changes the name
+          # the scrub gives it, and the hide settings still decide by the original.
+          named = begin
+            hidden_by_name(source, config, operation_name(source))
+          rescue StandardError
+            source
+          end
+          copy.attributes = mask(safe_metadata(named, secrets, lossy: lossy), config)
           recover_identity(copy, record, resource, config, secrets)
           Auto.debug(e)
         end
