@@ -67,10 +67,13 @@ export function throwawayCertificate(): { key: string; cert: string; caFile: str
   run(["x509", "-req", "-in", path.join(dir, "leaf.csr"), "-CA", path.join(dir, "ca.pem"), "-CAkey", path.join(dir, "ca.key"), "-CAcreateserial", "-days", "2", "-extfile", path.join(dir, "ext.cnf"), "-out", path.join(dir, "leaf.pem")]);
   return { key: fs.readFileSync(path.join(dir, "leaf.key"), "utf8"), cert: fs.readFileSync(path.join(dir, "leaf.pem"), "utf8"), caFile: path.join(dir, "ca.pem"), dispose: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
+const PACKAGE_DIR = path.join(__dirname, "..", "..", "..");
 /** Run a script in a child process of the built package, asynchronously (the servers of the test live in this process). */
 export function runChild(script: string, args: string[], env: Record<string, string>, nodeFlags: string[] = []): Promise<string> {
   return new Promise(done => {
-    const child = spawn(process.execPath, [...nodeFlags, "-e", script, ...args], { env: { PATH: process.env.PATH ?? "", ...env }, timeout: 30000 });
+    // A `-e` script resolves bare module names from its working directory, not from the test's, so the child runs in the
+    // package directory whatever directory jest was started from (the repository root in CI).
+    const child = spawn(process.execPath, [...nodeFlags, "-e", script, ...args], { cwd: PACKAGE_DIR, env: { PATH: process.env.PATH ?? "", ...env }, timeout: 30000 });
     let text = ""; child.stdout.on("data", chunk => { text += chunk; }); child.stderr.on("data", chunk => { text += chunk; }); child.on("close", () => done(text));
   });
 }
