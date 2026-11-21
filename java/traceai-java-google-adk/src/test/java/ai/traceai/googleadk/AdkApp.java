@@ -153,7 +153,21 @@ public class AdkApp {
         printAndFinish(own);
     }
 
+    /** When set (by {@link #runDeferred}), printAndFinish only records what to print, so an enclosing application span can end first. */
+    private static boolean deferFinish;
+    private static Runnable deferredFinish;
+
+    /** Runs {@link #main} without the final report and shutdown; call {@link #finish} once the caller's own span has ended. */
+    public static void runDeferred(String[] args) throws Exception { deferFinish = true; main(args); }
+
+    public static void finish() { deferredFinish.run(); }
+
     static void printAndFinish(InMemorySpanExporter own) {
+        if (deferFinish) { deferredFinish = () -> report(own); return; }
+        report(own);
+    }
+
+    private static void report(InMemorySpanExporter own) {
         for (SpanData span : own.getFinishedSpanItems()) {
             // What the application's own provider recorded: ADK's spans, unchanged.
             System.out.println("OWN " + span.getName() + " attributes=" + span.getAttributes().size() + " parent=" + span.getParentSpanContext().isValid());
