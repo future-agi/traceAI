@@ -157,6 +157,7 @@ format, so OpenAI-compatible gateways are covered too.
 | `FI_INSTRUMENTATIONS` | All. Comma-separated allowlist. Include `wire` to allow HTTP tracing. |
 | `FI_DISABLED_INSTRUMENTATIONS` | None. Comma-separated denylist. The denylist wins over the allowlist. |
 | `FI_WIRE_CAPTURE` | `true`. |
+| `FI_GOOGLE_ADK_SKIP_WRAPPED_CALLS` | `false`. Set `true` to skip the agent's Google ADK span for a model or tool call made through `TracedLlm` or `TracedTool`, so the wrapper's span is the only one. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304`. Body buffering bound per direction. |
 
 Names you can use in the denylist:

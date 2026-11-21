@@ -95,6 +95,7 @@ public final class TracedTool extends BaseTool {
     @Override
     public Single<Map<String, Object>> runAsync(Map<String, Object> args, ToolContext toolContext) {
         return Single.defer(() -> {
+            AgentLink.wrappedTool(args, this);
             Span span = tracer.startSpan("execute_tool " + name(), FISpanKind.TOOL);
             Single<Map<String, Object>> upstream;
             try (Scope ignored = span.makeCurrent()) {

@@ -215,6 +215,8 @@ public final class GoogleAdk {
         /** What the in-flight registry holds for this span: an identity, never any content. */
         private final Object flight = new Object();
         private volatile boolean answered;
+        /** True for a call made through TracedLlm or TracedTool while the skip option is on: the agent records no span of its own for it. */
+        private volatile boolean skipped;
         private volatile Map<String, Object> request, response;
         private volatile String toolName, toolDescription, toolType, agentName, agentDescription, sessionId, userId;
         private volatile Object toolArguments, toolResult;
@@ -239,7 +241,10 @@ public final class GoogleAdk {
                 if (runtime != null && kind != null && TraceAIAuto.integrationEnabled(INTEGRATION) && !TraceAIAuto.besideOtelJavaAgent()) {
                     captured = parentSpan != null ? parentSpan.snapshot : OtelBridge.snapshot(false);
                     if (!captured.suppressed() && runtime.acceptingResults()) {
-                        Context parentContext = parentSpan != null && parentSpan.shadow != null ? Context.root().with(parentSpan.shadow) : captured.parent();
+                        // Under the nearest enclosing span the agent records: a skipped call's own span is never exported.
+                        AdkSpan recorded = parentSpan;
+                        while (recorded != null && recorded.skipped) recorded = recorded.parent;
+                        Context parentContext = recorded != null && recorded.shadow != null ? Context.root().with(recorded.shadow) : captured.parent();
                         span = runtime.tracer().spanBuilder(bounded(name)).setSpanKind(SpanKind.INTERNAL).setParent(parentContext)
                             .setStartTimestamp(startEpochNanos, TimeUnit.NANOSECONDS).startSpan();
                     }
@@ -310,6 +315,7 @@ public final class GoogleAdk {
             toolName = name; toolDescription = description; toolType = type; toolArguments = arguments; toolResult = result; toolCallId = callId;
             if (error != null) { failed = true; thrown = error; }
         }
+        void skip() { skipped = true; }
         void agent(String name, String description, String session, String user) {
             agentName = name; agentDescription = description;
             if (session != null) sessionId = session;
@@ -324,6 +330,7 @@ public final class GoogleAdk {
             try {
                 Map<String, Object> mapped = withheld(mapped());
                 if (parent != null) parent.child(this, mapped);
+                if (skipped) return;
                 if (shadow == null || state == null || !state.startFinalizing()) return;
                 try { emit(mapped, endEpochNanos); } finally { state.endFinalizing(); }
             } catch (Throwable ignored) { }
@@ -439,6 +446,7 @@ public final class GoogleAdk {
                     Throwable error = args.length > 5 && args[5] instanceof Throwable t ? t : null;
                     ClassLoader loader = args[3].getClass().getClassLoader();
                     span.llm(adkJson(requestShape(args[3]), loader), adkJson(args[4], loader), sessionOf(args[1]), error);
+                    if (skipWrappedCalls() && modelIsWrapper(args[1])) span.skip();
                     String user = userOf(args[1]);
                     if (user != null) span.agent(null, null, null, user);
                 }
@@ -457,6 +465,7 @@ public final class GoogleAdk {
                         }
                     }
                     span.tool(String.valueOf(args[1]), args[2] == null ? null : String.valueOf(args[2]), args[3] == null ? null : String.valueOf(args[3]), args[4], result, callId, error);
+                    if (skipWrappedCalls() && takeWrappedTool(args[4], args[3] == null ? null : String.valueOf(args[3]))) span.skip();
                 }
                 case "traceAgentInvocation" -> span.agent(args[1] == null ? null : String.valueOf(args[1]), args[2] == null ? null : String.valueOf(args[2]),
                     args.length > 3 ? sessionOf(args[3]) : null, args.length > 3 ? userOf(args[3]) : null);
@@ -515,6 +524,68 @@ public final class GoogleAdk {
             Object id = invoke(invocationContext, "userId");
             return id == null ? null : String.valueOf(id);
         } catch (Throwable ignored) { return null; }
+    }
+
+    // ---- Calls made through the traceai wrappers --------------------------------------------------------------
+
+    static final String SKIP_OPTION = "FI_GOOGLE_ADK_SKIP_WRAPPED_CALLS";
+    /** Built from parts: the build relocates this jar's own copy of the module's mapping classes, and a whole name here would be rewritten with it. */
+    private static final String WRAPPERS = String.join(".", "ai", "traceai", "googleadk");
+    private static final String TRACED_LLM = WRAPPERS + ".TracedLlm", TRACED_TOOL = WRAPPERS + ".TracedTool";
+
+    /** True when the option is on: the agent records no span for a model or tool call made through TracedLlm or TracedTool. */
+    private static boolean skipWrappedCalls() {
+        AutoConfig config = TraceAIAuto.config();
+        return config != null && config.flag(SKIP_OPTION);
+    }
+
+    /** True when the object's class, or one of its superclasses, is the named class. */
+    private static boolean isInstanceOfClassNamed(Object object, String name) {
+        for (Class<?> type = object == null ? null : object.getClass(); type != null; type = type.getSuperclass()) if (type.getName().equals(name)) return true;
+        return false;
+    }
+
+    /**
+     * True when the model of the agent that ADK is calling is a TracedLlm: ADK's model call goes through the agent's resolved model.
+     * Any API difference, or a model that cannot be read, is false, so the call is recorded.
+     */
+    private static boolean modelIsWrapper(Object invocationContext) {
+        try {
+            Object resolved = invoke(invoke(invocationContext, "agent"), "resolvedModel");
+            Object llm = optional(invoke(resolved, "model"));
+            return isInstanceOfClassNamed(llm, TRACED_LLM);
+        } catch (Throwable error) { TraceAIAuto.debug("google-adk model not read (" + error.getClass().getSimpleName() + ")"); return false; }
+    }
+
+    /**
+     * ADK reports a tool call with the tool's name, description and its class's simple name, not the tool. TracedTool tells the agent about each
+     * call it receives (the arguments map ADK passes it, and itself) before it runs the tool; the report that carries the same arguments map
+     * and the simple name of that wrapper's class is that call's.
+     */
+    private record WrappedTool(java.lang.ref.WeakReference<Object> arguments, String type, long registered) {}
+    private static final List<WrappedTool> WRAPPED_TOOLS = new ArrayList<>();
+
+    /** Called reflectively by TracedTool. Registers nothing unless the agent traces ADK and the option is on. */
+    public static void wrappedTool(Object arguments, Object tool) {
+        try {
+            if (arguments == null || !isInstanceOfClassNamed(tool, TRACED_TOOL) || !skipWrappedCalls() || TraceAIAuto.besideOtelJavaAgent() || !TraceAIAuto.integrationEnabled(INTEGRATION)) return;
+            long now = System.nanoTime();
+            synchronized (WRAPPED_TOOLS) {
+                WRAPPED_TOOLS.removeIf(w -> w.arguments().get() == null || now - w.registered() > STALE_NANOS);
+                if (WRAPPED_TOOLS.size() < MAX_IN_FLIGHT) WRAPPED_TOOLS.add(new WrappedTool(new java.lang.ref.WeakReference<>(arguments), tool.getClass().getSimpleName(), now));
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private static boolean takeWrappedTool(Object arguments, String type) {
+        if (arguments == null || type == null) return false;
+        synchronized (WRAPPED_TOOLS) {
+            for (java.util.Iterator<WrappedTool> it = WRAPPED_TOOLS.iterator(); it.hasNext(); ) {
+                WrappedTool w = it.next();
+                if (w.arguments().get() == arguments && w.type().equals(type)) { it.remove(); return true; }
+            }
+        }
+        return false;
     }
 
     // ---- Read by the wire capture -----------------------------------------------------------------------------
@@ -593,7 +664,12 @@ public final class GoogleAdk {
     /** The agent's own span for an ADK span the application sees as its current span, as a context, or null. */
     static Context contextOf(Object external) {
         try {
-            if (external != null && Proxy.isProxyClass(external.getClass()) && Proxy.getInvocationHandler(external) instanceof AdkSpan adk && adk.shadow != null) return Context.root().with(adk.shadow);
+            if (external != null && Proxy.isProxyClass(external.getClass()) && Proxy.getInvocationHandler(external) instanceof AdkSpan adk) {
+                // A skipped call has no span of its own: the nearest enclosing span the agent records is the context.
+                AdkSpan recorded = adk;
+                while (recorded != null && recorded.skipped) recorded = recorded.parent;
+                if (recorded != null && recorded.shadow != null) return Context.root().with(recorded.shadow);
+            }
         } catch (Throwable ignored) { }
         return null;
     }
