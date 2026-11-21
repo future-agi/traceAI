@@ -63,6 +63,7 @@
     "@protobuf-ts/runtime": "^2.11.0",
     "@protobuf-ts/runtime-rpc": "^2.11.0",
     "@traceai/fi-semantic-conventions": "workspace:^",
+    "undici": "6.29.1",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
@@ -76,8 +77,7 @@
     "google-protobuf": "^3.21.4",
     "rimraf": "^6.0.1",
     "tsc-alias": "^1.8.16",
-    "typescript": "^5.8.3",
-    "undici": "6.29.0"
+    "typescript": "^5.8.3"
   },
   "keywords": [
     "opentelemetry",

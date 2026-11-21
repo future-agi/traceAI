@@ -22,9 +22,12 @@
  */
 import * as grpc from "@grpc/grpc-js";
 import { diag } from "@opentelemetry/api";
+import { OTLPExporterError } from "@opentelemetry/otlp-exporter-base";
+import { gzipSync } from "node:zlib";
+import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
 import { type EndpointTransport } from "./fi-endpoint";
 import { UNSUPPORTED_EXPORTER_LAYOUT } from "./otlp-header-isolation";
-import { decideFiRequest, FiKeyRefusal, isRedirect, matchesNoProxy, type FiDecision } from "./fi-request-policy";
+import { decideFiRequest, FiKeyRefusal, isRedirect, matchesNoProxy, undiciNoProxyExempts, type FiDecision } from "./fi-request-policy";
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Entry = [string, string];
@@ -51,6 +54,23 @@ export function intendedFrom(decision: Pick<FiDecision, "headers" | "metadata">)
 export function describeFailure(error: unknown): string {
   if (error instanceof FiKeyRefusal) return error.message;
   try { return error instanceof Error && typeof error.name === "string" ? `${error.name} (message withheld)` : "error (message withheld)"; } catch { return "error (message withheld)"; }
+}
+/** Shared by every copy of this package in the process: the first refusal to be reported explains itself, each later one names only its code. */
+const REFUSAL_LATCH = Symbol.for("traceai.fi-core.refusal-message");
+function firstRefusal(): boolean {
+  try {
+    if (Object.getOwnPropertyDescriptor(globalThis, REFUSAL_LATCH) !== undefined) return false;
+    Object.defineProperty(globalThis, REFUSAL_LATCH, { value: true, enumerable: false, writable: false, configurable: false });
+    return true;
+  } catch { return false; }
+}
+/**
+ * The end of a log line for a failed send: for a refusal, the explanatory message the first time in the process and only the code after that
+ * (`not sent (FI_...)`); for any other error, its value-free description. Pre-setting the latch only hides the message, never a refusal.
+ */
+export function failureSuffix(error: unknown): string {
+  if (error instanceof FiKeyRefusal) return firstRefusal() ? `: ${error.message}` : ` (${error.code})`;
+  return `: ${describeFailure(error)}`;
 }
 
 // --- the final set -----------------------------------------------------------------------------------------------
@@ -108,7 +128,7 @@ function judgeFinalSet(entries: readonly Entry[], intended: Intended): boolean {
   return present.size > 0;
 }
 
-// --- proxies and dispatchers ---------------------------------------------------------------------------------------
+// --- the transport -----------------------------------------------------------------------------------------------------
 
 /**
  * Node's own environment-proxy switch, read once when this module loads, from what Node saw at start: the value 1 of NODE_USE_ENV_PROXY (Node
@@ -122,106 +142,68 @@ const ENV_PROXY_AT_START: boolean = (() => {
   } catch { return true; }
 })();
 function nodeEnvProxy(): boolean { return ENV_PROXY_AT_START; }
-/** An own data property of `object`, by key; an accessor is never run, and what cannot be read as data is undefined. */
-function dataProperty(object: unknown, key: PropertyKey): unknown {
-  try {
-    if (typeof object !== "object" && typeof object !== "function") return undefined;
-    if (object === null) return undefined;
-    const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    return descriptor && "value" in descriptor ? descriptor.value : undefined;
-  } catch { return undefined; }
-}
-const GLOBAL_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
-type Slot = { kind: "empty" } | { kind: "data"; value: unknown } | { kind: "uninspectable" };
-/** The undici global-dispatcher slot, read as an own data property only: an accessor is not run, an inherited value is not read. */
-function readSlot(): Slot {
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, GLOBAL_DISPATCHER);
-    if (descriptor === undefined) return GLOBAL_DISPATCHER in globalThis ? { kind: "uninspectable" } : { kind: "empty" };
-    if (!("value" in descriptor)) return { kind: "uninspectable" };
-    return descriptor.value === undefined || descriptor.value === null ? { kind: "empty" } : { kind: "data", value: descriptor.value };
-  } catch { return { kind: "uninspectable" }; }
-}
 /**
- * Node's own default dispatcher, by provenance: the object Node itself put in the slot, captured here when this module loads. Node installs
- * it on first use of fetch or Request, so it is made to do so now, before any application code can replace the slot. A slot that already
- * holds something when this module loads, or ever holds anything else, is not Node's own: nothing is accepted on a class name or a shape.
+ * The environment proxy Node would use for https, read once when this module loads and only when Node's switch is on: lower-case
+ * `https_proxy` before `HTTPS_PROXY`, and `no_proxy` before `NO_PROXY`, as Node reads them. Nothing set later in the process is read.
  */
-/** The one probe that has Node install its own default dispatcher while the slot is empty: building a Request does so and sends nothing. */
-function primeNodeDispatcher(): void {
-  const probe = globalThis.fetch;
-  if (typeof probe === "function") void new Request("data:,");
-}
+const ENV_PROXY: { readonly proxy: string | undefined; readonly noProxy: string } | undefined = (() => {
+  try {
+    if (!ENV_PROXY_AT_START) return undefined;
+    const proxy = process.env.https_proxy ?? process.env.HTTPS_PROXY;
+    return Object.freeze({ proxy: proxy === "" ? undefined : proxy, noProxy: process.env.no_proxy ?? process.env.NO_PROXY ?? "" });
+  } catch { return undefined; }
+})();
+
 /** The one place a channel's credentials are constructed: TLS, or plaintext for a channel the decision allowed. */
 export function channelCredentials(kind: "tls" | "plaintext"): grpc.ChannelCredentials {
   return kind === "tls" ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
 }
-/** Shared by every copy of this package in the process: the first copy to load captures Node's own default dispatcher and fetch, later copies read them. */
-const SHARED_DEFAULT = Symbol.for("traceai.fi-core.node-default-dispatcher");
-/** What a copy trusts: the dispatcher Node itself put in the slot (undefined: none, every non-empty slot is refused) and Node's own fetch (undefined: none, every fetch is refused). */
-interface NodeOwn { readonly value: unknown; readonly fetch: ((input: string, init?: RequestInit) => Promise<Response>) | undefined }
-const NOTHING: NodeOwn = Object.freeze({ value: undefined, fetch: undefined });
-const nodeFetchNow = (): NodeOwn["fetch"] => (typeof globalThis.fetch === "function" ? globalThis.fetch : undefined);
+
 /**
- * A record another copy left is adopted only when it is a frozen, non-writable, non-configurable own data property whose value is the very
- * dispatcher this copy reads in the slot now. Anything else (a record placed by the application, a slot replaced since) is not adopted and
- * this copy refuses every non-empty slot.
+ * The https proxy of the SDK, or undefined: the `httpsProxy` option, else FI_HTTPS_PROXY, else (only when Node's switch was on at start) the
+ * environment's https proxy unless NO_PROXY exempts the destination. The option and FI_HTTPS_PROXY ignore NO_PROXY. Anything but an
+ * http:// or https:// URL is refused, naming no value.
  */
-function adopt(descriptor: PropertyDescriptor): NodeOwn {
-  const record = descriptor.value as { value?: unknown; fetch?: unknown } | null | undefined;
-  if (!("value" in descriptor) || descriptor.writable !== false || descriptor.configurable !== false || record === null || typeof record !== "object" || !Object.isFrozen(record)) return NOTHING;
-  const own = Object.getOwnPropertyDescriptor(record, "value"), ownFetch = Object.getOwnPropertyDescriptor(record, "fetch");
-  if (!own || !("value" in own) || !ownFetch || !("value" in ownFetch)) return NOTHING;
-  const fetchValue = ownFetch.value;
-  if (fetchValue !== undefined && typeof fetchValue !== "function") return NOTHING;
-  const slot = readSlot();
-  if (own.value === undefined ? slot.kind === "uninspectable" : slot.kind !== "data" || slot.value !== own.value) return NOTHING;
-  return Object.freeze({ value: own.value, fetch: fetchValue as NodeOwn["fetch"] });
+function resolveProxy(target: string, option: unknown): string | undefined {
+  const chosen = typeof option === "string" && option !== "" ? option : process.env.FI_HTTPS_PROXY !== undefined && process.env.FI_HTTPS_PROXY !== "" ? process.env.FI_HTTPS_PROXY : undefined;
+  let proxy = chosen;
+  if (proxy === undefined && ENV_PROXY?.proxy) {
+    let exempt = false;
+    try { const url = new URL(target); exempt = undiciNoProxyExempts(url.hostname, url.port, ENV_PROXY.noProxy); } catch { exempt = false; }
+    if (!exempt) proxy = ENV_PROXY.proxy;
+  }
+  if (proxy === undefined) return undefined;
+  let scheme: string;
+  try { scheme = new URL(proxy).protocol; } catch { throw new FiKeyRefusal("FI_PROXY_UNSUPPORTED"); }
+  if (scheme !== "http:" && scheme !== "https:") throw new FiKeyRefusal("FI_PROXY_UNSUPPORTED");
+  return proxy;
 }
-const nodeOwn: NodeOwn = (() => {
-  try {
-    const shared = Object.getOwnPropertyDescriptor(globalThis, SHARED_DEFAULT);
-    if (shared !== undefined) return adopt(shared);
-    // A slot that already holds something when this module loads is not Node's own, with Node's environment-proxy switch on as well: when the
-    // switch is on and a proxy variable is set Node fills the slot itself while it starts, and nothing shows who wrote what is there, so it is
-    // refused and no provenance is guessed from a name or a shape. Only a slot this copy's own probe makes Node fill is captured.
-    const loaded = readSlot();
-    let captured: NodeOwn;
-    if (loaded.kind !== "empty") captured = Object.freeze({ value: undefined, fetch: nodeFetchNow() });
-    else {
-      const fetchAtLoad = nodeFetchNow();
-      primeNodeDispatcher();
-      const slot = readSlot();
-      captured = Object.freeze({ value: slot.kind === "data" ? slot.value : undefined, fetch: fetchAtLoad });
-    }
-    try { Object.defineProperty(globalThis, SHARED_DEFAULT, { value: captured, enumerable: false, writable: false, configurable: false }); } catch { /* another copy defined it */ }
-    return captured;
-  } catch { return NOTHING; }
-})();
-const nodeDefault: { value: unknown } = nodeOwn;
-/** The one message, written once per process through the diagnostic channel: it names no URL, header or value. */
-const DISPATCHER_MESSAGE = "Future AGI keys are not sent: another global dispatcher was installed before tracing loaded, so key-carrying exports are refused (FI_DISPATCHER_UNKNOWN). "
-  + "Load @traceai/auto first, for example `node --import @traceai/auto/register app.mjs` (CommonJS: `node --require @traceai/auto/register app.cjs`).";
-const MESSAGE_LATCH = Symbol.for("traceai.fi-core.dispatcher-message");
-function announceDispatcherRefusal(): void {
-  try {
-    if (Object.getOwnPropertyDescriptor(globalThis, MESSAGE_LATCH) !== undefined) return;
-    Object.defineProperty(globalThis, MESSAGE_LATCH, { value: true, enumerable: false, writable: false, configurable: false });
-    diag.error(DISPATCHER_MESSAGE);
-  } catch { /* the message is a courtesy; the refusal stands */ }
+/** The one direct transport for key-carrying sends: its own agent, TLS verification always on whatever NODE_TLS_REJECT_UNAUTHORIZED says. */
+let directAgent: Agent | undefined;
+function direct(): Dispatcher { return directAgent ??= new Agent({ connect: { rejectUnauthorized: true } }); }
+/** One CONNECT-only proxy agent per proxy URL: the destination's certificate and the proxy's own (for an https proxy) are always verified. */
+const proxyAgents = new Map<string, ProxyAgent>();
+function through(proxy: string): Dispatcher {
+  let agent = proxyAgents.get(proxy);
+  if (agent === undefined) { agent = new ProxyAgent({ uri: proxy, requestTls: { rejectUnauthorized: true }, proxyTls: { rejectUnauthorized: true } }); proxyAgents.set(proxy, agent); }
+  return agent;
 }
 /**
- * The dispatcher check for a key-carrying request, run for plaintext and https alike. A caller's `dispatcher` option is refused. For a fetch
- * the SDK sends itself, the global slot must be empty or hold the very object Node installed (read as an own data property); anything else
- * (a proxy agent, an Agent, a pool, a Proxy object, a subclass, an accessor, an inherited value) is refused as FI_DISPATCHER_UNKNOWN. A
- * plaintext request is never proxied, so NODE_USE_ENV_PROXY and --use-env-proxy refuse it.
+ * The dispatcher for a key-carrying request: fi-core's own, never the global slot. A plaintext request goes direct (never through a proxy,
+ * loopback included): it is refused when an SDK proxy is configured or Node's environment-proxy switch is on. An https request goes
+ * through the SDK's https proxy when one applies, else direct.
  */
-function assertDispatcher(tls: boolean, callerDispatcher: unknown, ownFetch: boolean): void {
+function dispatcherFor(target: string, tls: boolean, option: unknown): Dispatcher {
+  if (!tls) {
+    if (nodeEnvProxy() || (typeof option === "string" && option !== "") || (process.env.FI_HTTPS_PROXY ?? "") !== "") throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+    return direct();
+  }
+  const proxy = resolveProxy(target, option);
+  return proxy === undefined ? direct() : through(proxy);
+}
+/** A caller's `dispatcher` option is refused on a key-carrying send: the SDK's own transport is the only one used. */
+function assertNoCallerDispatcher(callerDispatcher: unknown): void {
   if (callerDispatcher !== undefined) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
-  if (!ownFetch) return;
-  const slot = readSlot();
-  if (slot.kind === "uninspectable" || (slot.kind === "data" && (nodeDefault.value === undefined || slot.value !== nodeDefault.value))) { announceDispatcherRefusal(); throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN"); }
-  if (!tls && nodeEnvProxy()) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
 }
 
 /** The proxy gRPC reads for `host` from `env`, as grpcio reads it: the first SET of grpc_proxy, https_proxy, http_proxy (lower case only; an empty value counts as set and means none), unless no_grpc_proxy, else no_proxy, names the host. */
@@ -249,8 +231,6 @@ export interface SendFacts {
   /** A dispatcher the caller supplied (fetch). */
   dispatcher?: unknown;
   allowInsecureHttp?: unknown;
-  /** The request is a fetch the SDK builds itself (not through a dispatcher of the caller's): its proxy exposure is the global dispatcher and Node's switches. */
-  fetch?: boolean;
 }
 export interface SendOutcome { keys: boolean; tls: boolean; plaintextDirect: boolean }
 
@@ -267,12 +247,8 @@ export function guardSend(facts: SendFacts): SendOutcome {
   const request = { target: facts.target, transport: facts.transport, headers: present, allowInsecureHttp: facts.allowInsecureHttp,
     credentials: facts.transport === "grpc" ? channelCredentials(facts.secureChannel ? "tls" : "plaintext") : undefined };
   const decision = decideFiRequest(request);
-  // The dispatcher check runs for every key-carrying request, https included: a dispatcher whose dial can be redirected is unknown and refused,
-  // and a plaintext request never goes through a proxy, loopback included. The OTLP HTTP exporter sends with an agent of its own (no dispatcher,
-  // no proxy environment), so only a fetch or a request through a caller's dispatcher is checked.
-  if (facts.transport === "http" && (facts.fetch === true || facts.dispatcher !== undefined)) {
-    assertDispatcher(decision.tls, facts.dispatcher, facts.fetch === true);
-  }
+  // A dispatcher option from the caller is refused for every key-carrying request: the SDK's own transport is the only one used.
+  if (facts.transport === "http") assertNoCallerDispatcher(facts.dispatcher);
   return { keys: true, tls: decision.tls, plaintextDirect: decision.plaintextDirect };
 }
 
@@ -284,19 +260,22 @@ export interface GuardedFetchRequest {
   /** The decision's key headers and values for this request. */
   intended: Intended;
   allowInsecureHttp?: unknown;
+  /** The https proxy of the SDK (see `resolveProxy`); wins over FI_HTTPS_PROXY. */
+  httpsProxy?: unknown;
 }
 /**
  * The one fetch for every request that may carry Future AGI keys. The final headers and the proxy exposure are judged right before the
- * send; redirects are not followed, and an answer that is a redirect to a request that carried keys is a refusal (its body is dropped).
+ * send; the send uses fi-core's own pinned undici transport (never the global dispatcher slot or globalThis.fetch), redirects are not
+ * followed, and an answer that is a redirect to a request that carried keys is a refusal (its body is dropped).
  * Throws FiKeyRefusal, naming no value, and sends nothing, for a refused send.
  */
 export async function guardedFetch(request: GuardedFetchRequest): Promise<Response> {
   const init = { ...(request.init ?? {}) };
   const outcome = guardSend({ transport: "http", target: request.url, entries: headerEntries(init.headers), intended: request.intended,
-    dispatcher: init.dispatcher, allowInsecureHttp: request.allowInsecureHttp, fetch: true });
-  // Node's own fetch, captured when this package loaded: an application's replacement of the global is never called with the keys.
-  if (nodeOwn.fetch === undefined) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
-  const response = await nodeOwn.fetch(request.url, { ...init, redirect: "manual" });
+    dispatcher: init.dispatcher, allowInsecureHttp: request.allowInsecureHttp });
+  const dispatcher = dispatcherFor(request.url, outcome.tls, request.httpsProxy);
+  delete init.dispatcher;
+  const response = await undiciFetch(request.url, { ...(init as object), dispatcher, redirect: "manual" } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   if (outcome.keys && isRedirect(response)) {
     try { await response.body?.cancel(); } catch { /* the body is not read */ }
     throw new FiKeyRefusal("FI_REDIRECT");
@@ -314,25 +293,44 @@ function unguardable(intended: Intended): void {
   if (intended.keys.size > 0 || keyValues(intended).length > 0) unsupported();
 }
 
+/** HTTP statuses the OTLP specification treats as retryable, and the Retry-After header in milliseconds (a count of seconds or an HTTP date). */
+const RETRYABLE = new Set([429, 502, 503, 504]);
+function retryAfterMillis(value: string | null): number | undefined {
+  if (!value) return undefined;
+  if (/^\d+$/.test(value.trim())) return Number(value.trim()) * 1000;
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
 /**
- * Guard an OTLP HTTP exporter's send: the final url and headers of every request (after the SDK's own, the caller's and the ambient
- * merge) are judged before the exporter's own transport sends them. A refused send reports a failed export and logs the value-free refusal.
- * When the installed exporter does not have the layout this relies on, construction is refused.
+ * Guard an OTLP HTTP exporter's send, and make the send fi-core's own: the final url and headers of every request (after the SDK's own,
+ * the caller's and the ambient merge) are judged, then the request goes out through fi-core's pinned undici transport (its own agent, or
+ * the SDK's https proxy), so no global agent, proxy or dispatcher of the application is used. The exporter's retry layer is kept. A refused
+ * send reports a failed export and logs the value-free refusal. When the installed exporter does not have the layout this relies on,
+ * construction is refused.
  */
-export function guardOtlpHttpExporter(exporter: unknown, intended: Intended, allowInsecureHttp?: unknown): void {
+export function guardOtlpHttpExporter(exporter: unknown, intended: Intended, allowInsecureHttp?: unknown, httpsProxy?: unknown): void {
   const transport = (exporter as any)?._delegate?._transport?._transport;
   const parameters = transport?._parameters;
   if (!transport || typeof transport.send !== "function" || !parameters || typeof parameters.headers !== "function" || typeof parameters.url !== "string") return unguardable(intended);
-  const original = transport.send.bind(transport);
-  transport.send = (data: Uint8Array, timeoutMillis: number) => {
+  transport.send = async (data: Uint8Array, timeoutMillis: number) => {
     try {
-      // The global dispatcher slot is checked for this send too, though the exporter's own agent does not read it.
-      guardSend({ transport: "http", target: parameters.url, entries: headerEntries(parameters.headers()), intended, allowInsecureHttp, fetch: true });
+      const outcome = guardSend({ transport: "http", target: parameters.url, entries: headerEntries(parameters.headers()), intended, allowInsecureHttp });
+      const dispatcher = dispatcherFor(parameters.url, outcome.tls, httpsProxy);
+      const url = new URL(parameters.url); url.search = ""; url.hash = "";
+      const headers: Record<string, string> = { ...parameters.headers() };
+      const body = parameters.compression === "gzip" ? gzipSync(data) : data;
+      if (parameters.compression === "gzip") headers["Content-Encoding"] = "gzip";
+      const response = await undiciFetch(url.href, { method: "POST", headers, body, dispatcher, redirect: "manual", signal: AbortSignal.timeout(timeoutMillis) });
+      const text = Buffer.from(await response.arrayBuffer());
+      if (outcome.keys && isRedirect(response as unknown as Response)) throw new FiKeyRefusal("FI_REDIRECT");
+      if (response.status < 299) return { status: "success", data: text };
+      if (RETRYABLE.has(response.status)) return { status: "retryable", retryInMillis: retryAfterMillis(response.headers.get("retry-after")) };
+      return { status: "failure", error: new OTLPExporterError(response.statusText, response.status, text.toString()) };
     } catch (error) {
-      diag.error(`OTLP HTTP export not sent: ${describeFailure(error)}`);
-      return Promise.resolve({ status: "failure", error });
+      if (error instanceof FiKeyRefusal) diag.error(`OTLP HTTP export not sent${failureSuffix(error)}`);
+      return { status: "failure", error: error instanceof FiKeyRefusal ? error : new Error(error instanceof Error && error.name === "TimeoutError" ? "Request Timeout" : "OTLP HTTP request failed") };
     }
-    return original(data, timeoutMillis);
   };
 }
 
@@ -359,7 +357,7 @@ export function guardOtlpGrpcExporter(exporter: unknown, intended: Intended, all
         try { guardSend({ transport: "grpc", target, entries: metadataEntries(metadata), intended, secureChannel: secure(), allowInsecureHttp }); }
         catch (error) {
           refused = true;
-          diag.error(`OTLP gRPC export not sent: ${describeFailure(error)}`);
+          diag.error(`OTLP gRPC export not sent${failureSuffix(error)}`);
           listener.onReceiveStatus({ code: grpc.status.PERMISSION_DENIED, details: describeFailure(error), metadata: new grpc.Metadata() });
           return;
         }

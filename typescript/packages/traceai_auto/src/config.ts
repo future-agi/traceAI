@@ -9,6 +9,12 @@ import { compileOutgoingPolicy, type OutgoingPolicy, type OutgoingPropagationMod
 export interface Options {
   /** Allows FI keys in plaintext to a self-hosted base URL that is not a Future AGI host (FI_ALLOW_INSECURE_HTTP=1 does the same); never through a proxy. */
   allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for exports and checks that carry FI keys to an https destination (FI_HTTPS_PROXY does the same; this wins). The SDK opens
+   * its own CONNECT tunnel through it, with TLS verified to the destination and, for an https proxy, to the proxy. Credentials in the URL go to the proxy as
+   * Proxy-Authorization (unencrypted with an http:// proxy). A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
   /** Experimental node:http/node:https propagation; off until explicitly selected. */
   propagateOutgoingAdapters?: boolean;
   /** default/all retain mandatory vendor-host, provider-port and redirect vetoes. */

@@ -21,7 +21,7 @@ import { parseKeyPairsIntoRecord } from "@opentelemetry/core";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 
-export type FiKeyRefusalCode = "FI_HOST_MISMATCH" | "FI_EMPTY_AUTHORITY" | "FI_PLAINTEXT_FI_HOST" | "FI_PLAINTEXT_NOT_ALLOWED" | "FI_PLAINTEXT_PROXIED" | "FI_AMBIENT_KEY_HEADERS" | "FI_REDIRECT" | "FI_DISPATCHER_UNKNOWN";
+export type FiKeyRefusalCode = "FI_HOST_MISMATCH" | "FI_EMPTY_AUTHORITY" | "FI_PLAINTEXT_FI_HOST" | "FI_PLAINTEXT_NOT_ALLOWED" | "FI_PLAINTEXT_PROXIED" | "FI_AMBIENT_KEY_HEADERS" | "FI_REDIRECT" | "FI_DISPATCHER_UNKNOWN" | "FI_PROXY_UNSUPPORTED";
 const MESSAGES: Record<FiKeyRefusalCode, string> = {
   FI_HOST_MISMATCH: "The endpoint names its host in a way parsers read differently (a backslash, a percent-encoded backslash or an @ outside the host part), so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.",
   FI_EMPTY_AUTHORITY: "The endpoint has an empty host (scheme followed by no host), so no Future AGI key is sent to it. Write the endpoint as scheme://host[:port]/path.",
@@ -30,7 +30,8 @@ const MESSAGES: Record<FiKeyRefusalCode, string> = {
   FI_PLAINTEXT_PROXIED: "FI_ALLOW_INSECURE_HTTP and allowInsecureHttp do not apply when the request would go through an HTTP or HTTPS proxy; use TLS, or send without a proxy dispatcher.",
   FI_AMBIENT_KEY_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS carries a Future AGI key header or a Future AGI key value, so no exporter is created for this collector. Remove it from those variables, or send the traces to Future AGI.",
   FI_REDIRECT: "The collector answered with a redirect, which is not followed when Future AGI keys are sent; nothing further was sent.",
-  FI_DISPATCHER_UNKNOWN: "Key-carrying exports and checks use Node's default transport, so no Future AGI key is sent through a dispatcher option or a custom global dispatcher. Remove it, or load @traceai/auto before the dispatcher is installed.",
+  FI_DISPATCHER_UNKNOWN: "Key-carrying exports and checks use the SDK's own transport, so a dispatcher option is not accepted for them. Remove the dispatcher option.",
+  FI_PROXY_UNSUPPORTED: "The https proxy setting (FI_HTTPS_PROXY, the httpsProxy option, or HTTPS_PROXY under NODE_USE_ENV_PROXY=1) is not an http:// or https:// proxy URL, so no Future AGI key is sent. Use an http:// or https:// proxy URL, or remove the setting.",
 };
 export class FiKeyRefusal extends Error {
   readonly code: FiKeyRefusalCode;
@@ -151,22 +152,26 @@ export function proxiedByPython(host: string, port: string, env: Env = process.e
   if (!(proxies.http || proxies.all)) return false;
   return !matchesNoProxy(host, port, proxies.no ?? "");
 }
+/** Whether undici's NO_PROXY rule exempts `host` (and `port`, "" when none was written): the entries are split on commas and blanks, an entry may carry a port, a leading dot or star matches a suffix, and `*` exempts everything. */
+export function undiciNoProxyExempts(host: string, port: string, noProxy: string): boolean {
+  const hostname = host.toLowerCase().replace(/^\[|\]$/g, "");
+  for (const raw of noProxy.split(/[,\s]/)) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry === "*") return true;
+    const m = /^(.*?)(?::(\d+))?$/.exec(entry);
+    const name = m?.[1] ?? entry, entryPort = m?.[2];
+    if (entryPort && entryPort !== (port || "80")) continue;
+    if (!/^[.*]/.test(name)) { if (hostname === name || hostname.endsWith(`.${name}`)) return true; }
+    else if (hostname.endsWith(name.replace(/^\*/, ""))) return true;
+  }
+  return false;
+}
 /** Whether undici's EnvHttpProxyAgent would send a request to `host` through a proxy: its own environment reading and its own NO_PROXY rule. */
 export function proxiedByUndiciEnvironment(host: string, port: string, env: Env = process.env): boolean {
   const proxy = env.http_proxy || env.HTTP_PROXY;
   if (!proxy) return false;
-  const hostname = host.toLowerCase().replace(/^\[|\]$/g, "");
-  for (const raw of (env.no_proxy || env.NO_PROXY || "").split(/[,\s]/)) {
-    const entry = raw.trim().toLowerCase();
-    if (!entry) continue;
-    if (entry === "*") return false;
-    const m = /^(.*?)(?::(\d+))?$/.exec(entry);
-    const name = m?.[1] ?? entry, entryPort = m?.[2];
-    if (entryPort && entryPort !== (port || "80")) continue;
-    if (!/^[.*]/.test(name)) { if (hostname === name || hostname.endsWith(`.${name}`)) return false; }
-    else if (hostname.endsWith(name.replace(/^\*/, ""))) return false;
-  }
-  return true;
+  return !undiciNoProxyExempts(host, port, env.no_proxy || env.NO_PROXY || "");
 }
 const DIRECT_DISPATCHERS = new Set(["Agent", "Pool", "Client", "BalancedPool", "RoundRobinPool", "H2CClient"]);
 /** The constructor name of a dispatcher, or undefined when it cannot be read without running its code. */

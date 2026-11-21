@@ -59,16 +59,12 @@ let state: AgentState | undefined;
 function sharedState(): AgentState | undefined { return state ??= (globalThis as any)[STATE_KEY]; }
 const warned = new Set<string>();
 /**
- * The message for a collector export that failed: when fi-core refused to send (its refusal carries a value-free code), the code and, for a global
- * dispatcher installed before tracing loaded, the load-order fix. No URL, header or value is named.
+ * The message for a collector export that failed: when fi-core refused to send (its refusal carries a value-free code), the code. No URL, header or value is named.
  */
 function collectorFailure(error: unknown): string {
   const code = (error as { name?: unknown; code?: unknown } | undefined)?.name === "FiKeyRefusal" ? (error as { code?: unknown }).code : undefined;
   if (typeof code !== "string" || !/^FI_[A-Z_]+$/.test(code)) return "Collector export failed; the application will continue.";
-  const fix = code === "FI_DISPATCHER_UNKNOWN"
-    ? " Another global dispatcher was installed before tracing loaded: load @traceai/auto first, for example `node --import @traceai/auto/register app.mjs` (CommonJS: `node --require @traceai/auto/register app.cjs`)."
-    : "";
-  return `Collector export failed: Future AGI keys were not sent (${code}).${fix} The application will continue.`;
+  return `Collector export failed: Future AGI keys were not sent (${code}). The application will continue.`;
 }
 function warn(key: string, message: string): void {
   if (warned.has(key)) return; warned.add(key);
@@ -315,7 +311,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
         try { host = new URL(resolveTraceEndpoint(config.baseUrl)).host || host; } catch { /* Reported as invalid. */ }
         warn("base-host", `Sending traces to ${host} (base URL from the ${config.baseUrlSource}).`);
       }
-      const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl, allowInsecureHttp: options.allowInsecureHttp === true,
+      const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl, allowInsecureHttp: options.allowInsecureHttp === true, httpsProxy: options.httpsProxy,
         headers: { "x-api-key": config.apiKey!, "x-secret-key": config.secretKey! }, verbose: false, traceConfig: config.traceConfig,
         resourceAttributes: { project_name: config.projectName, project_type: config.projectType } }), agent, options, failedCaptures);
       processor = new BatchSpanProcessor(exporter);
@@ -367,7 +363,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
         delete process.env.OTEL_TRACES_SAMPLER_ARG;
         agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
           setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor], sampler,
-          allowInsecureHttp: options.allowInsecureHttp === true });
+          allowInsecureHttp: options.allowInsecureHttp === true, httpsProxy: options.httpsProxy });
       } finally {
         if (samplerName === undefined) delete process.env.OTEL_TRACES_SAMPLER;
         else process.env.OTEL_TRACES_SAMPLER = samplerName;

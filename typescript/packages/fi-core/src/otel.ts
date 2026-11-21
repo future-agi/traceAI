@@ -28,7 +28,7 @@ import {
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
-import { channelCredentials, describeFailure, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
+import { channelCredentials, describeFailure, failureSuffix, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
 import { assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
@@ -136,6 +136,12 @@ interface HTTPSpanExporterOptions extends ExportPrivacyOptions {
   verbose?: boolean;
   /** Allows plaintext to a self-hosted collector that is not a Future AGI host; see FI_ALLOW_INSECURE_HTTP. */
   allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
 }
 
 // --- Custom ID Generator (using UUIDs) ---
@@ -157,6 +163,7 @@ class HTTPSpanExporter implements SpanExporter {
   private readonly headers: FIHeaders;
   private readonly intended: Intended;
   private readonly allowInsecureHttp: unknown;
+  private readonly httpsProxy: unknown;
   private isShutdown = false;
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
@@ -165,6 +172,7 @@ class HTTPSpanExporter implements SpanExporter {
     const { headers } = decide({ target: options.endpoint, transport: "http", headers: options.headers, allowInsecureHttp: options.allowInsecureHttp });
     this.intended = intendedFrom({ headers });
     this.allowInsecureHttp = options.allowInsecureHttp;
+    this.httpsProxy = options.httpsProxy;
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
@@ -266,7 +274,7 @@ class HTTPSpanExporter implements SpanExporter {
     }
 
     // The one guarded fetch: the final headers and the proxy exposure are judged right before the send, redirects are not followed.
-    guardedFetch({ url: this.endpoint, init: { method: "POST", headers: this.headers, body: JSON.stringify(spansData) }, intended: this.intended, allowInsecureHttp: this.allowInsecureHttp })
+    guardedFetch({ url: this.endpoint, init: { method: "POST", headers: this.headers, body: JSON.stringify(spansData) }, intended: this.intended, allowInsecureHttp: this.allowInsecureHttp, httpsProxy: this.httpsProxy })
       .then((response) => {
         if (response.ok) {
           resultCallback({ code: ExportResultCode.SUCCESS });
@@ -278,7 +286,7 @@ class HTTPSpanExporter implements SpanExporter {
         }
       })
       .catch((errorCaught) => {
-        diag.error(`HTTPSpanExporter: ${errorCaught instanceof FiKeyRefusal ? "not sent" : "Error exporting spans"}: ${describeFailure(errorCaught)}`);
+        diag.error(errorCaught instanceof FiKeyRefusal ? `HTTPSpanExporter: not sent${failureSuffix(errorCaught)}` : `HTTPSpanExporter: Error exporting spans: ${describeFailure(errorCaught)}`);
         resultCallback({ code: ExportResultCode.FAILED });
       });
   }
@@ -469,7 +477,7 @@ function constructFullEndpoint(customEndpoint?: string): string {
 /** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; allowInsecureHttp?: boolean } = {}) {
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; allowInsecureHttp?: boolean; httpsProxy?: string } = {}) {
     const named = resolveTarget(options, false);
     const url = constructFullEndpoint(named);
     const { headers, fiBound } = decide({ target: url, written: named, transport: "http", headers: options.headers, declaredFi: isFiRouteDeclared(options), allowInsecureHttp: options.allowInsecureHttp });
@@ -479,7 +487,7 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
     super({ url, headers });
     if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
     // Every send is judged on its final url and headers, after every merge the exporter performs.
-    guardOtlpHttpExporter(this, intendedFrom({ headers }), options.allowInsecureHttp);
+    guardOtlpHttpExporter(this, intendedFrom({ headers }), options.allowInsecureHttp, options.httpsProxy);
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
   }
@@ -500,6 +508,12 @@ export function createSpanExporter(options: ExportPrivacyOptions & {
    * (the environment's FI_ALLOW_INSECURE_HTTP=1 does the same). Never applies to a Future AGI host or through a proxy.
    */
   allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
 } = {}): SpanExporter {
   // Whether the endpoint is the FI route is the SDK's own wiring (see fi-route.ts), carried by the
   // identity of the options object; no property of a caller's options can say so.
@@ -526,6 +540,12 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
   spanProcessors?: SpanProcessor[];
   /** See `createSpanExporter`. */
   allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -566,7 +586,7 @@ class FITracerProvider extends BasicTracerProvider {
     let defaultProcessor: DefaultBatchSpanProcessor | DefaultSimpleSpanProcessor | undefined;
     if (config.spanProcessors === undefined) {
       // Resolve the original options, not an already-resolved full environment URL.
-      const exporter = createSpanExporter({ ...config, transport, headers, allowInsecureHttp: config.allowInsecureHttp });
+      const exporter = createSpanExporter({ ...config, transport, headers, allowInsecureHttp: config.allowInsecureHttp, httpsProxy: config.httpsProxy });
       defaultProcessor = config.batch
         ? new DefaultBatchSpanProcessor(exporter)
         : new DefaultSimpleSpanProcessor(exporter);
@@ -678,6 +698,12 @@ class BatchSpanProcessor extends OTelBatchSpanProcessor {
 export interface RegisterOptions extends ExportPrivacyOptions {
   /** See `createSpanExporter`: plaintext to a self-hosted collector that is not a Future AGI host. */
   allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
   /** Preserve application service identity; FI project routing is separate. */
   resource?: Resource;
   projectName?: string;
@@ -758,7 +784,7 @@ if (!projectName) {
       preparedEvalTags,
       optEndpoint,
       verbose,
-      { allowInsecureHttp: options.allowInsecureHttp },
+      { allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy },
     ).then(customEvalConfigExists => {
       if (customEvalConfigExists) {
         // Log an error instead of throwing, as register has already returned.
@@ -809,6 +835,7 @@ if (!projectName) {
     traceConfig: options.traceConfig,
     resourceAttributes: options.resourceAttributes,
     allowInsecureHttp: options.allowInsecureHttp,
+    httpsProxy: options.httpsProxy,
   });
 
   if (setGlobalTracerProvider) {
@@ -880,7 +907,7 @@ async function checkCustomEvalConfigExists(
   evalTags: any[], // Expects result of prepareEvalTags
   customEndpoint?: string, // Can be base or full URL for the API call itself
   verbose?: boolean,
-  options: { allowInsecureHttp?: boolean; /** A caller-supplied undici dispatcher, which makes a plaintext request count as proxied when it is a proxy agent. */ dispatcher?: unknown } = {},
+  options: { allowInsecureHttp?: boolean; /** An https proxy for the check (see `createSpanExporter`). */ httpsProxy?: string; /** A dispatcher option is refused for a key-carrying check. */ dispatcher?: unknown } = {},
 ): Promise<boolean> {
   if (!evalTags || evalTags.length === 0) {
     return false;
@@ -897,7 +924,7 @@ async function checkCustomEvalConfigExists(
   let keys: FIHeaders | undefined;
   try { keys = decide({ target: url, transport: "http", declaredFi: true, allowInsecureHttp: options.allowInsecureHttp, dispatcher: options.dispatcher }).headers; }
   catch (error) {
-    diag.warn(`checkCustomEvalConfigExists: skipped: ${describeFailure(error)}`);
+    diag.warn(`checkCustomEvalConfigExists: skipped${failureSuffix(error)}`);
     return false;
   }
   const headers: FIHeaders = {
@@ -917,10 +944,10 @@ async function checkCustomEvalConfigExists(
   try {
     let response: Response;
     try {
-      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp,
+      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy,
         init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
     } catch (error) {
-      if (error instanceof FiKeyRefusal) { diag.warn(`checkCustomEvalConfigExists: skipped: ${describeFailure(error)}`); return false; }
+      if (error instanceof FiKeyRefusal) { diag.warn(`checkCustomEvalConfigExists: skipped${failureSuffix(error)}`); return false; }
       throw error;
     }
     if (!response.ok) {
@@ -945,7 +972,7 @@ export async function checkCustomEvalTemplateExists(
   eval_template_name: string,
   verbose?: boolean,
   customEndpoint?: string,
-  options: { allowInsecureHttp?: boolean; /** A caller-supplied undici dispatcher, which makes a plaintext request count as proxied when it is a proxy agent. */ dispatcher?: unknown } = {},
+  options: { allowInsecureHttp?: boolean; /** An https proxy for the check (see `createSpanExporter`). */ httpsProxy?: string; /** A dispatcher option is refused for a key-carrying check. */ dispatcher?: unknown } = {},
 ): Promise<CheckCustomEvalTemplateExistsResponse> {
   if (!eval_template_name || eval_template_name.length === 0) {
     const response: CheckCustomEvalTemplateExistsResponse = {
@@ -968,7 +995,7 @@ export async function checkCustomEvalTemplateExists(
   let keys: FIHeaders | undefined;
   try { keys = decide({ target: url, transport: "http", declaredFi: true, allowInsecureHttp: options.allowInsecureHttp, dispatcher: options.dispatcher }).headers; }
   catch (error) {
-    diag.warn(`checkCustomEvalTemplateExists: skipped: ${describeFailure(error)}`);
+    diag.warn(`checkCustomEvalTemplateExists: skipped${failureSuffix(error)}`);
     return { result: { isUserEvalTemplate: false, evalTemplate: null } };
   }
   const headers: FIHeaders = {
@@ -987,11 +1014,11 @@ export async function checkCustomEvalTemplateExists(
   try {
     let response: Response;
     try {
-      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp,
+      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy,
         init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
     } catch (error) {
       if (error instanceof FiKeyRefusal) {
-        diag.warn(`checkCustomEvalTemplateExists: skipped: ${describeFailure(error)}`);
+        diag.warn(`checkCustomEvalTemplateExists: skipped${failureSuffix(error)}`);
         return { result: { isUserEvalTemplate: false, evalTemplate: null } };
       }
       throw error;
