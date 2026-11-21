@@ -58,6 +58,18 @@ const STATE_KEY = Symbol.for("traceai.auto.agent.v1");
 let state: AgentState | undefined;
 function sharedState(): AgentState | undefined { return state ??= (globalThis as any)[STATE_KEY]; }
 const warned = new Set<string>();
+/**
+ * The message for a collector export that failed: when fi-core refused to send (its refusal carries a value-free code), the code and, for a global
+ * dispatcher installed before tracing loaded, the load-order fix. No URL, header or value is named.
+ */
+function collectorFailure(error: unknown): string {
+  const code = (error as { name?: unknown; code?: unknown } | undefined)?.name === "FiKeyRefusal" ? (error as { code?: unknown }).code : undefined;
+  if (typeof code !== "string" || !/^FI_[A-Z_]+$/.test(code)) return "Collector export failed; the application will continue.";
+  const fix = code === "FI_DISPATCHER_UNKNOWN"
+    ? " Another global dispatcher was installed before tracing loaded: load @traceai/auto first, for example `node --import @traceai/auto/register app.mjs` (CommonJS: `node --require @traceai/auto/register app.cjs`)."
+    : "";
+  return `Collector export failed: Future AGI keys were not sent (${code}).${fix} The application will continue.`;
+}
 function warn(key: string, message: string): void {
   if (warned.has(key)) return; warned.add(key);
   try { console.warn(`[traceai:auto] ${message}`); } catch { /* Host logger may throw. */ }
@@ -160,7 +172,7 @@ function guardedExporter(exporter: SpanExporter, agent: AgentState, options: Opt
         if (called) return; called = true;
         agent.unsent = Math.max(0, agent.unsent - spans.length);
         agent.collector = result.code === ExportResultCode.SUCCESS ? "accepted" : "failed";
-        if (result.code !== ExportResultCode.SUCCESS) { agent.collectorFailed = true; warn("collector", "Collector export failed; the application will continue."); }
+        if (result.code !== ExportResultCode.SUCCESS) { agent.collectorFailed = true; warn("collector", collectorFailure(result.error)); }
         callback(result);
       };
       try {
