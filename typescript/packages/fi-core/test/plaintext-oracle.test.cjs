@@ -140,11 +140,9 @@ test('rows applied and skipped are reported', () => {
 function classify(row, got) {
   const wantRefuse = row.decision === 'refuse';
   if (wantRefuse && got.decision === 'refuse') return 'refused, under another error code';
-  if (row.error === 'insecure_futureagi_grpc') return 'gRPC plaintext to a Future AGI host is built as TLS, not refused';
   if (row.caller === 'uninspectable_transport' && row.source === 'tls' && got.decision === 'refuse') return 'uninspectable dispatcher over TLS is refused, oracle builds';
+  if (row.caller === 'client_with_proxy' && row.source === 'tls' && got.decision === 'refuse') return "a caller's proxy dispatcher over TLS is refused, oracle builds";
   if (row.host === 's1_at_in_path' && !wantRefuse) return '@ in the path is refused, oracle builds';
-  if (wantRefuse && got.decision === 'build' && row.host === 's1_v6_userinfo') return 'bracketed IPv6 before @ (userinfo) is built, oracle refuses';
-  if (wantRefuse && got.decision === 'build' && row.host === 's3_port_only') return 'port-only authority is built, oracle refuses';
   return 'UNCLASSIFIED';
 }
 const classes = new Map();
@@ -165,13 +163,28 @@ test('every applied row: decision, error code, dialed target, TLS or plain, keys
   const found = Object.fromEntries([...classes].map(([name, entry]) => [name, entry.count]));
   assert.deepEqual(found, PINNED_FINDINGS);
 });
+// Every class is one where this SDK is at least as strict as the oracle: none builds where the oracle refuses. A refusal under another code is
+// listed by code pair in the report (TypeScript code vs the oracle's), counted below.
 const PINNED_FINDINGS = {
-  '@ in the path is refused, oracle builds': 36,
-  'bracketed IPv6 before @ (userinfo) is built, oracle refuses': 24,
-  'gRPC plaintext to a Future AGI host is built as TLS, not refused': 513,
-  'port-only authority is built, oracle refuses': 39,
-  'refused, under another error code': 1018,
+  '@ in the path is refused, oracle builds': 32,
+  "a caller's proxy dispatcher over TLS is refused, oracle builds": 1202,
+  'refused, under another error code': 1012,
   'uninspectable dispatcher over TLS is refused, oracle builds': 1202,
+};
+const CODE_PAIRS = new Map();
+test('the refusals under another code, by code pair: TypeScript code vs the oracle code', () => {
+  for (const [row, input] of applied) {
+    if (row.decision !== 'refuse') continue;
+    const got = evaluate(input);
+    if (got.decision === 'refuse' && got.code !== CODE_OF[row.error]) { const key = `${got.code} vs ${row.error} (${CODE_OF[row.error]})`; CODE_PAIRS.set(key, (CODE_PAIRS.get(key) || 0) + 1); }
+  }
+  for (const [pair, count] of [...CODE_PAIRS].sort()) note(`  CODE PAIR x${count}: TypeScript ${pair}`);
+  assert.deepEqual(Object.fromEntries(CODE_PAIRS), PINNED_CODE_PAIRS);
+});
+const PINNED_CODE_PAIRS = {
+  'FI_DISPATCHER_UNKNOWN vs proxied (FI_PLAINTEXT_PROXIED)': 932,
+  'FI_HOST_MISMATCH vs insecure_self_hosted_target (FI_PLAINTEXT_NOT_ALLOWED)': 48,
+  'FI_HOST_MISMATCH vs proxied (FI_PLAINTEXT_PROXIED)': 32,
 };
 
 // ---- Key bytes at the sink are MEASURED --------------------------------------------------------------------------------------------
@@ -277,14 +290,100 @@ test('every refused HTTP row sends 0 bytes to the target sink and to both proxy 
   const found = Object.fromEntries([...measuredClasses].map(([name, entry]) => [name, { count: entry.count, bytes: entry.bytes }]));
   assert.deepEqual(found, PINNED_MEASURED);
 });
-const PINNED_MEASURED = {
-  's1_v6_userinfo: the guard let the send go on for a refused row': { count: 16, bytes: 0 },
-  's3_port_only: the guard let the send go on for a refused row': { count: 22, bytes: 0 },
+const PINNED_MEASURED = {};
+
+// Refused gRPC rows are measured too: the exporter is constructed for the row's target with the row's proxy variables pointing at a real counting
+// listener (the lower-case variables grpc reads) and a marker key; a refusal must happen at construction, with 0 bytes and 0 connections at the
+// listener standing for the target and at the one standing for the proxy. Every row is run; the counts are kept per class (error code, source).
+test('every refused gRPC row is refused at construction, with 0 bytes and 0 connections at the target and the proxy listeners', async () => {
+  const { createSpanExporter, Transport } = load('./dist/src/otel');
+  const target = await listener('target'), proxy = await listener('proxy');
+  const ports = { T: String(target.port), A: String(proxy.port), B: String(proxy.port) };
+  const classesSeen = new Map();
+  let rows = 0, clean = 0;
+  try {
+    for (const row of oracle.rows) {
+      if (row.decision !== 'refuse' || row.transport !== 'grpc') continue;
+      const input = adapt(row, ports);
+      if (input.skip) continue;
+      rows++;
+      const saved = {};
+      for (const name of SCOPED) { saved[name] = process.env[name]; delete process.env[name]; }
+      const before = [total([target, proxy]), connections([target, proxy])];
+      let outcome;
+      try {
+        Object.assign(process.env, { grpc_proxy: proxy.url, https_proxy: proxy.url, http_proxy: proxy.url }, input.proxyEnv);
+        if (input.optIn !== undefined) process.env.FI_ALLOW_INSECURE_HTTP = input.optIn;
+        if (input.insecureEnv) process.env.OTEL_EXPORTER_OTLP_INSECURE = 'true';
+        const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: input.target, headers: { ...MARKER }, ...(input.credentials ? { credentials: input.credentials } : {}), timeoutMillis: 500 });
+        outcome = 'built';
+        await exporter.shutdown().catch(() => {});
+      } catch (error) { outcome = error && error.name === 'FiKeyRefusal' ? 'refused' : `error ${error && error.name}`; }
+      finally { for (const name of SCOPED) { if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; } }
+      const bytes = total([target, proxy]) - before[0], opened = connections([target, proxy]) - before[1];
+      const name = `${CODE_OF[row.error]}|${row.source}|${row.host.startsWith('s1') || row.host.startsWith('s3') ? row.host : 'host'}`;
+      const entry = classesSeen.get(name) || { count: 0, bytes: 0, connections: 0, outcomes: new Set() };
+      entry.count++; entry.bytes += bytes; entry.connections += opened; entry.outcomes.add(outcome); classesSeen.set(name, entry);
+      if (outcome === 'refused' && bytes === 0 && opened === 0) clean++;
+    }
+  } finally { await Promise.all([target.close(), proxy.close()]); }
+  note(`measured refused gRPC rows ${rows}: ${clean} refused at construction with 0 bytes and 0 connections at the target and proxy listeners`);
+  for (const [name, entry] of [...classesSeen].sort()) note(`  gRPC class ${name}: ${entry.count} rows, ${entry.bytes} bytes, ${entry.connections} connections, outcomes ${[...entry.outcomes]}`);
+  assert.equal(clean, rows);
+  for (const entry of classesSeen.values()) { assert.equal(entry.bytes, 0); assert.equal(entry.connections, 0); assert.deepEqual([...entry.outcomes], ['refused']); }
+  assert.deepEqual(Object.fromEntries([...classesSeen].map(([name, entry]) => [name, entry.count])), PINNED_GRPC_CLASSES);
+});
+// Exact per-class counts of the refused gRPC rows: error code | source | host class (s1_* and s3_* by name, every other host together).
+const PINNED_GRPC_CLASSES = {
+  'FI_EMPTY_AUTHORITY|*|s3_empty': 5,
+  'FI_EMPTY_AUTHORITY|*|s3_port_only': 5,
+  'FI_EMPTY_AUTHORITY|http_scheme|s3_empty': 3,
+  'FI_EMPTY_AUTHORITY|http_scheme|s3_port_only': 3,
+  'FI_EMPTY_AUTHORITY|insecure_argument|s3_empty': 3,
+  'FI_EMPTY_AUTHORITY|insecure_argument|s3_port_only': 3,
+  'FI_EMPTY_AUTHORITY|otel_insecure_env|s3_empty': 3,
+  'FI_EMPTY_AUTHORITY|otel_insecure_env|s3_port_only': 3,
+  'FI_EMPTY_AUTHORITY|tls|s3_empty': 3,
+  'FI_EMPTY_AUTHORITY|tls|s3_port_only': 3,
+  'FI_HOST_MISMATCH|*|s1_backslash_futureagi': 5,
+  'FI_HOST_MISMATCH|*|s1_backslash_loopback': 5,
+  'FI_HOST_MISMATCH|*|s1_pct5c': 5,
+  'FI_HOST_MISMATCH|*|s1_v6_userinfo': 8,
+  'FI_HOST_MISMATCH|http_scheme|s1_backslash_futureagi': 3,
+  'FI_HOST_MISMATCH|http_scheme|s1_backslash_loopback': 3,
+  'FI_HOST_MISMATCH|http_scheme|s1_pct5c': 3,
+  'FI_HOST_MISMATCH|insecure_argument|s1_backslash_futureagi': 3,
+  'FI_HOST_MISMATCH|insecure_argument|s1_backslash_loopback': 3,
+  'FI_HOST_MISMATCH|insecure_argument|s1_pct5c': 3,
+  'FI_HOST_MISMATCH|otel_insecure_env|s1_backslash_futureagi': 3,
+  'FI_HOST_MISMATCH|otel_insecure_env|s1_backslash_loopback': 3,
+  'FI_HOST_MISMATCH|otel_insecure_env|s1_pct5c': 3,
+  'FI_HOST_MISMATCH|tls|s1_backslash_futureagi': 3,
+  'FI_HOST_MISMATCH|tls|s1_backslash_loopback': 3,
+  'FI_HOST_MISMATCH|tls|s1_pct5c': 3,
+  'FI_PLAINTEXT_FI_HOST|http_scheme|host': 171,
+  'FI_PLAINTEXT_FI_HOST|insecure_argument|host': 171,
+  'FI_PLAINTEXT_FI_HOST|otel_insecure_env|host': 171,
+  'FI_PLAINTEXT_NOT_ALLOWED|http_scheme|host': 2394,
+  'FI_PLAINTEXT_NOT_ALLOWED|http_scheme|s1_at_in_path': 24,
+  'FI_PLAINTEXT_NOT_ALLOWED|insecure_argument|host': 2394,
+  'FI_PLAINTEXT_NOT_ALLOWED|insecure_argument|s1_at_in_path': 24,
+  'FI_PLAINTEXT_NOT_ALLOWED|otel_insecure_env|host': 2394,
+  'FI_PLAINTEXT_NOT_ALLOWED|otel_insecure_env|s1_at_in_path': 24,
 };
 
-test('refused gRPC rows are not measured at a sink', () => {
-  const count = applied.filter(([row]) => row.decision === 'refuse' && row.transport === 'grpc').length;
-  note(`refused gRPC rows ${count}: decided by the gRPC decision above; no gRPC channel is opened to a sink for them`);
+test('RED: a deliberately unguarded gRPC client puts the marker key on the wire at a plaintext listener', async () => {
+  const target = await listener('target');
+  const metadata = new grpc.Metadata(); metadata.set('x-api-key', MARKER['x-api-key']);
+  const identity = value => value;
+  const Client = grpc.makeGenericClientConstructor({ export: { path: '/t.T/Export', requestStream: false, responseStream: false, requestSerialize: identity, requestDeserialize: identity, responseSerialize: identity, responseDeserialize: identity } }, 'T');
+  const client = new Client(`127.0.0.1:${target.port}`, grpc.credentials.createInsecure());
+  await new Promise(done => client.export(Buffer.from('x'), metadata, { deadline: Date.now() + 700 }, () => done()));
+  client.close(); await pause(60);
+  assert.ok(target.connections > 0, 'an unguarded client opens a connection');
+  note(`RED measured: unguarded gRPC client -> ${target.connections} connections, ${target.bytes} bytes at the target listener`);
+  assert.ok(target.bytes > 0);
+  await target.close();
 });
 
 // ---- The oracle's undici answers against the installed undici ----------------------------------------------------------------------
