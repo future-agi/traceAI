@@ -326,11 +326,12 @@ class AnnotationsE2ETest {
     /** Credentials in plain String arguments and returns, asserted on what the collector received. */
     @Test void credentialsInPlainStringsNeverReachTheExporterWhateverTheirShape() throws Exception {
         String log = run("agent", "credential_strings", Map.of());
-        assertTrue(log.contains("RESULT=19"), log);
+        assertTrue(log.contains("RESULT=22"), log);
         String bytes = exported();
         assertFalse(spans.isEmpty());
         String basic = java.util.Base64.getEncoder().encodeToString("user:SYNTHB64PASS".getBytes());
-        for (String marker : List.of(basic, basic.substring(0, 12), "SYNTHPAREN", "TAILPAREN", "SYNTHBRACK", "TAILBRACK", "SYNTHQUOTE", "TAILQUOTE", "SYNTHDASH", "SYNTHDOTD", "SYNTHPWD", "SYNTHPHRASE", "SYNTHPASS", "SYNTHCOOKIE", "SYNTHDUSER", "SYNTHDRESP", "SYNTHDNONCE", "SYNTHSPACE", "SYNTHBRACKET", "SYNTHURIPW", "SYNTHAMQP"))
+        for (String marker : List.of(basic, basic.substring(0, 12), "SYNTHPAREN", "TAILPAREN", "SYNTHBRACK", "TAILBRACK", "SYNTHQUOTE", "TAILQUOTE", "SYNTHDASH", "SYNTHDOTD", "SYNTHPWD", "SYNTHPHRASE", "SYNTHPASS", "SYNTHCOOKIE", "SYNTHDUSER", "SYNTHDRESP", "SYNTHDNONCE", "SYNTHSPACE", "SYNTHBRACKET", "SYNTHURIPW", "SYNTHAMQP", "SYNTHBAREUSER", "SYNTHBARENONCE", "SYNTHBARERESP",
+            java.util.Base64.getEncoder().encodeToString("SYNTHNEGOTOKEN0".getBytes()), java.util.Base64.getEncoder().encodeToString("SYNTHNTLMTOKEN0".getBytes()), "SYNTHNEGOTOKEN0"))
             assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
         assertTrue(bytes.contains("id=7") || bytes.contains("run ") , "the surrounding text is kept where it is not part of a value: " + bytes);
     }
@@ -407,5 +408,20 @@ class AnnotationsE2ETest {
         run("agent_isolated", "wire", Map.of(), List.of("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions"));
         List<Map<String, Object>> wire = spans.stream().filter(s -> !"ask_model".equals(s.get("name"))).toList();
         assertEquals(1, wire.size(), "double wire span? " + names(spans));
+    }
+
+    /** The agent never runs an application's getMessage; a plain message is replaced like any other text. */
+    @Test void anExceptionMessageTheApplicationOverridesIsNeverRunAndAPlainOneIsReplaced() throws Exception {
+        String key = "fi-key-0123456789abcdef";
+        String log = run("agent", "exception_messages", Map.of("FI_API_KEY", key));
+        assertTrue(log.contains("RESULT=calls=0"), "the agent ran the application's getMessage or toString: " + log);
+        String bytes = exported();
+        assertFalse(spans.isEmpty());
+        assertFalse(bytes.contains("SYNTHOVERRIDDEN"), bytes);
+        assertFalse(bytes.contains(key), bytes);
+        assertTrue(bytes.contains("fails_overridden") && bytes.contains("fails_plain"), bytes);
+        assertTrue(bytes.contains("plain failure carrying"), "a plain message is kept with the secret replaced: " + bytes);
+        assertTrue(bytes.contains("ai.traceai.apptest.AnnotatedApp$OverriddenMessage"), "the class name stands in for an overridden message: " + bytes);
+        assertFalse(bytes.contains("stacktrace"), "the stack trace carries the message and is not exported: " + bytes);
     }
 }

@@ -1,5 +1,6 @@
 package ai.traceai.auto;
 
+import java.lang.reflect.Method;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -295,5 +296,195 @@ class CapturedValueTest {
         }
         assertEquals("\"{\\\"pass\\\":\\\"<redacted>\\\",\\\"n\\\":1}\"", text("{\"pass\":\"x\",\"n\":1}"));
         assertEquals("\"note=keep, id=7\"", text("note=keep, id=7"));
+    }
+
+    // ---- bounded scans ---------------------------------------------------------------------------------------------------
+
+    /** A user-information search never looks back past the start of the token it belongs to: the work is linear in the text. */
+    @Test void userInformationAndJsonNameScansAreLinear() {
+        Map<String, String> inputs = new LinkedHashMap<>();
+        inputs.put("scheme separators with no at sign", "://".repeat(50_000));
+        inputs.put("scheme separators and a late at sign", "://".repeat(50_000) + "@");
+        inputs.put("scheme separators in a word", "x://".repeat(40_000));
+        inputs.put("json names", "x\": ".repeat(40_000));
+        inputs.put("single-quoted json names", "x': ".repeat(40_000));
+        inputs.put("a long name before every colon", ("\"" + "n".repeat(120) + "\": ").repeat(1_500));
+        inputs.forEach((label, value) -> {
+            String redacted = assertTimeoutPreemptively(java.time.Duration.ofMillis(1_000), () -> CapturedValue.redactCredentialPairs(value), label + " is not linear");
+            assertTrue(redacted.length() <= value.length() + 64, label);
+            String captured = assertTimeoutPreemptively(java.time.Duration.ofMillis(1_000), () -> text(value), label + " (as captured) is not bounded");
+            assertTrue(captured.length() <= 140_000, label + ": " + captured.length()); // the budget, doubled for the escapes of a JSON string
+        });
+    }
+
+    // ---- authorization schemes with no name in front ------------------------------------------------------------------------
+
+    @Test void negotiateDigestAndNtlmValuesAreReplacedWithNoNameInFrontOfThem() {
+        String token = java.util.Base64.getEncoder().encodeToString("SYNTHNEGOTIATE0123456789".getBytes());
+        Map<String, String[]> inputs = new LinkedHashMap<>();
+        inputs.put("Negotiate " + token + ",", new String[] {token, token.substring(0, 12)});
+        inputs.put("Negotiate " + token, new String[] {token.substring(0, 12)});
+        inputs.put("see NTLM " + token + " end", new String[] {token.substring(0, 12)});
+        inputs.put("Digest username=\"SYNTHDU\", realm=\"r\", nonce=\"SYNTHDN\", response=\"SYNTHDR\"", new String[] {"SYNTHDU", "SYNTHDN", "SYNTHDR"});
+        inputs.put("x Digest username=SYNTHDU2, nonce=SYNTHDN2, response=SYNTHDR2 y", new String[] {"SYNTHDU2", "SYNTHDN2", "SYNTHDR2"});
+        inputs.forEach((value, markers) -> {
+            String captured = text(value);
+            for (String marker : markers) assertFalse(captured.contains(marker), value + " -> " + captured);
+            assertTrue(captured.contains("<redacted>"), captured);
+        });
+        assertEquals("\"the digest of the report\"", text("the digest of the report"));
+    }
+
+    // ---- map keys ------------------------------------------------------------------------------------------------------------
+
+    static final AtomicInteger KEY_CALLS = new AtomicInteger();
+    static final class CountedHolder {
+        @Override public String toString() { KEY_CALLS.incrementAndGet(); return "SYNTHKEYTEXT"; }
+        @Override public int hashCode() { KEY_CALLS.incrementAndGet(); return 7; }
+        @Override public boolean equals(Object other) { KEY_CALLS.incrementAndGet(); return other == this; }
+    }
+    static final class CountedNumeric extends Number {
+        @Override public String toString() { KEY_CALLS.incrementAndGet(); throw new IllegalStateException("toString"); }
+        @Override public int hashCode() { KEY_CALLS.incrementAndGet(); return 9; }
+        @Override public boolean equals(Object other) { KEY_CALLS.incrementAndGet(); return other == this; }
+        @Override public int intValue() { return 1; } @Override public long longValue() { return 1; }
+        @Override public float floatValue() { return 1; } @Override public double doubleValue() { return 1; }
+    }
+    enum Mode { FAST }
+
+    @Test void anApplicationKeyIsRedactedAndNoMethodOfItRuns() {
+        Map<Object, Object> map = new LinkedHashMap<>();
+        map.put(new CountedHolder(), "kept-value-1");
+        map.put(new CountedNumeric(), "kept-value-2");
+        KEY_CALLS.set(0);
+        String captured = text(map);
+        assertEquals(0, KEY_CALLS.get(), "application code ran for a key: " + captured);
+        assertFalse(captured.contains("SYNTHKEYTEXT"), captured);
+        assertTrue(captured.contains("CountedHolder") && captured.contains("CountedNumeric"), captured);
+        assertTrue(captured.contains("kept-value-1"), captured);
+    }
+
+    @Test void onlyKnownJdkValueTypesAreShownAsKeys() {
+        Map<Object, Object> map = new LinkedHashMap<>();
+        map.put(1, "a"); map.put(2L, "b"); map.put((short)3, "c"); map.put((byte)4, "d"); map.put(1.5d, "e"); map.put(2.5f, "f");
+        map.put(true, "g"); map.put('c', "h"); map.put("text", "i"); map.put(Mode.FAST, "j");
+        map.put(java.util.UUID.fromString("123e4567-e89b-12d3-a456-426614174000"), "k");
+        String captured = text(map);
+        for (String key : List.of("\"1\"", "\"2\"", "\"3\"", "\"4\"", "\"1.5\"", "\"2.5\"", "\"true\"", "\"c\"", "\"text\"", "\"FAST\"", "\"123e4567-e89b-12d3-a456-426614174000\""))
+            assertTrue(captured.contains(key + ":"), key + " in " + captured);
+        Map<Object, Object> others = new LinkedHashMap<>();
+        others.put(new java.math.BigInteger("12345678901234567890"), "x");
+        others.put(new java.util.concurrent.atomic.AtomicInteger(5), "y");
+        others.put(java.nio.file.Path.of("/tmp/SYNTHPATHKEY"), "z");
+        others.put(java.time.Instant.parse("2026-01-01T00:00:00Z"), "w");
+        String shown = text(others);
+        for (String hidden : List.of("12345678901234567890", "SYNTHPATHKEY", "2026-01-01")) assertFalse(shown.contains(hidden), shown);
+        assertTrue(shown.contains("<java.math.BigInteger>"), shown);
+    }
+
+    @Test void aStringKeyGoesThroughTheStringPipeline() {
+        String secret = "SYNTH-KEY-SECRET-0123456789";
+        KnownSecrets.PROCESS.register(secret);
+        Map<Object, Object> map = new LinkedHashMap<>();
+        map.put("lookup " + secret + " done", "v");
+        map.put("password=SYNTHKEYPW id=1", "w");
+        String captured = text(map);
+        assertFalse(captured.contains(secret), captured);
+        assertFalse(captured.contains("SYNTHKEYPW"), captured);
+        assertTrue(captured.contains("lookup <redacted> done"), captured);
+    }
+
+    // ---- the cut and a shape that straddles it --------------------------------------------------------------------------------
+
+    /** Secrets shrink the read window, so the cut ends up well inside the window: a JWT that begins before the cut and ends past the window leaves no prefix. */
+    @Test void aJwtThatStraddlesTheCutAfterShrinkingSecretsLeavesNoByte() {
+        String secret = "T".repeat(4096);
+        KnownSecrets.PROCESS.register(secret);
+        String filler = "f ".repeat(430);
+        String jwt = "eyJ" + "a".repeat(1500) + "." + "b".repeat(1500) + "." + "c".repeat(100);
+        String value = secret + " " + secret + " " + filler + jwt;
+        Object captured = CapturedValue.of(value, 1000);
+        String shown = String.valueOf(captured);
+        assertFalse(shown.contains("eyJ"), shown);
+        assertFalse(shown.contains("aaaa"), shown);
+        assertTrue(shown.endsWith(CapturedValue.CUT), shown);
+    }
+
+    // ---- parameters compiled without -parameters ---------------------------------------------------------------------------------
+
+    private static Method compiled(boolean withParameters, String source, String name, Class<?>... types) throws Exception {
+        Path dir = Files.createTempDirectory("traceai-params");
+        try {
+            Path file = dir.resolve("Compiled" + (withParameters ? "With" : "Without") + ".java");
+            Files.writeString(file, source.replace("CLASSNAME", "Compiled" + (withParameters ? "With" : "Without")));
+            javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+            assertNotNull(compiler, "a JDK is needed to compile the fixture");
+            List<String> options = new ArrayList<>(List.of("-d", dir.toString()));
+            if (withParameters) options.add("-parameters");
+            options.add(file.toString());
+            assertEquals(0, compiler.run(null, null, null, options.toArray(new String[0])));
+            try (java.net.URLClassLoader loader = new java.net.URLClassLoader(new java.net.URL[] {dir.toUri().toURL()}, CapturedValueTest.class.getClassLoader())) {
+                Class<?> type = loader.loadClass("Compiled" + (withParameters ? "With" : "Without"));
+                // Loaded eagerly: the class is read while its directory still exists.
+                return type.getMethod(name, types);
+            }
+        } finally {
+            try (Stream<Path> files = Files.walk(dir)) { files.sorted(Comparator.reverseOrder()).forEach(path -> path.toFile().delete()); }
+        }
+    }
+    private static final String LOGIN = "public class CLASSNAME { public String login(String password, int attempts, char[] pin, byte[] key, StringBuilder note, CharSequence phrase, Object other) { return \"ok\"; } public String describe(String note, int count) { return \"ok\"; } }";
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> inputValues(Method method, Object... arguments) throws Exception {
+        Method read = AnnotationTracing.class.getDeclaredMethod("inputValues", Method.class, Object[].class);
+        read.setAccessible(true);
+        return (Map<String, Object>)read.invoke(null, method, arguments);
+    }
+    static void resetNameWarning() throws Exception {
+        Method reset = AnnotationTracing.class.getDeclaredMethod("resetNameWarning");
+        reset.setAccessible(true);
+        reset.invoke(null);
+    }
+
+    @Test void textArgumentsAreRedactedWhenTheClassWasCompiledWithoutParameterNames() throws Exception {
+        Method login = compiled(false, LOGIN, "login", String.class, int.class, char[].class, byte[].class, StringBuilder.class, CharSequence.class, Object.class);
+        assertFalse(login.getParameters()[0].isNamePresent(), "the fixture must be compiled without -parameters");
+        resetNameWarning();
+        Map<String, Object> values = inputValues(login, "SYNTHPASSWORD", 3, "SYNTHPIN".toCharArray(), "SYNTHKEY".getBytes(), new StringBuilder("SYNTHNOTE"), (CharSequence)"SYNTHPHRASE", "SYNTHOTHER");
+        String shown = AnnotationTracing.render(values, 4096);
+        for (String secret : List.of("SYNTHPASSWORD", "SYNTHPIN", "SYNTHKEY", "SYNTHNOTE", "SYNTHPHRASE")) assertFalse(shown.contains(secret), shown);
+        assertTrue(shown.contains("\"arg1\":3"), "a number keeps its value: " + shown);
+    }
+
+    @Test void theNameWarningIsOnePerProcessAndNamesTheFixAndNoValue() throws Exception {
+        Method describe = compiled(false, LOGIN, "describe", String.class, int.class);
+        resetNameWarning();
+        java.io.PrintStream saved = System.err;
+        java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+        try {
+            System.setErr(new java.io.PrintStream(captured, true));
+            for (int i = 0; i < 5; i++) inputValues(describe, "SYNTHWARNVALUE" + i, i);
+        } finally { System.setErr(saved); }
+        String log = captured.toString();
+        long lines = log.lines().filter(line -> line.contains("-parameters")).count();
+        assertEquals(1, lines, log);
+        assertFalse(log.contains("SYNTHWARNVALUE"), log);
+    }
+
+    @Test void parameterNamesInTheClassFileAreJudgedByNameAndNoWarningIsPrinted() throws Exception {
+        Method login = compiled(true, LOGIN, "login", String.class, int.class, char[].class, byte[].class, StringBuilder.class, CharSequence.class, Object.class);
+        assertTrue(login.getParameters()[0].isNamePresent());
+        resetNameWarning();
+        java.io.PrintStream saved = System.err;
+        java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+        Map<String, Object> values;
+        try {
+            System.setErr(new java.io.PrintStream(captured, true));
+            values = inputValues(login, "SYNTHPASSWORD", 3, "x".toCharArray(), "y".getBytes(), new StringBuilder("keep-note"), (CharSequence)"keep-phrase", "keep-other");
+        } finally { System.setErr(saved); }
+        String shown = AnnotationTracing.render(values, 4096);
+        assertFalse(shown.contains("SYNTHPASSWORD"), shown);
+        assertTrue(shown.contains("keep-other"), shown);
+        assertEquals("", captured.toString());
     }
 }

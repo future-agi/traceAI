@@ -109,6 +109,12 @@ public final class AnnotatedApp {
                 Class.forName("ai.traceai.auto.TraceAIAuto").getMethod("init").invoke(null);
                 System.out.println("RESULT=" + service.agent("late", "s"));
             }
+            case "exception_messages" -> {
+                for (Runnable call : List.<Runnable>of(service::failsWithOverriddenMessage, service::failsWithPlainMessage)) {
+                    try { call.run(); } catch (RuntimeException expected) { }
+                }
+                System.out.println("RESULT=calls=" + OverriddenMessage.CALLS.get());
+            }
             default -> throw new IllegalArgumentException(scenario);
         }
         Class<?> auto = null;
@@ -185,6 +191,11 @@ public final class AnnotatedApp {
         /** Returns what it is given: the text is exported as an input and as an output. */
         @Chain(name = "echo")
         public String echo(String text) { return text; }
+
+        @Chain(name = "fails_overridden")
+        public void failsWithOverriddenMessage() { throw new OverriddenMessage(); }
+        @Chain(name = "fails_plain")
+        public void failsWithPlainMessage() { throw new IllegalStateException("plain failure carrying " + System.getenv("FI_API_KEY") + " end"); }
 
         @Tool(name = "unlock")
         public String unlock(String passphrase) { return "ok"; }
@@ -306,7 +317,17 @@ public final class AnnotatedApp {
             "run --password SYNTHSPACE now",
             "user[password]=SYNTHBRACKET&x=1",
             "connect postgres://dbuser:SYNTHURIPW@db.internal:5432/app now",
-            "queue amqp://guest:SYNTHAMQP@broker/vhost");
+            "queue amqp://guest:SYNTHAMQP@broker/vhost",
+            "header Negotiate " + java.util.Base64.getEncoder().encodeToString("SYNTHNEGOTOKEN0".getBytes()) + ", id=13",
+            "header Digest username=\"SYNTHBAREUSER\", realm=\"r\", nonce=\"SYNTHBARENONCE\", response=\"SYNTHBARERESP\" id=14",
+            "header NTLM " + java.util.Base64.getEncoder().encodeToString("SYNTHNTLMTOKEN0".getBytes()) + " id=15");
+    }
+
+    /** An exception whose getMessage the application overrides: the agent must not run it. */
+    public static final class OverriddenMessage extends RuntimeException {
+        public static final java.util.concurrent.atomic.AtomicInteger CALLS = new java.util.concurrent.atomic.AtomicInteger();
+        @Override public String getMessage() { CALLS.incrementAndGet(); return "SYNTHOVERRIDDEN " + System.getenv("FI_API_KEY"); }
+        @Override public String toString() { CALLS.incrementAndGet(); return "OverriddenMessage: " + getMessage(); }
     }
 
     /** Application objects whose declared toString() carries a credential in a shape a naive reader would cut short. */
