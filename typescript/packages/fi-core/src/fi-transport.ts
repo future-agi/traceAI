@@ -77,6 +77,12 @@ export interface OwnResponse {
  * A response of a plain object, not a global `Response` or `Headers`: Node loads its own undici lazily on first use of those, and that load
  * reads the process-wide dispatcher slot (running a getter the application put there) or fills it when it is empty.
  */
+/** Drops a body: undici's readable emits an abort error when destroyed, which nothing listens to. */
+function dropBody(body: { destroy(): unknown; on?: (event: string, listener: () => void) => unknown }): void {
+  try { body.on?.("error", () => undefined); } catch { /* nothing to listen on */ }
+  body.destroy();
+}
+
 function ownResponse(statusCode: number, headers: Map<string, string>, body: (Readable & { destroy(): unknown }) | null): OwnResponse {
   let read: Promise<Buffer> | undefined;
   const bytes = (): Promise<Buffer> => {
@@ -95,7 +101,7 @@ function ownResponse(statusCode: number, headers: Map<string, string>, body: (Re
     statusText: STATUS_CODES[statusCode] ?? "",
     ok: statusCode >= 200 && statusCode < 300,
     headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
-    body: body === null ? null : { cancel: async () => { body.destroy(); } },
+    body: body === null ? null : { cancel: async () => { dropBody(body); } },
     arrayBuffer: async () => { const b = await bytes(); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer; },
     text: async () => (await bytes()).toString("utf8"),
     json: async () => JSON.parse((await bytes()).toString("utf8")),
@@ -124,6 +130,6 @@ export async function ownFetch(url: string, init: OwnFetchInit): Promise<OwnResp
     if (value !== undefined) out.set(name.toLowerCase(), Array.isArray(value) ? value.join(", ") : String(value));
   }
   const empty = NO_BODY.has(response.statusCode);
-  if (empty) response.body.destroy();
+  if (empty) dropBody(response.body);
   return ownResponse(response.statusCode, out, empty ? null : response.body);
 }

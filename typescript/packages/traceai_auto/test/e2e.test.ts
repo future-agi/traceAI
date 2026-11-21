@@ -646,7 +646,7 @@ test("in an application with no OpenTelemetry of its own that loaded the OpenAI 
   const got = allSpans().map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kindOf(span)})`);
   expect({ got, exported: allSpans().length > 0 }).toEqual({ got, exported: true });
   expect(output.stderr).not.toMatch(/FI_DISPATCHER_UNKNOWN|Collector export failed|load @traceai\/auto first/);
-  for (const forbidden of ["mock-fi-api-key", "mock-fi-secret-key", "x-api-key", "x-secret-key"]) expect(output.stderr).not.toContain(forbidden);
+  for (const forbidden of [url, "mock-fi-api-key", "mock-fi-secret-key", "x-api-key", "x-secret-key"]) expect(output.stderr).not.toContain(forbidden);
 }, 60000);
 test.each([
   ["an AI call from an integration the agent does not scope", "unscoped", "unscoped model call"],

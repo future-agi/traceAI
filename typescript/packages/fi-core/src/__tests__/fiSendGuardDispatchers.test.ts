@@ -120,6 +120,8 @@ describe("a dispatcher is never trusted by name or shape", () => {
     const url = scenario === "proxy-agent-https" ? `https://localhost:${target.port}/x` : `${target.url}/x`;
     const output = await runChild(CHILD, [url], { SCENARIO: scenario, PROXY_URL: proxy.url, NODE_EXTRA_CA_CERTS: cert.caFile });
     expect(output).toContain("STATUS 200");
+    // a getter the application put on the slot before load is never invoked by loading fi-core or by a keyed send
+    expect(output).not.toContain("GETTER_RAN");
     seenNothing(proxy); expect(target.requests).toHaveLength(1);
   });
   test("a caller's plain Agent as the dispatcher option is refused: the option is not accepted for a key-carrying fetch", async () => {

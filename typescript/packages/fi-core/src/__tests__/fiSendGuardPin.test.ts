@@ -14,7 +14,7 @@ import * as ts from "typescript";
  */
 const PACKAGES = join(__dirname, "..", "..", "..");
 const KEY_CARRYING = [
-  { pkg: "fi-core", dir: join(PACKAGES, "fi-core", "src"), files: ["otel.ts", "fi-request-policy.ts", "otlp-header-isolation.ts", "fi-route.ts", "fi-route-registry.ts", "fi-send-guard.ts", "fi-endpoint.ts", "secrets.ts"] },
+  { pkg: "fi-core", dir: join(PACKAGES, "fi-core", "src"), files: ["otel.ts", "fi-request-policy.ts", "otlp-header-isolation.ts", "fi-route.ts", "fi-route-registry.ts", "fi-send-guard.ts", "fi-transport.ts", "fi-endpoint.ts", "secrets.ts"] },
   { pkg: "traceai_auto", dir: join(PACKAGES, "traceai_auto", "src"), files: ["index.ts", "config.ts"] },
 ];
 interface Parsed { id: string; sf: ts.SourceFile }
@@ -81,8 +81,8 @@ function isTransportPrimitive(node: ts.Node): boolean {
   }
   if (ts.isCallExpression(node)) {
     const callee = node.expression;
-    // undiciFetch is undici's own fetch, imported from the pinned package: fi-core's transport for every key-carrying send.
-    if (ts.isIdentifier(callee)) return /^(?:request|connect|undiciFetch)$/.test(callee.text) || GRPC_MEMBERS.test(callee.text);
+    // ownFetch is fi-core's own transport (undici's agent and request API by path), and newDirectAgent / newProxyAgent build its dispatchers: every key-carrying send and dispatcher goes through them.
+    if (ts.isIdentifier(callee)) return /^(?:request|connect|ownFetch|newDirectAgent|newProxyAgent)$/.test(callee.text) || GRPC_MEMBERS.test(callee.text);
     if (ts.isPropertyAccessExpression(callee)) {
       if (GRPC_MEMBERS.test(callee.name.text) || (callee.name.text === "createInsecure" || callee.name.text === "createSsl")) return true;
       const receiver = callee.expression.getText();
@@ -111,6 +111,7 @@ describe("every transport primitive in the key-carrying modules is inside the gu
       "fi-core/fi-send-guard.ts::guardOtlpHttpExporter", // the OTLP HTTP exporter's send, through fi-core's own undici fetch
       "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch: fi-core's own undici fetch, never the global slot or globalThis.fetch
       "fi-core/fi-send-guard.ts::through", // the SDK's https proxy: a CONNECT-only undici ProxyAgent of fi-core's own
+      "fi-core/fi-transport.ts::<top level>", // the one module that imports undici, by deep path (agent, proxy-agent, api): never the package index or lib/global.js
       "fi-core/otel.ts::<top level>", // the imports of the OTLP exporter packages the SDK's exporter classes extend
       "fi-core/otel.ts::createSpanExporter", // constructs the SDK's own exporter, whose constructor calls its guarded entry point
       "fi-core/otlp-header-isolation.ts::<top level>", // the exporter packages' own configuration functions, used to rebuild a delegate

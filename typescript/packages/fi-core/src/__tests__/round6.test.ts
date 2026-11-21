@@ -45,7 +45,7 @@ test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "regist
     if (route === "register-batch") expect(delivered).toHaveLength(0);
     await provider.forceFlush();
   } else await new Promise<void>(done => exporter.export([original], () => done()));
-  const spans = route === "legacy-http" ? JSON.parse(String(fetch.mock.calls[0][1]!.body)) : delivered[0];
+  const spans = route === "legacy-http" ? JSON.parse(String((fetch.mock.calls[0] as any[])[1].body)) : delivered[0];
   expect(spans).toHaveLength(1);
   if (provider) {
     expect(spans[0].attributes).toMatchObject({ database_password: "<redacted>", echoed: "<redacted>", "input.value": "__REDACTED__" });
