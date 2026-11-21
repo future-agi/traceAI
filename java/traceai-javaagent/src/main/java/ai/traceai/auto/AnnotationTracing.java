@@ -28,7 +28,10 @@ final class AnnotationTracing {
     static final ContextKey<Boolean> ACTIVE = ContextKey.named("traceai.auto.annotation");
     /** The id of the application's own span that was current when the outermost annotated call began ("" if none): a different current span inside the method is the application's own inner span. */
     static final ContextKey<String> APP_SPAN = ContextKey.named("traceai.auto.annotation.app-span");
+    /** At each annotated entry: the id of the agent's span for the Google ADK span that is current there, "" when none is. */
+    static final ContextKey<String> ADK_SPAN = ContextKey.named("traceai.auto.annotation.adk-span");
     static final String PACKAGE = "ai.traceai.annotations.";
+    static String adkSpanOf(Context context) { String id = context.get(ADK_SPAN); return id == null ? "" : id; }
     /** Annotation simple name -> span kind, in the order used when a method carries more than one. */
     private static final LinkedHashMap<String, String> KINDS = new LinkedHashMap<>();
     static {
@@ -60,12 +63,14 @@ final class AnnotationTracing {
             if (Boolean.TRUE.equals(current.get(TraceAIAuto.SUPPRESS)) || TraceAIAuto.IN_FLIGHT.get()) return null;
             Meta meta = meta(method); if (meta == null) return null;
             OtelBridge.Snapshot snapshot = OtelBridge.snapshot();
-            // An enclosing annotated span wins; otherwise the application's active span (or none).
-            Context parent = current.get(ACTIVE) != null ? current : snapshot.parent();
+            // An enclosing annotated span wins, unless a Google ADK span that began after it is current (ADK called this method, as a
+            // tool or a model): that span is the parent. Otherwise the application's active span (or none).
+            boolean underAdk = !snapshot.adkSpanId().isEmpty() && !snapshot.adkSpanId().equals(adkSpanOf(current));
+            Context parent = current.get(ACTIVE) != null && !underAdk ? current : snapshot.parent();
             Span span = state.tracer().spanBuilder(truncate(meta.name(), MAX_NAME)).setSpanKind(SpanKind.INTERNAL).setParent(parent).startSpan();
             Started started;
             // At every annotated entry, nested ones included: the application's own span that is current right here.
-            Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).with(APP_SPAN, snapshot.appSpanId()).makeCurrent();
+            Scope scope = parent.with(span).with(ACTIVE, Boolean.TRUE).with(APP_SPAN, snapshot.appSpanId()).with(ADK_SPAN, snapshot.adkSpanId()).makeCurrent();
             try { started = new Started(span, scope, state.config(), method.getReturnType()); }
             catch (Throwable error) { scope.close(); span.end(); return null; }
             if (span.isRecording()) {
