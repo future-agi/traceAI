@@ -41,6 +41,8 @@ public class AdkApp {
     static volatile boolean toolCallsModel;
     /** Scenario "error": the model answers with an error message and some output. */
     static volatile boolean failingModel;
+    /** The name of the function the model asks for: the plain tool, or (scenario "annotated-tool") the one that carries a TraceAI annotation. */
+    static volatile String toolName = "weather";
     static final java.util.concurrent.CountDownLatch ENTERED = new java.util.concurrent.CountDownLatch(1);
     static final java.util.concurrent.CountDownLatch RELEASE = new java.util.concurrent.CountDownLatch(1);
 
@@ -59,6 +61,13 @@ public class AdkApp {
 
     public static Map<String, Object> weather(@Schema(name = "city") String city) throws Exception {
         if (toolCallsModel) post();
+        return Map.of("city", city, "forecast", "SENTINEL-TOOL-RESULT");
+    }
+
+    /** The tool of scenario "annotated-tool": an annotated application method that ADK calls, which makes its own HTTP request. */
+    @ai.traceai.annotations.Tool(name = "weather_lookup")
+    public static Map<String, Object> annotatedWeather(@Schema(name = "city") String city) throws Exception {
+        post();
         return Map.of("city", city, "forecast", "SENTINEL-TOOL-RESULT");
     }
 
@@ -96,7 +105,7 @@ public class AdkApp {
                 boolean answered = request.contents().stream().anyMatch(c -> c.parts().orElse(List.of()).stream().anyMatch(p -> p.functionResponse().isPresent()));
                 Content out = answered
                     ? Content.builder().role("model").parts(Part.fromText("SENTINEL-ANSWER-sunny")).build()
-                    : Content.builder().role("model").parts(Part.builder().functionCall(FunctionCall.builder().name("weather").args(Map.of("city", "Kyoto")).id("call-1").build()).build()).build();
+                    : Content.builder().role("model").parts(Part.builder().functionCall(FunctionCall.builder().name(toolName).args(Map.of("city", "Kyoto")).id("call-1").build()).build()).build();
                 return Flowable.just(LlmResponse.builder().content(out)
                     .usageMetadata(GenerateContentResponseUsageMetadata.builder().promptTokenCount(11).candidatesTokenCount(7).totalTokenCount(18).build()).build());
             });
@@ -111,12 +120,13 @@ public class AdkApp {
         endpoint = args[1];
         toolCallsModel = scenario.equals("tool-call");
         failingModel = scenario.equals("error");
+        if (scenario.equals("annotated-tool")) toolName = "annotatedWeather";
         InMemorySpanExporter own = InMemorySpanExporter.create();
         if (mode.equals("sdk")) {
             OpenTelemetrySdk.builder().setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(own)).build()).buildAndRegisterGlobal();
         }
         LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(send)).instruction("Be brief")
-            .tools(FunctionTool.create(AdkApp.class, "weather")).build();
+            .tools(FunctionTool.create(AdkApp.class, toolName)).build();
         InMemoryRunner runner = new InMemoryRunner(agent);
         var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
         Thread slow = null;

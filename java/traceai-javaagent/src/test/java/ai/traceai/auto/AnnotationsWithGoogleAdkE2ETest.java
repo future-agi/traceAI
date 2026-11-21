@@ -23,17 +23,25 @@ class AnnotationsWithGoogleAdkE2ETest {
     final List<Map<String, Object>> spans = new CopyOnWriteArrayList<>();
     /** Every export request body as the collector received it. */
     final List<String> exported = new CopyOnWriteArrayList<>();
+    /** The key headers of every export request, as the collector received them. */
+    final List<Map<String, String>> exportHeaders = new CopyOnWriteArrayList<>();
+    /** Requests the model endpoint received: the model's own calls and a tool's own call. */
+    final java.util.concurrent.atomic.AtomicInteger modelRequests = new java.util.concurrent.atomic.AtomicInteger();
 
     @BeforeEach void startCollector() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
-            exchange.getRequestBody().readAllBytes();
+            exchange.getRequestBody().readAllBytes(); modelRequests.incrementAndGet();
             byte[] body = AgentE2ETest.BASIC.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.length);
             try (var out = exchange.getResponseBody()) { out.write(body); }
         });
         server.createContext("/tracer/v1/traces", exchange -> {
             String payload = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8); exported.add(payload);
+            Map<String, String> keys = new LinkedHashMap<>();
+            keys.put("X-Api-Key", exchange.getRequestHeaders().getFirst("X-Api-Key")); keys.put("X-Secret-Key", exchange.getRequestHeaders().getFirst("X-Secret-Key"));
+            keys.put("Content-Type", exchange.getRequestHeaders().getFirst("Content-Type")); keys.put("Content-Encoding", exchange.getRequestHeaders().getFirst("Content-Encoding"));
+            exportHeaders.add(keys);
             Object root = WireCore.parse(payload);
             for (Object resource : WireCore.list(WireCore.get(root, "resourceSpans")))
                 for (Object scope : WireCore.list(WireCore.get(resource, "scopeSpans")))
@@ -102,7 +110,6 @@ class AnnotationsWithGoogleAdkE2ETest {
         assertEquals(spans.size(), spans.stream().map(s -> s.get("spanId")).distinct().count());
         assertEquals("AGENT", attributes(planner).get("fi.span.kind"));
         assertEquals("AGENT", attributes(agent).get("gen_ai.span.kind"));
-        assertEquals(List.of("google-adk"), byLayer("google-adk").stream().map(s -> "google-adk").distinct().toList());
         assertEquals(5, byLayer("google-adk").size(), "every ADK span is the agent's google-adk layer span: " + spans);
     }
 
@@ -135,6 +142,35 @@ class AnnotationsWithGoogleAdkE2ETest {
             assertNotEquals(planner.get("spanId"), parent, mode + ": the ADK span wins inside the annotated method");
             assertTrue(parent.equals(tool.get("spanId")) || parent.equals(tool.get("parentSpanId")), mode + ": under the tool's own span or the model call that asked for it");
             assertEquals(wire.get(0).get("traceId"), planner.get("traceId"), mode + ": one trace");
+        }
+    }
+
+    @Test void anAnnotatedMethodThatAdkCallsNestsUnderTheAdkToolSpanAndItsHttpCallUnderIt() throws Exception {
+        for (String mode : List.of("plain", "sdk")) {
+            spans.clear(); exported.clear(); modelRequests.set(0);
+            run(mode, PROMPT, Map.of(), "annotated-tool");
+            String where = mode + ": " + spans.stream().map(s -> s.get("name") + "<" + (spans.stream().filter(p -> p.get("spanId").equals(s.get("parentSpanId"))).map(p -> String.valueOf(p.get("name"))).findFirst().orElse("-")) + ">").toList();
+            Map<String, Object> planner = only("planner"), invocation = only("invocation"), agent = only("invoke_agent weather_agent");
+            Map<String, Object> adkTool = named("execute_tool").get(0), annotatedTool = only("weather_lookup");
+            assertEquals(1, named("execute_tool").size(), where);
+            List<Map<String, Object>> llm = named("call_llm"), wire = byLayer("wire");
+            assertEquals(2, llm.size(), where);
+            // The tool's own HTTP request is the one wire span; the model's two calls are the call_llm spans, each traced once.
+            assertEquals(1, wire.size(), where);
+            assertEquals(3, modelRequests.get(), where + ": two model calls and the tool's request");
+            assertEquals(8, spans.size(), where);
+            // One chain: @Agent > invocation > agent > model call > tool > the annotated tool method > its HTTP call.
+            assertNull(planner.get("parentSpanId"), where);
+            assertEquals(planner.get("spanId"), invocation.get("parentSpanId"), where);
+            assertEquals(invocation.get("spanId"), agent.get("parentSpanId"), where);
+            for (Map<String, Object> call : llm) assertEquals(agent.get("spanId"), call.get("parentSpanId"), where);
+            Set<Object> adkIds = llm.stream().map(s -> s.get("spanId")).collect(Collectors.toSet()); adkIds.add(agent.get("spanId"));
+            assertTrue(adkIds.contains(adkTool.get("parentSpanId")), where + ": the ADK tool span runs under the agent's model call or the agent");
+            assertEquals(adkTool.get("spanId"), annotatedTool.get("parentSpanId"), where + ": the annotated method ADK calls nests under the ADK tool span, not under the outer annotated span");
+            assertEquals(annotatedTool.get("spanId"), wire.get(0).get("parentSpanId"), where + ": the HTTP call made inside the annotated method nests under it");
+            assertEquals("TOOL", attributes(annotatedTool).get("fi.span.kind"), where);
+            for (Map<String, Object> span : spans) assertEquals(planner.get("traceId"), span.get("traceId"), where + ": one trace");
+            assertEquals(spans.size(), spans.stream().map(s -> s.get("spanId")).distinct().count(), where);
         }
     }
 
@@ -177,6 +213,14 @@ class AnnotationsWithGoogleAdkE2ETest {
         for (String body : exported) assertFalse(body.contains(KEY), "the registered key reaches the collector in no span, attribute or event");
         assertFalse(spans.toString().contains(KEY));
         assertEquals(6, spans.size(), spans.stream().map(s -> s.get("name")).toList().toString());
+        // The key-transport route: every export request carries the keys in X-Api-Key and X-Secret-Key, JSON, uncompressed.
+        assertFalse(exportHeaders.isEmpty());
+        for (Map<String, String> headers : exportHeaders) {
+            assertEquals(KEY, headers.get("X-Api-Key"), headers.toString());
+            assertEquals("test-secret-key", headers.get("X-Secret-Key"), headers.toString());
+            assertEquals("application/json", headers.get("Content-Type"), headers.toString());
+            assertNull(headers.get("Content-Encoding"), headers.toString());
+        }
         assertTrue(log.lines().filter(l -> l.startsWith("DOCTOR ")).noneMatch(l -> l.contains(KEY)), "the doctor report names no key");
     }
 }
