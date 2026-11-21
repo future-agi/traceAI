@@ -11,10 +11,10 @@ import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
 import { BUILT_GUARD, cleanups, connectProxy, counter, redirectingConnect, runChild, runCleanups, sink, throwawayCertificate, UNDICI } from "./helpers/realSockets";
 
 /**
- * A key-carrying send uses Node's own default dispatching only. A caller's `dispatcher` option and every non-empty undici global slot that is
- * not Node's own (the default Agent Node installs on its first fetch, or the env-proxy agent Node installs for NODE_USE_ENV_PROXY) are refused with
- * FI_DISPATCHER_UNKNOWN, whatever the dispatcher is called or looks like, plaintext and https alike, at every send. Real sockets throughout: the
- * accepted connections and bytes of the proxy, the remote and the sink are counted on net.Server sockets; nothing is mocked.
+ * A key-carrying send uses fi-core's own transport only. A caller's `dispatcher` option is refused with FI_DISPATCHER_UNKNOWN, whatever the
+ * dispatcher is called or looks like, plaintext and https alike, at every send; the undici global slot is never read, so what an application
+ * installs there neither refuses nor routes a send. Real sockets throughout: the accepted connections and bytes of the proxy, the remote and the
+ * sink are counted on net.Server sockets; nothing is mocked.
  */
 const KEYS = { "x-api-key": "synthetic-fi-key-0001", "x-secret-key": "synthetic-fi-secret-0001" };
 const ENV_KEYS = { FI_API_KEY: "env-key-synthetic-0002", FI_SECRET_KEY: "env-secret-synthetic-0002" };
@@ -102,11 +102,11 @@ describe("a dispatcher is never trusted by name or shape", () => {
     await check(`https://localhost:${approved.port}`, { dispatcher: agent });
     seenNothing(proxy); expect(approved.requests).toHaveLength(0);
   });
-  test("an EnvHttpProxyAgent built with connect pointing at a 127.0.0.2 listener, installed globally, is refused for an https target: 0 bytes", async () => {
+  test("an EnvHttpProxyAgent built with connect pointing at a 127.0.0.2 listener, installed globally, is not read: the send reaches the real target, the listener sees 0 bytes", async () => {
     const approved = await sink({ tls: cert }), remote = await counter("127.0.0.2");
     const output = await runChild(CHILD, [`https://localhost:${approved.port}/x`], { SCENARIO: "envproxy-connect", REMOTE_PORT: String(remote.port), NODE_EXTRA_CA_CERTS: cert.caFile });
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
-    seenNothing(remote); expect(approved.requests).toHaveLength(0);
+    expect(output).toContain("STATUS 200");
+    seenNothing(remote); expect(approved.requests).toHaveLength(1);
   });
   test("an empty class named ProxyAgent as a caller dispatcher is refused with FI_DISPATCHER_UNKNOWN, https and plaintext", async () => {
     class ProxyAgentLookalike {}
@@ -115,13 +115,12 @@ describe("a dispatcher is never trusted by name or shape", () => {
       await expect(guardedFetch({ url, init: { method: "POST", headers: keyHeaders, dispatcher: new ProxyAgentLookalike() as any }, intended })).rejects.toEqual(expect.objectContaining({ code: "FI_DISPATCHER_UNKNOWN" }));
     }
   });
-  test.each(["proxy-wrapped-agent", "plain-agent", "accessor-slot", "proxy-agent-https"])("a global dispatcher installed by the application is refused: %s", async scenario => {
+  test.each(["proxy-wrapped-agent", "plain-agent", "accessor-slot", "proxy-agent-https"])("a global dispatcher installed by the application is not read: %s", async scenario => {
     const target = await sink({ tls: scenario === "proxy-agent-https" ? cert : undefined }), proxy = await counter();
     const url = scenario === "proxy-agent-https" ? `https://localhost:${target.port}/x` : `${target.url}/x`;
     const output = await runChild(CHILD, [url], { SCENARIO: scenario, PROXY_URL: proxy.url, NODE_EXTRA_CA_CERTS: cert.caFile });
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
-    expect(output).not.toContain("GETTER_RAN");
-    seenNothing(proxy); expect(target.requests).toHaveLength(0);
+    expect(output).toContain("STATUS 200");
+    seenNothing(proxy); expect(target.requests).toHaveLength(1);
   });
   test("a caller's plain Agent as the dispatcher option is refused: the option is not accepted for a key-carrying fetch", async () => {
     const target = await sink();
@@ -131,27 +130,24 @@ describe("a dispatcher is never trusted by name or shape", () => {
   });
 });
 
-describe("a dispatcher installed AFTER initialisation is refused at the send", () => {
-  test("a guarded fetch: setGlobalDispatcher(new ProxyAgent(...)) after the package loaded is refused, and the proxy and remote see 0 bytes", async () => {
+describe("a dispatcher installed AFTER initialisation is not read at the send", () => {
+  test("a guarded fetch: setGlobalDispatcher(new ProxyAgent(...)) after the package loaded changes nothing, and the proxy and remote see 0 bytes", async () => {
     const target = await sink(), proxy = await counter(), remote = await counter("127.0.0.2");
     const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "replaced-after-init", PROXY_URL: proxy.url });
-    expect(output).toContain("STATUS 200");              // the first send, while the slot is Node's own
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN"); // the second, after the replacement
-    expect(target.requests).toHaveLength(1); seenNothing(proxy); seenNothing(remote);
+    expect((output.match(/STATUS 200/g) ?? []).length).toBe(2);
+    expect(target.requests).toHaveLength(2); seenNothing(proxy); seenNothing(remote);
   });
-  test("an OTLP HTTP export: an exporter built before the slot is replaced fails at the send with the value-free refusal, and nothing is sent", async () => {
+  test("an OTLP HTTP export: an exporter built before the slot is replaced still exports, and nothing reaches the proxy", async () => {
     const target = await sink(), proxy = await counter(), remote = await counter("127.0.0.2");
     const output = await runChild(CHILD, [target.url], { SCENARIO: "otlp-replaced-after-init", PROXY_URL: proxy.url });
-    expect(output).toContain("EXPORT FAILED");
-    expect(output).toMatch(/not sent/);
-    expect(output).not.toMatch(/synthetic-fi|127\.0\.0\.1/);
-    seenNothing(target); seenNothing(proxy); seenNothing(remote);
+    expect(output).toContain("EXPORT OK");
+    expect(target.requests).toHaveLength(1); seenNothing(proxy); seenNothing(remote);
   });
-  test("an eval check through the public function: the same replacement is refused", async () => {
+  test("an eval check through the public function: the same replacement changes nothing", async () => {
     const target = await sink(), proxy = await counter();
     const output = await runChild(CHILD, [target.url], { SCENARIO: "eval-replaced-after-init", PROXY_URL: proxy.url });
     expect(output).toContain("EVAL-DONE");
-    expect(target.requests).toHaveLength(1); seenNothing(proxy);
+    expect(target.requests).toHaveLength(2); seenNothing(proxy);
   });
 });
 
@@ -200,12 +196,13 @@ describe("controls: the transports that are accepted", () => {
     const output = await runChild(SCRIPT, [`${plain.url}/x`], { APP_FETCH_FIRST: `${plain.url}/warm` });
     expect(output).toContain("STATUS 200");
   });
-  test("NODE_USE_ENV_PROXY=1 with a proxy variable: Node fills the slot while it starts, nothing shows who wrote it, so an https send is refused and the proxy and the target see 0 bytes", async () => {
+  test("NODE_USE_ENV_PROXY=1 with HTTPS_PROXY: an https send tunnels through the proxy with fi-core's own proxy agent: the proxy sees CONNECT only, the target gets the keys", async () => {
     const approved = await sink({ tls: cert });
     const proxy = await connectProxy(approved.port);
     const output = await runChild(SCRIPT, [`https://localhost:${approved.port}/x`], { NODE_EXTRA_CA_CERTS: cert.caFile, NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: proxy.url, NO_PROXY: "" });
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
-    expect(proxy.connects).toHaveLength(0); seenNothing(proxy); expect(approved.requests).toHaveLength(0);
+    expect(output).toContain("STATUS 200");
+    expect(proxy.connects).toEqual([`localhost:${approved.port}`]); expect(approved.requests).toHaveLength(1);
+    expect(proxy.seen).not.toContain("synthetic-fi-key-0001");
   });
   test("CONTROL: NODE_USE_ENV_PROXY=1 with no proxy variable leaves the slot empty at load: an https target is sent direct and TLS is verified", async () => {
     const approved = await sink({ tls: cert });
@@ -216,14 +213,14 @@ describe("controls: the transports that are accepted", () => {
   test("NODE_USE_ENV_PROXY=1 with a proxy variable and a plaintext target is refused: the proxy and the target see nothing", async () => {
     const plain = await sink(), proxy = await counter();
     const output = await runChild(SCRIPT, [`${plain.url}/x`], { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: proxy.url });
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
+    expect(output).toContain("REFUSED FI_PLAINTEXT_PROXIED");
     seenNothing(proxy); expect(plain.requests).toHaveLength(0);
   });
-  test("a dispatcher the application installed BEFORE the package was loaded cannot be told from Node's own, so it is refused", async () => {
+  test("CONTROL: a dispatcher the application installed BEFORE the package was loaded is not read: the send succeeds", async () => {
     const plain = await sink();
     const output = await runChild(SCRIPT.replace(`const { guardedFetch } = require(${JSON.stringify(BUILT_GUARD)});`, "let guardedFetch;"), [`${plain.url}/x`], { APP_SET_DISPATCHER_FIRST: "1", LOAD_AFTER_DISPATCHER: "1" });
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
-    expect(plain.requests).toHaveLength(0);
+    expect(output).toContain("STATUS 200");
+    expect(plain.requests).toHaveLength(1);
   });
 });
 void net;

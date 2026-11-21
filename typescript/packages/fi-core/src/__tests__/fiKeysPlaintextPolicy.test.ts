@@ -21,7 +21,7 @@ beforeEach(() => {
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
   // A slot that undici defined cannot be deleted; an empty value is Node's own default.
   savedSlot = (globalThis as any)[SLOT]; (globalThis as any)[SLOT] = undefined;
-  fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
+  fetchSpy = jest.spyOn(require("undici"), "fetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
 const SLOT = Symbol.for("undici.globalDispatcher.1");
 let savedSlot: unknown;
@@ -47,6 +47,8 @@ function withFreshModule<T>(run: (m: typeof import("../otel"), warnings: string[
   jest.isolateModules(() => {
     const api = require("@opentelemetry/api");
     api.diag.setLogger({ error: () => {}, warn: (m: string) => warnings.push(m), info: () => {}, debug: () => {}, verbose: () => {} }, { logLevel: DiagLogLevel.WARN, suppressOverrideMessage: true });
+    // A fresh copy of the package loads its own copy of undici: its fetch is routed to the test's spy so sends are counted.
+    jest.spyOn(require("undici"), "fetch").mockImplementation(((...args: unknown[]) => (fetchSpy as any)(...args)) as any);
     result = run(require("../otel"), warnings);
   });
   diag.disable();
@@ -202,13 +204,15 @@ describe("the custom eval checks follow the same rules", () => {
     await checkCustomEvalConfigExists("p", [tag()]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
-  test("with a proxy variable set and a global dispatcher that can read a proxy the check is not sent", async () => {
+  test("with a proxy variable set and a global dispatcher that can read a proxy, the check is sent through fi-core's own dispatcher, never the global one", async () => {
     process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.HTTP_PROXY = "http://proxy.internal.example:3128";
     class EnvHttpProxyAgent {}
-    const slot = Symbol.for("undici.globalDispatcher.1"), saved = (globalThis as any)[slot];
-    (globalThis as any)[slot] = new EnvHttpProxyAgent();
+    const slot = Symbol.for("undici.globalDispatcher.1"), saved = (globalThis as any)[slot], global = new EnvHttpProxyAgent();
+    (globalThis as any)[slot] = global;
     try { await checkCustomEvalConfigExists("p", [tag()]); } finally { if (saved === undefined) delete (globalThis as any)[slot]; else (globalThis as any)[slot] = saved; }
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const init = fetchSpy.mock.calls[0][1] as { dispatcher?: unknown };
+    expect(init.dispatcher).toBeDefined(); expect(init.dispatcher).not.toBe(global);
   });
   test("loopback and https bases are checked", async () => {
     process.env.FI_BASE_URL = "http://127.0.0.1:9"; await checkCustomEvalConfigExists("p", [tag()]);

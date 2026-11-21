@@ -20,7 +20,7 @@ beforeEach(() => {
   saved = {}; for (const n of NAMES) { saved[n] = process.env[n]; delete process.env[n]; }
   savedGlobal = (globalThis as any)[GLOBAL]; delete (globalThis as any)[GLOBAL];
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
-  fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
+  fetchSpy = jest.spyOn(require("undici"), "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
 afterEach(() => {
   fetchSpy.mockRestore(); for (const n of NAMES) { if (saved[n] === undefined) delete process.env[n]; else process.env[n] = saved[n]; }
@@ -35,12 +35,12 @@ const send = (dispatcher?: unknown) => {
 };
 const PROXY = "http://proxy.internal.example:3128";
 
-describe("an environment-reading dispatcher is always proxied", () => {
+describe("an environment-reading dispatcher a caller supplies is always proxied", () => {
   test("an explicit httpProxy option with no proxy in the environment is refused", async () => {
     await send(new EnvHttpProxyAgent({ httpProxy: PROXY }));
     expect(fetchSpy).not.toHaveBeenCalled();
   });
-  test("an agent built while HTTP_PROXY was set and used after it was unset is refused, as the global dispatcher too", async () => {
+  test("an agent built while HTTP_PROXY was set and used after it was unset is refused as a caller's dispatcher; as the global dispatcher it is not read", async () => {
     process.env.HTTP_PROXY = PROXY;
     const agent = new EnvHttpProxyAgent();
     delete process.env.HTTP_PROXY;
@@ -48,12 +48,13 @@ describe("an environment-reading dispatcher is always proxied", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     (globalThis as any)[GLOBAL] = agent;
     await send();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect((fetchSpy.mock.calls[0][1] as { dispatcher?: unknown }).dispatcher).not.toBe(agent);
   });
-  test("Node's environment-proxy switch is refused whatever the proxy variables say", async () => {
+  test("Node's environment-proxy switch is read when the process starts: a value set later is not the switch, and the send goes with fi-core's own dispatcher", async () => {
     process.env.NODE_USE_ENV_PROXY = "1";
     await send();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 

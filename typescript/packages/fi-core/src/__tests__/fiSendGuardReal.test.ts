@@ -154,15 +154,15 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
   test("(pin) a 302 from an approved https target to http:// is refused and the redirect target sees 0 bytes", async () => {
     const redirected = await sink();
     const approved = await sink({ tls, respond: res => { res.statusCode = 302; res.setHeader("location", `${redirected.url}/leak`); res.end(); } });
-    // The approved target has a throwaway certificate and the process environment of a jest test does not reach Node's TLS, so the send runs in a
-    // child process of the built package with certificate checking off (nothing else about the send differs).
+    // The approved target has a throwaway certificate that the child process trusts through NODE_EXTRA_CA_CERTS: certificate checking is never off.
+    const caFile = path.join(os.tmpdir(), `fi-guard-302-ca-${process.pid}.pem`); fs.writeFileSync(caFile, tls.cert); cleanups.push(() => fs.rmSync(caFile, { force: true }));
     const script = `const { guardedFetch } = require(${JSON.stringify(path.join(__dirname, "..", "..", "dist", "src", "fi-send-guard"))});
       const keys = { "x-api-key": "synthetic-fi-key-0001", "x-secret-key": "synthetic-fi-secret-0001" };
       guardedFetch({ url: process.argv[1], init: { method: "POST", headers: keys }, intended: { keys: new Map(Object.entries(keys)), values: Object.values(keys) } })
         .then(r => console.log("STATUS " + r.status), e => console.log("REFUSED " + e.code));`;
     // Asynchronous: the servers of this test live in this process and must keep answering while the child runs.
     const output = await new Promise<string>(done => {
-      const child = spawn(process.execPath, ["-e", script, `https://localhost:${approved.port}/x`], { env: { PATH: process.env.PATH, NODE_TLS_REJECT_UNAUTHORIZED: "0" }, timeout: 20000 });
+      const child = spawn(process.execPath, ["-e", script, `https://localhost:${approved.port}/x`], { env: { PATH: process.env.PATH, NODE_EXTRA_CA_CERTS: caFile }, timeout: 20000 });
       let text = ""; child.stdout.on("data", chunk => { text += chunk; }); child.on("close", () => done(text));
     });
     expect(output).toContain("REFUSED FI_REDIRECT");
@@ -195,17 +195,17 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
     await check(target.url);
     expect(target.requests).toHaveLength(1); seenNothing(proxy);
   });
-  test("(pin) a plain Agent installed by the application as the global dispatcher with HTTP_PROXY set is refused: it cannot be told from Node's own", async () => {
+  test("a plain Agent installed by the application as the global dispatcher with HTTP_PROXY set is not read: the send goes with fi-core's own dispatcher, the proxy sees 0 bytes", async () => {
     const target = await sink(), proxy = await counter();
     setGlobalDispatcher(new Agent()); process.env.HTTP_PROXY = proxy.url;
     await check(target.url);
-    expect(target.requests).toHaveLength(0); seenNothing(proxy);
+    expect(target.requests).toHaveLength(1); seenNothing(proxy);
   });
-  test("(pin) a global EnvHttpProxyAgent with a loopback target is refused and the proxy sees 0 bytes", async () => {
+  test("a global EnvHttpProxyAgent with a loopback target is not read: the send goes direct and the proxy sees 0 bytes", async () => {
     const target = await sink(), proxy = await counter();
     process.env.HTTP_PROXY = proxy.url; setGlobalDispatcher(new EnvHttpProxyAgent());
     await check(target.url);
-    expect(target.requests).toHaveLength(0); seenNothing(proxy);
+    expect(target.requests).toHaveLength(1); seenNothing(proxy);
   });
   test("(pin) a caller ProxyAgent with a loopback target is refused and the proxy sees 0 bytes", async () => {
     const target = await sink(), proxy = await counter();
@@ -217,8 +217,8 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
     const keys = { "x-api-key": "synthetic-fi-key-0001", "x-secret-key": "synthetic-fi-secret-0001" };
     guardedFetch({ url: process.argv[1], init: { method: "POST", headers: keys }, intended: { keys: new Map(Object.entries(keys)), values: Object.values(keys) } })
       .then(r => console.log("STATUS " + r.status), e => console.log("REFUSED " + e.code));`;
-  // Node's own switch is read when the process starts: with a proxy variable set, Node fills the undici slot itself then, which cannot be told from
-  // an application's dispatcher, so every key-carrying fetch is refused and neither the proxy nor the target sees a byte.
+  // Node's own switch is read when the process starts: a plaintext key-carrying send is refused while it is on (it is never proxied), and neither the
+  // proxy nor the target sees a byte.
   test.each([
     ["(pin) NODE_USE_ENV_PROXY=1", { NODE_USE_ENV_PROXY: "1" }, [] as string[]],
     ["--use-env-proxy", {}, ["--use-env-proxy"]],
@@ -226,7 +226,7 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
   ])("%s with a loopback target is refused and the proxy sees 0 bytes", async (_label, env, flags) => {
     const target = await sink(), proxy = await counter();
     const output = await runChild(CHILD_SEND, [`${target.url}/x`], { ...(env as Record<string, string>), HTTP_PROXY: proxy.url }, flags);
-    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
+    expect(output).toContain("REFUSED FI_PLAINTEXT_PROXIED");
     expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
   test("a guarded fetch whose final headers carry an FI key value under another name is refused: the sink sees 0 bytes", async () => {

@@ -8,9 +8,9 @@ import { guardedFetch } from "../fi-send-guard";
 import { BUILT_GUARD, cleanups, connectProxy, counter, runChild, runCleanups, sink, throwawayCertificate, UNDICI } from "./helpers/realSockets";
 
 /**
- * One value-free message per process when an application dispatcher refuses key-carrying exports, a dispatcher installed before load is not
- * trusted under Node's environment-proxy switch, the switch is read the way Node reads it, a pre-seeded shared record and a replaced global fetch
- * are not trusted, and a lone Future AGI key header makes a send key-carrying. Real sockets throughout: 0 bytes where a send is refused.
+ * The Node environment-proxy switch is read the way Node reads it (once, at load: only the value 1, --use-env-proxy, or that flag in NODE_OPTIONS),
+ * a replaced global fetch is never called by a keyed send, a caller's dispatcher option keeps its refusal without load-order advice, and a lone
+ * Future AGI key header makes a send key-carrying. Real sockets throughout: 0 bytes where a send is refused.
  */
 const KEY = "synthetic-fi-key-0001", SECRET = "synthetic-fi-secret-0001";
 const FIX = "node --import @traceai/auto/register app.mjs";
@@ -66,74 +66,20 @@ const CHILD = `
 `;
 const messages = (output: string): string[] => output.split("\n").filter(line => line.startsWith("DIAG ") && /dispatcher/i.test(line) && /@traceai\/auto/.test(line));
 
-describe("one value-free message per process when a dispatcher installed before load refuses key-carrying exports", () => {
-  test("RED a: a global dispatcher installed before the package loads, then 3 exports: refused each time, the message appears exactly once and names the load-order fix", async () => {
-    const target = await sink();
-    const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "app-agent-before-load" });
-    expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(3);
-    const found = messages(output);
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain(FIX);
-    expect(found[0]).toMatch(/another global dispatcher/i);
-    nothing(target); expect(target.requests).toHaveLength(0);
-  });
-  test("RED b: two copies of the package in one process: the message still appears exactly once", async () => {
-    const target = await sink();
-    const copy = path.join(DIST, "..", "..", `dist-copy-${process.pid}`);
-    fs.cpSync(path.join(DIST, ".."), copy, { recursive: true }); cleanups.push(() => fs.rmSync(copy, { recursive: true, force: true }));
-    const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "two-copies", COPY_DIR: path.join(copy, "src") });
-    expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(4);
-    expect(messages(output)).toHaveLength(1);
-    nothing(target);
-  });
-  test("c: a caller's dispatcher option keeps its own refusal and emits no load-order message", async () => {
+describe("a caller's dispatcher option is refused without load-order advice", () => {
+  test("a caller's dispatcher option is refused value-free, twice, with no load-order message", async () => {
     const target = await sink();
     const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "caller-option" });
     expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(2);
     expect(messages(output)).toHaveLength(0);
-    expect(output).not.toContain(FIX);
+    expect(output).not.toMatch(/load @traceai\/auto|node --import|node --require/);
     nothing(target);
     await expect(guardedFetch({ url: `${target.url}/x`, init: { method: "POST", headers: { "x-api-key": KEY, "x-secret-key": SECRET }, dispatcher: {} as any },
-      intended: { keys: new Map([["x-api-key", KEY], ["x-secret-key", SECRET]]), values: [KEY, SECRET] } })).rejects.toThrow(/Node's default transport/);
-  });
-  test("RED d: the message holds no URL, host, port, header name, header value or key", async () => {
-    const target = await sink();
-    const output = await runChild(CHILD, [`${target.url}/x?token=abc`], { SCENARIO: "app-agent-before-load" });
-    const found = messages(output);
-    expect(found).toHaveLength(1);
-    for (const forbidden of [KEY, SECRET, "x-api-key", "x-secret-key", "127.0.0.1", String(target.port), "http://", "https://", "token=abc", "/x"]) expect(found[0]).not.toContain(forbidden);
-    nothing(target);
+      intended: { keys: new Map([["x-api-key", KEY], ["x-secret-key", SECRET]]), values: [KEY, SECRET] } })).rejects.toThrow(/SDK's own transport/);
   });
 });
 
-describe("a dispatcher installed before load is not Node's own, under NODE_USE_ENV_PROXY too", () => {
-  const cert = throwawayCertificate(); afterAll(() => cert.dispose());
-  test("RED P1-a: NODE_USE_ENV_PROXY=1 and an application ProxyAgent installed before load, https target: refused, the proxy and the target see 0 bytes", async () => {
-    const approved = await sink({ tls: cert }), proxy = await counter();
-    const output = await runChild(CHILD, [`https://localhost:${approved.port}/x`], { SCENARIO: "proxy-agent-before-load", PROXY_URL: proxy.url, NODE_USE_ENV_PROXY: "1", NODE_EXTRA_CA_CERTS: cert.caFile });
-    expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(3);
-    nothing(proxy); nothing(approved);
-  });
-  test("RED P1-a: --use-env-proxy and an application ProxyAgent installed before load: refused, 0 bytes", async () => {
-    const approved = await sink({ tls: cert }), proxy = await counter();
-    const output = await runChild(CHILD, [`https://localhost:${approved.port}/x`], { SCENARIO: "proxy-agent-before-load", PROXY_URL: proxy.url, NODE_OPTIONS: "--use-env-proxy", NODE_EXTRA_CA_CERTS: cert.caFile });
-    expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(3);
-    nothing(proxy); nothing(approved);
-  });
-  test("RED P1-a: NODE_USE_ENV_PROXY set at runtime, then an application dispatcher, then the package loads: refused, 0 bytes", async () => {
-    const approved = await sink({ tls: cert }), proxy = await counter();
-    const output = await runChild(CHILD, [`https://localhost:${approved.port}/x`], { SCENARIO: "proxy-agent-before-load", RUNTIME_SWITCH: "1", PROXY_URL: proxy.url, NODE_EXTRA_CA_CERTS: cert.caFile });
-    expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(3);
-    nothing(proxy); nothing(approved);
-  });
-  test("RED P1-a: a pre-set slot is refused the same way with the switch on and with it off", async () => {
-    const target = await sink();
-    for (const env of [{ NODE_USE_ENV_PROXY: "1" } as Record<string, string>, {} as Record<string, string>]) {
-      const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "app-agent-before-load", ...env });
-      expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(3);
-    }
-    nothing(target);
-  });
+describe("Node's environment-proxy switch is read as Node reads it", () => {
   test("RED switch: only the value 1 turns Node's environment proxy on (as Node reads it): NODE_USE_ENV_PROXY=true leaves a plaintext send direct to the target, the proxy sees 0 bytes", async () => {
     const target = await sink(), proxy = await counter();
     const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "no-dispatcher", NODE_USE_ENV_PROXY: "true", HTTP_PROXY: proxy.url });
@@ -148,13 +94,7 @@ describe("a dispatcher installed before load is not Node's own, under NODE_USE_E
   });
 });
 
-describe("the shared record and the global fetch are not trusted", () => {
-  test("RED P2-a: a record pre-seeded at the shared symbol, then an application dispatcher: refused, the target sees 0 bytes", async () => {
-    const target = await sink();
-    const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "preseeded-record" });
-    expect(count(output, /REFUSED FI_DISPATCHER_UNKNOWN/g)).toBe(3);
-    nothing(target);
-  });
+describe("the global fetch is never called by a keyed send", () => {
   test("RED P2-b: a global fetch replaced after load is never called: the replacement gets 0 calls and its listener 0 bytes; the send goes through Node's own fetch", async () => {
     const target = await sink(), spy = await counter();
     const output = await runChild(CHILD, [`${target.url}/x`], { SCENARIO: "replaced-fetch", SPY_PORT: String(spy.port) });

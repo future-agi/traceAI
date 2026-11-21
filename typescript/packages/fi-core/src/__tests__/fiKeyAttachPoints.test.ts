@@ -112,9 +112,8 @@ function isMetadataBinding(node: ts.Node, name: string): boolean {
 function isAttach(node: ts.Node): boolean {
   if (ts.isCallExpression(node)) {
     const callee = node.expression;
-    if (ts.isIdentifier(callee) && ["fetch", "createOtlpHttpExportDelegate", "createOtlpGrpcExportDelegate"].includes(callee.text)) return true;
-    // The fetch captured when the guard loads is the send of a guarded fetch.
-    if (ts.isPropertyAccessExpression(callee) && callee.name.text === "fetch" && callee.expression.getText() === "nodeOwn") return true;
+    // undiciFetch is fi-core's own transport (undici's fetch, imported from the pinned package): the send of a guarded fetch and of the OTLP HTTP exporter.
+    if (ts.isIdentifier(callee) && ["fetch", "undiciFetch", "createOtlpHttpExportDelegate", "createOtlpGrpcExportDelegate"].includes(callee.text)) return true;
     // Any super(...) call with arguments in an exporter class hands its options, whatever they are called, to the OTLP exporter.
     if (callee.kind === ts.SyntaxKind.SuperKeyword) {
       const klass = node.parent && ts.findAncestor(node, ts.isClassDeclaration);
@@ -139,6 +138,7 @@ const ATTACH: Record<string, "decides" | "consumes"> = {
   "fi-core/otel.ts::FITracerProvider.constructor": "decides", // keeps the decided headers; the default exporter decides again on them
   "fi-core/otel.ts::GRPCSpanExporter.constructor": "decides",
   "fi-core/fi-send-guard.ts::guardedFetch": "consumes", // the one fetch: judges the final headers it is given, which the callers decided
+  "fi-core/fi-send-guard.ts::guardOtlpHttpExporter": "consumes", // the OTLP HTTP exporter's send, through fi-core's own transport: judges the final headers against the decided set
   "fi-core/fi-send-guard.ts::guardOtlpGrpcExporter": "consumes", // the one gRPC client: the interceptor judges the final metadata against the decided set
   "fi-core/otlp-header-isolation.ts::isolateHttpExporterHeaders": "consumes", // rebuilds the delegate from the decided headers
   "fi-core/otlp-header-isolation.ts::isolateGrpcExporterHeaders": "consumes", // rebuilds the delegate from the decided metadata

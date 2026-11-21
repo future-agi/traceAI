@@ -29,7 +29,7 @@ beforeEach(() => {
   savedGlobal = (globalThis as any)[GLOBAL];
   try { delete (globalThis as any)[GLOBAL]; } catch { /* a slot undici defined cannot be deleted */ } (globalThis as any)[GLOBAL] = undefined; // each test starts with Node's own default: an empty slot
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
-  fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
+  fetchSpy = jest.spyOn(require("undici"), "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
 afterEach(() => {
   fetchSpy.mockRestore(); for (const n of NAMES) { if (saved[n] === undefined) delete process.env[n]; else process.env[n] = saved[n]; }
@@ -92,30 +92,34 @@ describe("a caller's dispatcher: proxied when the library or Python says so", ()
   });
 });
 
-describe("the global dispatcher is read for each request", () => {
-  test("a proxy agent set after the check module was loaded is refused", async () => {
+describe("the global dispatcher slot is not read: key-carrying requests use fi-core's own transport", () => {
+  const usedOwn = (global: unknown, calls: number): void => {
+    expect(fetchSpy).toHaveBeenCalledTimes(calls);
+    for (const call of fetchSpy.mock.calls) { const dispatcher = (call[1] as { dispatcher?: unknown }).dispatcher; expect(dispatcher).toBeDefined(); expect(dispatcher).not.toBe(global); }
+  };
+  test("an agent set in the slot after the check module was loaded changes nothing: each check is sent with fi-core's own dispatcher", async () => {
     await check("http://collector.example:8000");
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    (globalThis as any)[GLOBAL] = new ProxyAgent();
+    usedOwn(undefined, 1);
+    const proxy = new ProxyAgent(); (globalThis as any)[GLOBAL] = proxy;
     await check("http://collector.example:8000");
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    (globalThis as any)[GLOBAL] = new Agent();
+    usedOwn(proxy, 2);
+    const agent = new Agent(); (globalThis as any)[GLOBAL] = agent;
     await check("http://collector.example:8000");
-    expect(fetchSpy).toHaveBeenCalledTimes(1); // an Agent the application installed is not Node's own either
+    usedOwn(agent, 3);
   });
-  test("the deprecated exporter reads it when it sends, not when it is built", async () => {
+  test("the deprecated exporter sends with fi-core's own dispatcher whatever the slot holds", async () => {
     const exporter = new HTTPSpanExporter({ endpoint: "http://collector.example:8000/tracer/v1/traces", headers: { ...KEYS }, allowInsecureHttp: true } as any);
-    (globalThis as any)[GLOBAL] = new ProxyAgent();
+    const proxy = new ProxyAgent(); (globalThis as any)[GLOBAL] = proxy;
     const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
     provider.getTracer("t").startSpan("one").end();
     await provider.forceFlush(); await provider.shutdown();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    usedOwn(proxy, 1);
   });
-  test("an environment-proxy global dispatcher follows its own rule", async () => {
-    (globalThis as any)[GLOBAL] = new EnvHttpProxyAgent();
+  test("an environment-proxy agent in the slot is not used: the check is sent with fi-core's own dispatcher", async () => {
+    const envAgent = new EnvHttpProxyAgent(); (globalThis as any)[GLOBAL] = envAgent;
     process.env.HTTP_PROXY = PROXY;
     await check("http://collector.example:8000");
-    expect(fetchSpy).not.toHaveBeenCalled();
+    usedOwn(envAgent, 1);
   });
   test("Node's own environment-proxy switch is read when the process starts: a value set later is not the switch, and the send is not refused for it", async () => {
     process.env.NODE_USE_ENV_PROXY = "1"; process.env.HTTP_PROXY = PROXY;
@@ -136,6 +140,7 @@ async function listener(): Promise<{ port: number; connections: number; close():
 describe("a request the SDK builds itself goes direct, with a proxy in the environment", () => {
   // 127.1 is not the literal loopback: a self-hosted host that needs the opt-in, and the connection still reaches this machine.
   test("HTTP exporter", async () => {
+    fetchSpy.mockRestore(); // the exporter sends with undici's real fetch here, to a real listener
     const proxy = await listener();
     const received: http.IncomingHttpHeaders[] = [];
     const server = http.createServer((req, res) => { req.resume(); req.on("end", () => { received.push(req.headers); res.setHeader("content-type", "application/json"); res.end("{}"); }); });

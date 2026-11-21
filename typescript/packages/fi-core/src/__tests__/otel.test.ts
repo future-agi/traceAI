@@ -19,9 +19,9 @@ import {
 } from '../otel';
 import { ProjectType, EvalTag, EvalTagType, EvalSpanKind, EvalName, ModelChoices } from '../fi_types';
 
-// Mock fetch globally
+// The SDK sends key-carrying requests with undici's own fetch (it never reads globalThis.fetch): that is the transport mocked here.
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
-global.fetch = mockFetch;
+jest.spyOn(require("undici"), "fetch").mockImplementation(mockFetch as any);
 
 // Mock grpc
 // These tests replace the exporter class with a plain stand-in that has no OTLP delegate. Shipped

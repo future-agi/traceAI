@@ -81,7 +81,8 @@ function isTransportPrimitive(node: ts.Node): boolean {
   }
   if (ts.isCallExpression(node)) {
     const callee = node.expression;
-    if (ts.isIdentifier(callee)) return /^(?:request|connect)$/.test(callee.text) || GRPC_MEMBERS.test(callee.text);
+    // undiciFetch is undici's own fetch, imported from the pinned package: fi-core's transport for every key-carrying send.
+    if (ts.isIdentifier(callee)) return /^(?:request|connect|undiciFetch)$/.test(callee.text) || GRPC_MEMBERS.test(callee.text);
     if (ts.isPropertyAccessExpression(callee)) {
       if (GRPC_MEMBERS.test(callee.name.text) || (callee.name.text === "createInsecure" || callee.name.text === "createSsl")) return true;
       const receiver = callee.expression.getText();
@@ -105,10 +106,11 @@ describe("every transport primitive in the key-carrying modules is inside the gu
       "fi-core/fi-request-policy.ts::<top level>", // the grpc import for Metadata, which the decider builds as data
       "fi-core/fi-send-guard.ts::<top level>", // the imports of the transports the guard uses
       "fi-core/fi-send-guard.ts::channelCredentials", // the one place a channel's credentials are constructed
+      "fi-core/fi-send-guard.ts::direct", // the one direct transport: fi-core's own undici Agent, TLS verification on
       "fi-core/fi-send-guard.ts::guardOtlpGrpcExporter", // the channel it builds with proxies off
-      "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch, through the reference captured when the guard loads
-      "fi-core/fi-send-guard.ts::nodeFetchNow", // the one read of the global fetch: Node's own, captured when the guard loads
-      "fi-core/fi-send-guard.ts::primeNodeDispatcher", // the one probe that has Node install its own default dispatcher while the slot is empty
+      "fi-core/fi-send-guard.ts::guardOtlpHttpExporter", // the OTLP HTTP exporter's send, through fi-core's own undici fetch
+      "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch: fi-core's own undici fetch, never the global slot or globalThis.fetch
+      "fi-core/fi-send-guard.ts::through", // the SDK's https proxy: a CONNECT-only undici ProxyAgent of fi-core's own
       "fi-core/otel.ts::<top level>", // the imports of the OTLP exporter packages the SDK's exporter classes extend
       "fi-core/otel.ts::createSpanExporter", // constructs the SDK's own exporter, whose constructor calls its guarded entry point
       "fi-core/otlp-header-isolation.ts::<top level>", // the exporter packages' own configuration functions, used to rebuild a delegate
