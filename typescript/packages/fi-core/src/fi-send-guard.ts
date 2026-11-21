@@ -164,12 +164,12 @@ export function channelCredentials(kind: "tls" | "plaintext"): grpc.ChannelCrede
  * environment's https proxy unless NO_PROXY exempts the destination. The option and FI_HTTPS_PROXY ignore NO_PROXY. Anything but an
  * http:// or https:// URL is refused, naming no value.
  */
-function resolveProxy(target: string, option: unknown): string | undefined {
+export function resolveProxy(target: string, option: unknown): string | undefined {
   const chosen = typeof option === "string" && option !== "" ? option : process.env.FI_HTTPS_PROXY !== undefined && process.env.FI_HTTPS_PROXY !== "" ? process.env.FI_HTTPS_PROXY : undefined;
   let proxy = chosen;
   if (proxy === undefined && ENV_PROXY?.proxy) {
     let exempt = false;
-    try { const url = new URL(target); exempt = undiciNoProxyExempts(url.hostname, url.port, ENV_PROXY.noProxy); } catch { exempt = false; }
+    try { const url = new URL(target); exempt = undiciNoProxyExempts(url.hostname, url.port || (url.protocol === "https:" ? "443" : "80"), ENV_PROXY.noProxy); } catch { exempt = false; }
     if (!exempt) proxy = ENV_PROXY.proxy;
   }
   if (proxy === undefined) return undefined;
@@ -193,7 +193,9 @@ function through(proxy: string): Dispatcher {
  * loopback included): it is refused when an SDK proxy is configured or Node's environment-proxy switch is on. An https request goes
  * through the SDK's https proxy when one applies, else direct.
  */
-function dispatcherFor(target: string, tls: boolean, option: unknown): Dispatcher {
+function dispatcherFor(target: string, tls: boolean, option: unknown, keys: boolean): Dispatcher {
+  // A send that carries no key is not subject to the keyed-send proxy rules: it goes direct, with fi-core's own agent.
+  if (!keys) return direct();
   if (!tls) {
     if (nodeEnvProxy() || (typeof option === "string" && option !== "") || (process.env.FI_HTTPS_PROXY ?? "") !== "") throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
     return direct();
@@ -273,7 +275,7 @@ export async function guardedFetch(request: GuardedFetchRequest): Promise<Respon
   const init = { ...(request.init ?? {}) };
   const outcome = guardSend({ transport: "http", target: request.url, entries: headerEntries(init.headers), intended: request.intended,
     dispatcher: init.dispatcher, allowInsecureHttp: request.allowInsecureHttp });
-  const dispatcher = dispatcherFor(request.url, outcome.tls, request.httpsProxy);
+  const dispatcher = dispatcherFor(request.url, outcome.tls, request.httpsProxy, outcome.keys);
   delete init.dispatcher;
   const response = await undiciFetch(request.url, { ...(init as object), dispatcher, redirect: "manual" } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   if (outcome.keys && isRedirect(response)) {
@@ -316,8 +318,8 @@ export function guardOtlpHttpExporter(exporter: unknown, intended: Intended, all
   transport.send = async (data: Uint8Array, timeoutMillis: number) => {
     try {
       const outcome = guardSend({ transport: "http", target: parameters.url, entries: headerEntries(parameters.headers()), intended, allowInsecureHttp });
-      const dispatcher = dispatcherFor(parameters.url, outcome.tls, httpsProxy);
-      const url = new URL(parameters.url); url.search = ""; url.hash = "";
+      const dispatcher = dispatcherFor(parameters.url, outcome.tls, httpsProxy, outcome.keys);
+      const url = new URL(parameters.url); url.search = ""; url.hash = ""; url.username = ""; url.password = ""; // the exporter never sent userinfo, and fetch refuses a URL that has it
       const headers: Record<string, string> = { ...parameters.headers() };
       const body = parameters.compression === "gzip" ? gzipSync(data) : data;
       if (parameters.compression === "gzip") headers["Content-Encoding"] = "gzip";
