@@ -130,16 +130,43 @@ final class AnnotationTracing {
 
     private static void input(Started started, Method method, Object[] arguments) {
         if (TraceAIAuto.hidden("input.value", "v", null, started.config)) return;
+        Map<String, Object> values = inputValues(method, arguments);
+        if (values.isEmpty()) return;
+        // One walk over all the arguments, so the depth, item, node and character bounds hold for the whole input.
+        set(started, "input.value", render(values, started.chars())); set(started, "input.mime_type", "application/json");
+    }
+
+    private static final AtomicBoolean NAMES_WARNED = new AtomicBoolean();
+    /** Lets a test see the warning again. */
+    static void resetNameWarning() { NAMES_WARNED.set(false); }
+
+    /**
+     * The arguments of a call by parameter name. A credential name redacts its value. A class compiled without {@code -parameters} has no
+     * names ({@code arg0}, {@code arg1}), so a text argument cannot be judged by its name: a String, CharSequence, char[] or byte[] is
+     * redacted, and one warning per process says how to export them.
+     */
+    static Map<String, Object> inputValues(Method method, Object[] arguments) {
         Parameter[] parameters = method.getParameters();
         Map<String, Object> values = new LinkedHashMap<>();
         for (int i = 0; i < parameters.length && i < arguments.length; i++) {
             if (excluded(parameters[i])) continue;
-            String name = parameters[i].isNamePresent() ? parameters[i].getName() : "arg" + i;
-            values.put(name, CapturedValue.credentialName(name) ? "<redacted>" : arguments[i]);
+            boolean named = parameters[i].isNamePresent();
+            String name = named ? parameters[i].getName() : "arg" + i;
+            Object argument = arguments[i];
+            if (named ? CapturedValue.credentialName(name) : textual(argument)) {
+                if (!named) warnNames();
+                argument = "<redacted>";
+            }
+            values.put(name, argument);
         }
-        if (values.isEmpty()) return;
-        // One walk over all the arguments, so the depth, item, node and character bounds hold for the whole input.
-        set(started, "input.value", render(values, started.chars())); set(started, "input.mime_type", "application/json");
+        return values;
+    }
+    private static boolean textual(Object argument) {
+        return argument instanceof CharSequence || argument instanceof char[] || argument instanceof byte[];
+    }
+    private static void warnNames() {
+        if (NAMES_WARNED.compareAndSet(false, true))
+            System.err.println("[traceai-auto] Text arguments of annotated methods are redacted because this class has no parameter names in its class file. Compile with -parameters to export them.");
     }
     private static void output(Started started, Object value) {
         if (TraceAIAuto.hidden("output.value", "v", null, started.config)) return;
@@ -147,15 +174,25 @@ final class AnnotationTracing {
     }
     private static void fail(Started started, Throwable error) {
         Span span = started.span; AutoConfig config = started.config;
-        span.setAttribute(AttributeKey.stringKey("error.type"), error.getClass().getName());
+        String type = error.getClass().getName();
+        span.setAttribute(AttributeKey.stringKey("error.type"), type);
         if (TraceAIAuto.hidesErrorText(config)) {
             span.setStatus(StatusCode.ERROR);
-            span.addEvent("exception", io.opentelemetry.api.common.Attributes.of(AttributeKey.stringKey("exception.type"), error.getClass().getName()));
+            span.addEvent("exception", io.opentelemetry.api.common.Attributes.of(AttributeKey.stringKey("exception.type"), type));
         } else {
-            span.setStatus(StatusCode.ERROR, error.getMessage() == null ? "" : error.getMessage());
-            span.recordException(error);
-            if (error.getMessage() != null) span.setAttribute(AttributeKey.stringKey("error.message"), error.getMessage());
+            // The message of an exception whose getMessage the application overrides is never asked for (the class name stands in), the text
+            // goes through the same replacement as any captured string, and the stack trace is not exported: it prints the message.
+            String message = guardedMessage(started, error);
+            span.setStatus(StatusCode.ERROR, message);
+            span.addEvent("exception", io.opentelemetry.api.common.Attributes.of(
+                AttributeKey.stringKey("exception.type"), type, AttributeKey.stringKey("exception.message"), message));
+            span.setAttribute(AttributeKey.stringKey("error.message"), message);
         }
+    }
+    private static String guardedMessage(Started started, Throwable error) {
+        String message = WireCore.exceptionMessage(error);
+        try { return String.valueOf(CapturedValue.of(message, Math.min(started.chars(), 4096))); }
+        catch (Throwable unavailable) { return error.getClass().getName(); }
     }
 
     private static void set(Started started, String key, String value) {
