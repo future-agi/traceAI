@@ -27,6 +27,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Testing: the annotations the test application's own tool method carries -->
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-annotations</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

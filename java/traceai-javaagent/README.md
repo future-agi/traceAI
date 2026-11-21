@@ -108,8 +108,8 @@ Precedence: code arguments, then environment, then `futureagi.toml`, then the fi
 | `FI_PROJECT_TYPE` | `observe`. |
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Resource attributes for the agent's own spans; an application-supplied resource takes precedence. |
 | `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` / `OTEL_ATTRIBUTE_COUNT_LIMIT` | Span limit, then general limit, then 128. A smaller limit configured in the application SDK is respected. |
-| `FI_INSTRUMENTATIONS` | All. Comma-separated allowlist; include `wire` to allow HTTP tracing. |
-| `FI_DISABLED_INSTRUMENTATIONS` | None. Denylist wins. `wire` turns HTTP tracing off; `okhttp` or `java.net.http` turns off one client; `servlet` stops joining incoming W3C trace context; `langchain4j` or `spring-ai` stops the `execute_tool` spans of that library. `google-adk` stops tracing Google ADK for Java. |
+| `FI_INSTRUMENTATIONS` | All. Comma-separated allowlist; include `wire` to allow HTTP tracing, `annotations` to allow spans for annotated methods and `google-adk` to allow Google ADK spans. |
+| `FI_DISABLED_INSTRUMENTATIONS` | None. Denylist wins. `wire` turns HTTP tracing off; `okhttp` or `java.net.http` turns off one client; `servlet` stops joining incoming W3C trace context; `langchain4j` or `spring-ai` stops the `execute_tool` spans of that library. `annotations` stops tracing methods annotated with `traceai-java-annotations`. `google-adk` stops tracing Google ADK for Java. |
 | `FI_WIRE_CAPTURE` | `true`. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304`; per-direction body buffering bound. |
 | `FI_SAMPLE_RATE` | When set, `ParentBased(TraceIdRatio(rate))`; `0` drops roots but retains children of sampled parents. Without a rate or OTel sampler setting, defaults to `ParentBased(TraceIdRatio(1.0))`. |

@@ -17,13 +17,25 @@ public final class TraceAIAgent {
         try { TraceAIAuto.start(Map.of(), instrumentation); }
         catch (Throwable ignored) { TraceAIAuto.warn("Agent startup failed; application runs without auto-instrumentation"); }
     }
+    static final String TRANSFORMER_CLAIM = "traceai.auto.annotation.transformer";
+    /**
+     * One annotation transformer per JVM: the first engine copy to ask (the agent flag, or a class-loader copy that calls
+     * init()) installs it, and later copies do not, so no method is woven twice. The claim is a JVM-wide system property,
+     * set atomically, because the copies share nothing else.
+     */
+    static boolean claimAnnotationTransformer() { return System.getProperties().putIfAbsent(TRANSFORMER_CLAIM, "1") == null; }
     static void install(Instrumentation instrumentation) {
         IncomingRequests.install(instrumentation);
         ToolSpans.install(instrumentation);
         GoogleAdk.install(instrumentation);
         // Shade relocates this property along with ByteBuddy: it cannot alter an application's copy.
         if (Runtime.version().feature() > 24) System.setProperty("net.bytebuddy.experimental", "true");
-        new AgentBuilder.Default().disableClassFormatChanges()
+        // Claimed only by a copy that will really weave annotations (its own settings have them on): a copy with
+        // annotations disabled must not keep another copy from weaving.
+        boolean annotations = TraceAIAuto.annotationsEnabled();
+        if (annotations && !claimAnnotationTransformer()) { annotations = false; TraceAIAuto.annotationsHeldElsewhere(); }
+        final boolean claimed = annotations;
+        AgentBuilder base = new AgentBuilder.Default().disableClassFormatChanges()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .ignore(nameStartsWith("ai.traceai.auto.").and(not(hasSuperType(namedOneOf("okio.Source", "okhttp3.ResponseBody"))))
                 // Built at runtime: Shade would rewrite the literal to the agent's own relocated package.
@@ -33,16 +45,26 @@ public final class TraceAIAgent {
             .or(any(), loader -> loader != null && loader.getClass().getName().startsWith(OtelJavaAgent.PREFIX))
             .with(new AgentBuilder.Listener.Adapter() {
                 @Override public void onTransformation(TypeDescription type, ClassLoader loader, JavaModule module, boolean loaded, DynamicType dynamicType) {
-                    TraceAIAuto.integrationInstrumented(type.getName().startsWith("okhttp3") ? "okhttp" : "java.net.http");
+                    TraceAIAuto.integrationInstrumented(integration(type.getName()));
                 }
                 @Override public void onError(String type, ClassLoader loader, JavaModule module, boolean loaded, Throwable error) {
-                    TraceAIAuto.integrationFailed(type.startsWith("okhttp3") ? "okhttp" : "java.net.http");
+                    TraceAIAuto.integrationFailed(integration(type));
                     TraceAIAuto.debug("Transformation failed for " + type + " (" + error.getClass().getSimpleName() + ")");
                 }
             })
             // Only HTTP client classes are transformed. The application's OpenTelemetry SDK classes,
             // providers and processors are never rewritten, wrapped or observed.
-            .type(named("jdk.internal.net.http.HttpRequestImpl"))
+            // Application classes (and interfaces, for their default methods) with a method annotated with ai.traceai.annotations.*;
+            // matched by name, so the annotation module is not needed here. Not woven at all while the annotations are disabled.
+            ;
+        if (annotations) {
+            base = base.type(declaresMethod(annotated()).and(not(nameStartsWith("java.").or(nameStartsWith("jdk.")).or(nameStartsWith("sun."))))
+                    .and(type -> TraceAIAuto.annotationsEnabled()))
+                .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(AnnotatedMethodAdvice.class).on(annotated())));
+        }
+        // A claim whose installation fails is given back, so another copy can still weave the annotations.
+        try {
+        base.type(named("jdk.internal.net.http.HttpRequestImpl"))
             .transform((builder, type, loader, module, domain) -> builder
                 .visit(Advice.to(JdkHeaderAdvice.class).on(namedOneOf("setSystemHeader", "addSystemHeader").and(takesArguments(String.class, String.class)))))
             .type(named("jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream"))
@@ -64,6 +86,44 @@ public final class TraceAIAgent {
             .type(named("okhttp3.OkHttpClient"))
             .transform((builder, type, loader, module, domain) -> builder.visit(Advice.to(OkHttpAdvice.class).on(isConstructor().and(takesArguments(1)).and(takesArgument(0, named("okhttp3.OkHttpClient$Builder"))))))
             .installOn(instrumentation);
+        } catch (Throwable failed) {
+            if (claimed) System.getProperties().remove(TRANSFORMER_CLAIM);
+            throw failed;
+        }
+    }
+    /** A concrete method with one of the annotations; the compiler's bridge and other synthetic copies of it are never woven, so one call is one span. */
+    private static net.bytebuddy.matcher.ElementMatcher.Junction<net.bytebuddy.description.method.MethodDescription> annotated() {
+        return isAnnotatedWith(annotationType()).and(not(isAbstract())).and(not(isConstructor())).and(not(isTypeInitializer())).and(not(isBridge())).and(not(isSynthetic()));
+    }
+    private static net.bytebuddy.matcher.ElementMatcher<TypeDescription> annotationType() { return type -> AnnotationTracing.annotationName(type.getName()); }
+    /** The integration a transformed class belongs to, for the status report. */
+    private static String integration(String type) {
+        return type.startsWith("okhttp3") || type.startsWith("okio") ? "okhttp" : type.startsWith("jdk.internal.net.http") ? "java.net.http" : "annotations";
+    }
+    public static class AnnotatedMethodAdvice {
+        @Advice.OnMethodEnter(suppress = Throwable.class)
+        public static Object enter(@Advice.Origin java.lang.reflect.Method method, @Advice.AllArguments Object[] arguments) throws Exception {
+            Class<?> bridge = null;
+            // An active engine first: the system class path (the agent flag puts the jar there), else the annotated class's own loader
+            // chain (a jar that is on the application's class path only, such as a fat jar's, or a web application's). An engine that
+            // is not running, or has annotations off, is used only when no other one is found.
+            try { bridge = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto"); }
+            catch (ClassNotFoundException missing) { }
+            if (bridge == null || !((Boolean)bridge.getMethod("annotationsActive").invoke(null)).booleanValue()) {
+                try {
+                    Class<?> own = Class.forName("ai.traceai.auto.TraceAIAuto", false, method.getDeclaringClass().getClassLoader());
+                    if (bridge == null || ((Boolean)own.getMethod("annotationsActive").invoke(null)).booleanValue()) bridge = own;
+                } catch (ClassNotFoundException missing) { if (bridge == null) throw missing; }
+            }
+            return bridge.getMethod("enterAnnotated", java.lang.reflect.Method.class, Object[].class).invoke(null, method, arguments);
+        }
+        @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
+        public static void exit(@Advice.Enter Object state, @Advice.Return(readOnly = false, typing = net.bytebuddy.implementation.bytecode.assign.Assigner.Typing.DYNAMIC) Object returned,
+                                @Advice.Thrown Throwable error) throws Exception {
+            if (state == null) return;
+            Object replacement = state.getClass().getClassLoader().loadClass("ai.traceai.auto.TraceAIAuto").getMethod("exitAnnotated", Object.class, Object.class, Throwable.class).invoke(null, state, returned, error);
+            if (replacement != null) returned = replacement;
+        }
     }
     public static class JdkHeaderAdvice {
         @Advice.OnMethodEnter(suppress = Throwable.class)
