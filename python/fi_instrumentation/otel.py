@@ -1350,11 +1350,13 @@ def _session_is_stock(session: Any, allowed: Mapping[str, Any] | None = None) ->
     if not _auth_is_stock(getattr(session, "auth", None)):
         return False
     hooks = getattr(session, "hooks", None)
-    if not isinstance(hooks, dict) or any(hooks.values()):
+    # A dict of exactly that type, read by its keys: a subclass can show less than it holds.
+    if type(hooks) is not dict or any(dict.__getitem__(hooks, key) for key in list(dict.keys(hooks))):
         return False
     adapters = getattr(session, "adapters", None)
+    # By exact type: a subclass of HTTPAdapter can choose the connection it uses (a pool key, a dial, an ssl context).
     return hasattr(adapters, "values") and all(
-        isinstance(adapter, HTTPAdapter) and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING) for adapter in adapters.values()
+        type(adapter) is HTTPAdapter and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING) for adapter in adapters.values()
     )
 
 
@@ -1518,6 +1520,8 @@ def _sender_is_sound(sender: Any, guard: Any = None) -> bool:
     routing functions of ``requests`` (``guard`` is the only function this package set on it), has no proxy, reads no environment
     and runs no hook."""
     allowed = {"request": guard} if guard is not None else None
+    if guard is not None and getattr(sender, "__dict__", {}).get("request") is not guard:
+        return False
     return _session_is_stock(sender, allowed) and sender.trust_env is False and not sender.proxies
 
 
