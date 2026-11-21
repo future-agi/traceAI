@@ -30,7 +30,7 @@ const MESSAGES: Record<FiKeyRefusalCode, string> = {
   FI_PLAINTEXT_PROXIED: "FI_ALLOW_INSECURE_HTTP and allowInsecureHttp do not apply when the request would go through an HTTP or HTTPS proxy; use TLS, or send without a proxy dispatcher.",
   FI_AMBIENT_KEY_HEADERS: "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS carries a Future AGI key header or a Future AGI key value, so no exporter is created for this collector. Remove it from those variables, or send the traces to Future AGI.",
   FI_REDIRECT: "The collector answered with a redirect, which is not followed when Future AGI keys are sent; nothing further was sent.",
-  FI_DISPATCHER_UNKNOWN: "The dispatcher for this request cannot be shown to connect to the request's own origin (a custom connect function, a socket path, a factory, or an origin-bound pool or client), so no Future AGI key is sent through it. Use a plain undici Agent, or send without a dispatcher.",
+  FI_DISPATCHER_UNKNOWN: "Key-carrying exports and checks use Node's default transport, so no Future AGI key is sent through a dispatcher option or a custom global dispatcher. Remove it; for an https proxy, set NODE_USE_ENV_PROXY=1.",
 };
 export class FiKeyRefusal extends Error {
   readonly code: FiKeyRefusalCode;
