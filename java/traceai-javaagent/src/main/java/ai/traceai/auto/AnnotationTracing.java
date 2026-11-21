@@ -142,8 +142,9 @@ final class AnnotationTracing {
 
     /**
      * The arguments of a call by parameter name. A credential name redacts its value. A class compiled without {@code -parameters} has no
-     * names ({@code arg0}, {@code arg1}), so a text argument cannot be judged by its name: a String, CharSequence, char[] or byte[] is
-     * redacted, and one warning per process says how to export them.
+     * names ({@code arg0}, {@code arg1}), so no argument can be judged by its name: every argument except null, a Boolean and an enum
+     * constant is redacted whatever its type (numbers, arrays, collections, Optionals, Maps, records and objects included), and one
+     * warning per process says how to export them.
      */
     static Map<String, Object> inputValues(Method method, Object[] arguments) {
         Parameter[] parameters = method.getParameters();
@@ -153,7 +154,7 @@ final class AnnotationTracing {
             boolean named = parameters[i].isNamePresent();
             String name = named ? parameters[i].getName() : "arg" + i;
             Object argument = arguments[i];
-            if (named ? CapturedValue.credentialName(name) : textual(argument)) {
+            if (named ? CapturedValue.credentialName(name) : !exportedWithoutName(argument)) {
                 if (!named) warnNames();
                 argument = "<redacted>";
             }
@@ -161,12 +162,13 @@ final class AnnotationTracing {
         }
         return values;
     }
-    private static boolean textual(Object argument) {
-        return argument instanceof CharSequence || argument instanceof char[] || argument instanceof byte[];
+    /** What carries no secret whatever the parameter is called: nothing, a flag, or a constant of an enum. */
+    private static boolean exportedWithoutName(Object argument) {
+        return argument == null || argument instanceof Boolean || argument instanceof Enum<?>;
     }
     private static void warnNames() {
         if (NAMES_WARNED.compareAndSet(false, true))
-            System.err.println("[traceai-auto] Text arguments of annotated methods are redacted because this class has no parameter names in its class file. Compile with -parameters to export them.");
+            System.err.println("[traceai-auto] Arguments of annotated methods are redacted because this class has no parameter names in its class file. Compile with -parameters to export them.");
     }
     private static void output(Started started, Object value) {
         if (TraceAIAuto.hidden("output.value", "v", null, started.config)) return;
