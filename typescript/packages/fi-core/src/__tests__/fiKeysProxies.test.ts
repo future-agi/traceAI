@@ -27,6 +27,7 @@ let fetchSpy: jest.SpyInstance;
 beforeEach(() => {
   saved = {}; for (const n of NAMES) { saved[n] = process.env[n]; delete process.env[n]; }
   savedGlobal = (globalThis as any)[GLOBAL];
+  try { delete (globalThis as any)[GLOBAL]; } catch { /* a slot undici defined cannot be deleted */ } (globalThis as any)[GLOBAL] = undefined; // each test starts with Node's own default: an empty slot
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
   fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
@@ -85,9 +86,9 @@ describe("a caller's dispatcher: proxied when the library or Python says so", ()
     }
     expect(fetchSpy).not.toHaveBeenCalled();
   });
-  test("a plain dispatcher with no proxy in the environment is used", async () => {
+  test("a plain dispatcher with no proxy in the environment is refused: a caller's dispatcher is never accepted", async () => {
     await check("http://collector.example:8000", new Agent());
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -100,7 +101,7 @@ describe("the global dispatcher is read for each request", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     (globalThis as any)[GLOBAL] = new Agent();
     await check("http://collector.example:8000");
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // an Agent the application installed is not Node's own either
   });
   test("the deprecated exporter reads it when it sends, not when it is built", async () => {
     const exporter = new HTTPSpanExporter({ endpoint: "http://collector.example:8000/tracer/v1/traces", headers: { ...KEYS }, allowInsecureHttp: true } as any);

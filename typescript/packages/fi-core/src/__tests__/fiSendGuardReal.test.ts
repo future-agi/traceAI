@@ -31,6 +31,7 @@ const cleanups: Array<() => Promise<void> | void> = [];
 beforeEach(() => {
   saved = {}; for (const n of NAMES) { saved[n] = process.env[n]; delete process.env[n]; }
   savedGlobal = (globalThis as any)[GLOBAL]; savedExecArgv = [...process.execArgv];
+  try { delete (globalThis as any)[GLOBAL]; } catch { /* a slot undici defined cannot be deleted */ } (globalThis as any)[GLOBAL] = undefined; // each test starts with Node's own default: an empty slot
 });
 afterEach(async () => {
   for (const n of NAMES) { if (saved[n] === undefined) delete process.env[n]; else process.env[n] = saved[n]; }
@@ -193,11 +194,11 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
     await check(target.url);
     expect(target.requests).toHaveLength(1); seenNothing(proxy);
   });
-  test("(pin) a plain Agent as the global dispatcher with HTTP_PROXY set and a loopback target is sent direct", async () => {
+  test("(pin) a plain Agent installed by the application as the global dispatcher with HTTP_PROXY set is refused: it cannot be told from Node's own", async () => {
     const target = await sink(), proxy = await counter();
     setGlobalDispatcher(new Agent()); process.env.HTTP_PROXY = proxy.url;
     await check(target.url);
-    expect(target.requests).toHaveLength(1); seenNothing(proxy);
+    expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
   test("(pin) a global EnvHttpProxyAgent with a loopback target is refused and the proxy sees 0 bytes", async () => {
     const target = await sink(), proxy = await counter();
@@ -384,14 +385,12 @@ describe("dispatchers whose dial can be redirected are refused for every key-car
     for (const dispatcher of dispatchers) { cleanups.push(() => dispatcher.close()); await check(target.url, { dispatcher }); }
     seenNothing(unix); expect(target.requests).toHaveLength(0);
   });
-  test("(pin) a plain Agent is allowed, plaintext and https", async () => {
+  test("a plain Agent as the dispatcher option is refused, plaintext and https: nothing is accepted on its shape", async () => {
     const target = await sink(), approved = await sink({ tls });
-    const plain = new Agent({ connect: { ca: tls.cert } }); cleanups.push(() => plain.close());
-    // A TLS option in connect does not redirect the dial, but the guard cannot tell; a plain Agent with no options is the shape that is proven.
     const bare = new Agent(); cleanups.push(() => bare.close());
     await check(target.url, { dispatcher: bare });
-    expect(target.requests).toHaveLength(1); expect(target.requests[0].headers["x-api-key"]).toBe(ENV_KEYS.FI_API_KEY);
-    void plain; void approved;
+    expect(target.requests).toHaveLength(0);
+    void approved;
   });
   test("dispatcher origins and options are read from data only: an accessor on the dispatcher is never run", async () => {
     const target = await sink();

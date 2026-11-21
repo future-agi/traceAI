@@ -58,9 +58,10 @@ describe("a trailing dot is the same Future AGI host for every TLS decision", ()
   test("an https trailing-dot host is accepted", async () => {
     await createSpanExporter({ endpoint: "https://api.futureagi.com./", headers: { ...KEYS } }).shutdown();
   });
-  test("a gRPC target with a trailing dot and explicit keys uses TLS", () => {
-    const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: "http://grpc.futureagi.com.:4317", headers: { ...KEYS } } as any);
+  test("a gRPC target with a trailing dot and explicit keys uses TLS, and a plaintext request for it is refused", () => {
+    const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: "grpc.futureagi.com.:4317", headers: { ...KEYS } } as any);
     expect(channel(exporter)).toEqual({ address: "grpc.futureagi.com.:4317", secure: true });
+    expect(() => createSpanExporter({ transport: Transport.GRPC, endpoint: "http://grpc.futureagi.com.:4317", headers: { ...KEYS } } as any)).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_FI_HOST" }));
   });
 });
 
@@ -90,9 +91,8 @@ describe("the deprecated HTTP exporter follows the same rule", () => {
 });
 
 describe("gRPC channel credentials", () => {
-  test("caller insecure credentials do not override TLS for a Future AGI target with keys", () => {
-    const exporter = createSpanExporter({ transport: Transport.GRPC, endpoint: "grpc.futureagi.com:443", headers: { ...KEYS }, credentials: grpc.credentials.createInsecure() } as any);
-    expect(channel(exporter).secure).toBe(true);
+  test("caller insecure credentials for a Future AGI target with keys are refused, never replaced with TLS", () => {
+    expect(() => createSpanExporter({ transport: Transport.GRPC, endpoint: "grpc.futureagi.com:443", headers: { ...KEYS }, credentials: grpc.credentials.createInsecure() } as any)).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_FI_HOST" }));
   });
   test("a loopback target that the FI environment selects keeps the plaintext channel", () => {
     process.env.FI_GRPC_COLLECTOR_ENDPOINT = "localhost:4317";

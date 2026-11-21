@@ -19,9 +19,13 @@ let fetchSpy: jest.SpyInstance;
 beforeEach(() => {
   saved = {}; for (const n of NAMES) { saved[n] = process.env[n]; delete process.env[n]; }
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
+  // A slot that undici defined cannot be deleted; an empty value is Node's own default.
+  savedSlot = (globalThis as any)[SLOT]; (globalThis as any)[SLOT] = undefined;
   fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
-afterEach(() => { fetchSpy.mockRestore(); for (const n of NAMES) { if (saved[n] === undefined) delete process.env[n]; else process.env[n] = saved[n]; } });
+const SLOT = Symbol.for("undici.globalDispatcher.1");
+let savedSlot: unknown;
+afterEach(() => { (globalThis as any)[SLOT] = savedSlot; fetchSpy.mockRestore(); for (const n of NAMES) { if (saved[n] === undefined) delete process.env[n]; else process.env[n] = saved[n]; } });
 
 const tag = () => ({ type: EvalTagType.OBSERVATION_SPAN, value: EvalSpanKind.LLM, eval_name: EvalName.CHUNK_ATTRIBUTION, config: {}, custom_eval_name: "Chunk_Attribution",
   mapping: { context: "raw.input", output: "raw.output" }, model: ModelChoices.TURING_SMALL, toDict: () => ({ eval_name: EvalName.CHUNK_ATTRIBUTION, custom_eval_name: "Chunk_Attribution" }) });
@@ -68,9 +72,9 @@ describe("a Future AGI host is never used in plaintext, and the opt-in does not 
     expect(refused(() => http(endpoint))).not.toBe("");
     expect(refused(() => http(endpoint, { allowInsecureHttp: true }))).not.toBe("");
   });
-  test.each([["http://grpc.futureagi.com:4317"], ["grpc.futureagi.com.:4317"], ["http://grpc.futureagi.com.:4317"]])("gRPC %s uses TLS whatever else says", endpoint => {
+  test.each([["http://grpc.futureagi.com:4317"], ["grpc.futureagi.com.:4317"], ["http://grpc.futureagi.com.:4317"]])("gRPC %s is refused when a plaintext channel is asked for, whatever else says", endpoint => {
     process.env.FI_ALLOW_INSECURE_HTTP = "1"; process.env.OTEL_EXPORTER_OTLP_INSECURE = "true";
-    expect(channel(rpc(endpoint, { credentials: grpc.credentials.createInsecure(), allowInsecureHttp: true })).secure).toBe(true);
+    expect(() => rpc(endpoint, { credentials: grpc.credentials.createInsecure(), allowInsecureHttp: true })).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_FI_HOST" }));
   });
   test("the refusals name no value", () => {
     const message = refused(() => http("http://api.futureagi.com"));
@@ -129,7 +133,7 @@ describe("the opt-in allows plaintext to a host that is not Future AGI, with one
   test("one warning per process, naming the setting and the origin only", () => {
     process.env.FI_ALLOW_INSECURE_HTTP = "1";
     const { warnings } = withFreshModule(m => {
-      m.createSpanExporter({ endpoint: "http://user:pw-synthetic@collector.example:4318/tracer/v1/traces?token=query-synthetic", headers: { ...KEYS } } as any);
+      m.createSpanExporter({ endpoint: "http://collector.example:4318/tracer/v1/traces?token=query-synthetic", headers: { ...KEYS } } as any);
       m.createSpanExporter({ endpoint: "http://other.example:4318", headers: { ...KEYS } } as any);
       m.createSpanExporter({ transport: m.Transport.GRPC, endpoint: "http://third.example:4317", headers: { ...KEYS } } as any);
     });
@@ -183,7 +187,8 @@ describe("the custom eval checks follow the same rules", () => {
     process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1";
     const { result, warnings } = withFreshModule(m => m.checkCustomEvalConfigExists("p", [tag()]));
     await result;
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // A freshly loaded module has Node install its default dispatcher with a fetch of a data URL, which a mocked fetch records too.
+    expect(fetchSpy.mock.calls.filter(([url]) => url !== "data:,")).toHaveLength(1);
     expect(warnings.filter(w => /FI_ALLOW_INSECURE_HTTP/.test(w))).toHaveLength(1);
     expect(await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true })).toBe(false);
   });

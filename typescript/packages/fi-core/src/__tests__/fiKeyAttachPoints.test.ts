@@ -190,7 +190,7 @@ describe("loopback is decided on the host as written, in the pinned places only"
   test("only these functions name the loopback set or call the literal-loopback decider", () => {
     expect(sites(node => ts.isIdentifier(node) && /^(?:LOOPBACK_HOSTS|isLiteralLoopback)$/.test(node.text))).toEqual([
       "fi-core/fi-endpoint.ts::<top level>", "fi-core/fi-endpoint.ts::isLiteralLoopback", "fi-core/fi-request-policy.ts::<top level>" /* the import */,
-      "fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-request-policy.ts::hostClass", "fi-core/fi-request-policy.ts::plaintextRule", "fi-core/fi-send-guard.ts::<top level>", "fi-core/fi-send-guard.ts::guardSend"]);
+      "fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-request-policy.ts::hostClass", "fi-core/fi-request-policy.ts::plaintextRule"]);
   });
   test("the decider reads the written host and agrees it with the parsed one; it never reads the parsed host alone", () => {
     const parsed = PARSED.find(p => p.id === "fi-core/fi-endpoint.ts")!.sf;

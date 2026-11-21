@@ -87,7 +87,7 @@ const ROWS: Row[] = [
   A("empty authority (backslash)", "https://\\api.futureagi.com/", "env", no("FI_EMPTY_AUTHORITY")),
   // gRPC
   G("grpc FI host is TLS", "grpc.futureagi.com:443", "env", ok("grpc.futureagi.com", true)),
-  G("grpc http:// FI host is still TLS", "http://grpc.futureagi.com:4317", "explicit", ok("grpc.futureagi.com", true), { optIn: "option" }),
+  G("grpc http:// FI host is refused, never upgraded to TLS", "http://grpc.futureagi.com:4317", "explicit", no("FI_PLAINTEXT_FI_HOST"), { optIn: "option" }),
   G("grpc loopback", "localhost:4317", "explicit", ok("localhost", false)),
   G("grpc self-hosted TLS", "collector.example:4317", "explicit", ok("collector.example", true)),
   G("grpc self-hosted plaintext, no opt-in", "http://collector.example:4317", "explicit", no("FI_PLAINTEXT_NOT_ALLOWED")),
@@ -100,7 +100,7 @@ const ROWS: Row[] = [
   G("pair split across metadata and headers", "http://collector.example:4317", "split", no("FI_PLAINTEXT_NOT_ALLOWED")),
   G("metadata pair with headers: {} and the opt-in", "http://collector.example:4317", "metadata+empty-headers", ok("collector.example", false), { optIn: "env" }),
   G("split pair through a gRPC proxy", "http://collector.example:4317", "split", ok("collector.example", false), { optIn: "env", proxy: { http_proxy: PROXY } }),
-  G("metadata pair with headers: {} to a FI host is TLS", "http://grpc.futureagi.com:4317", "metadata+empty-headers", ok("grpc.futureagi.com", true)),
+  G("metadata pair with headers: {} to a FI host is TLS", "grpc.futureagi.com:443", "metadata+empty-headers", ok("grpc.futureagi.com", true)),
   // gRPC proxy: the channel's own environment (grpc_proxy, https_proxy, http_proxy, lower case) decides
   G("grpc_proxy", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { grpc_proxy: PROXY } }),
   G("https_proxy routes a gRPC channel", "http://collector.example:4317", "explicit", ok("collector.example", false), { optIn: "env", proxy: { https_proxy: PROXY } }),

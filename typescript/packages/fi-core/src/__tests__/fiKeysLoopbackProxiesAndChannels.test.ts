@@ -25,6 +25,7 @@ let fetchSpy: jest.SpyInstance;
 beforeEach(() => {
   saved = {}; for (const n of NAMES) { saved[n] = process.env[n]; delete process.env[n]; }
   savedGlobal = (globalThis as any)[GLOBAL];
+  try { delete (globalThis as any)[GLOBAL]; } catch { /* a slot undici defined cannot be deleted */ } (globalThis as any)[GLOBAL] = undefined; // each test starts with Node's own default: an empty slot
   process.env.FI_API_KEY = "env-key-synthetic-0002"; process.env.FI_SECRET_KEY = "env-secret-synthetic-0002";
   fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ result: { exists: false } }), text: async () => "" } as Response);
 });
@@ -94,8 +95,8 @@ describe("a plaintext loopback send never goes through a proxy", () => {
       process.env.HTTP_PROXY = proxy.url; process.env.http_proxy = proxy.url; process.env.ALL_PROXY = proxy.url;
       await check(base);
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      await check(base, new Agent());
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      await check(base, new Agent()); // a caller's dispatcher is refused
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(proxy.bytes).toBe(0);
     } finally { await proxy.close(); }
   });
@@ -156,7 +157,7 @@ describe("a caller's TLS credentials are never replaced with insecure ones", () 
     expect(exporter._delegate._transport._parameters.credentials()._isSecure()).toBe(true);
   });
   test("insecure credentials only when the caller supplied none and the target is literal plaintext loopback", () => {
-    expect((decideFiRequest({ target: "localhost:4317", transport: "grpc", headers: { ...KEYS }, declaredFi: true }) as any).credentials._isSecure()).toBe(false);
+    expect(decideFiRequest({ target: "localhost:4317", transport: "grpc", headers: { ...KEYS }, declaredFi: true }).credentialsKind).toBe("plaintext");
     expect((decideFiRequest({ target: "localhost:4317", transport: "grpc", headers: { ...KEYS }, credentials: grpc.credentials.createInsecure() }) as any).credentials._isSecure()).toBe(false);
   });
 });

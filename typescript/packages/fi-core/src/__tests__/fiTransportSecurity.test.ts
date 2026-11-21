@@ -27,16 +27,16 @@ describe("a Future AGI bound gRPC exporter uses TLS", () => {
     process.env.OTEL_EXPORTER_OTLP_TRACES_INSECURE = "true";
     expect(channel(grpcExporter({}))).toEqual({ address: "grpc.futureagi.com", secure: true });
   });
-  test("an http:// Future AGI target is not refused and uses TLS", () => {
-    expect(channel(grpcExporter({ endpoint: "http://grpc.futureagi.com:4317" }))).toEqual({ address: "grpc.futureagi.com:4317", secure: true });
+  test("an http:// Future AGI target is refused, never upgraded to TLS", () => {
+    expect(() => grpcExporter({ endpoint: "http://grpc.futureagi.com:4317" })).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_FI_HOST" }));
     process.env.OTEL_EXPORTER_OTLP_INSECURE = "true";
-    expect(channel(grpcExporter({ endpoint: "http://grpc.futureagi.com:4317" })).secure).toBe(true);
+    expect(() => grpcExporter({ endpoint: "grpc.futureagi.com:4317" })).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_FI_HOST" }));
   });
   test("an http:// target selected by the environment is a plaintext request: the same plaintext rule applies, as for any other target", () => {
     process.env.FI_GRPC_COLLECTOR_ENDPOINT = "http://collector.internal.example:4317";
     expect(() => grpcExporter({})).toThrow(/FI_ALLOW_INSECURE_HTTP/);
     process.env.FI_GRPC_COLLECTOR_ENDPOINT = "http://grpc.futureagi.com:4317";
-    expect(channel(grpcExporter({})).secure).toBe(true);
+    expect(() => grpcExporter({})).toThrow(expect.objectContaining({ code: "FI_PLAINTEXT_FI_HOST" }));
     process.env.FI_GRPC_COLLECTOR_ENDPOINT = "collector.internal.example:4317";
     expect(channel(grpcExporter({})).secure).toBe(true);
   });
