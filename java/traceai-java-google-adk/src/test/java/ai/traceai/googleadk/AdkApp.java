@@ -13,6 +13,8 @@ import com.google.genai.types.Content;
 import com.google.genai.types.FunctionCall;
 import com.google.genai.types.GenerateContentResponseUsageMetadata;
 import com.google.genai.types.Part;
+import ai.traceai.FITracer;
+import ai.traceai.TraceConfig;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
@@ -45,6 +47,8 @@ public class AdkApp {
     static volatile String toolName = "weather";
     /** Scenario "tool-error": the tool reports a failure in its result, and the model answers after it. */
     static volatile boolean failingTool;
+    /** Scenarios "wrapped", "wrapped-llm" and "wrapped-tool": the model and/or the tool go through TracedLlm / TracedTool, whose spans a provider of the wrappers' own records. */
+    static InMemorySpanExporter wrapperSpans;
     static final java.util.concurrent.CountDownLatch ENTERED = new java.util.concurrent.CountDownLatch(1);
     static final java.util.concurrent.CountDownLatch RELEASE = new java.util.concurrent.CountDownLatch(1);
 
@@ -143,8 +147,16 @@ public class AdkApp {
         if (mode.equals("sdk")) {
             OpenTelemetrySdk.builder().setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(own)).build()).buildAndRegisterGlobal();
         }
-        LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(send)).instruction("Be brief")
-            .tools(failingTool ? new FailingTool() : FunctionTool.create(AdkApp.class, toolName)).build();
+        boolean wrapLlm = scenario.equals("wrapped") || scenario.equals("wrapped-llm"), wrapTool = scenario.equals("wrapped") || scenario.equals("wrapped-tool");
+        FITracer wrapperTracer = null;
+        if (wrapLlm || wrapTool) {
+            wrapperSpans = InMemorySpanExporter.create();
+            wrapperTracer = new FITracer(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(wrapperSpans)).build().get("wrapper"), TraceConfig.builder().build());
+        }
+        BaseLlm model = wrapLlm ? new TracedLlm(new Model(send), wrapperTracer) : new Model(send);
+        com.google.adk.tools.BaseTool weather = wrapTool ? new TracedTool(FunctionTool.create(AdkApp.class, toolName), wrapperTracer) : FunctionTool.create(AdkApp.class, toolName);
+        LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(model).instruction("Be brief")
+            .tools(failingTool ? new FailingTool() : weather).build();
         InMemoryRunner runner = new InMemoryRunner(agent);
         var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
         Thread slow = null;
@@ -199,6 +211,11 @@ public class AdkApp {
         for (SpanData span : own.getFinishedSpanItems()) {
             // What the application's own provider recorded: ADK's spans, unchanged.
             System.out.println("OWN " + span.getName() + " attributes=" + span.getAttributes().size() + " parent=" + span.getParentSpanContext().isValid());
+            System.out.println("OWNID " + span.getName() + " id=" + span.getSpanId() + " parent=" + span.getParentSpanId());
+        }
+        if (wrapperSpans != null) for (SpanData span : wrapperSpans.getFinishedSpanItems()) {
+            // What the wrappers' own provider recorded.
+            System.out.println("WRAP " + span.getName() + " id=" + span.getSpanId() + " parent=" + span.getParentSpanId() + " trace=" + span.getTraceId());
         }
         try {
             Class<?> auto = ClassLoader.getSystemClassLoader().loadClass("ai.traceai.auto.TraceAIAuto");

@@ -80,7 +80,8 @@ class GoogleAdkE2ETest {
         Path module = Path.of("..", "traceai-java-google-adk", "target").toAbsolutePath().normalize();
         Path classpath = module.resolve("adk-app.classpath");
         assertTrue(Files.isRegularFile(classpath), "build the traceai-java-google-adk module first (mvn -pl traceai-javaagent -am verify): " + classpath);
-        String cp = module.resolve("test-classes") + File.pathSeparator + Files.readString(classpath).trim();
+        // The module's own classes (TracedLlm, TracedTool) come before its dependencies.
+        String cp = module.resolve("test-classes") + File.pathSeparator + module.resolve("classes") + File.pathSeparator + Files.readString(classpath).trim();
         if (extraClasspath != null) cp = extraClasspath + File.pathSeparator + cp;
         adkVersion100 = cp.contains("google-adk-1.0.0.jar");
         Path output = Files.createTempFile(Path.of("target"), "adk-e2e-", ".log");
@@ -424,5 +425,99 @@ class GoogleAdkE2ETest {
         String everything = spans.toString();
         for (String content : List.of(PROMPT, ANSWER, TOOL_RESULT, "Kyoto", "test-secret-key")) assertFalse(everything.contains(content), content + " in " + everything);
         assertEquals("11", String.valueOf(attributes(named("call_llm").get(0)).get("gen_ai.usage.input_tokens")), "counts stay");
+
+    // ---- TracedLlm and TracedTool beside the agent ------------------------------------------------------------
+
+    static final String SKIP = "FI_GOOGLE_ADK_SKIP_WRAPPED_CALLS";
+
+    /** The "WRAP" or "OWNID" lines of the child's output: span name, id and parent id. */
+    static List<String[]> idLines(String log, String prefix) {
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("^" + prefix + " (.*) id=(\\w+) parent=(\\w*)(?: trace=(\\w+))?$");
+        List<String[]> out = new ArrayList<>();
+        for (String line : log.lines().toList()) {
+            var m = pattern.matcher(line.trim());
+            if (m.matches()) out.add(new String[]{m.group(1), m.group(2), m.group(3)});
+        }
+        return out;
+    }
+    static List<String[]> withName(List<String[]> lines, String prefix) { return lines.stream().filter(l -> l[0].startsWith(prefix)).toList(); }
+    static Set<String> ids(List<String[]> lines) { return lines.stream().map(l -> l[1]).collect(Collectors.toSet()); }
+
+    /** Each model and tool call goes through the wrappers; the application's own provider records ADK's spans. */
+    @Test void withSkippingOffEachWrappedCallIsTheWrapperSpanAndTheAgentSpan() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(), "none", "wrapped");
+        List<String[]> wrap = idLines(log, "WRAP");
+        assertEquals(2, withName(wrap, "call_llm").size(), log);
+        assertEquals(1, withName(wrap, "execute_tool").size(), log);
+        assertEquals(2, named("call_llm").size(), "the agent's span for each model call: " + spans);
+        assertEquals(1, named("execute_tool").size(), "the agent's span for the tool call: " + spans);
+        assertEquals(5, spans.size(), spans.toString());
+    }
+
+    @Test void withSkippingOnEachWrappedCallIsOnlyTheWrapperSpanAndTheChainOfTheOtherSpansIsIntact() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "wrapped");
+        List<String[]> wrap = idLines(log, "WRAP"), own = idLines(log, "OWNID");
+        // The wrapper's span for each call, with the parent it has always had: ADK's span the application's provider recorded.
+        assertEquals(2, withName(wrap, "call_llm").size(), log);
+        assertEquals(1, withName(wrap, "execute_tool").size(), log);
+        for (String[] w : withName(wrap, "call_llm")) assertTrue(ids(withName(own, "call_llm")).contains(w[2]), "wrapper model span under ADK's model span: " + log);
+        for (String[] w : withName(wrap, "execute_tool")) assertTrue(ids(withName(own, "execute_tool")).contains(w[2]), "wrapper tool span under ADK's tool span: " + log);
+        // The agent adds no second span for them.
+        assertEquals(List.of(), named("call_llm"), spans.toString());
+        assertEquals(List.of(), named("execute_tool"), spans.toString());
+        assertEquals(2, spans.size(), spans.toString());
+        Map<String, Object> invocation = only("invocation"), agent = only("invoke_agent weather_agent");
+        assertNull(invocation.get("parentSpanId"));
+        assertEquals(invocation.get("spanId"), agent.get("parentSpanId"));
+        assertEquals(invocation.get("traceId"), agent.get("traceId"));
+        // The summary the skipped calls would have given their ancestors is kept.
+        Map<String, Object> a = attributes(agent);
+        assertEquals("user-1", a.get("user.id"));
+        assertNotNull(a.get("session.id"));
+        assertEquals(PROMPT, a.get("input.value"));
+        assertEquals(ANSWER, a.get("output.value"));
+        if (!adkVersion100) {
+            Map<String, Object> top = attributes(invocation);
+            assertEquals("user-1", top.get("user.id"));
+            assertNotNull(top.get("session.id"));
+            assertEquals(PROMPT, top.get("input.value"));
+            assertEquals(ANSWER, top.get("output.value"));
+        }
+    }
+
+    /** Only the wrapped model: the tool's span stays, under the nearest span the agent still records. */
+    @Test void withSkippingOnAWrappedModelAloneTheToolSpanKeepsAnExportedParent() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "wrapped-llm");
+        assertEquals(2, withName(idLines(log, "WRAP"), "call_llm").size(), log);
+        assertEquals(List.of(), named("call_llm"), spans.toString());
+        Map<String, Object> tool = tool(), agent = only("invoke_agent weather_agent");
+        assertEquals(agent.get("spanId"), tool.get("parentSpanId"), "no reference to a span that is not exported: " + spans);
+        assertEquals(3, spans.size(), spans.toString());
+        assertEquals(ANSWER, attributes(agent).get("output.value"));
+        assertEquals(PROMPT, attributes(agent).get("input.value"));
+    }
+
+    @Test void withSkippingOnAWrappedToolAloneTheModelSpansStay() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "wrapped-tool");
+        assertEquals(1, withName(idLines(log, "WRAP"), "execute_tool").size(), log);
+        assertEquals(List.of(), named("execute_tool"), spans.toString());
+        assertEquals(2, named("call_llm").size(), spans.toString());
+        assertEquals(4, spans.size(), spans.toString());
+        Map<String, Object> agent = only("invoke_agent weather_agent");
+        for (Map<String, Object> call : named("call_llm")) assertEquals(agent.get("spanId"), call.get("parentSpanId"));
+    }
+
+    @Test void withSkippingOnCallsThatDoNotGoThroughTheWrappersAreStillRecorded() throws Exception {
+        run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "single");
+        assertEquals(2, named("call_llm").size(), spans.toString());
+        assertEquals(1, named("execute_tool").size(), spans.toString());
+        assertEquals(5, spans.size(), spans.toString());
+    }
+
+    @Test void theSkipOptionIsInTheConfigurationTheDoctorPrintsAndIsOffByDefault() throws Exception {
+        String off = run("plain", PROMPT, Map.of(), "none", "single");
+        assertTrue(off.contains("\"" + SKIP + "\":\"false\""), off);
+        String on = run("plain", PROMPT, Map.of(SKIP, "true"), "none", "single");
+        assertTrue(on.contains("\"" + SKIP + "\":\"true\""), on);
     }
 }
