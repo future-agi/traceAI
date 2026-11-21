@@ -88,3 +88,30 @@ def test_the_scanner_ignores_words_that_only_contain_a_banned_word():
 def test_clear_text_spellings_are_caught():
     for spelling in ("clear_text", "clear-text", "clear text", "cleartext", "Clear_Text"):
         assert "cleartext" in banned(f"x {spelling} y"), spelling
+
+
+# ---- the tests of the plain channel read the same way ------------------------------------------------------------
+
+PLAIN_CHANNEL_TESTS = [
+    "test_plain_channel_adapters.py", "test_plain_channel_fresh_adapter.py", "test_plain_channel_isolated_sender.py",
+    "test_plain_channel_sender_type.py", "test_plaintext_post_build_session.py",
+]
+
+
+@pytest.mark.parametrize("module", PLAIN_CHANNEL_TESTS)
+def test_the_docstrings_comments_and_names_of_the_plain_channel_tests_use_the_public_wording(module):
+    assert python_text((ROOT / "tests" / module).read_text()) == {}
+
+
+def test_each_changelog_bullet_that_names_the_proxied_code_carries_a_breaking_label():
+    section = changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.5.2")
+    bullets = [line for line in section.splitlines() if line.startswith("- ") and "`proxied`" in line]
+    assert len(bullets) >= 4 and [b[:60] for b in bullets if "Breaking:" not in b] == []
+
+
+def test_the_changelog_names_why_a_futures_session_is_refused_and_the_user_action_for_each_refusal():
+    section = changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.5.2")
+    assert "`requests_futures.FuturesSession` is refused because it overrides `request`, `send` and `prepare_request`" in section
+    for phrase in ("a custom `auth` callable", "routing function replaced on the session or adapter object itself",
+                   "`requests.Session` subclass that overrides a routing function"):
+        assert phrase in section, phrase

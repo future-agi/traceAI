@@ -18,7 +18,7 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 
 import oracle_conformance as oc
 from fi_instrumentation import otel
-from test_plaintext_post_build_session import BASE, OPT_IN, LeakyAdapter, _env, _leak
+from test_plaintext_post_build_session import BASE, OPT_IN, LeakyAdapter, _env, _stray
 
 SUCCESS = SpanExportResult.SUCCESS
 
@@ -133,7 +133,7 @@ def test_a_sender_changed_in_place_after_the_build_sends_nothing(change, listene
                 assert listeners.measure() == {"dialed": None, "marker_bytes": 0}
                 return
             elif change == "hook":
-                sender.hooks["response"].append(lambda response, **kwargs: _leak(response.request, listeners.a.port))
+                sender.hooks["response"].append(lambda response, **kwargs: _stray(response.request, listeners.a.port))
             else:
                 sender.mount("http://", LeakyAdapter(listeners.a.port))
             assert exporter.export([oc.one_span()]) == SpanExportResult.FAILURE
@@ -153,15 +153,15 @@ def _patched(owner, name, port):
         return original_prepare(session, requests.Request(method, url, headers=kwargs.get("headers"), data=kwargs.get("data")))
 
     if (owner, name) == ("Session", "request"):
-        return lambda self, method, url, **kwargs: _leak(prepared(self, method, url, kwargs), port)
+        return lambda self, method, url, **kwargs: _stray(prepared(self, method, url, kwargs), port)
     if (owner, name) == ("Session", "prepare_request"):
         def patched(self, request):
-            _leak(original(self, request), port)
+            _stray(original(self, request), port)
         return patched
     if (owner, name) == ("Session", "get_adapter"):
         return lambda self, url: LeakyAdapter(port)
     # Session.send, HTTPAdapter.send and HTTPAdapter.get_connection_with_tls_context all receive the prepared request first.
-    return lambda self, request, *args, **kwargs: _leak(request, port)
+    return lambda self, request, *args, **kwargs: _stray(request, port)
 
 
 PATCHES = [("Session", "request"), ("Session", "send"), ("Session", "prepare_request"), ("Session", "get_adapter"),
@@ -216,7 +216,7 @@ class Hook:
 
     def __call__(self, response, **kwargs):
         self.calls += 1
-        _leak(response.request, self.port)
+        _stray(response.request, self.port)
 
 
 def test_a_session_with_a_response_hook_is_refused_on_a_plain_channel(listeners):
@@ -230,7 +230,7 @@ def test_a_session_with_a_response_hook_is_refused_on_a_plain_channel(listeners)
     assert listeners.measure() == {"dialed": None, "marker_bytes": 0}
 
 
-def test_a_hook_added_to_the_callers_session_after_the_build_never_runs(listeners):
+def test_a_hook_added_to_the_callers_session_after_the_build_does_not_run(listeners):
     listeners.reset()
     caller = requests.Session()
     hook = Hook(listeners.a.port)
@@ -314,7 +314,7 @@ def _mutations(listeners):
     return {
         "proxies": lambda s: setattr(s, "proxies", {"http": _proxy(listeners)}),
         "an adapter mounted": lambda s: s.mount("http://", LeakyAdapter(listeners.a.port)),
-        "send replaced on the object": lambda s: setattr(s, "send", lambda request, **kwargs: _leak(request, listeners.a.port)),
+        "send replaced on the object": lambda s: setattr(s, "send", lambda request, **kwargs: _stray(request, listeners.a.port)),
         "a response hook": lambda s: s.hooks["response"].append(Hook(listeners.a.port)),
     }
 

@@ -1,7 +1,7 @@
 """On a plain channel that carries Future AGI keys the sender is always ``requests.Session`` itself, and every container it holds is
 read as the plain type ``requests`` uses.
 
-A ``requests.Session`` subclass passed as ``session=`` never has one of its own methods run to send (a ``post`` that rewrites the
+A ``requests.Session`` subclass passed as ``session=`` has none of its own methods run to send (a ``post`` that rewrites the
 URL or adds a header): the isolated sender is built as ``requests.Session()`` and carries over only the settings that are
 inspected. On a channel with TLS the session the caller passed is used as built. The ``adapters`` and ``proxies`` of the sender are
 read as a ``dict`` or ``OrderedDict`` by direct iteration: a subclass that shows less than it holds fails the export. Marker key
@@ -55,7 +55,7 @@ def _subclass(verb, port=None):
     return Verbose
 
 
-# ---- a caller's session subclass never sends on a plain channel -------------------------------------------------------------
+# ---- a caller's session subclass is not used to send on a plain channel -------------------------------------------------------------
 
 @pytest.mark.parametrize("rewrite", [True, False], ids=["rewrites the url to a proxy", "adds nothing"])
 @pytest.mark.parametrize("verb", VERBS)

@@ -36,7 +36,7 @@ def _clean_warnings():
     otel._PLAIN_TEXT_WARNED.clear()
 
 
-def _leak(request, port):
+def _stray(request, port):
     """What a caller's own transport might do: write the whole prepared request to a proxy sink."""
     head = f"{request.method} {request.url} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in request.headers.items())
     body = request.body or b""
@@ -59,7 +59,7 @@ class LeakyAdapter(requests.adapters.BaseAdapter):
         self.port = port if port is not None else type(self).port
 
     def send(self, request, **kwargs):
-        _leak(request, self.port)
+        _stray(request, self.port)
 
     def close(self):
         return None
@@ -80,12 +80,12 @@ def _mount_adapter(session, ports):
 
 
 def _patch_session_send(session, ports):
-    session.send = lambda request, **kwargs: _leak(request, ports["A"])
+    session.send = lambda request, **kwargs: _stray(request, ports["A"])
 
 
 def _patch_adapter_send(session, ports):
     adapter = session.get_adapter("http://example.com/")
-    adapter.send = lambda request, **kwargs: _leak(request, ports["A"])
+    adapter.send = lambda request, **kwargs: _stray(request, ports["A"])
 
 
 def _auth_hook(session, ports):
@@ -170,7 +170,7 @@ def test_with_the_copy_and_the_judgement_taken_out_the_changed_session_puts_mark
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
     if hasattr(OTLPSpanExporter(endpoint="http://127.0.0.1:1/v1/traces"), "_session"):
-        pytest.skip("this release copies the session it is given, so a change to the caller's session never reaches what sends")
+        pytest.skip("this release copies the session it is given, so a change to the caller's session does not reach what sends")
     with mock.patch.object(otel, "_isolated_session", lambda session, *a, **k: session), \
             mock.patch.object(otel, "_sender_is_sound", lambda *a, **k: True):
         code, result, measured, (a, b) = _export(listeners, CHANGES[name])
