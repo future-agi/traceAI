@@ -42,6 +42,7 @@ class HttpsProxyTest < Minitest::Test
     def target = @target ||= issue("/CN=#{TARGET_HOST}", "DNS:#{TARGET_HOST}", issuer: ca)
     def wrong_name = @wrong_name ||= issue('/CN=elsewhere.test', 'DNS:elsewhere.test', issuer: ca)
     def untrusted = @untrusted ||= issue("/CN=#{TARGET_HOST}", "DNS:#{TARGET_HOST}", issuer: other_ca)
+    def ip_target = @ip_target ||= issue('/CN=ip-target', 'IP:10.1.2.3', issuer: ca)
     def proxy = @proxy ||= issue('/CN=localhost', 'DNS:localhost,IP:127.0.0.1', issuer: ca)
     def proxy_untrusted = @proxy_untrusted ||= issue('/CN=localhost', 'DNS:localhost,IP:127.0.0.1', issuer: other_ca)
   end
@@ -166,6 +167,43 @@ class HttpsProxyTest < Minitest::Test
     end
   end
 
+  # A proxy that answers CONNECT as the block says, and keeps every byte the client sends.
+  class RawProxy
+    attr_reader :port
+    def initialize(&behaviour)
+      @server = TCPServer.new('127.0.0.1', 0); @port = @server.addr[1]
+      @behaviour = behaviour; @received = +''.b; @mutex = Mutex.new; @accepted = Queue.new
+      @thread = Thread.new do
+        loop do
+          client = @server.accept
+          @accepted << true
+          Thread.new(client) { |io| serve(io) }
+        end
+      rescue IOError, SystemCallError
+        nil
+      end
+      @thread.report_on_exception = false
+    end
+
+    def accepted = @accepted.size
+    def received = @mutex.synchronize { @received.dup }
+
+    def serve(io)
+      head = +''.b
+      head << io.readpartial(1) until head.end_with?("\r\n\r\n")
+      @mutex.synchronize { @received << head }
+      @behaviour.call(io) { |data| @mutex.synchronize { @received << data.b } }
+    rescue IOError, SystemCallError, EOFError
+      nil
+    ensure
+      io.close rescue nil
+    end
+
+    def stop
+      @server.close; @thread.kill; @thread.join
+    end
+  end
+
   def setup
     PROXY_ENV.each { |name| ENV.delete(name) }
     A::KeyTransport.reset_warning
@@ -208,7 +246,7 @@ class HttpsProxyTest < Minitest::Test
         real = socket_class.method(:tcp)
         mapped = lambda do |host, port, **options|
           attempts << [host, port]
-          real.call(host == TARGET_HOST ? '127.0.0.1' : host, port, **options)
+          real.call([TARGET_HOST, '10.1.2.3'].include?(host) ? '127.0.0.1' : host, port, **options)
         end
         socket_class.stub(:tcp, mapped) { result = exporter.export([span.to_span_data], timeout: timeout) }
       end
@@ -484,5 +522,181 @@ class HttpsProxyTest < Minitest::Test
     assert_equal 1, attempts.size
     assert_includes err, 'redirect'
     refute_leaked err
+  end
+
+  # ---- NO_PROXY as Ruby reads it (URI::Generic.use_proxy?), for the targets this exporter can name ----
+
+  def export_via_proxy(target_base, pair, no_proxy: nil)
+    trust(Pki.ca)
+    target = track(TlsTarget.new(pair))
+    proxy = proxy_for(target)
+    ENV['HTTPS_PROXY'] = "http://127.0.0.1:#{proxy.port}"
+    ENV['NO_PROXY'] = no_proxy if no_proxy
+    result, attempts, err = export_to(target_base.call(target.port))
+    [result, attempts, err, proxy, target]
+  end
+
+  def test_an_ip_target_inside_a_no_proxy_cidr_goes_direct
+    result, attempts, err, proxy, = export_via_proxy(->(port) { "https://10.1.2.3:#{port}" }, Pki.ip_target, no_proxy: '10.0.0.0/8')
+    assert_equal 0, result, err
+    assert_equal [['10.1.2.3', attempts.first.last]], attempts
+    assert_equal 0, proxy.accepted
+  end
+
+  def test_an_ip_target_equal_to_a_no_proxy_address_goes_direct_and_one_outside_a_cidr_does_not
+    result, _attempts, err, proxy, = export_via_proxy(->(port) { "https://10.1.2.3:#{port}" }, Pki.ip_target, no_proxy: 'other.test, 10.1.2.3')
+    assert_equal 0, result, err
+    assert_equal 0, proxy.accepted
+    result, attempts, err, proxy, = export_via_proxy(->(port) { "https://10.1.2.3:#{port}" }, Pki.ip_target, no_proxy: '192.168.0.0/16,10.1.0.0/24')
+    assert_equal 0, result, err
+    assert_equal [['127.0.0.1', proxy.port]], attempts
+    assert_equal 1, proxy.accepted
+  end
+
+  def test_an_ip_target_is_not_matched_by_a_no_proxy_cidr_with_a_port_that_differs
+    _result, attempts, _err, proxy, = export_via_proxy(->(port) { "https://10.1.2.3:#{port}" }, Pki.ip_target, no_proxy: '10.0.0.0/8:1')
+    assert_equal [['127.0.0.1', proxy.port]], attempts
+  end
+
+  def test_a_leading_dot_matches_subdomains_only_and_a_star_is_not_special
+    ['.collector.test', '*', '*.test', '.test.'].each do |entry|
+      result, attempts, err, proxy, = export_via_proxy(->(port) { "https://#{TARGET_HOST}:#{port}" }, Pki.target, no_proxy: entry)
+      assert_equal 0, result, "#{entry}: #{err}"
+      assert_equal [['127.0.0.1', proxy.port]], attempts, "#{entry} was taken for a match"
+    end
+  end
+
+  def test_a_bare_no_proxy_name_matches_the_host_and_its_subdomains
+    result, attempts, = export_via_proxy(->(port) { "https://#{TARGET_HOST}:#{port}" }, Pki.target, no_proxy: 'test, collector.test')
+    assert_equal 0, result
+    assert_equal [[TARGET_HOST, attempts.first.last]], attempts
+    result, attempts, = export_via_proxy(->(port) { "https://#{TARGET_HOST}:#{port}" }, Pki.target, no_proxy: 'ctor.test')
+    assert_equal 0, result
+    assert_equal '127.0.0.1', attempts.first.first, 'a name that only ends with the same letters is not a match'
+  end
+
+  # ---- a bad proxy value never disables the agent ----
+
+  def test_a_proxy_value_that_is_not_valid_text_is_refused_value_free_and_the_exporter_still_starts
+    trust(Pki.ca)
+    target = target_server
+    ["http://\xFF\xFE.invalid:3128", "\xC3\x28"].each do |value|
+      A::KeyTransport.reset_warning
+      ENV['HTTPS_PROXY'] = value.b.force_encoding('UTF-8')
+      result, attempts, err = export_to("https://#{TARGET_HOST}:#{target.port}")
+      assert_equal 1, result, value.inspect
+      assert_empty attempts, value.inspect
+      assert_includes err, 'proxy unsupported', value.inspect
+    end
+    assert_equal 0, target.requests.size
+  end
+
+  def test_a_no_proxy_value_that_is_not_valid_text_never_disables_the_exporter
+    trust(Pki.ca)
+    target = target_server
+    ENV['HTTPS_PROXY'] = 'http://127.0.0.1:9'
+    ENV['NO_PROXY'] = "\xFF\xFE".b.force_encoding('UTF-8')
+    result, attempts, err = export_to("https://#{TARGET_HOST}:#{target.port}")
+    assert_equal 1, result
+    assert_empty attempts
+    assert_includes err, 'proxy unsupported'
+  end
+
+  # ---- every proxy failure is one value-free warning ----
+
+  # The agent's own threads are found by where they run, so the test doubles' threads are not counted.
+  def relay_threads
+    Thread.list.select { |thread| thread.alive? && thread.backtrace.to_a.any? { |line| line.include?('proxy_tunnel.rb') } }
+  end
+
+  def assert_one_proxy_warning(err, *values)
+    assert_equal 1, err.scan('refused by the key transport check').size, err
+    assert_includes err, 'proxy refused'
+    refute_leaked err, *values
+  end
+
+  def test_a_proxy_that_cannot_be_reached_is_one_warning
+    trust(Pki.ca)
+    target = target_server
+    closed = TCPServer.new('127.0.0.1', 0); port = closed.addr[1]; closed.close
+    ENV['HTTPS_PROXY'] = "http://proxy-user:secret-pass@127.0.0.1:#{port}"
+    result, _attempts, err = export_to("https://#{TARGET_HOST}:#{target.port}")
+    assert_equal 1, result
+    assert_one_proxy_warning(err, 'proxy-user', 'secret-pass', port.to_s)
+    assert_equal 0, target.requests.size
+  end
+
+  def malicious_proxy_run(timeout: 3, &behaviour)
+    trust(Pki.ca)
+    target = target_server
+    proxy = track(RawProxy.new(&behaviour))
+    ENV['HTTPS_PROXY'] = "http://proxy-user:secret-pass@127.0.0.1:#{proxy.port}"
+    result, attempts, err = export_to("https://#{TARGET_HOST}:#{target.port}", timeout: timeout)
+    assert_empty relay_threads, 'a relay thread was left running'
+    assert_equal 1, result
+    assert_equal [['127.0.0.1', proxy.port]], attempts, 'no direct dial'
+    assert_equal 0, target.requests.size
+    received = proxy.received
+    refute_includes received, KEY
+    refute_includes received, 'X-Api-Key'
+    refute_includes received.downcase, 'x-secret-key'
+    refute_includes err, 'proxy-user'
+    refute_includes err, 'secret-pass'
+    [err, proxy, received]
+  end
+
+  def test_a_proxy_that_closes_without_answering_is_one_warning
+    err, = malicious_proxy_run { |_io| nil }
+    assert_one_proxy_warning(err)
+  end
+
+  def test_a_redirect_answer_to_connect_is_a_redirect_refusal
+    err, = malicious_proxy_run { |io| io.write "HTTP/1.1 302 Found\r\nLocation: http://elsewhere.test/\r\nContent-Length: 0\r\n\r\n" }
+    assert_equal 1, err.scan('refused by the key transport check').size, err
+    assert_includes err, 'redirect'
+    refute_includes err, 'elsewhere'
+  end
+
+  def test_an_oversized_answer_head_is_one_warning
+    err, = malicious_proxy_run do |io|
+      io.write "HTTP/1.1 200 Connection established\r\n"
+      20.times { io.write "X-Padding: #{'a' * 1000}\r\n" }
+      sleep 0.3
+    end
+    assert_one_proxy_warning(err)
+  end
+
+  def test_a_slow_answer_head_times_out_with_one_warning_and_within_the_deadline
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    err, = malicious_proxy_run(timeout: 1) { |io| io.write 'HTTP/1.1 200 Conn'; sleep 5 }
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 3
+    assert_one_proxy_warning(err)
+  end
+
+  def test_extra_bytes_after_the_200_make_the_destination_handshake_fail_with_one_warning
+    err, = malicious_proxy_run { |io| io.write "HTTP/1.1 200 OK\r\n\r\nGARBAGE-NOT-A-TLS-RECORD"; sleep 0.3 }
+    assert_equal 1, err.scan('refused by the key transport check').size, err
+  end
+
+  def test_an_https_proxy_that_refuses_connect_leaves_no_thread_and_one_warning
+    trust(Pki.ca)
+    target = target_server
+    proxy = proxy_for(target, tls: Pki.proxy, status: 407)
+    ENV['HTTPS_PROXY'] = "https://proxy-user:secret-pass@127.0.0.1:#{proxy.port}"
+    result, attempts, err = export_to("https://#{TARGET_HOST}:#{target.port}")
+    assert_equal 1, result
+    assert_equal [['127.0.0.1', proxy.port]], attempts
+    assert_empty relay_threads
+    assert_one_proxy_warning(err, 'proxy-user', 'secret-pass')
+  end
+
+  def test_the_relay_of_an_https_proxy_is_stopped_and_joined_when_the_export_ends
+    trust(Pki.ca)
+    target = target_server
+    proxy = proxy_for(target, tls: Pki.proxy)
+    ENV['HTTPS_PROXY'] = "https://127.0.0.1:#{proxy.port}"
+    result, = export_to("https://#{TARGET_HOST}:#{target.port}")
+    assert_equal 0, result
+    assert_empty relay_threads, 'the relay thread outlived the export'
   end
 end
