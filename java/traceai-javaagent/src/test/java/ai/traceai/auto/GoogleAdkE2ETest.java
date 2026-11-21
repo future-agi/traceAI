@@ -21,6 +21,11 @@ class GoogleAdkE2ETest {
 
     /** ADK 1.0.0 ends the invocation span before the agent span it contains, so that span cannot carry what the agent span reports. */
     boolean adkVersion100;
+    /** The child's main class: AdkApp (a stub model), or AdkGeminiApp (ADK's own Gemini client). */
+    String appClass = "ai.traceai.googleadk.AdkApp";
+    final java.util.concurrent.atomic.AtomicInteger geminiCalls = new java.util.concurrent.atomic.AtomicInteger();
+    final List<String> geminiBodies = new CopyOnWriteArrayList<>();
+    final List<String> geminiRequests = new CopyOnWriteArrayList<>();
     /** A directory added to the child's class path, or null. */
     Path extraClasspath;
     HttpServer server;
@@ -35,6 +40,19 @@ class GoogleAdkE2ETest {
         server.createContext("/v1/chat/completions", exchange -> {
             exchange.getRequestBody().readAllBytes(); modelCalls.incrementAndGet();
             byte[] body = AgentE2ETest.BASIC.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) { out.write(body); }
+        });
+        // The Gemini generateContent REST shape that google-genai sends: POST {baseUrl}/v1beta/models/{model}:generateContent.
+        server.createContext("/v1beta/models/", exchange -> {
+            String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            geminiCalls.incrementAndGet(); geminiBodies.add(request);
+            geminiRequests.add(exchange.getRequestMethod() + " " + exchange.getRequestURI() + " key=" + exchange.getRequestHeaders().getFirst("x-goog-api-key"));
+            String part = request.contains("functionResponse")
+                ? "{\"text\":\"" + ANSWER + "\"}"
+                : "{\"functionCall\":{\"name\":\"weather\",\"args\":{\"city\":\"Kyoto\"},\"id\":\"call-1\"}}";
+            byte[] body = ("{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[" + part + "]},\"finishReason\":\"STOP\"}],"
+                + "\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":7,\"totalTokenCount\":18}}").getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.length);
             try (var out = exchange.getResponseBody()) { out.write(body); }
         });
@@ -67,7 +85,7 @@ class GoogleAdkE2ETest {
         adkVersion100 = cp.contains("google-adk-1.0.0.jar");
         Path output = Files.createTempFile(Path.of("target"), "adk-e2e-", ".log");
         List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-javaagent:" + agent,
-            "-cp", cp, "ai.traceai.googleadk.AdkApp", mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt, send, scenario));
+            "-cp", cp, appClass, mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt, send, scenario));
         ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         Map<String, String> env = pb.environment(); env.keySet().removeIf(k -> k.startsWith("FI_") || k.startsWith("OTEL_") || k.startsWith("ADK_"));
         env.put("FI_CONFIG_FILE", "target/no-e2e-config.toml"); env.put("FI_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort());
@@ -341,5 +359,70 @@ class GoogleAdkE2ETest {
     @Test void doctorListsTheIntegration() throws Exception {
         String log = run("plain", PROMPT, Map.of());
         assertTrue(log.lines().anyMatch(l -> l.startsWith("DOCTOR ") && l.contains("\"google-adk\":\"instrumented\"")), log);
+    }
+
+    // ---- ADK's own Gemini model client (google-genai) against a local stub of generateContent ---------------------------------
+
+    /**
+     * ADK's own Gemini client (AdkGeminiApp: Gemini built on google-genai's Client, with HttpOptions.baseUrl pointing at the loopback stub
+     * and the API key given to the builder; no environment variable needed) is a real client path, so this is the real thing.
+     *
+     * <p>Findings by running it on ADK 1.15.0 (google-genai 1.77.0): see THREAD_FINDINGS below; the model's HTTP call is a single
+     * request per model call, and the wire capture records no second span for it.
+     */
+    String runGemini(String mode, String prompt, Map<String, String> options) throws Exception {
+        appClass = "ai.traceai.googleadk.AdkGeminiApp";
+        try { return run(mode, prompt, options); } finally { appClass = "ai.traceai.googleadk.AdkApp"; }
+    }
+
+    @Test void adkOwnGeminiClientModelCallsAreOneSpanEachAndTheirHttpCallsAreNotTracedASecondTime() throws Exception {
+        String log = runGemini("plain", PROMPT, Map.of());
+        // Thread findings (ADK 1.15.0, google-genai 1.77.0, observed by AdkGeminiApp): ADK's Gemini is subscribed on the caller's thread and
+        // blocks it for the answer (the answer is delivered on that same thread). google-genai's async client enqueues the OkHttp call
+        // from that thread; OkHttp runs it on its own dispatcher thread ("OkHttp <url>", RealCall$AsyncCall.run), which carries no
+        // OpenTelemetry context. The agent reads the context where the call is enqueued (the subscriber's thread, inside the call_llm
+        // scope), so the hop does not matter: the HTTP call is not a second span.
+        List<String> threads = log.lines().filter(l -> l.startsWith("THREAD-")).toList();
+        assertTrue(threads.stream().anyMatch(l -> l.startsWith("THREAD-SUBSCRIBE main")), threads.toString());
+        assertTrue(threads.contains("THREAD-HTTP main in RealCall.enqueue"), "the subscriber's thread enqueues the OkHttp call: " + threads);
+        assertTrue(threads.contains("THREAD-HTTP OkHttp  in RealCall.getResponseWithInterceptorChain$okhttp"), "an OkHttp dispatcher thread runs it: " + threads);
+        assertFalse(threads.contains("THREAD-HTTP main in RealCall.getResponseWithInterceptorChain$okhttp"), "not the subscriber's thread: " + threads);
+        assertEquals(2, geminiCalls.get(), "the real Gemini client made its two HTTP calls: " + geminiRequests);
+        assertEquals(0, modelCalls.get());
+        for (String request : geminiRequests) assertTrue(request.startsWith("POST /v1beta/models/gemini-2.0-flash:generateContent"), request);
+        Map<String, Object> invocation = only("invocation"), agent = only("invoke_agent weather_agent"), tool = tool();
+        List<Map<String, Object>> llm = named("call_llm");
+        assertEquals(2, llm.size(), "one model span per model call: " + spans);
+        assertEquals(List.of(), byLayer("wire"), "the model's own HTTP call is not traced a second time: " + spans);
+        assertEquals(5, spans.size(), spans.toString());
+        assertNull(invocation.get("parentSpanId"));
+        assertEquals(invocation.get("spanId"), agent.get("parentSpanId"));
+        for (Map<String, Object> call : llm) assertEquals(agent.get("spanId"), call.get("parentSpanId"));
+        assertTrue(llm.stream().anyMatch(s -> s.get("spanId").equals(tool.get("parentSpanId"))), "the tool runs under the call that asked for it");
+        for (Map<String, Object> span : spans) assertEquals(invocation.get("traceId"), span.get("traceId"));
+        Map<String, Object> second = llm.stream().map(GoogleAdkE2ETest::attributes).filter(x -> x.containsKey("gen_ai.input.messages.3.message.role")).findFirst().orElseThrow();
+        assertEquals("LLM", second.get("gen_ai.span.kind"));
+        assertEquals(PROMPT, second.get("gen_ai.input.messages.1.message.content"));
+        assertEquals(ANSWER, second.get("gen_ai.output.messages.0.message.content"));
+        assertEquals("11", String.valueOf(second.get("gen_ai.usage.input_tokens")));
+        // The API key the client sent is a known secret: it is in no span and in no export.
+        assertTrue(geminiRequests.get(0).contains("key=test-secret-key"), "control: the client sent the key: " + geminiRequests);
+        assertFalse(spans.toString().contains("test-secret-key"), spans.toString());
+        for (String bytes : exported) assertFalse(bytes.contains("test-secret-key"), bytes);
+    }
+
+    @Test void adkOwnGeminiClientHonoursTheHideSettingsAndReplacesKnownSecrets() throws Exception {
+        runGemini("plain", PROMPT + " key=test-secret-key", Map.of());
+        assertEquals(List.of(), byLayer("wire"), spans.toString());
+        assertFalse(spans.toString().contains("test-secret-key"), spans.toString());
+        assertTrue(spans.toString().contains(PROMPT), spans.toString());
+        spans.clear(); geminiCalls.set(0);
+        runGemini("plain", PROMPT, Map.of("FI_HIDE_INPUTS", "true", "FI_HIDE_OUTPUTS", "true"));
+        assertEquals(2, geminiCalls.get());
+        assertEquals(5, spans.size(), spans.toString());
+        assertEquals(List.of(), byLayer("wire"), spans.toString());
+        String everything = spans.toString();
+        for (String content : List.of(PROMPT, ANSWER, TOOL_RESULT, "Kyoto", "test-secret-key")) assertFalse(everything.contains(content), content + " in " + everything);
+        assertEquals("11", String.valueOf(attributes(named("call_llm").get(0)).get("gen_ai.usage.input_tokens")), "counts stay");
     }
 }
