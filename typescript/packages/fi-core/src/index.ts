@@ -1,3 +1,4 @@
+import "./fi-route"; // registers the SDK-internal route factory for @traceai/auto; not an export
 export { createAutoSpanDelivery, rememberAutoModelCoverage, hasAutoModelCoverage } from "./auto-span-delivery";
 export { createAutoModelOperation, getAutoModelOperation, rememberAutoModelOperation,
   activeAutoModelOperation, withAutoModelOperation, autoModelResponsibility, hasAutoSpanSink, rememberAutoSpanSink, autoModelWireAllowed } from "./auto-span-delivery";

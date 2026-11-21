@@ -1,0 +1,1 @@
+fetch.apply(undefined, ["https://example.invalid/"]);

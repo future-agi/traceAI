@@ -1,0 +1,2 @@
+import * as https from "https";
+https.get("https://example.invalid/");
