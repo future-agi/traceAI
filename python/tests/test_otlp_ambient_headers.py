@@ -58,7 +58,12 @@ def http_sink():
 
 
 @pytest.fixture
-def grpc_sink():
+def grpc_sink(request):
+    # Cases for the HTTP transport do not need gRPC, so they run where it is not installed.
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is not None and callspec.params.get("transport") == "http":
+        yield None, []
+        return
     grpc = pytest.importorskip("grpc")
     pytest.importorskip("opentelemetry.exporter.otlp.proto.grpc.trace_exporter")
     seen = []
@@ -341,3 +346,294 @@ def test_a_grpc_exporter_without_keys_or_environment_headers_is_built(monkeypatc
 
     assert len(seen) == 1
     assert "x-api-key" not in seen[0]
+
+
+def _wrap_parent_init(monkeypatch, base):
+    """Wrap the parent exporter __init__ with a bare (self, *args, **kwargs) function."""
+    original = base.__init__
+
+    def wrapper(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(base, "__init__", wrapper)
+
+
+def _exporter_classes(transport):
+    if transport == "grpc":
+        return otel._GRPCSpanExporter, otel.GRPCSpanExporter
+    return otel._HTTPSpanExporter, otel.HTTPSpanExporter
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_init_pointed_at_the_users_collector_is_built(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    # Future AGI is configured in the environment, but the exporter is given the user's own collector.
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+    base, cls = _exporter_classes(transport)
+    _wrap_parent_init(monkeypatch, base)
+
+    exporter = cls(endpoint=url, headers={"x-user-header": "1"}, timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-user-header") == "1"
+    assert "x-api-key" not in seen[0] and "x-secret-key" not in seen[0], seen
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_init_pointed_at_future_agi_sends_only_sdk_headers(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    _set_env(monkeypatch, "both")
+    base, cls = _exporter_classes(transport)
+    _wrap_parent_init(monkeypatch, base)
+
+    _export_one_span(cls(timeout=5))
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-api-key") == "synthetic-env-key"
+    assert all(name not in seen[0] for name in AMBIENT_NAMES), seen
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_of_unknown_shape_pointed_at_future_agi_is_refused(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    _set_env(monkeypatch, "both")
+    base, cls = _exporter_classes(transport)
+
+    def unknown_layout(self, endpoint=None, *args, **kwargs):
+        self._endpoint = endpoint
+
+    monkeypatch.setattr(base, "__init__", unknown_layout)
+    _wrap_parent_init(monkeypatch, base)
+
+    with pytest.raises(otel.UnsupportedOTLPExporterError):
+        cls()
+    assert seen == []
+
+
+class _InitCalls:
+    """Counts the constructions of the parent exporter and can redirect its endpoint."""
+
+    def __init__(self, monkeypatch, base, redirect_to=None):
+        self.count = 0
+        original = base.__init__
+
+        def wrapper(exporter, *args, **kwargs):
+            self.count += 1
+            if redirect_to is not None:
+                if args:
+                    args = (redirect_to, *args[1:])
+                else:
+                    kwargs["endpoint"] = redirect_to
+            original(exporter, *args, **kwargs)
+
+        monkeypatch.setattr(base, "__init__", wrapper)
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_that_resolves_to_the_users_collector_is_built_once_without_keys(
+    monkeypatch, caplog, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+    base, cls = _exporter_classes(transport)
+    calls = _InitCalls(monkeypatch, base, redirect_to=url)
+
+    with caplog.at_level("WARNING"):
+        if transport == "http":
+            import requests
+
+            session = requests.Session()
+            exporter = cls(session=session, timeout=5)
+            held = {k.lower() for k in session.headers}
+        else:
+            exporter = cls(timeout=5)
+            held = {str(k).lower() for k, _ in (exporter._headers or ())}
+        _export_one_span(exporter)
+
+    assert calls.count == 1
+    assert "x-api-key" not in held and "x-secret-key" not in held, held
+    assert not [r for r in caplog.records if "instrument" in r.getMessage().lower()], caplog.records
+    assert len(seen) == 1, seen
+    assert "x-api-key" not in seen[0] and "x-secret-key" not in seen[0], seen
+
+
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_wrapped_exporter_that_resolves_to_future_agi_is_built_once_with_sdk_headers(
+    monkeypatch, http_sink, grpc_sink, transport
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    _set_env(monkeypatch, "both")
+    base, cls = _exporter_classes(transport)
+    calls = _InitCalls(monkeypatch, base)
+
+    _export_one_span(cls(timeout=5))
+
+    assert calls.count == 1
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-api-key") == "synthetic-env-key"
+    assert all(name not in seen[0] for name in AMBIENT_NAMES), seen
+
+
+def test_every_positional_grpc_argument_passes_through_a_hidden_wrapper(monkeypatch, grpc_sink):
+    import inspect
+
+    import grpc
+
+    url, seen = grpc_sink
+    base = otel._GRPCSpanExporter
+    accepted = list(inspect.signature(base).parameters.values())
+    positional = [
+        p.name
+        for p in accepted
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY)
+    ]
+    values = {
+        "endpoint": url,
+        "insecure": True,
+        "credentials": None,
+        "headers": {"x-user-header": "1"},
+        "timeout": 5,
+        "compression": None,
+        "channel_options": (("grpc.max_send_message_length", 1_000_000),),
+        "retryable_error_codes": (grpc.StatusCode.UNAVAILABLE,),
+    }
+    args = [values[name] for name in positional]
+    _wrap_parent_init(monkeypatch, base)
+    monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+
+    exporter = otel.GRPCSpanExporter(*args)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, (positional, seen)
+    assert seen[0].get("x-user-header") == "1"
+
+
+def _header_shapes():
+    return {
+        "mapping": lambda: {"X-Custom": "v"},
+        "pairs": lambda: [("X-Custom", "v")],
+        "one-shot generator": lambda: (pair for pair in [("X-Custom", "v")]),
+    }
+
+
+@pytest.mark.parametrize("shape", list(_header_shapes()))
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_caller_headers_in_any_shape_reach_a_collector_that_is_not_future_agi(
+    monkeypatch, http_sink, grpc_sink, transport, shape
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    exporter = cls(endpoint=url, headers=_header_shapes()[shape](), timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-custom") == "v"
+    assert "x-api-key" not in seen[0] and "x-secret-key" not in seen[0], seen
+
+
+@pytest.mark.parametrize("shape", list(_header_shapes()))
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_caller_headers_in_any_shape_reach_future_agi_with_the_sdk_headers(
+    monkeypatch, http_sink, grpc_sink, transport, shape
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    _point_at(monkeypatch, transport, url)
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+
+    _export_one_span(cls(headers=_header_shapes()[shape](), timeout=5))
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-custom") == "v"
+    assert seen[0].get("x-api-key") == "synthetic-env-key"
+
+
+# (case id, headers argument, expected headers at the collector, names that must be absent)
+_SHAPE_CASES = [
+    ("comma-string", "X-Custom=a=b%20c, Y-Two = 2", {"x-custom": "a=b c", "y-two": "2"}, ()),
+    ("empty-value", {"X-Custom": "", "X-Other": "o"}, {"x-other": "o"}, ()),
+    ("none-value", {"X-Custom": None, "X-Other": "o"}, {"x-other": "o"}, ("x-custom",)),
+    ("blank-duplicate-last", {"X-Custom": "v", "x-custom": ""}, {"x-custom": "v"}, ()),
+    ("blank-duplicate-first", {"x-custom": "", "X-Custom": "v"}, {"x-custom": "v"}, ()),
+    ("blank-duplicate-pairs", [("X-Custom", "v"), ("x-custom", "   ")], {"x-custom": "v"}, ()),
+]
+
+
+@pytest.mark.parametrize("case", _SHAPE_CASES, ids=[c[0] for c in _SHAPE_CASES])
+@pytest.mark.parametrize("future_agi", [False, True], ids=["other-collector", "future-agi"])
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_header_values_and_duplicates_are_sent_the_same_way_on_both_transports(
+    monkeypatch, http_sink, grpc_sink, transport, future_agi, case
+):
+    _, headers, expected, absent = case
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+    if future_agi:
+        _point_at(monkeypatch, transport, url)
+        exporter = cls(headers=headers, timeout=5)
+    else:
+        monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+        monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+        exporter = cls(endpoint=url, headers=headers, timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    for name, value in expected.items():
+        assert seen[0].get(name) == value, (name, seen[0])
+    for name in absent:
+        assert name not in seen[0], (name, seen[0])
+    assert ("x-api-key" in seen[0]) is future_agi
+
+
+@pytest.mark.parametrize("future_agi", [False, True], ids=["other-collector", "future-agi"])
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_a_bytes_header_value_is_sent_as_given(monkeypatch, http_sink, grpc_sink, transport, future_agi):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+    if future_agi:
+        _point_at(monkeypatch, transport, url)
+        exporter = cls(headers={"X-Custom": b"v"}, timeout=5)
+    else:
+        monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+        monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+        exporter = cls(endpoint=url, headers={"X-Custom": b"v"}, timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-custom") in ("v", b"v")
+
+
+@pytest.mark.parametrize("future_agi", [False, True], ids=["other-collector", "future-agi"])
+@pytest.mark.parametrize("transport", ["http", "grpc"])
+def test_explicit_credentials_are_sent_without_the_environment_pair(
+    monkeypatch, http_sink, grpc_sink, transport, future_agi
+):
+    url, seen = _sink(transport, http_sink, grpc_sink)
+    cls = otel.GRPCSpanExporter if transport == "grpc" else otel.HTTPSpanExporter
+    headers = {"X-Api-Key": "caller-key"}
+    if future_agi:
+        _point_at(monkeypatch, transport, url)
+        exporter = cls(headers=headers, timeout=5)
+    else:
+        monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+        monkeypatch.setenv("FI_GRPC_URL", "127.0.0.1:9")
+        exporter = cls(endpoint=url, headers=headers, timeout=5)
+    _export_one_span(exporter)
+
+    assert len(seen) == 1, seen
+    assert seen[0].get("x-api-key") == "caller-key"
+    assert "x-secret-key" not in seen[0], seen

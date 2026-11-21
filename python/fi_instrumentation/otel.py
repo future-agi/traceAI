@@ -1,15 +1,18 @@
 import atexit
+import collections
+import contextlib
 import inspect
 import json
 import logging
 import os
-import sys
+import re
+import socket
 import threading
 import uuid
 import warnings
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import ParseResult, unquote, urlparse, urlsplit
 
 import requests
 from fi_instrumentation.fi_types import (
@@ -127,7 +130,7 @@ def register(
     """Configure and return a Future AGI `TracerProvider`.
 
     Span processors added later with `add_span_processor` run next to the Future AGI
-    exporter, never in place of it. To export somewhere else instead, pass `span_exporter`.
+    exporter, not in place of it. To export somewhere else instead, pass `span_exporter`.
 
     All tuning args below default to `None`, meaning the corresponding OpenTelemetry
     environment variable / upstream default applies (no behavior change when unset).
@@ -600,6 +603,7 @@ class BatchSpanProcessor(_BatchSpanProcessor):
 
 
 _CREDENTIAL_HEADERS = (AUTHORIZATION, "x-api-key", "x-secret-key")
+_FI_KEY_HEADER_NAMES = ("x-api-key", "x-secret-key")
 
 
 def _is_blank(value: Any) -> bool:
@@ -622,7 +626,7 @@ def _with_fi_auth_headers(headers: Any, add_env_keys: bool = True) -> Dict[str, 
     Authorization, X-Api-Key or X-Secret-Key header was passed. A credential
     header with an empty value is dropped rather than treated as a credential,
     so an empty Authorization no longer hides valid environment keys. Keys are
-    lower-cased on both sides, so the request never carries case-variant
+    lower-cased on both sides, so the request carries no case-variant
     duplicates such as ``x-api-key`` and ``X-Api-Key``.
     """
     pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
@@ -630,7 +634,7 @@ def _with_fi_auth_headers(headers: Any, add_env_keys: bool = True) -> Dict[str, 
     for key, value in pairs:
         name = (key.decode() if isinstance(key, bytes) else str(key)).lower()
         # Skip a blank credential before collapsing case variants, so an empty
-        # duplicate can never erase an explicit one and pull in the env pair.
+        # duplicate cannot erase an explicit one and pull in the env pair.
         if name in _CREDENTIAL_HEADERS and _is_blank(value):
             continue
         merged[name] = value
@@ -652,49 +656,407 @@ def _ambient_headers() -> dict[str, str]:
     1.4x, merge them under the headers passed in). They are meant for the
     collector the user configured, which is not necessarily Future AGI.
     """
-    from opentelemetry.util.re import parse_env_headers
-
     found: dict[str, str] = {}
     for var in reversed(_AMBIENT_HEADER_ENV_VARS):
         raw = os.environ.get(var)
         if raw:
-            found.update({k.lower(): v for k, v in parse_env_headers(raw, liberal=True).items()})
+            found.update({k.lower(): v for k, v in _parse_env_headers_quietly(raw).items()})
     return found
 
 
-def _is_future_agi_endpoint(endpoint: str | None) -> bool:
-    """True when ``endpoint`` is a Future AGI endpoint.
-
-    ``endpoint`` is the URL (HTTP) or host:port (gRPC) an exporter resolved. It
-    counts when its host matches FI_TRACES_URL, FI_BASE_URL, FI_GRPC_URL or the
-    Future AGI hosts, with the same port when both name one. Anything else,
-    including no endpoint at all, is a collector the user chose and keeps
-    standard OpenTelemetry environment behaviour.
-    """
-    if not endpoint:
+class _DropRecords(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
         return False
 
-    def _origin(url: str | None) -> tuple[str, int | None] | None:
-        if not url:
-            return None
-        parsed = urlparse(url if "://" in url else f"//{url}")
-        return (parsed.hostname or "").lower(), parsed.port
 
-    known = [
-        get_env_traces_endpoint(),
-        get_env_collector_endpoint(),
-        get_env_grpc_collector_endpoint(),
-        "https://api.futureagi.com",
-        "https://grpc.futureagi.com",
-    ]
-    target = _origin(endpoint)
-    for url in known:
-        origin = _origin(url)
-        if origin and target and origin[0] == target[0] and (
-            origin[1] == target[1] or origin[1] is None or target[1] is None
-        ):
+_PARSER_LOG_LOCK = threading.Lock()
+
+
+def _parse_env_headers_quietly(raw: str) -> Mapping[str, str]:
+    """``opentelemetry.util.re.parse_env_headers`` (liberal) without its log records: for a pair it cannot read it logs the whole
+    environment value, and the value can hold a key."""
+    from opentelemetry.util.re import parse_env_headers
+
+    parser_log = logging.getLogger("opentelemetry.util.re")
+    silence = _DropRecords()
+    with _PARSER_LOG_LOCK:
+        parser_log.addFilter(silence)
+        try:
+            return parse_env_headers(raw, liberal=True)
+        finally:
+            parser_log.removeFilter(silence)
+
+
+def _folds_to_key_header(name: str) -> bool:
+    """Whether ``name`` is a Future AGI key header once case is dropped and ``_`` is read as ``-`` (servers that fold them)."""
+    return name.strip().lower().replace("_", "-") in _FI_KEY_HEADER_NAMES
+
+
+def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | None:
+    """The caller's headers read once into a dict (None when there are none).
+
+    Accepts a mapping, a sequence or one-shot iterator of pairs, or the comma-separated
+    ``name=value`` string gRPC exporters take. With ``lower`` the names are lower-cased, as
+    gRPC requires; values are untouched, and entries whose value is None are left out.
+    """
+    if headers is None:
+        return None
+    if isinstance(headers, str):
+        from opentelemetry.util.re import parse_env_headers
+
+        pairs: Any = parse_env_headers(headers, liberal=True).items()
+    else:
+        pairs = headers.items() if isinstance(headers, Mapping) else headers
+    result: dict[str, Any] = {}
+    given: dict[str, str] = {}  # lower-case name -> the name as it appears in result
+    for key, value in pairs:
+        if value is None:
+            continue
+        name = key.decode() if isinstance(key, bytes) else str(key)
+        folded = name.lower()
+        if folded in given:
+            # Names that differ only in case are one header: a blank duplicate does not replace a value
+            # that was given, and a given value replaces an earlier blank one.
+            if _is_blank(value):
+                continue
+            del result[given[folded]]
+        result[folded if lower else name] = value
+        given[folded] = folded if lower else name
+    return result or None
+
+
+def _caller_headers(headers: Any) -> dict[str, Any]:
+    """The headers a caller passed to an exporter, keyed by lower-case name.
+
+    Read by the same rules as ``_materialize_headers``: names that differ only in case are one header,
+    a blank duplicate does not replace a given value, and a value of None is left out.
+    """
+    return _materialize_headers(headers, lower=True) or {}
+
+
+class UnsupportedFutureAGIEndpointError(ValueError):
+    """Future AGI credentials are refused for an endpoint, a channel or a client.
+
+    ``code`` names the reason: ``disputed_authority``, ``empty_authority``, ``insecure_futureagi_http``,
+    ``insecure_futureagi_grpc``, ``insecure_self_hosted_target``, ``proxied``, ``unverified_endpoint`` or
+    ``key_header_in_environment``. The message names no value.
+    """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
+
+
+_HOST_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?")
+_PLAIN_GRPC_TARGET = re.compile(r"([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]{1,5}))?")
+
+
+def _normalize_host(host: str | None) -> str | None:
+    """A host name in one comparable form, or None when it is not a plain ASCII DNS name or address.
+
+    Lower case, one trailing dot removed, labels of letters, digits and hyphens only. A name
+    that does not normalise matches nothing.
+    """
+    if not host or not host.isascii():
+        return None
+    host = host.lower().removesuffix(".")
+    if host.startswith("[") and host.endswith("]"):
+        return host if re.fullmatch(r"\[[0-9a-f:.]+\]", host) else None
+    labels = host.split(".")
+    return host if host and all(_HOST_LABEL.fullmatch(label) for label in labels) else None
+
+
+_DOT_FORMS = "\u3002\uff0e\uff61"
+
+
+def _host_forms(token: str) -> set[str]:
+    """The spellings of one host token a client may resolve: unescaped, width-folded, dots unified, ``xn--`` labels decoded."""
+    import unicodedata
+
+    forms: set[str] = set()
+    for variant in {token, unquote(token), unicodedata.normalize("NFKC", token), unicodedata.normalize("NFKC", unquote(token))}:
+        text = variant.lower()
+        for dot in _DOT_FORMS:
+            text = text.replace(dot, ".")
+        text = text.rstrip(".")
+        forms.add(text)
+        decoded = []
+        for label in text.split("."):
+            if label.startswith("xn--"):
+                try:
+                    label = unicodedata.normalize("NFKC", label[4:].encode("ascii").decode("punycode")).lower()
+                except (UnicodeError, ValueError):
+                    pass
+            decoded.append(label)
+        forms.add(".".join(decoded))
+    return forms
+
+
+def _names_future_agi_host(endpoint: str, grpc: bool = False) -> bool:
+    """True when the host of ``endpoint``, in any escaping, width or ``xn--`` spelling, is futureagi.com or a subdomain.
+
+    Only the host is read: an HTTP URL's authority, or the whole gRPC target (its grammar can place the host after a
+    prefix). A path, a query, a fragment or a longer name such as ``myfutureagi.corp`` does not count.
+    """
+    if grpc:
+        text = endpoint
+    else:
+        rest = endpoint.split("//", 1)[1] if "//" in endpoint else endpoint
+        text = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    candidates = {text}
+    unescaped = text
+    for _ in range(3):
+        unescaped = unquote(unescaped)
+        candidates.add(unescaped)
+    for candidate in candidates:
+        for token in re.split(r"[@\\:/?#,\s]+", candidate):
+            if token and any(_is_futureagi_host(form) for form in _host_forms(token)):
+                return True
+    return False
+
+
+def _http_origin(endpoint: str | None) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of an http(s) URL on which urlsplit and urllib3 agree, else None.
+
+    The URL carries no userinfo, no backslash and no percent-escape in its authority; the port is
+    explicit or the scheme's default.
+    """
+    if not endpoint or "\\" in endpoint or any(ord(c) < 33 or ord(c) == 127 for c in endpoint):
+        return None
+    try:
+        import urllib3.util
+
+        split = urlsplit(endpoint)
+        parsed = urllib3.util.parse_url(endpoint)
+        scheme = split.scheme.lower()
+        if scheme not in ("http", "https") or "@" in split.netloc or "%" in split.netloc or parsed.auth:
+            return None
+        name = split.hostname
+        host = _normalize_host(f"[{name}]" if name and ":" in name else name)
+        if host is None or host != _normalize_host(parsed.host):
+            return None
+        if split.port != parsed.port:
+            return None
+        return scheme, host, split.port or (80 if scheme == "http" else 443)
+    except (ValueError, ImportError):  # an endpoint the parsers cannot read matches nothing
+        return None
+
+
+def _grpc_target(endpoint: str | None) -> tuple[str, str, int] | None:
+    """(scheme, host, port) of the exact target grpc receives, or None unless it is a plain host[:port].
+
+    The exporters pass ``urlparse(endpoint).netloc`` to grpc when there is one, so that is the string read
+    here; a target-grammar prefix (dns:, ipv4:, unix:, xds: ...), userinfo or a backslash is not plain.
+    """
+    if not endpoint:
+        return None
+    try:
+        parsed = urlsplit(endpoint)
+    except ValueError:
+        return None
+    target = parsed.netloc or endpoint
+    scheme = parsed.scheme.lower() if parsed.netloc else ""
+    match = _PLAIN_GRPC_TARGET.fullmatch(target)
+    if match is None:
+        return None
+    host = _normalize_host(match.group(1))
+    if host is None:
+        return None
+    return scheme, host, int(match.group(2)) if match.group(2) else 443
+
+
+def _known_future_agi_origins(grpc: bool) -> set[tuple[str, int]]:
+    """The (host, port) pairs the Future AGI environment and defaults name.
+
+    For gRPC the port of a host is the one ``FI_GRPC_URL`` names for it, otherwise 443; an endpoint argument and
+    ``FI_GRPC_URL`` are held to the same rule.
+    """
+    known: set[tuple[str, int]] = set()
+    if grpc:
+        named = _grpc_target(get_env_grpc_collector_endpoint())
+        if named:
+            known.add((named[1], named[2]))
+        if not named or named[1] != "grpc.futureagi.com":
+            known.add(("grpc.futureagi.com", 443))
+    else:
+        candidates = [get_env_traces_endpoint(), get_env_collector_endpoint(), "https://api.futureagi.com"]
+        for url in candidates:
+            origin = _http_origin(url)
+            if origin:
+                known.add((origin[1], origin[2]))
+    return known
+
+
+def _is_futureagi_host(host: str) -> bool:
+    """True for futureagi.com and its subdomains; one trailing dot is read as absent."""
+    host = host.lower().removesuffix(".")
+    return host == "futureagi.com" or host.endswith(".futureagi.com")
+
+
+_CREDENTIAL_ESCAPES = ("%5c", "%40")
+
+
+def _authority_text(endpoint: str) -> str:
+    """The authority of a URL or target as written: the text after ``//`` up to ``/``, ``?`` or ``#``, else the leading
+    token of a bare ``host:port``."""
+    rest = endpoint.split("//", 1)[1] if "//" in endpoint else endpoint
+    return re.split(r"[/?#]", rest, maxsplit=1)[0]
+
+
+def _is_disputed(endpoint: str) -> bool:
+    """True when parsers can read the authority of ``endpoint`` differently, so no parser's reading is trusted.
+
+    That is the case for whitespace or control characters, a backslash or ``@`` (userinfo, or text that follows an
+    ``@``) or an escaped backslash or ``@`` in the endpoint, an empty authority that a path follows (the host is not
+    re-read from the path), and a host that ``urlsplit``, ``urllib3`` and the written text read differently.
+    """
+    if any(ord(c) < 33 or ord(c) == 127 for c in endpoint) or "\\" in endpoint or "@" in endpoint:
+        return True
+    lowered = endpoint.lower()
+    if any(escape in lowered for escape in _CREDENTIAL_ESCAPES):
+        return True
+    if "//" in endpoint and not _authority_text(endpoint) and endpoint.split("//", 1)[1].strip("/"):
+        return True
+    if "//" in endpoint:
+        try:
+            import urllib3.util
+
+            hosts = {
+                host.lower().strip("[]").removesuffix(".")
+                for host in (urlsplit(endpoint).hostname or "", urllib3.util.parse_url(endpoint).host or "", _written_host(endpoint) or "")
+            }
+        except Exception:  # a parser that cannot read the endpoint disagrees with the others
+            return True
+        if len(hosts) > 1:
             return True
     return False
+
+
+def _is_env_named(endpoint: str) -> bool:
+    """True when the authority of ``endpoint`` is the authority of ``FI_BASE_URL``, ``FI_TRACES_URL`` or ``FI_GRPC_URL``."""
+    wanted = _authority_text(endpoint)
+    return any(
+        value and _authority_text(value) == wanted
+        for value in (get_env_traces_endpoint(), get_env_collector_endpoint(), get_env_grpc_collector_endpoint())
+    )
+
+
+def _future_agi_decision(endpoint: str | None, grpc: bool = False, named: bool = False) -> str:
+    """``"fi"`` for a Future AGI endpoint, ``"refuse"`` for one that names Future AGI but cannot be
+    verified, ``"other"`` for a collector of the user's own.
+
+    ``endpoint`` is the URL (HTTP) or the target an exporter received or resolved (gRPC; either
+    spelling). It is Future AGI only when it is a plain target on exact host and port the Future AGI
+    environment or defaults name. A Future AGI HTTP host is reached over https only; a gRPC target of any
+    scheme is bound and uses TLS (see ``_force_tls_for_future_agi``). An endpoint whose authority parsers can read
+    differently (see ``_is_disputed``) is refused when it names Future AGI or is the one the environment names
+    (``named``), whichever parser reads it.
+    """
+    if not endpoint:
+        return "other"
+    if (_is_disputed(endpoint) or _has_empty_authority(endpoint)) and (
+        _names_future_agi_host(endpoint, True) or named or _is_env_named(endpoint)
+    ):
+        return "refuse"
+    if grpc:
+        target = _grpc_target(endpoint)
+        host = target[1] if target else None
+        origin = (target[1], target[2]) if target else None
+        plain_http = False
+    else:
+        parsed = _http_origin(endpoint)
+        host = parsed[1] if parsed else None
+        origin = (parsed[1], parsed[2]) if parsed else None
+        plain_http = bool(parsed and parsed[0] == "http")
+    if origin is not None and origin in _known_future_agi_origins(grpc):
+        # A futureagi.com HTTP host is reached over https; a self-hosted base the environment names may use http.
+        return "refuse" if plain_http and _is_futureagi_host(host or "") else "fi"
+    if _names_future_agi_host(endpoint, grpc) or (host is not None and _is_futureagi_host(host)):
+        return "refuse"
+    return "other"
+
+
+def _is_future_agi_endpoint(endpoint: str | None, grpc: bool | None = None) -> bool:
+    """True when ``endpoint`` is a Future AGI endpoint (see _future_agi_decision).
+
+    Without ``grpc`` the endpoint may be either kind: a URL or a plain host:port target.
+    """
+    if grpc is None:
+        return _future_agi_decision(endpoint, False) == "fi" or _future_agi_decision(endpoint, True) == "fi"
+    return _future_agi_decision(endpoint, grpc) == "fi"
+
+
+def _fi_keys_configured(caller_headers: Any = None) -> bool:
+    """True when Future AGI credentials would be sent: from the environment or the caller's headers."""
+    if get_env_fi_auth_header():
+        return True
+    final = {**_ambient_headers(), **_caller_headers(caller_headers)}
+    return any(name in _CREDENTIAL_HEADERS and not _is_blank(value) for name, value in final.items())
+
+
+def _has_empty_authority(endpoint: str) -> bool:
+    """True when the authority of ``endpoint`` names no host: empty, or only a port (``https:///x``, ``http://:4318/x``)."""
+    return re.fullmatch(r"(:[0-9]*)?", _authority_text(endpoint)) is not None
+
+
+def _refusal_code(endpoint: str, grpc: bool) -> str:
+    """The code of the refusal of an endpoint that names Future AGI, or the endpoint the environment names, but cannot be
+    verified."""
+    if _has_empty_authority(endpoint):
+        return "empty_authority"
+    if _is_disputed(endpoint):
+        return "disputed_authority"
+    if not grpc:
+        origin = _http_origin(endpoint)
+        if origin is not None and origin[0] == "http" and _is_futureagi_host(origin[1]):
+            return "insecure_futureagi_http"
+    return "unverified_endpoint"
+
+
+_REFUSAL_MESSAGES = {
+    "empty_authority": "The exporter endpoint names no host, so the Future AGI credentials are not sent to it. Set FI_BASE_URL "
+    "(or the endpoint option) to a URL with a host, or remove the credentials.",
+    "disputed_authority": "The exporter endpoint has an authority that parsers read differently, so the Future AGI credentials are "
+    "not sent to it. Set FI_BASE_URL (or the endpoint option) to a URL without userinfo, backslash or `@`, or remove the "
+    "credentials.",
+    "insecure_futureagi_http": "A Future AGI host is reached over https only, so the Future AGI credentials are not sent to it "
+    "over http. Set FI_BASE_URL (or the endpoint option) to an https Future AGI URL, or remove the credentials.",
+    "unverified_endpoint": "The exporter endpoint names Future AGI but cannot be verified as a Future AGI endpoint, so "
+    "the Future AGI credentials are not sent to it. Set FI_BASE_URL (or the endpoint option) to a plain https Future AGI URL "
+    "with no userinfo and the default port, or remove the credentials.",
+}
+
+
+def _check_future_agi_endpoint(endpoint: str | None, grpc: bool, caller_headers: Any = None, named: bool = False) -> str:
+    """The decision for ``endpoint``; raises when it names Future AGI and credentials are set. The credentials are the
+    final outgoing set: the environment keys, the caller's headers and the OpenTelemetry environment headers."""
+    decision = _future_agi_decision(endpoint, grpc, named)
+    if decision == "refuse" and _fi_keys_configured(caller_headers):
+        code = _refusal_code(endpoint or "", grpc)
+        raise UnsupportedFutureAGIEndpointError(_REFUSAL_MESSAGES[code], code)
+    return decision
+
+
+def _guard_future_agi_request(
+    url: str, named: bool = False, allow: bool = False, session: Any = None, base: str | None = None, from_env: bool = False
+) -> bool:
+    """True when Future AGI keys may be attached to an HTTP request to ``url``.
+
+    The endpoint rules of the exporters apply before any request: a Future AGI host reached over http, or in a form that
+    cannot be verified, raises UnsupportedFutureAGIEndpointError (which names FI_BASE_URL) when Future AGI credentials are
+    set. ``named`` marks a URL the user configured as their Future AGI base, which is then treated as self-hosted when
+    it is not a futureagi.com host. A plain http base on a host other than loopback is refused unless it is opted in
+    (see ``_authorize_plain_text``).
+    """
+    # The base as written is checked first (``from_env``: it is the one the environment names), then the request URL.
+    _check_future_agi_endpoint(base or url, False, named=named or from_env)
+    decision = _check_future_agi_endpoint(url, False)
+    if decision == "other" and named and _http_origin(url) is not None:
+        decision = "fi"
+    if decision != "fi":
+        return False
+    _authorize_http_endpoint(url, allow, session)
+    return True
 
 
 _SUPPORTED_OTLP_EXPORTERS = "1.29.0 to 1.45.x"
@@ -707,8 +1069,8 @@ class UnsupportedOTLPExporterError(RuntimeError):
 def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporterError:
     """The error for an exporter bound for Future AGI whose headers cannot be pinned.
 
-    The message names the exporter class, the package version and the setting
-    that could leak, and no header or environment value.
+    The message names the exporter class, the package version and the supported
+    versions, and no header or environment value.
     """
     try:
         from importlib.metadata import version
@@ -718,13 +1080,163 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
         installed = "unknown version"
     return UnsupportedOTLPExporterError(
         f"Cannot send traces to Future AGI with {type(exporter).__name__} from {package} {installed}: "
-        "its header handling is not one this release can set, so settings from "
-        "OTEL_EXPORTER_OTLP_HEADERS could reach Future AGI. "
+        "its header handling is not one this release can set, so headers from "
+        "OTEL_EXPORTER_OTLP_HEADERS cannot be kept out of its requests. "
         f"Supported versions are {_SUPPORTED_OTLP_EXPORTERS}."
     )
 
 
-def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+_RETRY_FIELDS = (
+    "total", "connect", "read", "redirect", "status", "other", "allowed_methods", "status_forcelist", "backoff_factor",
+    "backoff_max", "backoff_jitter", "raise_on_redirect", "raise_on_status", "respect_retry_after_header",
+    "remove_headers_on_redirect",
+)
+
+
+def _unreadable_adapter() -> UnsupportedFutureAGIEndpointError:
+    return UnsupportedFutureAGIEndpointError(
+        "The requests session the exporter sends with cannot be inspected (an adapter's max_retries is not an integer or "
+        "urllib3.util.Retry itself), so Future AGI keys are not sent over a plain channel with it. Use https, or mount "
+        "requests.adapters.HTTPAdapter with max_retries set to an integer or to urllib3.util.Retry.",
+        "proxied",
+    )
+
+
+def _retries_are_plain(retries: Any) -> bool:
+    """True when ``max_retries`` of an adapter is an ``int`` or exactly ``urllib3.util.Retry``: a subclass can run its own code
+    (and choose the pool) on the send path."""
+    from urllib3.util import Retry
+
+    return type(retries) in (int, Retry)
+
+
+def _plain_retry_value(name: str, value: Any) -> Any:
+    """The value of one ``Retry`` field as a plain value, or raise ``proxied``: numbers, flags and ``None`` as they are, and the
+    method, status and header collections as a frozenset of plain values."""
+    if name in ("allowed_methods", "status_forcelist", "remove_headers_on_redirect"):
+        if value is None or value is False:
+            return value
+        if isinstance(value, (set, frozenset, list, tuple)):
+            items = list(value)
+            kind = int if name == "status_forcelist" else str
+            if all(type(item) is kind for item in items):
+                return frozenset(items)
+        raise _unreadable_adapter()
+    if value is None or type(value) in (bool, int, float):
+        return value
+    raise _unreadable_adapter()
+
+
+def _plain_retries(retries: Any) -> Any:
+    """``max_retries`` of an adapter as an ``int``, or as a new ``urllib3.util.Retry`` with the values the caller's has. Anything
+    else (a ``Retry`` subclass included) raises ``proxied``."""
+    import inspect
+
+    from urllib3.util import Retry
+
+    if not _retries_are_plain(retries):
+        raise _unreadable_adapter()
+    if type(retries) is int:
+        return retries
+    held = getattr(retries, "__dict__", None)
+    if not isinstance(held, dict):
+        raise _unreadable_adapter()
+    accepted = inspect.signature(Retry.__init__).parameters
+    settings = {name: _plain_retry_value(name, held[name]) for name in _RETRY_FIELDS if name in held and name in accepted}
+    return Retry(**settings)
+
+
+def _plain_size(value: Any, default: int) -> int:
+    return value if type(value) is int and value > 0 else default
+
+
+def _copy_adapter(adapter: Any, plain: bool = False) -> Any:
+    """A new adapter with the settings of ``adapter`` and pools of its own, so closing one does not close the other's.
+
+    With ``plain`` the copy is a new ``requests.adapters.HTTPAdapter`` made from plain settings only: the pool sizes and blocking,
+    and ``max_retries`` as an ``int`` or exactly ``urllib3.util.Retry`` (see ``_plain_retries``). Nothing the caller's adapter holds
+    on the instance reaches it, and a ``Retry`` subclass is refused.
+
+    Otherwise an ``HTTPAdapter`` is copied as it is (a subclass keeps what it holds, such as an ssl context) and its pools are built
+    again by its own ``init_poolmanager``; any other adapter is built from the same settings."""
+    settings_of = {
+        "pool_connections": getattr(adapter, "_pool_connections", 10),
+        "pool_maxsize": getattr(adapter, "_pool_maxsize", 10),
+        "max_retries": getattr(adapter, "max_retries", 0),
+        "pool_block": getattr(adapter, "_pool_block", False),
+    }
+    if plain:
+        return requests.adapters.HTTPAdapter(
+            pool_connections=_plain_size(settings_of["pool_connections"], 10),
+            pool_maxsize=_plain_size(settings_of["pool_maxsize"], 10),
+            max_retries=_plain_retries(settings_of["max_retries"]),
+            pool_block=settings_of["pool_block"] is True,
+        )
+    if isinstance(adapter, requests.adapters.HTTPAdapter):
+        try:
+            # Not ``copy.copy``: an HTTPAdapter's pickling state drops what a subclass holds.
+            fresh = object.__new__(type(adapter))
+            fresh.__dict__.update(adapter.__dict__)
+            fresh.proxy_manager = {}
+            fresh.init_poolmanager(settings_of["pool_connections"], settings_of["pool_maxsize"], block=settings_of["pool_block"])
+            return fresh
+        except Exception:  # an adapter class whose pools cannot be rebuilt this way
+            logger.debug("adapter copy fell back to a new adapter of the same settings", exc_info=True)
+    try:
+        return type(adapter)(**settings_of)
+    except (TypeError, ValueError):  # an adapter class with its own constructor
+        return requests.adapters.HTTPAdapter(**settings_of)
+
+
+def _copy_cookies(jar: Any) -> Any:
+    """A copy of a session's cookie jar: a ``RequestsCookieJar`` copies itself, any other jar (the standard library's
+    ``http.cookiejar.CookieJar``) is read cookie by cookie into a ``RequestsCookieJar``."""
+    import copy as copy_module
+
+    try:
+        return jar.copy()
+    except AttributeError:
+        fresh = requests.cookies.RequestsCookieJar()
+        for cookie in jar:
+            fresh.set_cookie(copy_module.copy(cookie))
+        return fresh
+
+
+def _copy_session(session: requests.Session, hooks: bool = True, plain: bool = False) -> requests.Session:
+    """A new session with the caller's settings and adapters, whose headers can be changed freely.
+
+    The copy is an instance of the caller's session class when that class can be created without arguments, and a
+    ``requests.Session`` otherwise. With ``plain`` it is always ``requests.Session`` itself, so no method of a caller's subclass
+    runs on it.
+    """
+    if plain:
+        copy = requests.Session()
+    else:
+        try:
+            copy = type(session)()
+        except (TypeError, ValueError, AttributeError):  # a subclass that needs arguments
+            copy = requests.Session()
+    copy.headers = session.headers.copy()
+    copy.auth = session.auth
+    copy.proxies = dict(session.proxies)
+    copy.hooks = {name: list(held) if hooks else [] for name, held in session.hooks.items()}
+    copy.params = session.params
+    copy.stream = session.stream
+    copy.verify = session.verify
+    copy.cert = session.cert
+    copy.max_redirects = session.max_redirects
+    copy.trust_env = session.trust_env
+    copy.cookies = _copy_cookies(session.cookies)
+    # Fresh adapters with the same settings: closing the exporter closes these, not the caller's connection pools.
+    copy.adapters = type(session.adapters)()
+    for prefix, adapter in session.adapters.items():
+        copy.adapters[prefix] = _copy_adapter(adapter, plain)
+    return copy
+
+
+def _pin_http_headers(
+    exporter: Any, sdk_headers: Mapping[str, Any], caller_headers: Any = None, caller_session: Any = None
+) -> None:
     """Make an HTTP exporter send the OTLP defaults plus exactly ``sdk_headers``.
 
     OpenTelemetry 1.29 sends from ``exporter._session.headers`` (and
@@ -741,9 +1253,13 @@ def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
         _OTLP_HTTP_HEADERS = {}
     defaults = {k.lower(): v for k, v in _OTLP_HTTP_HEADERS.items()}
     sdk = {str(k).lower(): v for k, v in sdk_headers.items()}
-    ambient = _ambient_headers()
+    # Headers the exporter took from the environment or from the caller, which the SDK headers replace.
+    ambient = {**_ambient_headers(), **_caller_headers(caller_headers)}
 
     pinned_any = False
+    if caller_session is not None and getattr(exporter, "_session", None) is caller_session:
+        # The Future AGI headers go on a copy: the caller's own session is left as the caller built it.
+        exporter._session = _copy_session(caller_session)
     client = getattr(exporter, "_client", None)
     current = getattr(client, "_headers", None)
     if isinstance(current, dict):
@@ -772,7 +1288,7 @@ def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
         raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-http")
 
 
-def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any], caller_headers: Any = None) -> None:
     """Make a gRPC exporter send its metadata from exactly ``sdk_headers``.
 
     The metadata is ``exporter._headers`` in 1.29 and 1.4x. Both take environment
@@ -787,13 +1303,468 @@ def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
         return
     if not isinstance(current, (tuple, list)):
         raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-grpc")
-    ambient = _ambient_headers()
+    ambient = {**_ambient_headers(), **_caller_headers(caller_headers)}
     kept = [
         (k, v)
         for k, v in current
         if str(k).lower() not in sdk and not (str(k).lower() in ambient and ambient[str(k).lower()] == v)
     ]
     exporter._headers = tuple(kept) + tuple(sdk.items())
+
+
+def _written_host(endpoint: str | None) -> str | None:
+    """The host of a URL or gRPC target as written, lower-cased and without brackets, before any normalisation.
+
+    One trailing dot stays on the host, and forms a parser rewrites (``127.1``, ``0x7f.0.0.1``, ``2130706433``) stay as
+    written. Every loopback decision reads this host.
+    """
+    if not endpoint:
+        return None
+    try:
+        split = urlsplit(endpoint)
+        text = split.netloc if split.netloc else endpoint
+        text = text.rsplit("@", 1)[-1]
+        if text.startswith("["):
+            return text[1 : text.index("]")].lower() if "]" in text else None
+        return text.split(":", 1)[0].lower() or None
+    except ValueError:
+        return None
+
+
+_LOOPBACK_FORMS = ("localhost", "127.0.0.1", "::1")
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """True only for the literal forms ``localhost``, ``127.0.0.1`` and ``::1`` (``[::1]``), as written.
+
+    A form a parser rewrites into loopback (``127.1``, ``0x7f.0.0.1``, ``2130706433``), a trailing dot
+    (``127.0.0.1.``, ``localhost.``) and a name that merely ends in ``.localhost`` are not loopback: they are treated
+    like any other self-hosted host.
+    """
+    return bool(host) and host.strip("[]").lower() in _LOOPBACK_FORMS
+
+
+def _plain_text_requested(target: tuple[str, str, int], insecure: Any) -> bool:
+    """True when the settings ask for a plain gRPC channel to ``target``, in the order the exporter reads them:
+    the ``insecure`` argument, ``OTEL_EXPORTER_OTLP_TRACES_INSECURE``, ``OTEL_EXPORTER_OTLP_INSECURE``, then an
+    ``http`` scheme. An ``https`` scheme is TLS."""
+    if target[0] == "https":
+        return False
+    if insecure is not None:
+        return bool(insecure)
+    for name in ("OTEL_EXPORTER_OTLP_TRACES_INSECURE", "OTEL_EXPORTER_OTLP_INSECURE"):
+        value = os.environ.get(name)
+        if value is not None:
+            return value.lower() == "true"
+    return target[0] == "http"
+
+
+def _force_tls_for_future_agi(endpoint: str | None, insecure: Any, allow: bool = False) -> bool:
+    """True when a gRPC exporter for this Future AGI target is built with TLS.
+
+    A futureagi.com target is reached over TLS only: a plain channel asked for by the ``insecure`` argument, by
+    ``OTEL_EXPORTER_OTLP_TRACES_INSECURE`` or ``OTEL_EXPORTER_OTLP_INSECURE``, or by an ``http`` scheme raises
+    UnsupportedFutureAGIEndpointError (``insecure_futureagi_grpc``). Loopback keeps the configured channel. Any other
+    host uses TLS unless the settings ask for plain text, which needs the opt-in (see ``_authorize_plain_text``);
+    with it, the configured plain channel is kept.
+    """
+    target = _grpc_target(endpoint)
+    if target is None or _is_loopback_host(_written_host(endpoint)):
+        return False
+    if not _is_futureagi_host(target[1]):
+        if _plain_text_requested(target, insecure):
+            _authorize_plain_text(_written_host(endpoint) or target[1], target[2], allow, grpc=True)
+            return False
+        return True
+    if _plain_text_requested(target, insecure):
+        raise UnsupportedFutureAGIEndpointError(
+            "A Future AGI gRPC endpoint is reached over TLS only, so a plain channel cannot be asked for it (the insecure "
+            "argument, OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_TRACES_INSECURE or an http scheme). Use TLS, or set "
+            "FI_GRPC_URL to your own collector.",
+            "insecure_futureagi_grpc",
+        )
+    return True
+
+
+_PLAIN_TEXT_WARNED: set[str] = set()
+_ALLOW_INSECURE_HTTP = "FI_ALLOW_INSECURE_HTTP"
+
+
+_SESSION_ROUTING = ("request", "send", "prepare_request", "get_adapter", "merge_environment_settings", "rebuild_proxies")
+_ADAPTER_ROUTING = ("send", "get_connection", "get_connection_with_tls_context", "proxy_manager_for", "init_poolmanager")
+
+
+def _pinned(owner: Any, names: tuple[str, ...]) -> dict[str, Any]:
+    return {name: getattr(owner, name, None) for name in names}
+
+
+# The routing functions of ``requests`` as they were when this package was imported. A class patched afterwards (a test double, an
+# instrumentation) differs from these, and one patched before shows a function that does not belong to ``requests``.
+_PINNED_SESSION = _pinned(requests.Session, _SESSION_ROUTING)
+_PINNED_ADAPTER = _pinned(requests.adapters.HTTPAdapter, _ADAPTER_ROUTING)
+
+
+def _is_requests_function(function: Any) -> bool:
+    return getattr(function, "__module__", "").startswith("requests.")
+
+
+def _routing_is_stock(owner: Any, pinned: Mapping[str, Any], names: tuple[str, ...], allowed: Mapping[str, Any] | None = None) -> bool:
+    """True when ``owner``'s class keeps the routing functions ``requests`` had when this package was imported, and no instance
+    attribute of ``owner`` replaces one of them (a patched ``send`` on the object itself is not the library's). ``allowed`` names
+    instance attributes this package set itself, by identity."""
+    instance = getattr(owner, "__dict__", None)
+    allowed = allowed or {}
+    if not isinstance(instance, dict) or any(name in instance and instance[name] is not allowed.get(name) for name in names):
+        return False
+    for name in names:
+        function = getattr(type(owner), name, None)
+        if function is not pinned.get(name) or (function is not None and not _is_requests_function(function)):
+            return False
+    return True
+
+
+def _auth_is_stock(auth: Any) -> bool:
+    """True when a session's ``auth`` is unset, a ``(user, password)`` tuple or one of the authentication handlers of
+    ``requests``. Any other callable can rewrite the request, URL included, so it cannot be inspected."""
+    from requests import auth as requests_auth
+
+    if auth is None:
+        return True
+    if type(auth) is tuple:
+        return len(auth) == 2
+    return type(auth) in (requests_auth.HTTPBasicAuth, requests_auth.HTTPProxyAuth, requests_auth.HTTPDigestAuth)
+
+
+def _session_is_stock(session: Any, allowed: Mapping[str, Any] | None = None) -> bool:
+    """True when ``session`` and its adapters keep the routing functions of ``requests`` and the session has no hook, so its proxies
+    can be read and nothing runs on a request or a response besides ``requests``."""
+    from requests.adapters import HTTPAdapter
+
+    if not isinstance(session, requests.Session) or not _routing_is_stock(session, _PINNED_SESSION, _SESSION_ROUTING, allowed):
+        return False
+    if not _auth_is_stock(getattr(session, "auth", None)):
+        return False
+    hooks = getattr(session, "hooks", None)
+    # A dict of exactly that type, read by its keys: a subclass can show less than it holds.
+    if type(hooks) is not dict or any(dict.__getitem__(hooks, key) for key in list(dict.keys(hooks))):
+        return False
+    adapters = getattr(session, "adapters", None)
+    # The container is a dict or an OrderedDict (what ``requests`` uses), read by direct iteration: a subclass can show less than it
+    # holds. Each adapter is judged by exact type: a subclass of HTTPAdapter can choose the connection it uses (a pool key, a dial,
+    # an ssl context).
+    return type(adapters) in (dict, collections.OrderedDict) and all(
+        type(adapter) is HTTPAdapter
+        and _retries_are_plain(getattr(adapter, "max_retries", None))
+        and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING)
+        for adapter in dict.values(adapters)
+    )
+
+
+def _client_may_proxy(session: Any, host: str, port: int) -> bool:
+    """True when a ``requests`` session the caller passed may send a plain request to ``host:port`` through a proxy.
+
+    That is the case when its own ``proxies`` name one, when ``trust_env`` is on and ``requests`` (or the standard library,
+    ``urllib.request.proxy_bypass_environment``) routes the request through an environment proxy, and whenever the session
+    cannot be inspected: a session class or an adapter that replaces a routing method counts as proxied.
+    """
+    import urllib.request
+
+    from requests.utils import get_environ_proxies, select_proxy
+
+    if not _session_is_stock(session):
+        return True
+    if any((getattr(session, "proxies", None) or {}).values()):
+        return True
+    if not getattr(session, "trust_env", True):
+        return False
+    url = f"http://[{host}]:{port}/" if ":" in host else f"http://{host}:{port}/"
+    try:
+        if select_proxy(url, get_environ_proxies(url)) is not None:
+            return True
+        proxies = urllib.request.getproxies_environment()
+        return bool((proxies.get("http") or proxies.get("all")) and not urllib.request.proxy_bypass_environment(f"{host}:{port}"))
+    except Exception:  # an environment that cannot be read counts as proxied
+        return True
+
+
+def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None, grpc: bool = False) -> None:
+    """Allow Future AGI keys on a plain (not TLS) channel to ``host:port``, or raise UnsupportedFutureAGIEndpointError.
+
+    Loopback needs no opt-in. Any other host needs ``FI_ALLOW_INSECURE_HTTP=1`` or the ``allow_insecure_http`` option
+    (``insecure_self_hosted_target``). A ``requests`` session the caller passed that may use a proxy, or cannot be inspected,
+    is refused (``proxied``); a transport this package builds for a plain channel has proxies off (see
+    ``_without_proxies``). An allowed channel to a host other than loopback logs one warning per process that names the
+    setting and the origin (scheme, host and port), and no userinfo, path, query or key.
+    """
+    loopback = _is_loopback_host(host)
+    if not loopback and not (allow or os.environ.get(_ALLOW_INSECURE_HTTP) == "1"):
+        raise UnsupportedFutureAGIEndpointError(
+            "Future AGI keys are not sent over a plain channel to a host other than loopback. Use https (or TLS), or set "
+            f"{_ALLOW_INSECURE_HTTP}=1 (or the allow_insecure_http option) to allow it for your own self-hosted collector.",
+            "insecure_self_hosted_target",
+        )
+    if session is not None and _client_may_proxy(session, host, port):
+        raise UnsupportedFutureAGIEndpointError(
+            "The requests session passed to the exporter may send through a proxy, or cannot be inspected, so Future AGI keys "
+            "are not sent over a plain channel with it. Use https, or do not pass a session: the exporter builds its own "
+            "with proxies off.",
+            "proxied",
+        )
+    if loopback or _PLAIN_TEXT_WARNED:
+        return
+    _PLAIN_TEXT_WARNED.add(f"{host}:{port}")
+    logger.warning(
+        "Future AGI keys are sent over a plain channel to http://%s:%s, allowed by %s. Use https (or TLS) to send them over TLS.",
+        host,
+        port,
+        _ALLOW_INSECURE_HTTP,
+    )
+
+
+def _authorize_http_endpoint(endpoint: str | None, allow: bool = False, session: Any = None) -> None:
+    """The plain-channel rule for an HTTP endpoint that carries Future AGI keys (see ``_authorize_plain_text``)."""
+    origin = _http_origin(endpoint)
+    if origin is not None and origin[0] == "http":
+        _authorize_plain_text(_written_host(endpoint) or origin[1], origin[2], allow, session)
+
+
+_DECODE_LIMIT = 8
+
+
+def _environment_names_a_key_header_by_an_encoded_delimiter() -> bool:
+    """True when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS``, read as written and after URL decoding (up to eight
+    times), has an entry whose name is a Future AGI key header. That covers a name joined to its value by an encoded
+    ``=`` (``x-api-key%3D...``) and a pair carried inside another header's value (``a=b%2Cx-api-key%3D...``), which a consumer
+    that decodes the text again reads as a key header."""
+    from urllib.parse import unquote
+
+    for var in _AMBIENT_HEADER_ENV_VARS:
+        text = os.environ.get(var)
+        # The text as written, then decoded until it stops changing (at most eight times).
+        for _ in range(_DECODE_LIMIT + 1):
+            if not text:
+                break
+            # A consumer that reads ``+`` as a space (form decoding) sees the same entries with the blanks around the name dropped.
+            for view in (text, text.replace("+", " ")):
+                for entry in view.replace(";", ",").split(","):
+                    if _folds_to_key_header(entry.split("=", 1)[0]):
+                        return True
+            decoded = unquote(text)
+            if decoded == text:
+                break
+            text = decoded
+    return False
+
+
+def _refuse_fi_header_names_in_environment() -> None:
+    """Raise when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS`` carry a Future AGI key header name.
+
+    Called for an exporter that does not send to Future AGI: OpenTelemetry sends those environment headers to the collector
+    that exporter is configured for.
+    """
+    names = {name for name in _ambient_headers() if _folds_to_key_header(name)}
+    if names or _environment_names_a_key_header_by_an_encoded_delimiter():
+        raise UnsupportedFutureAGIEndpointError(
+            "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS names a Future AGI key header (x-api-key or "
+            "x-secret-key) while this exporter does not send to Future AGI, so OpenTelemetry would send it to that collector. "
+            "Remove the header from the environment, or set it on the exporter you want to receive it.",
+            "key_header_in_environment",
+        )
+
+
+class _RedirectRefused(requests.exceptions.RequestException):
+    """A request that carries Future AGI keys was answered with a redirect, which is not followed."""
+
+
+class _SenderRefused(requests.exceptions.RequestException):
+    """The session that sends a request that carries Future AGI keys was changed after it was built."""
+
+
+def _refuse_redirects(session: requests.Session, recheck: Any = None) -> Any:
+    """Make ``session`` answer a redirect with ``_RedirectRefused`` instead of following it. Returns the function that does so.
+
+    ``recheck`` is called immediately before each send; when it returns false nothing is sent and ``_SenderRefused`` is raised."""
+    request = session.request
+
+    def guarded(method: Any, url: Any, **kwargs: Any) -> Any:
+        if recheck is not None and not recheck():
+            raise _SenderRefused("The session that sends a request that carries Future AGI keys was changed after it was built.")
+        kwargs["allow_redirects"] = False
+        response = request(method, url, **kwargs)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int) and 300 <= status < 400:
+            response.close()
+            raise _RedirectRefused("A request that carries Future AGI keys was answered with a redirect, which is not followed.")
+        return response
+
+    session.request = guarded  # type: ignore[method-assign]
+    return guarded
+
+
+def _without_proxies(session: requests.Session) -> None:
+    """Turn the proxies of a ``requests`` session this package built off: the environment is not read."""
+    session.trust_env = False
+    session.proxies = {}
+
+
+def _requests_session_of(exporter: Any) -> Any:
+    """The ``requests`` session an OTLP HTTP exporter sends with: ``_session`` or, from 1.4x, the transport's."""
+    session = getattr(exporter, "_session", None)
+    if session is None:
+        session = getattr(getattr(getattr(exporter, "_client", None), "_transport", None), "_session", None)
+    return session if isinstance(session, requests.Session) else None
+
+
+def _isolated_session(session: requests.Session) -> requests.Session:
+    """The session a plain channel that carries Future AGI keys sends with: ``requests.Session`` itself (a method of a caller's
+    subclass is not used to send) holding a copy of the settings of ``session`` that were inspected, with its own adapters (settings
+    and TLS configuration kept), no proxies, no environment, and no hooks."""
+    isolated = _copy_session(session, hooks=False, plain=True)
+    _without_proxies(isolated)
+    return isolated
+
+
+def _sender_is_sound(sender: Any, guard: Any = None) -> bool:
+    """True when the session that sends a plain request that carries keys is still what ``_isolated_session`` made: it keeps the
+    routing functions of ``requests`` (``guard`` is the only function this package set on it), has no proxy, reads no environment
+    and runs no hook."""
+    allowed = {"request": guard} if guard is not None else None
+    if guard is not None and getattr(sender, "__dict__", {}).get("request") is not guard:
+        return False
+    proxies = getattr(sender, "proxies", None)
+    # Exactly requests.Session, and proxies held in a plain dict that holds nothing (a subclass can read as empty while it holds entries).
+    return (
+        type(sender) is requests.Session
+        and _session_is_stock(sender, allowed)
+        and sender.trust_env is False
+        and type(proxies) is dict
+        and dict.__len__(proxies) == 0
+        and all(_adapter_holds_no_proxy(adapter) for adapter in dict.values(sender.adapters))
+    )
+
+
+def _adapter_holds_no_proxy(adapter: Any) -> bool:
+    """True when a mounted adapter's pool manager is exactly ``urllib3.PoolManager`` and it holds no proxy manager."""
+    import urllib3
+
+    proxy_managers = getattr(adapter, "proxy_manager", None)
+    return (
+        type(getattr(adapter, "poolmanager", None)) is urllib3.PoolManager
+        and type(proxy_managers) is dict
+        and dict.__len__(proxy_managers) == 0
+    )
+
+
+def _install_session(exporter: Any, session: requests.Session) -> None:
+    """Make an HTTP exporter send with ``session``: ``_session`` where the release has one (1.29), else the transport's."""
+    if getattr(exporter, "_session", None) is not None:
+        exporter._session = session
+    else:
+        exporter._client._transport._session = session
+
+
+def _secure_http_transport(exporter: Any, plain: bool, caller_session: Any) -> None:
+    """Set up the transport of an HTTP exporter that sends Future AGI keys: no redirects, and on a plain channel an isolated copy.
+
+    On a plain channel the exporter sends with ``_isolated_session`` of the session it holds (the caller's, or the one the
+    OpenTelemetry release built): what the caller does to their own session afterwards cannot reach the copy. The copy is judged
+    again on every export (see ``HTTPSpanExporter.export``). On a channel with TLS a session the caller passed is left as built; on
+    1.29 the exporter holds a copy of it, which is set up like a session of this package's own.
+    """
+    session = _requests_session_of(exporter)
+    if session is None:
+        if plain:
+            raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-http")
+        return
+    if plain:
+        if not _session_is_stock(session):
+            # A session that cannot be inspected: a hook, a routing function replaced on a class or an object, or an auth that
+            # rewrites the request (for example one the OpenTelemetry release loads itself).
+            raise UnsupportedFutureAGIEndpointError(
+                "The requests session the exporter sends with cannot be inspected (it has a hook, or a routing function of requests "
+                "is replaced), so Future AGI keys are not sent over a plain channel with it. Use https, or do not pass such a "
+                "session.",
+                "proxied",
+            )
+        isolated = _isolated_session(session)
+        guard = _refuse_redirects(isolated, lambda: _sender_is_sound(isolated, guard))
+        _install_session(exporter, isolated)
+        if session is not caller_session:
+            with contextlib.suppress(Exception):
+                session.close()
+        exporter._fi_sender = (isolated, guard)
+        return
+    if session is caller_session:
+        return
+    _refuse_redirects(session)
+
+
+def _post_with_keys(url: str, send_keys: bool, **kwargs: Any) -> Any:
+    """``requests.post`` for a request of this package. One that carries Future AGI keys follows no redirect (a redirect
+    raises ``_RedirectRefused``) and, on a plain channel, reads no proxy from the environment."""
+    if not send_keys:
+        return requests.post(url, **kwargs)
+    if urlsplit(url).scheme.lower() == "http":
+        with requests.Session() as session:
+            _without_proxies(session)
+            response = session.post(url, allow_redirects=False, **kwargs)
+    else:
+        response = requests.post(url, allow_redirects=False, **kwargs)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int) and 300 <= status < 400:
+        response.close()
+        raise _RedirectRefused("A request that carries Future AGI keys was answered with a redirect, which is not followed.")
+    return response
+
+
+def _close_after_refusal(exporter: Any, base: Any) -> None:
+    """Close what an exporter opened while it was being built, before its constructor raises."""
+    steps = [lambda: base.shutdown(exporter)]
+    for attribute in ("_channel", "_session"):
+        held = getattr(exporter, attribute, None)
+        if held is not None:
+            steps.append(held.close)
+    for step in steps:
+        try:
+            step()
+        except (OSError, ValueError, AttributeError, RuntimeError):  # best effort; the refusal is what the caller needs
+            logger.debug("exporter cleanup after a refusal failed", exc_info=True)
+
+
+_PROXY_OPTIONS = ("grpc.enable_http_proxy", "grpc.http_proxy")
+
+
+def _options_without_proxy(options: Any) -> tuple[Any, ...]:
+    """The caller's gRPC channel options without proxy settings, plus the one that turns the proxy off."""
+    kept = tuple(pair for pair in (options or ()) if not (isinstance(pair, (tuple, list)) and pair and pair[0] in _PROXY_OPTIONS))
+    return kept + (("grpc.enable_http_proxy", 0),)
+
+
+def _plain_channel_without_proxy(target: str, compression: Any) -> Any:
+    """A plain gRPC channel to ``target`` that reads no proxy (for an exporter release whose constructor takes no channel
+    options)."""
+    import grpc
+
+    if compression is None:
+        try:
+            from opentelemetry.exporter.otlp.proto.grpc.exporter import environ_to_compression
+
+            compression = environ_to_compression("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION") or environ_to_compression(
+                "OTEL_EXPORTER_OTLP_COMPRESSION"
+            )
+        except Exception:  # no compression setting can be read: none is used
+            compression = None
+    return grpc.insecure_channel(target, options=list(_options_without_proxy(None)), compression=compression)
+
+
+def _grpc_plain_requested(endpoint: str | None, insecure: Any) -> bool:
+    """True when the settings ask for a plain channel to the gRPC endpoint (for any target spelling)."""
+    target = _grpc_target(endpoint)
+    try:
+        scheme = target[0] if target else urlsplit(endpoint or "").scheme.lower()
+    except ValueError:
+        scheme = ""
+    return _plain_text_requested((scheme, "", 0), insecure)
 
 
 class GRPCSpanExporter(_GRPCSpanExporter):
@@ -805,25 +1776,65 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         headers: Headers to send when exporting. For a Future AGI endpoint, the
             `FI_API_KEY` and `FI_SECRET_KEY` environment variables are added when no
             credential header is given.
+        allow_insecure_http (bool): Allow Future AGI keys over a plain channel to a self-hosted host other
+            than loopback, like ``FI_ALLOW_INSECURE_HTTP=1``. It does not apply to a Future AGI host. A plain
+            channel this exporter builds reads no proxy (``grpc.enable_http_proxy`` is ``0``).
     """
 
-    def __init__(self, *args: Any, **kwargs: Any):
-        sig = _get_class_signature(_GRPCSpanExporter)
-        bound_args = sig.bind_partial(*args, **kwargs)
-        bound_args.apply_defaults()
+    def __init__(self, *args: Any, allow_insecure_http: bool = False, **kwargs: Any):
+        bound_args = _get_class_signature(_GRPCSpanExporter, "grpc").bind_partial(*args, **kwargs)
+        # Read once; gRPC metadata names are lower case.
+        caller_headers = _materialize_headers(bound_args.arguments.get("headers"), lower=True)
+        if "headers" in bound_args.arguments:
+            bound_args.arguments["headers"] = caller_headers
 
-        if bound_args.arguments.get("endpoint") is None:
+        from_env = bound_args.arguments.get("endpoint") is None
+        if from_env:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
-        future_agi = _is_future_agi_endpoint(bound_args.arguments["endpoint"])
-        sdk_headers = _with_fi_auth_headers(bound_args.arguments.get("headers"), add_env_keys=future_agi)
-        bound_args.arguments["headers"] = sdk_headers or None
 
+        # Built once, with the caller's own arguments; the Future AGI headers are set afterwards,
+        # and only when the exporter resolved a Future AGI endpoint.
+        decision = _check_future_agi_endpoint(bound_args.arguments["endpoint"], True, caller_headers, named=from_env)
+        forced = False
+        plain_channel = False
+        if decision == "fi":
+            if _force_tls_for_future_agi(bound_args.arguments["endpoint"], bound_args.arguments.get("insecure"), allow_insecure_http):
+                # TLS for a Future AGI target: the argument and both OTEL_EXPORTER_OTLP*_INSECURE variables are not read.
+                bound_args.arguments["insecure"] = False
+                forced = True
+            else:
+                plain_channel = _grpc_plain_requested(bound_args.arguments["endpoint"], bound_args.arguments.get("insecure"))
+        else:
+            _refuse_fi_header_names_in_environment()
+        rebuild_channel = False
+        if plain_channel:
+            if "channel_options" in _get_class_signature(_GRPCSpanExporter, "grpc").parameters:
+                bound_args.arguments["channel_options"] = _options_without_proxy(bound_args.arguments.get("channel_options"))
+            else:
+                rebuild_channel = True
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        # Decide on the endpoint the exporter resolved, not only the argument.
-        if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
-            _pin_grpc_headers(self, sdk_headers)
-        elif future_agi:
-            raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-grpc")
+        try:
+            if rebuild_channel:
+                stub = getattr(self, "_stub", None)
+                if stub is None:
+                    raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-grpc")
+                self._client = stub(_plain_channel_without_proxy(self._endpoint, bound_args.arguments.get("compression")))
+            resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), True, caller_headers)
+            resolved_target = _grpc_target(getattr(self, "_endpoint", None))
+            written = _written_host(getattr(self, "_endpoint", None))
+            if resolved == "fi" and not forced and resolved_target and not _is_loopback_host(written) and _fi_keys_configured(caller_headers):
+                if _is_futureagi_host(resolved_target[1]):
+                    raise UnsupportedFutureAGIEndpointError(
+                        "The exporter resolved a Future AGI endpoint that was not set up for TLS, so the Future AGI "
+                        "credentials are not sent to it. Set FI_GRPC_URL to the Future AGI gRPC target, or remove the credentials.",
+                        "insecure_futureagi_grpc",
+                    )
+                _authorize_plain_text(written or resolved_target[1], resolved_target[2], allow_insecure_http, grpc=True)
+        except (UnsupportedFutureAGIEndpointError, UnsupportedOTLPExporterError):
+            _close_after_refusal(self, _GRPCSpanExporter)
+            raise
+        if resolved == "fi":
+            _pin_grpc_headers(self, _with_fi_auth_headers(caller_headers, add_env_keys=True), caller_headers)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -850,27 +1861,70 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         headers: Headers to send when exporting. For a Future AGI endpoint, the
             `FI_API_KEY` and `FI_SECRET_KEY` environment variables are added when no
             credential header is given.
+        allow_insecure_http (bool): Allow Future AGI keys over plain http to a self-hosted host other than
+            loopback, like ``FI_ALLOW_INSECURE_HTTP=1``. It does not apply to a Future AGI host. A plain
+            channel with a session this exporter builds reads no proxy; a session you pass that may use a proxy,
+            or cannot be inspected (a hook, a routing function of ``requests`` replaced on a class or the session), raises
+            ``UnsupportedFutureAGIEndpointError`` (code ``proxied``). The exporter then sends with an isolated copy of it, made
+            when the exporter is built: changes the caller makes to their own session afterwards do not reach the copy. The copy
+            is judged on every export: a change to it makes that export send nothing and return a failure.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any):
-        bound_args = _get_class_signature(_HTTPSpanExporter).bind_partial(*args, **kwargs)
-        endpoint = bound_args.arguments.get("endpoint")
-        headers = bound_args.arguments.get("headers")
+    def __init__(self, *args: Any, allow_insecure_http: bool = False, **kwargs: Any):
+        bound_args = _get_class_signature(_HTTPSpanExporter, "http").bind_partial(*args, **kwargs)
+        caller_headers = _materialize_headers(bound_args.arguments.get("headers"))
+        if "headers" in bound_args.arguments:
+            bound_args.arguments["headers"] = caller_headers
 
-        if endpoint is None:
+        if bound_args.arguments.get("endpoint") is None:
+            # The environment's endpoint is checked as written, before the exporter's own rewrite of its path.
+            _check_future_agi_endpoint(get_env_traces_endpoint(), False, caller_headers, named=True)
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
-        future_agi = _is_future_agi_endpoint(endpoint)
-        sdk_headers = _with_fi_auth_headers(headers, add_env_keys=future_agi)
-        bound_args.arguments["headers"] = sdk_headers or None
-
+        # Built once, with the caller's own arguments: nothing Future AGI specific reaches the
+        # session or the headers a caller supplied until the resolved endpoint is known.
+        if _check_future_agi_endpoint(bound_args.arguments["endpoint"], False, caller_headers) == "fi":
+            _authorize_http_endpoint(bound_args.arguments["endpoint"], allow_insecure_http, bound_args.arguments.get("session"))
+        else:
+            _refuse_fi_header_names_in_environment()
         super().__init__(*bound_args.args, **bound_args.kwargs)
-        # Decide on the endpoint the exporter resolved, not only the argument.
-        if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
-            _pin_http_headers(self, sdk_headers)
-        elif future_agi:
-            raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-http")
+        try:
+            resolved = _check_future_agi_endpoint(getattr(self, "_endpoint", None), False, caller_headers)
+            if resolved == "fi":
+                _pin_http_headers(
+                    self,
+                    _with_fi_auth_headers(caller_headers, add_env_keys=True),
+                    caller_headers,
+                    bound_args.arguments.get("session"),
+                )
+                origin = _http_origin(getattr(self, "_endpoint", None))
+                plain = bool(origin and origin[0] == "http")
+                _secure_http_transport(self, plain, bound_args.arguments.get("session"))
+        except (UnsupportedFutureAGIEndpointError, UnsupportedOTLPExporterError):
+            _close_after_refusal(self, _HTTPSpanExporter)
+            raise
+
+    def export(self, spans: Any, *args: Any, **kwargs: Any) -> Any:
+        """Export ``spans``. On a plain channel that carries Future AGI keys, the session that sends is judged first, as it is when
+        the export runs: it must still be the isolated copy this exporter installed, with no proxy, no environment, no hook and the
+        routing functions of ``requests``. Otherwise nothing is sent and the export fails with ``UnsupportedFutureAGIEndpointError``
+        code ``proxied`` logged."""
+        held = self.__dict__.get("_fi_sender")
+        changed = (
+            "Future AGI keys are not sent over a plain channel with a session that may send through a proxy, runs a hook or "
+            "cannot be inspected (code proxied): the session this exporter sends with was changed after it was built."
+        )
+        if held is not None and (_requests_session_of(self) is not held[0] or not _sender_is_sound(*held)):
+            logger.error(changed)
+            return SpanExportResult.FAILURE
+        try:
+            return super().export(spans, *args, **kwargs)
+        except _SenderRefused:
+            logger.error(changed)
+        except _RedirectRefused:
+            logger.error("A request that carries Future AGI keys was answered with a redirect, which is not followed.")
+        return SpanExportResult.FAILURE
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -914,20 +1968,80 @@ def _normalized_endpoint(endpoint: Optional[str]) -> Tuple[ParseResult, str]:
     return parsed, parsed.geturl()
 
 
-def _get_class_signature(fn: Type[Any]) -> inspect.Signature:
-    if sys.version_info >= (3, 9):
-        return inspect.signature(fn)
-    elif sys.version_info >= (3, 8):
-        init_signature = inspect.signature(fn.__init__)
-        new_params = list(init_signature.parameters.values())[1:]  # Skip 'self'
-        new_sig = init_signature.replace(parameters=new_params)
-        return new_sig
+_EXPORTER_PACKAGES = {
+    "http": "opentelemetry-exporter-otlp-proto-http",
+    "grpc": "opentelemetry-exporter-otlp-proto-grpc",
+}
+
+
+def _installed_minor(kind: str) -> int | None:
+    """The minor version of the installed exporter package (1.<minor>.x), if it can be read."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        parts = version(_EXPORTER_PACKAGES[kind]).split(".")
+        return int(parts[1]) if parts[0] == "1" else None
+    except (PackageNotFoundError, ValueError, IndexError):  # pragma: no cover - metadata unavailable or unusual
+        return None
+
+
+def _documented_init_signature(kind: str) -> inspect.Signature:
+    """The ``__init__`` parameters the OTLP span exporters document, without ``self``.
+
+    Used when the class's ``__init__`` is wrapped by a bare ``(self, *args, **kwargs)``
+    function, so its own signature names none of them. The positional order is the
+    one of the installed release: ``channel_options`` follows ``compression`` from 1.35
+    and ``retryable_error_codes`` follows it from 1.42 (gRPC). Parameters a release
+    does not have pass through ``**kwargs`` unchanged.
+    """
+    P = inspect.Parameter
+    minor = _installed_minor(kind)
+    if kind == "http":
+        names = [
+            "endpoint",
+            "certificate_file",
+            "client_key_file",
+            "client_certificate_file",
+            "headers",
+            "timeout",
+            "compression",
+            "session",
+        ]
     else:
-        raise RuntimeError("Unsupported Python version")
+        names = ["endpoint", "insecure", "credentials", "headers", "timeout", "compression"]
+        if minor is None or minor >= 35:
+            names.append("channel_options")
+        if minor is None or minor >= 42:
+            names.append("retryable_error_codes")
+    params = [P(n, P.POSITIONAL_OR_KEYWORD, default=None) for n in names]
+    params.append(P("kwargs", P.VAR_KEYWORD))
+    return inspect.Signature(params)
+
+
+def _get_class_signature(fn: Type[Any], kind: str | None = None) -> inspect.Signature:
+    """The signature callers of ``fn`` bind against, following any ``__wrapped__`` chain.
+
+    When what remains is only ``*args``/``**kwargs`` (a wrapper that does not expose
+    the function it wraps), ``kind`` ("http" or "grpc") selects the exporter's
+    documented parameters instead.
+    """
+    sig = inspect.signature(fn, follow_wrapped=True)
+    named = [
+        p
+        for p in sig.parameters.values()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    if kind is not None and not named:
+        return _documented_init_signature(kind)
+    return sig
 
 
 def check_custom_eval_config_exists(
-    project_name: str, eval_tags: list, project_type: str = ProjectType.EXPERIMENT.value, base_url: Optional[str] = None
+    project_name: str,
+    eval_tags: list,
+    project_type: str = ProjectType.EXPERIMENT.value,
+    base_url: Optional[str] = None,
+    allow_insecure_http: bool = False,
 ) -> bool:
     """
     Check if a custom eval config exists for a given project.
@@ -935,19 +2049,22 @@ def check_custom_eval_config_exists(
     if not eval_tags:
         return False
 
+    from_env = base_url is None
     if base_url is None:
         base_url = get_env_collector_endpoint()
 
     url = f"{base_url}/tracer/custom-eval-config/check_exists/"
+    send_keys = _guard_future_agi_request(url, allow=allow_insecure_http, base=base_url, from_env=from_env)
 
     try:
         headers = {
             CONTENT_TYPE: "application/json",
-            **(get_env_fi_auth_header() or {}),
+            **((get_env_fi_auth_header() or {}) if send_keys else {}),
         }
 
-        response = requests.post(
+        response = _post_with_keys(
             url,
+            send_keys,
             headers=headers,
             json={"project_name": project_name, "eval_tags": eval_tags, "project_type": project_type},
         )
