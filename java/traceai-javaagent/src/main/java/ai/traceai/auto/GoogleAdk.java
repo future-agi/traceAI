@@ -584,6 +584,14 @@ public final class GoogleAdk {
         return null;
     }
 
+    /** The id of the agent's own span for an ADK span the application sees as its current span, or "" for any other span. */
+    static String idOf(Object external) {
+        try {
+            if (external != null && Proxy.isProxyClass(external.getClass()) && Proxy.getInvocationHandler(external) instanceof AdkSpan adk && adk.shadow != null) return adk.shadow.getSpanContext().getSpanId();
+        } catch (Throwable ignored) { }
+        return "";
+    }
+
     /** The agent's own span for an ADK span the application sees as its current span, as a context, or null. */
     static Context contextOf(Object external) {
         try {

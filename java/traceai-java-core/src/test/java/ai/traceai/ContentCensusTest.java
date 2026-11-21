@@ -36,6 +36,7 @@ class ContentCensusTest {
         Map.entry("traceai-java-watsonx/WatsonxAttributes.java", "helpers called only with model, token-count and parameter keys"),
         Map.entry("traceai-javaagent/GoogleAdk.java", "every key passes AttributeProjection.sanitize and hidden(k, ...) before the typed write"),
         Map.entry("traceai-javaagent/TraceAIAuto.java", "every key passes hidden(k, ...) before the typed write"),
+        Map.entry("traceai-javaagent/AnnotationTracing.java", "attributes are written by set(), which passes hidden(k, ...) first, and the input and output text is built only after the same check; the exception path writes error.type (a class name) and error.message only when hidesErrorText is false; the cancellation marker is a fixed boolean"),
         Map.entry("traceai-spring-ai/SpringAITracingContext.java", "context attributes (session, user, metadata), not content keys"));
 
     private static Path javaRoot() {

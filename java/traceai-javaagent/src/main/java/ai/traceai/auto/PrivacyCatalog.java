@@ -8,11 +8,20 @@ import java.util.regex.Pattern;
 
 /** S6 recognition, loaded once from the shared catalog. No transport or application objects. */
 final class PrivacyCatalog {
+    private static final String DIGEST_PARAMETER = "[A-Za-z][A-Za-z0-9_-]{0,31}\\s{0,4}=\\s{0,4}(?:\"[^\"\\r\\n]{0,512}\"|[^\\s,\"]{0,512})";
+    private static final List<String> AUTHORIZATION_SHAPES = List.of(
+        "\\b(?:Negotiate|NTLM)\\s+[A-Za-z0-9+/_=-]{8,}",
+        "\\bDigest\\s+" + DIGEST_PARAMETER + "(?:\\s{0,4},\\s{0,4}" + DIGEST_PARAMETER + "){0,31}");
+    // Declared before INSTANCE: the constructor reads them.
+    /** The catalog's JWT shape, with the first two segments possessive (the run before a dot is never given back). */
+    private static final String JWT_CATALOG = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b";
+    private static final String JWT_LINEAR = "\\beyJ[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}\\b";
+    private static final Pattern JWT_START = Pattern.compile("\\beyJ");
     static final PrivacyCatalog INSTANCE = new PrivacyCatalog();
     private final List<String> credentialPatterns;
     private final List<Exclusion> exclusions = new ArrayList<>();
     private final List<Pattern> contextualExclusions = new ArrayList<>();
-    private final List<Pattern> valueShapes = new ArrayList<>();
+    private final List<Shape> valueShapes = new ArrayList<>();
     // Exact declared usage/byte counter keys; true when the catalog types them as nonnegative safe integers.
     private final Map<String, Boolean> scalarMetrics = new HashMap<>();
     private final Set<String> signed, mimeNames, mimeExact, mimePayload, audioFields, audioPayload, audioTypes, metadata, base64Fields;
@@ -24,6 +33,15 @@ final class PrivacyCatalog {
     private final int prefixBytes, threshold;
     final int maxDepth, maxNodes, maxText;
     private record Exclusion(Pattern regex, List<String> guards) {}
+    /**
+     * A credential value shape. {@code start} is set for a shape whose start can sit inside the run of characters it then reads: a start
+     * that fails has read that whole run, and every later start in the same run would read it again and fail the same way, so the scan
+     * continues after the run and the work stays linear in the text.
+     */
+    private record Shape(Pattern pattern, Pattern start) {
+        Shape(Pattern pattern) { this(pattern, null); }
+    }
+    private static boolean runCharacter(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'; }
     private record MagicTest(int offset, byte[] expected, byte[] mask) {}
     /** image is extra image evidence (image type, modality or MIME): it only widens omission. */
     record Hint(boolean media, boolean audio, boolean image) {
@@ -54,8 +72,13 @@ final class PrivacyCatalog {
         for (Object rule : WireCore.list(credentials.get("value_shapes"))) {
             String flags = Objects.requireNonNullElse(WireCore.str(WireCore.get(rule, "flags")), "");
             if (!flags.replace("i", "").isEmpty()) throw new IllegalStateException("Unsupported value-shape flags: " + flags);
-            valueShapes.add(Pattern.compile(WireCore.str(WireCore.get(rule, "regex")), flags.contains("i") ? Pattern.CASE_INSENSITIVE : 0));
+            String regex = WireCore.str(WireCore.get(rule, "regex"));
+            int options = flags.contains("i") ? Pattern.CASE_INSENSITIVE : 0;
+            valueShapes.add(JWT_CATALOG.equals(regex) && options == 0 ? new Shape(Pattern.compile(JWT_LINEAR), JWT_START) : new Shape(Pattern.compile(regex, options)));
         }
+        // Authorization schemes with no name in front of them, besides the catalog's Bearer and Basic: Negotiate and NTLM carry a token, Digest a
+        // comma-separated list of name=value parameters.
+        for (String shape : AUTHORIZATION_SHAPES) valueShapes.add(new Shape(Pattern.compile(shape, Pattern.CASE_INSENSITIVE)));
         for (Object container : WireCore.list(WireCore.get(catalog.get("scalar_metrics"), "containers"))) {
             boolean typed = "nonnegative_safe_integer".equals(WireCore.get(container, "value_type"));
             for (Object key : WireCore.list(WireCore.get(container, "keys"))) scalarMetrics.merge((String)key, typed, Boolean::logicalOr);
@@ -130,6 +153,18 @@ final class PrivacyCatalog {
         for (Exclusion rule : exclusions) if (rule.regex.matcher(folded).matches() && rule.guards.stream().noneMatch(folded::contains)) return true;
         return false;
     }
+    /** Names that are credentials as a whole or as a segment ({@code dbPass}, {@code db.pwd}, {@code Set-Cookie}), besides the catalog's patterns. Over-redaction (a name like {@code pin}) fails closed. */
+    private static final Set<String> VOCABULARY = Set.of("pwd", "pass", "passphrase", "passwd", "passcode", "pin");
+    private static boolean vocabulary(String name) {
+        StringBuilder word = new StringBuilder();
+        for (int i = 0; i <= name.length(); i++) {
+            char c = i < name.length() ? name.charAt(i) : '-';
+            boolean boundary = !Character.isLetterOrDigit(c) || i > 0 && Character.isUpperCase(c) && Character.isLowerCase(name.charAt(i - 1));
+            if (boundary && word.length() > 0) { if (VOCABULARY.contains(word.toString())) return true; word.setLength(0); }
+            if (Character.isLetterOrDigit(c)) word.append(Character.toLowerCase(c));
+        }
+        return false;
+    }
     boolean credentialName(String name) { return credentialName(name, false); }
     boolean credentialName(String name, boolean environmentSeed) {
         // S5 initialization deliberately seeds all credential-marked environment names, including
@@ -142,11 +177,11 @@ final class PrivacyCatalog {
             if (!context.isEmpty()) context.append('.'); context.append(folded);
             String current = context.toString();
             if (excluded(folded) || contextualExclusions.stream().anyMatch(rule -> rule.matcher(current).matches())) excluded = true;
-            else if (credentialPatterns.stream().anyMatch(folded::contains)) return true;
+            else if (credentialPatterns.stream().anyMatch(folded::contains) || vocabulary(part)) return true;
         }
         if (excluded) return false;
         String folded = normalize(name);
-        return !excluded(folded) && credentialPatterns.stream().anyMatch(folded::contains);
+        return !excluded(folded) && (credentialPatterns.stream().anyMatch(folded::contains) || vocabulary(name));
     }
     boolean queryName(String name) { return signed.contains(normalize(name)) || credentialName(name); }
     boolean base64(String value) {
@@ -248,11 +283,35 @@ final class PrivacyCatalog {
     String otherMedia() { return otherReplacement; }
     /** Credential value shapes apply to every exported string after registered secrets, independently of names. */
     String scrubValueShapes(String text) {
-        for (Pattern shape : valueShapes) {
-            Matcher matcher = shape.matcher(text);
+        for (Shape shape : valueShapes) {
+            if (shape.start() != null) { text = replaceRunStarts(shape, text); continue; }
+            Matcher matcher = shape.pattern().matcher(text);
             if (matcher.find()) text = matcher.replaceAll(Matcher.quoteReplacement(replacement));
         }
         return text;
+    }
+    /** The replacements {@code replaceAll} would make for the shape, with a failed start skipping the rest of the run it read. */
+    private String replaceRunStarts(Shape shape, String text) {
+        Matcher starts = shape.start().matcher(text);
+        Matcher whole = shape.pattern().matcher(text).useTransparentBounds(true).useAnchoringBounds(false);
+        StringBuilder out = null;
+        int copied = 0, from = 0, length = text.length();
+        while (from < length && starts.find(from)) {
+            int start = starts.start();
+            whole.region(start, length);
+            if (whole.lookingAt()) {
+                if (out == null) out = new StringBuilder(length);
+                out.append(text, copied, start).append(replacement);
+                copied = whole.end();
+                from = Math.max(copied, start + 1);
+            } else {
+                int end = start;
+                while (end < length && runCharacter(text.charAt(end))) end++;
+                from = Math.max(end, start + 1);
+            }
+        }
+        if (out == null) return text;
+        return out.append(text, copied, length).toString();
     }
     /**
      * A declared usage/byte counter (exact complete key) keeps its scalar role, although its spelling
