@@ -316,19 +316,39 @@ module TraceAI
         end.join('&') + hashmark + fragment
         candidate != value && URL_VALUE.match?(candidate)
       end
-      # Three limits bound what the fragment matcher may do for one value (not for a whole span: every string value of
-      # a span has its own, so a span of max_nodes strings can cost that many times MATCH_WORK):
+      # Four limits bound what the fragment matcher may do. Three are for one value:
       #   MATCH_ROUNDS - rounds over every secret that may still change the value;
       #   MATCH_STEPS  - automaton steps, in total;
       #   MATCH_WORK   - everything scanned, in total: each character of every scan of the text, every candidate
-      #                  examined for every secret (and every character a membership test reads), the output built
-      #                  for a replacement, and the automaton steps. Each amount is charged BEFORE the work it pays
-      #                  for, so the charged total never exceeds the limit.
-      # Past any limit, the whole value becomes the placeholder; a fragment is never left behind. A value that still
-      # changes in the last round is replaced whole only if one more pass over it would change it again.
+      #                  examined for every secret (and every character a membership test reads), the binary searches
+      #                  over the candidates, the code points of every secret, the table and the bit masks built and
+      #                  used for it, the output built for a replacement, and the automaton steps. Each amount is
+      #                  charged BEFORE the work it pays for, so the charged total never exceeds the limit.
+      # The fourth is for one span, that is, for every value scrubbed with one Budget:
+      #   MATCH_SPAN_WORK - the same work, added up over all of those values (a value's work counts toward both its own
+      #                  MATCH_WORK and this). Without it a span of max_nodes strings could cost that many times
+      #                  MATCH_WORK.
+      # Past a value's limit, the whole value becomes the placeholder; a fragment is never left behind. Past the
+      # span's, that value and every later value of the span becomes the placeholder. A value that still changes in
+      # the last round is replaced whole only if one more pass over it would change it again.
       MATCH_ROUNDS = 8
       MATCH_STEPS = 200_000
       MATCH_WORK = 16_000_000
+      # What the matcher costs scales with the registry, not only with the text: a value that holds a placeholder is
+      # read once for every registered secret (up to 1024), at the length of the secret, and each placeholder is
+      # examined for every secret. A span with a full registry of long credentials and a few hundred placeholders in
+      # its values can therefore reach this bound; the span of a few values with a few placeholders, and the largest
+      # span without them, cannot: the text budget of a span is max_text_chars (4 MiB) and charges each string twice,
+      # so a span holds about 2 MiB of text, and a value with one fragment next to a placeholder costs about 4 units a
+      # character (12 million for 3 million characters), about 8 million for such a span. The bound is 32 million:
+      # twice MATCH_WORK, so a single value can still use all of its own. Matching costs from 20 to 90 nanoseconds a
+      # unit, so the bound caps the matching of one span at roughly one to three seconds on the host's thread.
+      # Past it the value being matched and every later value of the span (and every later name in it) is the
+      # placeholder. Privacy.snapshot scrubs a span's name, status text, resource and scope before its attributes, so
+      # the span keeps its identity. The fallbacks that run only after the snapshot failed (Privacy.safe_metadata, with
+      # one Budget for keys and one for values, and Privacy.recover_identity, with one for the name and one for the
+      # resource) each use a Budget of their own, so the worst case for one span is five times this bound.
+      MATCH_SPAN_WORK = 32_000_000
       class MatchLimit < StandardError; end
 
       # A secret learned after a span was captured, or one that overlaps another, can leave part of itself next to a
@@ -340,9 +360,9 @@ module TraceAI
       # in S and whose placeholder step moves to any later position. A match holds at least one placeholder and one
       # literal character, and is replaced by one placeholder. A replacement can complete a match for another secret
       # (a chain), so the secrets are applied again until nothing changes. Every round that changes something adds a
-      # placeholder and removes characters, so the process ends; the round and step limits bound the work, and a
-      # value that reaches either is replaced whole.
-      def close_fragments(text, secrets, work = [0, 0])
+      # placeholder and removes characters, so the process ends; the limits above bound the work, and a
+      # value that reaches any of them is replaced whole.
+      def close_fragments(text, secrets, work = [0, 0, nil])
         return text unless text.include?(REDACTED)
         # work: characters and candidates scanned, automaton steps. The scan is rebuilt only after a change and then
         # serves the rest of the round, the next round, and the final check.
@@ -363,8 +383,11 @@ module TraceAI
       end
 
       # Charges `amount` before the work it pays for; past the limit the work is never done.
+      # `work` is [work, steps] of one value, with the span's Budget as a third item when there is one: the amount
+      # is charged to the span as well.
       def spend(work, amount)
         raise MatchLimit if work[0] + amount > MATCH_WORK
+        work[2]&.spend_work(amount)
         work[0] += amount
       end
 
@@ -391,18 +414,22 @@ module TraceAI
         items, tokens, positions = scan
         size = secret.length
         spend(work, tokens.length + 1)
+        spend(work, 2 * size) # codepoints reads the whole secret, and so does the set of its characters below
         codes = secret.codepoints
+        present = {}
+        codes.each { |code| present[code] = true }
         listed = positions.fetch(codes[0], nil)
         starts = []
         second = codes[1]
+        # Two binary searches per token, each at most one step more than the bits of the list's length.
+        spend(work, 2 * tokens.length * (listed.length.bit_length + 1)) if listed
         tokens.each do |token|
           # A match that starts at the placeholder goes on with a character of the secret (or another placeholder).
           following = items[token + 1]
           if token + 1 >= items.length || following.nil?
             starts << token
           else
-            spend(work, size) # include? reads up to the whole secret
-            starts << token if secret.include?([following].pack('U'))
+            starts << token if present.key?(following) # one hash lookup; the loop is charged above
           end
           next unless listed
           low = token - size + 1
@@ -416,7 +443,11 @@ module TraceAI
           end
         end
         return nil if starts.empty?
-        spend(work, starts.length + size)
+        # One step per start, and one per character of the secret for the loop that builds the table. The table sets
+        # bit `index` of one mask per distinct character, and both `1 << index` and the `|=` make a mask of at most
+        # index / 64 + 1 words: at most 2 * (size + size * (size - 1) / 128) words in all, which 2 * size +
+        # size * size / 64 covers.
+        spend(work, starts.length + size + 2 * size + ((size * size) >> 6))
         table = Hash.new(0)
         codes.each_with_index { |code, index| table[code] |= 1 << index }
         full = (1 << (size + 1)) - 1
@@ -424,7 +455,7 @@ module TraceAI
         output = []; cursor = 0; found = false
         starts.uniq.sort.each do |start|
           next if start < cursor
-          stop = match_end(items, start, table, full, accept, work)
+          stop = match_end(items, start, table, full, accept, work, size)
           next unless stop
           spend(work, start - cursor + 1)
           output.concat(items[cursor...start]); output << nil
@@ -437,12 +468,16 @@ module TraceAI
       end
 
       # The end of the longest match of the automaton from `start` that holds a placeholder and a literal, or nil.
-      def match_end(items, start, table, full, accept, work)
+      def match_end(items, start, table, full, accept, work, size)
         mask = 1; position = start; best = nil; token = false; literal = false
+        # A step makes at most seven operations on masks of at most size + 1 bits (the placeholder branch: negate, and,
+        # shift, subtract, complement, and, then the test against `accept`), each reading and writing at most
+        # (size + 1) / 64 + 1 words; 8 words' worth covers them, plus one for the step itself.
+        step = 1 + 8 * (((size + 1) >> 6) + 1)
         while mask != 0 && position < items.length
           work[1] += 1
           raise MatchLimit if work[1] > MATCH_STEPS
-          spend(work, 1)
+          spend(work, step)
           item = items[position]
           if item.nil?
             lowest = mask & -mask
@@ -459,6 +494,8 @@ module TraceAI
       end
       def clean_string(value, secrets, budget = Budget.new, framed = true)
         budget.spend(value.bytesize)
+        # The span has used all the matching work it may: nothing more of it is read.
+        return REDACTED if budget.work_spent?
         text = value.encode('UTF-8', invalid: :replace, undef: :replace)
         replacement = media_replacement(text, '', false, false, {}, framed)
         return replacement if replacement
@@ -482,11 +519,12 @@ module TraceAI
         end
         # Secrets first, none matching across a placeholder; then whatever of an overlapping secret the first pass left
         # beside a placeholder (see close_fragments).
-        plain = secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 && secret != REDACTED && !secret.include?(REDACTED) }
+        # Secrets are read as the registry reads them (invalid bytes become U+FFFD), never skipped for their bytes.
+        plain = normalize_secrets(secrets).select { |secret| secret != REDACTED && !secret.include?(REDACTED) }
         plain.each do |secret|
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end
-        text = close_fragments(text, plain)
+        text = close_fragments(text, plain, [0, 0, budget])
         VALUE_SHAPES.each { |shape| text = text.gsub(shape, REDACTED) }
         text
       end

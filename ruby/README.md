@@ -475,6 +475,13 @@ install anything.
 
 ## Limitations
 
+- Matching known secrets that overlap one another has a work limit per value and a larger one per span. The cost
+  grows with the registered secrets (at most 1024, each read once for every value that holds a placeholder) and the
+  placeholders in a span's values. A value past its limit is replaced with the placeholder. When a span reaches its
+  limit, the value being matched and every later value (numbers and booleans too) and name of that span are replaced
+  with the placeholder, the hide settings still apply by each attribute's own name, and the span's name, status text,
+  resource and scope, scrubbed first, are kept. The agent's fallbacks after a
+  failed snapshot each have their own limit, so the worst case for one span is five times the span's limit.
 - Not covered: non-default Faraday adapters (Typhoeus, Excon, HTTP.rb), direct
   sockets, WebSockets, gRPC and custom HTTPX transport plugins.
 - Apart from RubyLLM, there are no library-level instrumentors in this gem;
