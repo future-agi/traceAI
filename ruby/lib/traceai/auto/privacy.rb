@@ -67,8 +67,17 @@ module TraceAI
       end
       # Secrets a caller hands in are read as the registry reads them (Config.utf8): invalid bytes become U+FFFD and the
       # valid characters stay, so such a secret still protects the text it was taken from. None is skipped for its bytes.
+      # A secret that is a byte slice cutting through a multi-byte character reads as U+FFFD there, which matches less than
+      # the valid text around it. So every maximal run of valid characters (8 or more) is a secret of its own as well.
       def normalize_secrets(secrets)
-        secrets.select { |secret| Codec.type(secret) == String }.map { |secret| Config.utf8(secret) }.select { |secret| secret.length >= 8 }
+        strings = secrets.select { |secret| Codec.type(secret) == String }
+        strings.flat_map { |secret| [Config.utf8(secret), *valid_runs(secret)] }.select { |secret| secret.length >= 8 }.uniq
+      end
+      def valid_runs(secret)
+        return [] if secret.valid_encoding? && ![Encoding::UTF_8, Encoding::US_ASCII, Encoding::ASCII_8BIT].include?(secret.encoding)
+        text = secret.b.force_encoding(Encoding::UTF_8)
+        return [] if text.valid_encoding?
+        text.each_char.chunk { |char| char.valid_encoding? }.filter_map { |valid, chars| chars.join if valid }.select { |run| run.length >= 8 }
       end
       def secrets(headers, configured = [])
         values = configured.select { |v| Codec.type(v) == String }
@@ -208,6 +217,8 @@ module TraceAI
           on_media&.call if cleaned != value && cleaned.include?('<omitted:')
           cleaned
         elsif [Integer, Float, TrueClass, FalseClass, NilClass].include?(klass)
+          # The span has used all the matching work it may: no leaf of it is read, whatever its type.
+          return REDACTED if budget.work_spent?
           if klass != NilClass && (media_context(path, media, audio, hints)[2] || (lossy && lossy_media_path?(path)))
             on_media&.call
             return MEDIA['other_replacement']
@@ -460,6 +471,20 @@ module TraceAI
         return explicit unless explicit.nil?
         %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text].any? { |k| config.hidden?(k) }
       end
+      # The operation name as the attributes carry it (a String), or nil.
+      def operation_name(attributes)
+        return nil unless Codec.type(attributes) == Hash
+        attributes.each do |key, value|
+          return value if Codec.type(value) == String && (Codec.type(key) == Symbol ? key.name : key) == 'gen_ai.operation.name'
+        end
+        nil
+      end
+      # The attributes with the hide settings applied by their own names, before scrubbing renames anything.
+      def hidden_by_name(attributes, config, operation)
+        return attributes unless Codec.type(attributes) == Hash
+        named = attributes.each_with_object({}) { |(key, value), out| out[Codec.type(key) == Symbol ? key.name : safe_string(key)] = value }
+        mask(named, config, operation)
+      end
       def mask(attributes, config, operation = nil)
         hide = ->(key) { config.hidden?(key) }
         attributes.each_with_object({}) do |(k, v), out|
@@ -596,7 +621,7 @@ module TraceAI
           # operation name, which comes from the scrubbed attributes, so they are applied after them.
           name = scrub(safe_string(field(record, :name)), secrets, nil, 0, budget)
           status_text = hide_errors?(config) ? '__REDACTED__' : scrub(safe_string(description || ''), secrets, nil, 0, budget)
-          resource_scrubbed = scrub(resource_attributes(record, resource) || {}, secrets, nil, 0, budget)
+          resource_scrubbed = scrub(hidden_by_name(resource_attributes(record, resource) || {}, config, operation_name(source)), secrets, nil, 0, budget)
           scope = field(record, :instrumentation_scope)
           structured = Object.instance_method(:is_a?).bind_call(scope, Struct)
           scope_name = structured ? field(scope, :name) : ivar(scope, :@name)
@@ -604,10 +629,14 @@ module TraceAI
           scope_attrs = Codec.type(scope) == ExportScope ? field(scope, :attributes) : ivar(scope, :@attributes)
           scope_name_scrubbed = scrub(safe_string(scope_name || ''), secrets, nil, 0, budget)
           scope_version_scrubbed = scrub(safe_string(scope_version || ''), secrets, nil, 0, budget)
-          scope_attrs_scrubbed = scrub(scope_attrs || {}, secrets, nil, 0, budget)
-          attributes = scrub(source, secrets, nil, 0, budget, lossy: lossy)
-          operation = attributes['gen_ai.operation.name']
-          apply_media = ->(attrs, decision) { mask(scrub(admitted_attributes(attrs, decision), secrets, nil, 0, budget, lossy: lossy), config, operation) }
+          scope_attrs_scrubbed = scrub(hidden_by_name(scope_attrs || {}, config, operation_name(source)), secrets, nil, 0, budget)
+          # The operation name is an identity field: it is read from the attributes as they came, so a span that passes its
+          # work bound before the name still tells a spoken input from a spoken output.
+          operation = operation_name(source)
+          # The hide settings decide by the attribute's own name, so they apply to the attributes as they came, before any
+          # name is replaced by the placeholder; the same masks run again on the scrubbed names below.
+          attributes = scrub(hidden_by_name(source, config, operation), secrets, nil, 0, budget, lossy: lossy)
+          apply_media = ->(attrs, decision) { mask(scrub(hidden_by_name(admitted_attributes(attrs, decision), config, operation), secrets, nil, 0, budget, lossy: lossy), config, operation) }
           safe_status = LocalStatus.new(copy.status.code, status_text)
           safe_resource = ExportResource.new(mask(resource_scrubbed, config, operation))
           safe_scope = ExportScope.new(scope_name_scrubbed, scope_version_scrubbed, mask(scope_attrs_scrubbed, config, operation))

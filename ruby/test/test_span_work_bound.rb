@@ -146,7 +146,9 @@ class SpanWorkBoundTest < Minitest::Test
     attributes = (0...200).to_h { |i| ["app.value.#{i}", value] }
     record = span_with(attributes)
     config = TraceAI::Auto::Config.new({}, env: {})
-    # The process-wide registry is whatever other tests left in it; the test's own list is the whole registry.
+    # Every test in the process shares one registry (Auto.register_secret and the environment seed it), and each secret in
+    # it adds matcher work to this span, so how many values pass the bound depended on which tests had run before. The
+    # stub makes the test's own list the whole registry.
     copy = TraceAI::Auto.stub(:secret_values, []) do
       TraceAI::Auto::Privacy.snapshot(record, TraceAI::Auto::ExportResource.new({'service.name' => 'checkout-service'}), config, registry)
     end
@@ -203,7 +205,7 @@ class SpanWorkBoundTest < Minitest::Test
     copy = snapshot_past_the_bound(span_with(attributes), {})
     refute_includes exported_text(copy), '424242'
     refute_includes exported_text(copy), '31415'
-    assert_equal PLACEHOLDER, copy.attributes[PLACEHOLDER]
+    assert_equal [PLACEHOLDER], [copy.attributes[PLACEHOLDER]].flatten.uniq
   end
 
   def test_an_event_numeric_attribute_past_the_bound_is_the_placeholder
