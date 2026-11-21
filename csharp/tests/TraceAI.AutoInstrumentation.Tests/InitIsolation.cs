@@ -16,6 +16,7 @@ public abstract class InitIsolation : IDisposable
             ((Dictionary<string,LinkedListNode<string>>)state[1]).Clear(); ((LinkedList<string>)state[2]).Clear();
             state[3]=Array.Empty<string>(); state[4]=false; state[5]=false; state[6]=false;
             if(state.Length>7) ((HashSet<string>)state[7]).Clear();
+            if(state.Length>9) { ((Dictionary<string,LinkedListNode<string>>)state[8]).Clear(); ((LinkedList<string>)state[9]).Clear(); }
         }
     }
     private static void Reset()

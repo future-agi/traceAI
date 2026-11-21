@@ -6,17 +6,18 @@ namespace TraceAI.AutoInstrumentation;
 /// No activity references, per-trace groups or diagnostic representation of values.</summary>
 internal static class KnownSecrets
 {
-    private const string StateKey="TraceAI.AutoInstrumentation.KnownSecrets.v2";
+    private const string StateKey="TraceAI.AutoInstrumentation.KnownSecrets.v3";
     internal const int Capacity=1024;
     internal const int MaxLength=4096;
-    // gate, LRU index/list, immutable sorted snapshot, failed, environment seeded, dirty, pinned (outside the LRU: never evicted, not bounded).
+    // gate, LRU index/list, immutable sorted snapshot, failed, environment seeded, dirty, pinned (outside the LRU: never evicted, not bounded),
+    // then the secrets registered through RegisterSecret: their own index and recency list (bounded like the registry).
     private static readonly object[] State=ProcessState();
     private static object[] ProcessState()
     {
         lock(AppDomain.CurrentDomain)
         {
             if(AppDomain.CurrentDomain.GetData(StateKey) is object[] existing) return existing;
-            object[] created=[new object(),new Dictionary<string,LinkedListNode<string>>(StringComparer.Ordinal),new LinkedList<string>(),Array.Empty<string>(),false,false,false,new HashSet<string>(StringComparer.Ordinal)];
+            object[] created=[new object(),new Dictionary<string,LinkedListNode<string>>(StringComparer.Ordinal),new LinkedList<string>(),Array.Empty<string>(),false,false,false,new HashSet<string>(StringComparer.Ordinal),new Dictionary<string,LinkedListNode<string>>(StringComparer.Ordinal),new LinkedList<string>()];
             AppDomain.CurrentDomain.SetData(StateKey,created); return created;
         }
     }
@@ -50,6 +51,31 @@ internal static class KnownSecrets
         try { lock(State[0]) Add(value); }
         catch { FailClosed(); }
     }
+    // Secrets the application registered through RegisterSecret, kept apart from the environment-seeded and wire-observed values: only these
+    // (with the Future AGI key values) decide whether another collector may be given ambient OTLP headers. They live in the process state
+    // above, so the hook and default load contexts see one set.
+    /// <summary>Registers a secret the application named through <c>TraceAIAuto.RegisterSecret</c>: redacted like any known secret, and screened for in ambient exporter headers.</summary>
+    internal static void RegisterExplicit(string? value)
+    {
+        if(value==null || value.Length<8) return;
+        Register(value);
+        if(value.Length>MaxLength) return;
+        try
+        {
+            lock(State[0])
+            {
+                var index=(Dictionary<string,LinkedListNode<string>>)State[8];
+                var order=(LinkedList<string>)State[9];
+                // Registering a value again makes it the newest, so the most recent registrations are the ones kept.
+                if(index.TryGetValue(value,out var found)) { order.Remove(found); order.AddLast(found); return; }
+                if(index.Count==Capacity) { index.Remove(order.First!.Value); order.RemoveFirst(); }
+                index[value]=order.AddLast(value);
+            }
+        }
+        catch { FailClosed(); }
+    }
+    /// <summary>The secrets registered through <c>TraceAIAuto.RegisterSecret</c>.</summary>
+    internal static string[] Registered() { lock(State[0]) return ((LinkedList<string>)State[9]).ToArray(); }
     private static void Add(string value)
     {
         if(value.Length<8) return;

@@ -174,7 +174,8 @@ debug = false
 | Environment | Default / meaning |
 | --- | --- |
 | `FI_API_KEY`, `FI_SECRET_KEY` | Complete pair required for the default collector; optional with a supplied exporter or provider. |
-| `FI_BASE_URL` | `https://api.futureagi.com`; OTLP HTTP/protobuf at `/tracer/v1/traces`. |
+| `FI_BASE_URL` | `https://api.futureagi.com`; OTLP HTTP/protobuf at `/tracer/v1/traces`. Future AGI keys go to a Future AGI host only over TLS and to a literal loopback host (`localhost`, `127.0.0.1`, `::1`) in plaintext. |
+| `FI_ALLOW_INSECURE_HTTP` | Unset. `1` (exactly) or `AutoOptions.AllowInsecureHttp` lets the keys go in plaintext to a self-hosted collector that is not a Future AGI host, with one warning naming the setting and the origin; a plaintext request that carries the keys, loopback included, goes direct and never through a proxy (https keeps the normal proxy behaviour). Key-carrying requests do not follow redirects. |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, working directory name, then `DEFAULT_PROJECT_NAME`. |
 | `FI_PROJECT_TYPE` | `observe`; alternatively `experiment`. |
 | `FI_CONFIG_FILE` | `./futureagi.toml`. |
