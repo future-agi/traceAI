@@ -54,13 +54,12 @@ export function isEnvKeyValue(value: unknown): boolean {
   return Object.values(readEnvKeys(false) ?? {}).some(key => key.trim() === value.trim());
 }
 /**
- * Whether `headers` is key-carrying: a complete pair, or a lone key header (any case) whose value is a Future AGI key value. A lone key header
- * with another value is the caller's own header for its own collector.
+ * Whether `headers` is key-carrying: any key header (any case), a lone one included, whatever its value. A send that names a Future AGI key
+ * header is judged as one that carries keys; an application that sends such a header to its own collector sets the opt-in or uses TLS.
  */
 function hasAnyKeyHeader(headers: unknown): boolean {
-  if (hasCompleteKeyPair(headers)) return true;
   if (typeof headers !== "object" || headers === null) return false;
-  return Object.entries(headers).some(([key, value]) => isKeyName(key) && isEnvKeyValue(value));
+  return Object.entries(headers).some(([key, value]) => isKeyName(key) && value !== undefined && value !== null);
 }
 
 /** The string-valued entries of a gRPC Metadata object (for secret discovery and the exporter's privacy filter). */
@@ -81,9 +80,9 @@ export function metadataKeyValues(metadata: unknown): string[] {
   } catch { /* An unreadable metadata object adds nothing. */ }
   return found;
 }
-/** Whether a gRPC Metadata carries a complete pair, in any of its (repeated) values. */
-function metadataHasPair(metadata: grpc.Metadata): boolean {
-  return KEY_NAMES.every(name => metadata.get(name).some(value => typeof value === "string" && value.trim() !== ""));
+/** Whether a gRPC Metadata carries any key header, a lone one included, whatever its value. */
+function metadataHasAnyKey(metadata: grpc.Metadata): boolean {
+  return KEY_NAMES.some(name => metadata.get(name).length > 0);
 }
 /** Every value of the caller's gRPC Metadata, repeated and binary ones included, into `target`. */
 function copyMetadata(metadata: unknown, target: grpc.Metadata): void {
@@ -312,7 +311,7 @@ export interface FiRequest {
 }
 export interface FiDecision {
   fiBound: boolean;
-  /** The final outgoing set carries a complete key pair. */
+  /** The final outgoing set carries a Future AGI key header, a lone one included. */
   keys: boolean;
   /** The request is encrypted: https for HTTP, a secure channel for gRPC. */
   tls: boolean;
@@ -361,7 +360,7 @@ export function decideFiRequest(request: FiRequest): FiDecision {
     copyMetadata(request.metadata, metadata);
     for (const [name, value] of Object.entries(headers ?? {})) metadata.set(name.toLowerCase(), value);
   }
-  const keys = metadata ? metadataHasPair(metadata) : hasAnyKeyHeader(headers);
+  const keys = metadata ? metadataHasAnyKey(metadata) : hasAnyKeyHeader(headers);
 
   // A target a second parser reads differently never carries keys.
   if (shapes.some(shape => shape.ambiguous) && (keys || hasCompleteKeyPair(readEnvKeys(false)) || isFiEndpoint(target, transport) || (request.written !== undefined && isFiEndpoint(request.written, transport)))) throw new FiKeyRefusal("FI_HOST_MISMATCH");

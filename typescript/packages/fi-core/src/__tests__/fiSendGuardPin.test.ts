@@ -85,6 +85,8 @@ function isTransportPrimitive(node: ts.Node): boolean {
     if (ts.isPropertyAccessExpression(callee)) {
       if (GRPC_MEMBERS.test(callee.name.text) || (callee.name.text === "createInsecure" || callee.name.text === "createSsl")) return true;
       const receiver = callee.expression.getText();
+      // The captured fetch: Node's own, taken when the guard loads, is the one reference every key-carrying fetch goes through.
+      if (receiver === "nodeOwn" && callee.name.text === "fetch") return true;
       if (/^(?:http|https|http2|net|tls|undici|globalThis|global|Reflect)$/.test(receiver) && NETWORK_MEMBERS.test(callee.name.text)) return true;
       if (receiver === "Reflect" && callee.name.text === "apply") return /\b(?:fetch|request|connect)\b/.test(node.arguments[0]?.getText() ?? "");
     }
@@ -104,7 +106,8 @@ describe("every transport primitive in the key-carrying modules is inside the gu
       "fi-core/fi-send-guard.ts::<top level>", // the imports of the transports the guard uses
       "fi-core/fi-send-guard.ts::channelCredentials", // the one place a channel's credentials are constructed
       "fi-core/fi-send-guard.ts::guardOtlpGrpcExporter", // the channel it builds with proxies off
-      "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch
+      "fi-core/fi-send-guard.ts::guardedFetch", // the one fetch, through the reference captured when the guard loads
+      "fi-core/fi-send-guard.ts::nodeFetchNow", // the one read of the global fetch: Node's own, captured when the guard loads
       "fi-core/fi-send-guard.ts::primeNodeDispatcher", // the one probe that has Node install its own default dispatcher while the slot is empty
       "fi-core/otel.ts::<top level>", // the imports of the OTLP exporter packages the SDK's exporter classes extend
       "fi-core/otel.ts::createSpanExporter", // constructs the SDK's own exporter, whose constructor calls its guarded entry point

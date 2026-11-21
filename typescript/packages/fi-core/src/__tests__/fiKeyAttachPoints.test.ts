@@ -113,6 +113,8 @@ function isAttach(node: ts.Node): boolean {
   if (ts.isCallExpression(node)) {
     const callee = node.expression;
     if (ts.isIdentifier(callee) && ["fetch", "createOtlpHttpExportDelegate", "createOtlpGrpcExportDelegate"].includes(callee.text)) return true;
+    // The fetch captured when the guard loads is the send of a guarded fetch.
+    if (ts.isPropertyAccessExpression(callee) && callee.name.text === "fetch" && callee.expression.getText() === "nodeOwn") return true;
     // Any super(...) call with arguments in an exporter class hands its options, whatever they are called, to the OTLP exporter.
     if (callee.kind === ts.SyntaxKind.SuperKeyword) {
       const klass = node.parent && ts.findAncestor(node, ts.isClassDeclaration);

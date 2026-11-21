@@ -66,9 +66,9 @@ export function throwawayCertificate(): { key: string; cert: string; caFile: str
   return { key: fs.readFileSync(path.join(dir, "leaf.key"), "utf8"), cert: fs.readFileSync(path.join(dir, "leaf.pem"), "utf8"), caFile: path.join(dir, "ca.pem"), dispose: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 /** Run a script in a child process of the built package, asynchronously (the servers of the test live in this process). */
-export function runChild(script: string, args: string[], env: Record<string, string>): Promise<string> {
+export function runChild(script: string, args: string[], env: Record<string, string>, nodeFlags: string[] = []): Promise<string> {
   return new Promise(done => {
-    const child = spawn(process.execPath, ["-e", script, ...args], { env: { PATH: process.env.PATH ?? "", ...env }, timeout: 30000 });
+    const child = spawn(process.execPath, [...nodeFlags, "-e", script, ...args], { env: { PATH: process.env.PATH ?? "", ...env }, timeout: 30000 });
     let text = ""; child.stdout.on("data", chunk => { text += chunk; }); child.stderr.on("data", chunk => { text += chunk; }); child.on("close", () => done(text));
   });
 }

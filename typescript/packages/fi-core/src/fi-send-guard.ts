@@ -24,7 +24,7 @@ import * as grpc from "@grpc/grpc-js";
 import { diag } from "@opentelemetry/api";
 import { type EndpointTransport } from "./fi-endpoint";
 import { UNSUPPORTED_EXPORTER_LAYOUT } from "./otlp-header-isolation";
-import { decideFiRequest, FiKeyRefusal, hasCompleteKeyPair, isEnvKeyValue, isRedirect, matchesNoProxy, type FiDecision } from "./fi-request-policy";
+import { decideFiRequest, FiKeyRefusal, isRedirect, matchesNoProxy, type FiDecision } from "./fi-request-policy";
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Entry = [string, string];
@@ -86,7 +86,7 @@ function keyValues(intended: Intended): string[] {
   for (const name of ["FI_API_KEY", "FI_SECRET_KEY"]) { const value = process.env[name]; if (typeof value === "string" && value.trim().length >= 8) { values.add(value); values.add(value.trim()); } }
   return [...values];
 }
-/** Whether the final entries carry anything the decision did not put there. Throws FI_AMBIENT_KEY_HEADERS (naming no value). */
+/** Whether the final entries carry anything the decision did not put there, and whether they carry any key header at all (a lone one counts). Throws FI_AMBIENT_KEY_HEADERS (naming no value). */
 function judgeFinalSet(entries: readonly Entry[], intended: Intended): boolean {
   const values = keyValues(intended);
   const present = new Map<string, string>();
@@ -105,17 +105,23 @@ function judgeFinalSet(entries: readonly Entry[], intended: Intended): boolean {
   }
   // A key header, even a lone one, makes the send key-carrying; the set must be the decision's own, no half of it.
   if (present.size > 0 && [...intended.keys.keys()].some(name => !present.has(name))) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
-  return present.size > 0 && (hasCompleteKeyPair(Object.fromEntries(present)) || [...present.values()].some(isEnvKeyValue));
+  return present.size > 0;
 }
 
 // --- proxies and dispatchers ---------------------------------------------------------------------------------------
 
-/** Node's own environment-proxy switch, by variable or by flag, which makes the global fetch read the proxy variables itself. */
-function nodeEnvProxy(): boolean {
-  if (["1", "true"].includes((process.env.NODE_USE_ENV_PROXY ?? "").toLowerCase())) return true;
-  const flags = [...process.execArgv, ...(process.env.NODE_OPTIONS ?? "").split(/\s+/)];
-  return flags.some(flag => flag === "--use-env-proxy");
-}
+/**
+ * Node's own environment-proxy switch, read once when this module loads, from what Node saw at start: the value 1 of NODE_USE_ENV_PROXY (Node
+ * accepts no other value), the flag --use-env-proxy, or the same flag in NODE_OPTIONS. A value set later in the process does not turn it on.
+ * What cannot be read counts as on.
+ */
+const ENV_PROXY_AT_START: boolean = (() => {
+  try {
+    if (process.env.NODE_USE_ENV_PROXY === "1") return true;
+    return [...process.execArgv, ...(process.env.NODE_OPTIONS ?? "").split(/\s+/)].some(flag => flag === "--use-env-proxy");
+  } catch { return true; }
+})();
+function nodeEnvProxy(): boolean { return ENV_PROXY_AT_START; }
 /** An own data property of `object`, by key; an accessor is never run, and what cannot be read as data is undefined. */
 function dataProperty(object: unknown, key: PropertyKey): unknown {
   try {
@@ -138,9 +144,8 @@ function readSlot(): Slot {
 }
 /**
  * Node's own default dispatcher, by provenance: the object Node itself put in the slot, captured here when this module loads. Node installs
- * it on first use of fetch or Request (an env-proxy agent when NODE_USE_ENV_PROXY or --use-env-proxy is on), so it is made to do so now,
- * before any application code can replace the slot. A slot that already holds something when this module loads, or ever holds anything
- * else, is not Node's own: nothing is accepted on a class name or a shape.
+ * it on first use of fetch or Request, so it is made to do so now, before any application code can replace the slot. A slot that already
+ * holds something when this module loads, or ever holds anything else, is not Node's own: nothing is accepted on a class name or a shape.
  */
 /** The one probe that has Node install its own default dispatcher while the slot is empty: building a Request does so and sends nothing. */
 function primeNodeDispatcher(): void {
@@ -151,27 +156,60 @@ function primeNodeDispatcher(): void {
 export function channelCredentials(kind: "tls" | "plaintext"): grpc.ChannelCredentials {
   return kind === "tls" ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
 }
-/** Shared by every copy of this package in the process: the first copy to load captures Node's own default, later copies read it. */
+/** Shared by every copy of this package in the process: the first copy to load captures Node's own default dispatcher and fetch, later copies read them. */
 const SHARED_DEFAULT = Symbol.for("traceai.fi-core.node-default-dispatcher");
-const nodeDefault: { value: unknown } = (() => {
+/** What a copy trusts: the dispatcher Node itself put in the slot (undefined: none, every non-empty slot is refused) and Node's own fetch (undefined: none, every fetch is refused). */
+interface NodeOwn { readonly value: unknown; readonly fetch: ((input: string, init?: RequestInit) => Promise<Response>) | undefined }
+const NOTHING: NodeOwn = Object.freeze({ value: undefined, fetch: undefined });
+const nodeFetchNow = (): NodeOwn["fetch"] => (typeof globalThis.fetch === "function" ? globalThis.fetch : undefined);
+/**
+ * A record another copy left is adopted only when it is a frozen, non-writable, non-configurable own data property whose value is the very
+ * dispatcher this copy reads in the slot now. Anything else (a record placed by the application, a slot replaced since) is not adopted and
+ * this copy refuses every non-empty slot.
+ */
+function adopt(descriptor: PropertyDescriptor): NodeOwn {
+  const record = descriptor.value as { value?: unknown; fetch?: unknown } | null | undefined;
+  if (!("value" in descriptor) || descriptor.writable !== false || descriptor.configurable !== false || record === null || typeof record !== "object" || !Object.isFrozen(record)) return NOTHING;
+  const own = Object.getOwnPropertyDescriptor(record, "value"), ownFetch = Object.getOwnPropertyDescriptor(record, "fetch");
+  if (!own || !("value" in own) || !ownFetch || !("value" in ownFetch)) return NOTHING;
+  const fetchValue = ownFetch.value;
+  if (fetchValue !== undefined && typeof fetchValue !== "function") return NOTHING;
+  const slot = readSlot();
+  if (own.value === undefined ? slot.kind === "uninspectable" : slot.kind !== "data" || slot.value !== own.value) return NOTHING;
+  return Object.freeze({ value: own.value, fetch: fetchValue as NodeOwn["fetch"] });
+}
+const nodeOwn: NodeOwn = (() => {
   try {
-    const shared = dataProperty(globalThis, SHARED_DEFAULT) as { value: unknown } | undefined;
-    if (shared !== undefined && typeof shared === "object" && "value" in shared) return shared;
+    const shared = Object.getOwnPropertyDescriptor(globalThis, SHARED_DEFAULT);
+    if (shared !== undefined) return adopt(shared);
+    // A slot that already holds something when this module loads is not Node's own, with Node's environment-proxy switch on as well: when the
+    // switch is on and a proxy variable is set Node fills the slot itself while it starts, and nothing shows who wrote what is there, so it is
+    // refused and no provenance is guessed from a name or a shape. Only a slot this copy's own probe makes Node fill is captured.
     const loaded = readSlot();
-    // With Node's environment-proxy switch on, Node installs its env-proxy agent while it starts, so a data slot at this point is that
-    // agent (nothing can show who wrote it, and the switch is the case this transport exists for). Without the switch, a slot that is
-    // already set belongs to the application.
-    let captured: { value: unknown };
-    if (loaded.kind !== "empty") captured = { value: loaded.kind === "data" && nodeEnvProxy() ? loaded.value : undefined };
+    let captured: NodeOwn;
+    if (loaded.kind !== "empty") captured = Object.freeze({ value: undefined, fetch: nodeFetchNow() });
     else {
+      const fetchAtLoad = nodeFetchNow();
       primeNodeDispatcher();
       const slot = readSlot();
-      captured = { value: slot.kind === "data" ? slot.value : undefined };
+      captured = Object.freeze({ value: slot.kind === "data" ? slot.value : undefined, fetch: fetchAtLoad });
     }
-    try { Object.defineProperty(globalThis, SHARED_DEFAULT, { value: Object.freeze(captured), enumerable: false, writable: false, configurable: false }); } catch { /* another copy defined it */ }
+    try { Object.defineProperty(globalThis, SHARED_DEFAULT, { value: captured, enumerable: false, writable: false, configurable: false }); } catch { /* another copy defined it */ }
     return captured;
-  } catch { return { value: undefined }; }
+  } catch { return NOTHING; }
 })();
+const nodeDefault: { value: unknown } = nodeOwn;
+/** The one message, written once per process through the diagnostic channel: it names no URL, header or value. */
+const DISPATCHER_MESSAGE = "Future AGI keys are not sent: another global dispatcher was installed before tracing loaded, so key-carrying exports are refused (FI_DISPATCHER_UNKNOWN). "
+  + "Load @traceai/auto first, for example `node --import @traceai/auto/register app.mjs` (CommonJS: `node --require @traceai/auto/register app.cjs`).";
+const MESSAGE_LATCH = Symbol.for("traceai.fi-core.dispatcher-message");
+function announceDispatcherRefusal(): void {
+  try {
+    if (Object.getOwnPropertyDescriptor(globalThis, MESSAGE_LATCH) !== undefined) return;
+    Object.defineProperty(globalThis, MESSAGE_LATCH, { value: true, enumerable: false, writable: false, configurable: false });
+    diag.error(DISPATCHER_MESSAGE);
+  } catch { /* the message is a courtesy; the refusal stands */ }
+}
 /**
  * The dispatcher check for a key-carrying request, run for plaintext and https alike. A caller's `dispatcher` option is refused. For a fetch
  * the SDK sends itself, the global slot must be empty or hold the very object Node installed (read as an own data property); anything else
@@ -182,7 +220,7 @@ function assertDispatcher(tls: boolean, callerDispatcher: unknown, ownFetch: boo
   if (callerDispatcher !== undefined) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
   if (!ownFetch) return;
   const slot = readSlot();
-  if (slot.kind === "uninspectable" || (slot.kind === "data" && (nodeDefault.value === undefined || slot.value !== nodeDefault.value))) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
+  if (slot.kind === "uninspectable" || (slot.kind === "data" && (nodeDefault.value === undefined || slot.value !== nodeDefault.value))) { announceDispatcherRefusal(); throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN"); }
   if (!tls && nodeEnvProxy()) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
 }
 
@@ -256,7 +294,9 @@ export async function guardedFetch(request: GuardedFetchRequest): Promise<Respon
   const init = { ...(request.init ?? {}) };
   const outcome = guardSend({ transport: "http", target: request.url, entries: headerEntries(init.headers), intended: request.intended,
     dispatcher: init.dispatcher, allowInsecureHttp: request.allowInsecureHttp, fetch: true });
-  const response = await fetch(request.url, { ...init, redirect: "manual" });
+  // Node's own fetch, captured when this package loaded: an application's replacement of the global is never called with the keys.
+  if (nodeOwn.fetch === undefined) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
+  const response = await nodeOwn.fetch(request.url, { ...init, redirect: "manual" });
   if (outcome.keys && isRedirect(response)) {
     try { await response.body?.cancel(); } catch { /* the body is not read */ }
     throw new FiKeyRefusal("FI_REDIRECT");
@@ -348,10 +388,10 @@ export function guardOtlpGrpcExporter(exporter: unknown, intended: Intended, all
     return original(data, timeoutMillis);
   };
 }
-/** Whether the entries carry a complete key pair, without judging them. */
+/** Whether the entries carry any key header, a lone one included, without judging them. */
 function judgeFinalSetQuiet(entries: readonly Entry[], intended: Intended): boolean {
   const present: Record<string, string> = {};
   for (const [name, value] of entries) if (KEY_NAME.test(decoded(name).trim())) present[decoded(name).trim().toLowerCase()] = value;
   void intended;
-  return hasCompleteKeyPair(present);
+  return Object.keys(present).length > 0;
 }

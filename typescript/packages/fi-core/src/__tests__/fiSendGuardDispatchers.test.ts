@@ -200,17 +200,23 @@ describe("controls: the transports that are accepted", () => {
     const output = await runChild(SCRIPT, [`${plain.url}/x`], { APP_FETCH_FIRST: `${plain.url}/warm` });
     expect(output).toContain("STATUS 200");
   });
-  test("CONTROL: NODE_USE_ENV_PROXY=1 with an https target through a local CONNECT proxy is accepted and TLS is verified end to end", async () => {
+  test("NODE_USE_ENV_PROXY=1 with a proxy variable: Node fills the slot while it starts, nothing shows who wrote it, so an https send is refused and the proxy and the target see 0 bytes", async () => {
     const approved = await sink({ tls: cert });
     const proxy = await connectProxy(approved.port);
     const output = await runChild(SCRIPT, [`https://localhost:${approved.port}/x`], { NODE_EXTRA_CA_CERTS: cert.caFile, NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: proxy.url, NO_PROXY: "" });
-    expect(output).toContain("STATUS 200");
-    expect(proxy.connects).toHaveLength(1); expect(approved.requests).toHaveLength(1);
+    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
+    expect(proxy.connects).toHaveLength(0); seenNothing(proxy); expect(approved.requests).toHaveLength(0);
   });
-  test("NODE_USE_ENV_PROXY=1 with a plaintext target is refused: the proxy sees nothing", async () => {
+  test("CONTROL: NODE_USE_ENV_PROXY=1 with no proxy variable leaves the slot empty at load: an https target is sent direct and TLS is verified", async () => {
+    const approved = await sink({ tls: cert });
+    const output = await runChild(SCRIPT, [`https://localhost:${approved.port}/x`], { NODE_EXTRA_CA_CERTS: cert.caFile, NODE_USE_ENV_PROXY: "1" });
+    expect(output).toContain("STATUS 200");
+    expect(approved.requests).toHaveLength(1);
+  });
+  test("NODE_USE_ENV_PROXY=1 with a proxy variable and a plaintext target is refused: the proxy and the target see nothing", async () => {
     const plain = await sink(), proxy = await counter();
     const output = await runChild(SCRIPT, [`${plain.url}/x`], { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: proxy.url });
-    expect(output).toContain("REFUSED FI_PLAINTEXT_PROXIED");
+    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
     seenNothing(proxy); expect(plain.requests).toHaveLength(0);
   });
   test("a dispatcher the application installed BEFORE the package was loaded cannot be told from Node's own, so it is refused", async () => {

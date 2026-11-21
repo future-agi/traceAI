@@ -12,6 +12,7 @@ import { Agent, EnvHttpProxyAgent, Pool, ProxyAgent, setGlobalDispatcher } from 
 import "../fi-route";
 import { checkCustomEvalConfigExists, createSpanExporter, FITracerProvider, Transport } from "../otel";
 import { grpcProxyFor, guardedFetch } from "../fi-send-guard";
+import { BUILT_GUARD, runChild } from "./helpers/realSockets";
 import { EvalName, EvalSpanKind, EvalTagType, ModelChoices } from "../fi_types";
 
 /**
@@ -212,22 +213,20 @@ describe("fetch: redirects, dispatchers and proxies, with real dispatchers and l
     await check(target.url, { dispatcher: agent });
     expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
-  test("(pin) NODE_USE_ENV_PROXY=1 with a loopback target is refused and the proxy sees 0 bytes", async () => {
+  const CHILD_SEND = `const { guardedFetch } = require(${JSON.stringify(BUILT_GUARD)});
+    const keys = { "x-api-key": "synthetic-fi-key-0001", "x-secret-key": "synthetic-fi-secret-0001" };
+    guardedFetch({ url: process.argv[1], init: { method: "POST", headers: keys }, intended: { keys: new Map(Object.entries(keys)), values: Object.values(keys) } })
+      .then(r => console.log("STATUS " + r.status), e => console.log("REFUSED " + e.code));`;
+  // Node's own switch is read when the process starts: with a proxy variable set, Node fills the undici slot itself then, which cannot be told from
+  // an application's dispatcher, so every key-carrying fetch is refused and neither the proxy nor the target sees a byte.
+  test.each([
+    ["(pin) NODE_USE_ENV_PROXY=1", { NODE_USE_ENV_PROXY: "1" }, [] as string[]],
+    ["--use-env-proxy", {}, ["--use-env-proxy"]],
+    ["--use-env-proxy in NODE_OPTIONS", { NODE_OPTIONS: "--use-env-proxy" }, [] as string[]],
+  ])("%s with a loopback target is refused and the proxy sees 0 bytes", async (_label, env, flags) => {
     const target = await sink(), proxy = await counter();
-    process.env.NODE_USE_ENV_PROXY = "1"; process.env.HTTP_PROXY = proxy.url;
-    await check(target.url);
-    expect(target.requests).toHaveLength(0); seenNothing(proxy);
-  });
-  test("--use-env-proxy with a loopback target is refused and the proxy sees 0 bytes", async () => {
-    const target = await sink(), proxy = await counter();
-    process.execArgv.push("--use-env-proxy"); process.env.HTTP_PROXY = proxy.url;
-    await check(target.url);
-    expect(target.requests).toHaveLength(0); seenNothing(proxy);
-  });
-  test("--use-env-proxy in NODE_OPTIONS is the same", async () => {
-    const target = await sink(), proxy = await counter();
-    process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --use-env-proxy`; process.env.HTTP_PROXY = proxy.url;
-    try { await check(target.url); } finally { process.env.NODE_OPTIONS = process.env.NODE_OPTIONS.replace(" --use-env-proxy", ""); }
+    const output = await runChild(CHILD_SEND, [`${target.url}/x`], { ...(env as Record<string, string>), HTTP_PROXY: proxy.url }, flags);
+    expect(output).toContain("REFUSED FI_DISPATCHER_UNKNOWN");
     expect(target.requests).toHaveLength(0); seenNothing(proxy);
   });
   test("a guarded fetch whose final headers carry an FI key value under another name is refused: the sink sees 0 bytes", async () => {

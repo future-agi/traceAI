@@ -79,9 +79,9 @@ describe("a plaintext loopback send never goes through a proxy", () => {
   test("NODE_USE_ENV_PROXY=1 with http://[::1] is refused or sent direct, and the proxy sees nothing", async () => {
     const proxy = await proxyListener();
     try {
+      // Set after the process started, the switch is not Node's: the send is made direct, and the proxy sees nothing either way.
       process.env.NODE_USE_ENV_PROXY = "1"; process.env.HTTP_PROXY = proxy.url;
       await check("http://[::1]:4318");
-      expect(fetchSpy).not.toHaveBeenCalled();
       expect(proxy.bytes).toBe(0);
     } finally { await proxy.close(); }
   });

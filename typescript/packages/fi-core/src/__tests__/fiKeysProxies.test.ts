@@ -117,10 +117,10 @@ describe("the global dispatcher is read for each request", () => {
     await check("http://collector.example:8000");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
-  test("Node's own environment-proxy switch counts as a proxy for fetch", async () => {
+  test("Node's own environment-proxy switch is read when the process starts: a value set later is not the switch, and the send is not refused for it", async () => {
     process.env.NODE_USE_ENV_PROXY = "1"; process.env.HTTP_PROXY = PROXY;
     await check("http://collector.example:8000");
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 
