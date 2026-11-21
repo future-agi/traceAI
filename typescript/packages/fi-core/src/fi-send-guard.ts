@@ -25,7 +25,7 @@ import { diag } from "@opentelemetry/api";
 import { OTLPExporterError } from "@opentelemetry/otlp-exporter-base";
 import { gzipSync } from "node:zlib";
 import type { Dispatcher } from "undici";
-import { headerEntries, newDirectAgent, newProxyAgent, ownFetch } from "./fi-transport";
+import { headerEntries, newDirectAgent, newProxyAgent, ownFetch, type OwnResponse } from "./fi-transport";
 import { type EndpointTransport } from "./fi-endpoint";
 import { UNSUPPORTED_EXPORTER_LAYOUT } from "./otlp-header-isolation";
 import { decideFiRequest, FiKeyRefusal, isRedirect, matchesNoProxy, undiciNoProxyExempts, type FiDecision } from "./fi-request-policy";
@@ -270,7 +270,7 @@ export interface GuardedFetchRequest {
  * followed, and an answer that is a redirect to a request that carried keys is a refusal (its body is dropped).
  * Throws FiKeyRefusal, naming no value, and sends nothing, for a refused send.
  */
-export async function guardedFetch(request: GuardedFetchRequest): Promise<Response> {
+export async function guardedFetch(request: GuardedFetchRequest): Promise<OwnResponse> {
   const init = { ...(request.init ?? {}) };
   const outcome = guardSend({ transport: "http", target: request.url, entries: headerEntries(init.headers), intended: request.intended,
     dispatcher: init.dispatcher, allowInsecureHttp: request.allowInsecureHttp });

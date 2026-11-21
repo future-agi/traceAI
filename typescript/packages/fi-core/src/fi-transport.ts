@@ -18,6 +18,11 @@ import AgentClass from "undici/lib/dispatcher/agent.js";
 import ProxyAgentClass from "undici/lib/dispatcher/proxy-agent.js";
 // @ts-ignore untyped deep import
 import api from "undici/lib/api/index.js";
+// @ts-ignore untyped deep import
+import DispatcherClass from "undici/lib/dispatcher/dispatcher.js";
+
+// What undici's index does before anything else, for this private copy of its classes: a proxy agent opens its tunnel with `client.connect`.
+Object.assign((DispatcherClass as { prototype: object }).prototype, api);
 
 type Entry = [string, string];
 
@@ -56,13 +61,53 @@ export interface OwnFetchInit {
   redirect?: "manual";
 }
 
+/** The part of a response the callers read: status line, headers by name, the body as bytes, text or JSON, and a way to drop the body. */
+export interface OwnResponse {
+  readonly status: number;
+  readonly statusText: string;
+  readonly ok: boolean;
+  readonly headers: { get(name: string): string | null };
+  readonly body: { cancel(): Promise<void> } | null;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+}
+
+/**
+ * A response of a plain object, not a global `Response` or `Headers`: Node loads its own undici lazily on first use of those, and that load
+ * reads the process-wide dispatcher slot (running a getter the application put there) or fills it when it is empty.
+ */
+function ownResponse(statusCode: number, headers: Map<string, string>, body: (Readable & { destroy(): unknown }) | null): OwnResponse {
+  let read: Promise<Buffer> | undefined;
+  const bytes = (): Promise<Buffer> => {
+    if (read === undefined) {
+      read = (async () => {
+        if (body === null) return Buffer.alloc(0);
+        const chunks: Buffer[] = [];
+        for await (const chunk of body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        return Buffer.concat(chunks);
+      })();
+    }
+    return read;
+  };
+  return {
+    status: statusCode,
+    statusText: STATUS_CODES[statusCode] ?? "",
+    ok: statusCode >= 200 && statusCode < 300,
+    headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
+    body: body === null ? null : { cancel: async () => { body.destroy(); } },
+    arrayBuffer: async () => { const b = await bytes(); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer; },
+    text: async () => (await bytes()).toString("utf8"),
+    json: async () => JSON.parse((await bytes()).toString("utf8")),
+  };
+}
+
 const NO_BODY = new Set([101, 204, 205, 304]);
 
 /**
- * A request through `init.dispatcher`, answered with a standard Response. A redirect is returned as the 3xx answer it is; the body is not
- * decompressed (no Accept-Encoding is sent).
+ * A request through `init.dispatcher`. A redirect is returned as the 3xx answer it is; the body is not decompressed (no Accept-Encoding is sent).
  */
-export async function ownFetch(url: string, init: OwnFetchInit): Promise<Response> {
+export async function ownFetch(url: string, init: OwnFetchInit): Promise<OwnResponse> {
   const target = new URL(url);
   const headers: string[] = [];
   for (const [name, value] of headerEntries(init.headers)) headers.push(name, value);
@@ -74,12 +119,11 @@ export async function ownFetch(url: string, init: OwnFetchInit): Promise<Respons
     body: init.body,
     signal: init.signal,
   });
-  const out = new Headers();
+  const out = new Map<string, string>();
   for (const [name, value] of Object.entries(response.headers)) {
-    if (Array.isArray(value)) for (const item of value) out.append(name, item);
-    else if (value !== undefined) out.append(name, String(value));
+    if (value !== undefined) out.set(name.toLowerCase(), Array.isArray(value) ? value.join(", ") : String(value));
   }
   const empty = NO_BODY.has(response.statusCode);
   if (empty) response.body.destroy();
-  return new Response(empty ? null : (Readable.toWeb(response.body) as unknown as ReadableStream), { status: response.statusCode, statusText: STATUS_CODES[response.statusCode] ?? "", headers: out });
+  return ownResponse(response.statusCode, out, empty ? null : response.body);
 }

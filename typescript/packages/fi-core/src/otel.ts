@@ -28,6 +28,7 @@ import {
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
+import { type OwnResponse } from "./fi-transport";
 import { channelCredentials, describeFailure, failureSuffix, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
@@ -942,7 +943,7 @@ async function checkCustomEvalConfigExists(
   }
 
   try {
-    let response: Response;
+    let response: OwnResponse;
     try {
       response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy,
         init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
@@ -1012,7 +1013,7 @@ export async function checkCustomEvalTemplateExists(
   }
 
   try {
-    let response: Response;
+    let response: OwnResponse;
     try {
       response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy,
         init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
