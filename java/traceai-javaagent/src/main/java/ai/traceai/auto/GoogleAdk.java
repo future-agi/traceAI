@@ -217,6 +217,8 @@ public final class GoogleAdk {
         private volatile boolean answered;
         /** True for a call made through TracedLlm or TracedTool while the skip option is on: the agent records no span of its own for it. */
         private volatile boolean skipped;
+        /** True once a span the agent records was parented to this span's own span: it must then be exported even if the call is skipped. */
+        private volatile boolean shadowUsed;
         private volatile Map<String, Object> request, response;
         private volatile String toolName, toolDescription, toolType, agentName, agentDescription, sessionId, userId;
         private volatile Object toolArguments, toolResult;
@@ -244,6 +246,7 @@ public final class GoogleAdk {
                         // Under the nearest enclosing span the agent records: a skipped call's own span is never exported.
                         AdkSpan recorded = parentSpan;
                         while (recorded != null && recorded.skipped) recorded = recorded.parent;
+                        if (recorded != null && recorded.shadow != null) recorded.shadowUsed = true;
                         Context parentContext = recorded != null && recorded.shadow != null ? Context.root().with(recorded.shadow) : captured.parent();
                         span = runtime.tracer().spanBuilder(bounded(name)).setSpanKind(SpanKind.INTERNAL).setParent(parentContext)
                             .setStartTimestamp(startEpochNanos, TimeUnit.NANOSECONDS).startSpan();
@@ -330,7 +333,12 @@ public final class GoogleAdk {
             try {
                 Map<String, Object> mapped = withheld(mapped());
                 if (parent != null) parent.child(this, mapped);
-                if (skipped) return;
+                if (skipped && !shadowUsed) {
+                    // No span of the agent's refers to it: it is closed and never exported.
+                    if (shadow != null) WireResourceProcessor.drop(shadow, endEpochNanos);
+                    return;
+                }
+                // A skipped call that already has children under its own span is recorded after all: no exported span refers to an unexported one.
                 if (shadow == null || state == null || !state.startFinalizing()) return;
                 try { emit(mapped, endEpochNanos); } finally { state.endFinalizing(); }
             } catch (Throwable ignored) { }
@@ -572,8 +580,25 @@ public final class GoogleAdk {
             long now = System.nanoTime();
             synchronized (WRAPPED_TOOLS) {
                 WRAPPED_TOOLS.removeIf(w -> w.arguments().get() == null || now - w.registered() > STALE_NANOS);
-                if (WRAPPED_TOOLS.size() < MAX_IN_FLIGHT) WRAPPED_TOOLS.add(new WrappedTool(new java.lang.ref.WeakReference<>(arguments), tool.getClass().getSimpleName(), now));
+                boolean known = false;
+                for (WrappedTool w : WRAPPED_TOOLS) if (w.arguments().get() == arguments) { known = true; break; }
+                if (!known && WRAPPED_TOOLS.size() < MAX_IN_FLIGHT) WRAPPED_TOOLS.add(new WrappedTool(new java.lang.ref.WeakReference<>(arguments), tool.getClass().getSimpleName(), now));
             }
+            skipCurrentTool(tool);
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * ADK reports a tool call after the tool has run, but spans started while it ran are already under the call's own span: when
+     * the application's current span is the ADK tool span, mark it skipped now, before the tool runs.
+     */
+    private static void skipCurrentTool(Object tool) {
+        try {
+            ClassLoader loader = tool.getClass().getClassLoader() == null ? ClassLoader.getSystemClassLoader() : tool.getClass().getClassLoader();
+            Api api = APIS.computeIfAbsent(loader, key -> { try { return Api.of(key); } catch (ReflectiveOperationException e) { return null; } });
+            if (api == null) return;
+            Object current = api.fromContext().invoke(null, api.current().invoke(null));
+            if (current != null && Proxy.isProxyClass(current.getClass()) && Proxy.getInvocationHandler(current) instanceof AdkSpan adk && "TOOL".equals(adk.kind)) adk.skip();
         } catch (Throwable ignored) { }
     }
 
@@ -668,7 +693,7 @@ public final class GoogleAdk {
                 // A skipped call has no span of its own: the nearest enclosing span the agent records is the context.
                 AdkSpan recorded = adk;
                 while (recorded != null && recorded.skipped) recorded = recorded.parent;
-                if (recorded != null && recorded.shadow != null) return Context.root().with(recorded.shadow);
+                if (recorded != null && recorded.shadow != null) { recorded.shadowUsed = true; return Context.root().with(recorded.shadow); }
             }
         } catch (Throwable ignored) { }
         return null;

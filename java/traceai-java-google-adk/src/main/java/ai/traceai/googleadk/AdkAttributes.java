@@ -356,7 +356,11 @@ public final class AdkAttributes {
      */
     public static boolean toolResultFailed(Object result) {
         if (!(result instanceof Map<?, ?> map)) return false;
-        return map.get("error") != null || "error".equalsIgnoreCase(String.valueOf(map.get("status")));
+        if (map.get("error") != null) return true;
+        // Only a String or an enum constant's name is compared: any other value is not read as text, so no application code runs here.
+        Object status = map.get("status");
+        if (status instanceof String text) return "error".equalsIgnoreCase(text);
+        return status instanceof Enum<?> constant && "error".equalsIgnoreCase(constant.name());
     }
 
     /**

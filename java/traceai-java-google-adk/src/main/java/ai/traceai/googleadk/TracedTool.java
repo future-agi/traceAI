@@ -94,6 +94,8 @@ public final class TracedTool extends BaseTool {
 
     @Override
     public Single<Map<String, Object>> runAsync(Map<String, Object> args, ToolContext toolContext) {
+        // Told when the call is made, which is under the span ADK made current for it, and again when the result is subscribed to.
+        AgentLink.wrappedTool(args, this);
         return Single.defer(() -> {
             AgentLink.wrappedTool(args, this);
             Span span = tracer.startSpan("execute_tool " + name(), FISpanKind.TOOL);
