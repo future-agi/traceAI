@@ -27,11 +27,22 @@ module TraceAI
       class Limit < StandardError; end
       class Budget
         MAX_NODES = CATALOG['limits']['max_nodes']
-        def initialize = (@nodes = MAX_NODES; @bytes = CATALOG['limits']['max_text_chars'])
+        def initialize = (@nodes = MAX_NODES; @bytes = CATALOG['limits']['max_text_chars']; @work = 0; @work_spent = false)
         def spend(bytes = 0)
           @nodes -= 1; @bytes -= bytes
           raise Limit if @nodes < 0 || @bytes < 0
         end
+        # Matcher work (see MATCH_SPAN_WORK) shared by every value scrubbed with this budget, that is, by one span.
+        # The amount is charged before the work it pays for; one that does not fit is refused, and from then on
+        # every value of the span is the placeholder.
+        def spend_work(amount)
+          raise MatchLimit if @work_spent || @work + amount > MATCH_SPAN_WORK
+          @work += amount
+        rescue MatchLimit
+          @work_spent = true
+          raise
+        end
+        def work_spent? = @work_spent
       end
       module_function
       def ivar(value, name) = Object.instance_method(:instance_variable_get).bind_call(value, name)

@@ -38,6 +38,14 @@ class SpanWorkBoundTest < Minitest::Test
     assert_operator seconds, :<, 10
   end
 
+  # The largest ordinary span: one value of about 2 MB (the span's text budget charges each string twice) with a
+  # fragment beside a placeholder, about 8 million units of work.
+  def test_a_three_million_character_value_with_one_fragment_still_settles_in_a_span
+    text = ('plain words ' * 170_000) + PLACEHOLDER + 'YYYYYYYYYYYY' + ' end'
+    cleaned = P.scrub({'messages' => [text, 'second value']}, ['XYYYYYYYYYYYY'])['messages']
+    assert_equal [('plain words ' * 170_000) + PLACEHOLDER + ' end', 'second value'], cleaned
+  end
+
   def test_each_span_has_its_own_bound
     values = Array.new(80) { VALUE }
     first = P.scrub({'messages' => values}, SECRETS)['messages']

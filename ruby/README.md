@@ -447,6 +447,7 @@ install anything.
 
 ## Limitations
 
+- Matching known secrets that overlap one another has a work limit per value and a larger one per span. A value past its limit, and every value of the span after the span's limit is reached, is replaced with the placeholder. Ordinary spans never reach either limit.
 - Not covered: non-default Faraday adapters (Typhoeus, Excon, HTTP.rb), direct
   sockets, WebSockets, gRPC and custom HTTPX transport plugins.
 - Apart from RubyLLM, there are no library-level instrumentors in this gem;
