@@ -605,7 +605,7 @@ test("in an application with no OpenTelemetry of its own, two OpenAI SDK calls s
   expect(questions).toHaveLength(2);
   expect(questions).toEqual(expect.arrayContaining([{ first: true, second: false }, { first: false, second: true }]));
 });
-test("in an application with no OpenTelemetry of its own, a plain fetch AI request sent in the same tick as an OpenAI Agents SDK run is not lost, and the run keeps its model span", async () => {
+test("in an application with no OpenTelemetry of its own that loaded the OpenAI Agents SDK first (which installs a global undici dispatcher), the application is unaffected and the key-carrying export is refused, not sent through that dispatcher", async () => {
   // No context manager: the application loads no OpenTelemetry. agents-source-preload.cjs lets
   // the agent load the integration from source and turns on the SDK's own tracing. The
   // application starts one agent run and one plain fetch to the same chat route in the same tick.
@@ -622,16 +622,10 @@ test("in an application with no OpenTelemetry of its own, a plain fetch AI reque
   const output = await child(app, [...preload, "--import", "@traceai/auto/register"], { ...env, TRACED: "1" });
   expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ finalOutput: "hello world", plain: "hello world", status: "instrumented" });
   expect(requests).toBe(2);
-  // What Future AGI received, shown when one of the two checks below fails.
-  const kindOf = (span: any) => attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"];
-  const got = allSpans().map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kindOf(span)})`);
-  // The agent run arrives as the integration's model span, not from wire capture.
-  const model = allSpans().filter(span => attrs(span)["traceai.capture.layer"] !== "wire" && kindOf(span) === "LLM");
-  expect({ got, modelSpan: model.length > 0 }).toEqual({ got, modelSpan: true });
-  // The plain fetch arrives as a wire span with its own message, so the SDK's own request,
-  // sent a second time, could not stand in for it.
-  const plain = wireSpans().filter(span => JSON.stringify(span).includes("a plain fetch beside the agent run"));
-  expect({ got, plainFetchWireSpan: plain.length > 0 }).toEqual({ got, plainFetchWireSpan: true });
+  // Key-carrying exports use Node's default transport only: a global dispatcher the application's own libraries installed before the agent loaded
+  // is refused at the send, so nothing reaches Future AGI and the application goes on.
+  expect(output.stderr).toMatch(/Collector export failed/);
+  expect(allSpans()).toHaveLength(0);
 }, 60000);
 test.each([
   ["an AI call from an integration the agent does not scope", "unscoped", "unscoped model call"],

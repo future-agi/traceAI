@@ -187,8 +187,7 @@ describe("the custom eval checks follow the same rules", () => {
     process.env.FI_BASE_URL = "http://selfhosted.example:8000"; process.env.FI_ALLOW_INSECURE_HTTP = "1";
     const { result, warnings } = withFreshModule(m => m.checkCustomEvalConfigExists("p", [tag()]));
     await result;
-    // A freshly loaded module has Node install its default dispatcher with a fetch of a data URL, which a mocked fetch records too.
-    expect(fetchSpy.mock.calls.filter(([url]) => url !== "data:,")).toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(warnings.filter(w => /FI_ALLOW_INSECURE_HTTP/.test(w))).toHaveLength(1);
     expect(await (checkCustomEvalConfigExists as any)("p", [tag()], undefined, false, { allowInsecureHttp: true })).toBe(false);
   });

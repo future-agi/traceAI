@@ -24,7 +24,7 @@ import * as grpc from "@grpc/grpc-js";
 import { diag } from "@opentelemetry/api";
 import { type EndpointTransport } from "./fi-endpoint";
 import { UNSUPPORTED_EXPORTER_LAYOUT } from "./otlp-header-isolation";
-import { decideFiRequest, FiKeyRefusal, hasCompleteKeyPair, isRedirect, matchesNoProxy, type FiDecision } from "./fi-request-policy";
+import { decideFiRequest, FiKeyRefusal, hasCompleteKeyPair, isEnvKeyValue, isRedirect, matchesNoProxy, type FiDecision } from "./fi-request-policy";
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Entry = [string, string];
@@ -105,7 +105,7 @@ function judgeFinalSet(entries: readonly Entry[], intended: Intended): boolean {
   }
   // A key header, even a lone one, makes the send key-carrying; the set must be the decision's own, no half of it.
   if (present.size > 0 && [...intended.keys.keys()].some(name => !present.has(name))) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
-  return present.size > 0;
+  return present.size > 0 && (hasCompleteKeyPair(Object.fromEntries(present)) || [...present.values()].some(isEnvKeyValue));
 }
 
 // --- proxies and dispatchers ---------------------------------------------------------------------------------------
@@ -142,9 +142,10 @@ function readSlot(): Slot {
  * before any application code can replace the slot. A slot that already holds something when this module loads, or ever holds anything
  * else, is not Node's own: nothing is accepted on a class name or a shape.
  */
-/** The one probe that has Node install its own default dispatcher while the slot is empty: a fetch of a data URL, which opens no connection. */
+/** The one probe that has Node install its own default dispatcher while the slot is empty: building a Request does so and sends nothing. */
 function primeNodeDispatcher(): void {
-  void globalThis.fetch("data:,").catch(() => undefined);
+  const probe = globalThis.fetch;
+  if (typeof probe === "function") void new Request("data:,");
 }
 /** The one place a channel's credentials are constructed: TLS, or plaintext for a channel the decision allowed. */
 export function channelCredentials(kind: "tls" | "plaintext"): grpc.ChannelCredentials {

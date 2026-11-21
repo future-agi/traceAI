@@ -48,10 +48,19 @@ export function hasCompleteKeyPair(headers: unknown): boolean {
   return present("x-api-key") && present("x-secret-key");
 }
 
-/** Whether `headers` carries any key header with a non-empty string value: a lone one counts as key-carrying. */
+/** Whether a value is one of the Future AGI key values of the environment. */
+export function isEnvKeyValue(value: unknown): boolean {
+  if (typeof value !== "string" || value.trim() === "") return false;
+  return Object.values(readEnvKeys(false) ?? {}).some(key => key.trim() === value.trim());
+}
+/**
+ * Whether `headers` is key-carrying: a complete pair, or a lone key header (any case) whose value is a Future AGI key value. A lone key header
+ * with another value is the caller's own header for its own collector.
+ */
 function hasAnyKeyHeader(headers: unknown): boolean {
+  if (hasCompleteKeyPair(headers)) return true;
   if (typeof headers !== "object" || headers === null) return false;
-  return Object.entries(headers).some(([key, value]) => isKeyName(key) && typeof value === "string" && value.trim() !== "");
+  return Object.entries(headers).some(([key, value]) => isKeyName(key) && isEnvKeyValue(value));
 }
 
 /** The string-valued entries of a gRPC Metadata object (for secret discovery and the exporter's privacy filter). */
