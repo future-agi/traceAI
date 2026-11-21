@@ -17,12 +17,16 @@ module TraceAI
       # tags environment values and paths as US-ASCII even when they hold UTF-8.
       # The runs of valid characters (8 or more) in a secret that has invalid bytes, for a byte slice that cuts through a
       # multi-byte character: each run is a secret of its own, as the text it was taken from still holds it.
+      VALID_RUNS_PER_SECRET = 8
       def self.valid_runs(secret)
         return [] unless secret.instance_of?(String)
         return [] if secret.valid_encoding? && ![Encoding::UTF_8, Encoding::US_ASCII, Encoding::ASCII_8BIT].include?(secret.encoding)
         text = secret.b.force_encoding(Encoding::UTF_8)
         return [] if text.valid_encoding?
-        text.each_char.chunk { |char| char.valid_encoding? }.filter_map { |valid, chars| chars.join if valid }.select { |run| run.length >= 8 }
+        runs = text.each_char.chunk { |char| char.valid_encoding? }.filter_map { |valid, chars| chars.join if valid }.select { |run| run.length >= 8 }
+        # At most VALID_RUNS_PER_SECRET, the longest first (the earlier one of equal length), whatever the registry's capacity: one
+        # value with invalid bytes must never take more than that many places from the secrets already known.
+        runs.each_with_index.sort_by { |run, index| [-run.length, index] }.first(VALID_RUNS_PER_SECRET).map(&:first)
       end
 
       def self.utf8(value)

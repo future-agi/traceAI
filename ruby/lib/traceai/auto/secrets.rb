@@ -24,10 +24,13 @@ module TraceAI
         raw = String.new(value)
         secret = Config.utf8(raw)
         return false if secret.length < 8
-        remember(secret.freeze)
         # A secret that is a byte slice cutting through a multi-byte character reads as U+FFFD there, which matches less than the
-        # valid text around it: each run of valid characters in it is registered as a secret of its own.
+        # valid text around it: its longest runs of valid characters (at most Config::VALID_RUNS_PER_SECRET) are registered as
+        # secrets of their own, before the secret, so the secret is the newest entry. One call therefore takes at most
+        # VALID_RUNS_PER_SECRET + 1 places, far fewer than CAPACITY, and cannot evict the seeded Future AGI keys or the environment
+        # secrets by itself (the registry is not pinned; many registrations still age out the oldest, as before).
         Config.valid_runs(raw).each { |run| remember(run.freeze) }
+        remember(secret.freeze)
         true
       rescue StandardError
         # Do not log values, including in exception messages. Future snapshots

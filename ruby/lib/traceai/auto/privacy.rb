@@ -68,7 +68,8 @@ module TraceAI
       # Secrets a caller hands in are read as the registry reads them (Config.utf8): invalid bytes become U+FFFD and the
       # valid characters stay, so such a secret still protects the text it was taken from. None is skipped for its bytes.
       # A secret that is a byte slice cutting through a multi-byte character reads as U+FFFD there, which matches less than
-      # the valid text around it. So every maximal run of valid characters (8 or more) is a secret of its own as well.
+      # the valid text around it. So the longest runs of valid characters (8 or more, at most Config::VALID_RUNS_PER_SECRET of
+      # them) are secrets of their own as well: a secret never adds an unbounded list.
       def normalize_secrets(secrets)
         strings = secrets.select { |secret| Codec.type(secret) == String }
         strings.flat_map { |secret| [Config.utf8(secret), *valid_runs(secret)] }.select { |secret| secret.length >= 8 }.uniq
