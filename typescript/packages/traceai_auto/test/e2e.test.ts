@@ -635,18 +635,18 @@ test("in an application with no OpenTelemetry of its own, a plain fetch AI reque
   expect({ got, plainFetchWireSpan: plain.length > 0 }).toEqual({ got, plainFetchWireSpan: true });
   expect(output.stderr).not.toMatch(/FI_DISPATCHER_UNKNOWN/);
 }, 60000);
-test("in an application with no OpenTelemetry of its own that loaded the OpenAI Agents SDK before @traceai/auto, the application is unaffected and the key-carrying export is refused with the dispatcher cause and the load-order fix, not sent through that dispatcher", async () => {
+test("in an application with no OpenTelemetry of its own that loaded the OpenAI Agents SDK before @traceai/auto, the key-carrying export is sent through fi-core's own transport and the application is unaffected", async () => {
   // The same application, with the Agents SDK preload first and the agent after it: the Agents SDK's global dispatcher is in the undici slot
-  // when the agent loads, so no key-carrying export is sent. The one collector warning names the refusal code and the fix, and no key, URL or header.
+  // when the agent loads. Key-carrying exports do not read that slot: they succeed, with no collector warning and no key, URL or header in the output.
   const app = "beside-agents-run-no-otel.cjs", preload = ["-r", resolve(apps, "agents-source-preload.cjs")];
   const output = await child(app, [...preload, "--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai-agents,wire", TRACED: "1" });
   expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ finalOutput: "hello world", plain: "hello world", status: "instrumented" });
   expect(requests).toBe(2);
-  expect(allSpans()).toHaveLength(0);
-  expect(output.stderr).toContain("Collector export failed: Future AGI keys were not sent (FI_DISPATCHER_UNKNOWN).");
-  expect(output.stderr).toContain("load @traceai/auto first, for example `node --import @traceai/auto/register app.mjs`");
-  expect(output.stderr.split("\n").filter(line => line.includes("Collector export failed"))).toHaveLength(1);
-  for (const forbidden of ["mock-fi-api-key", "mock-fi-secret-key", url, "x-api-key", "x-secret-key"]) expect(output.stderr).not.toContain(forbidden);
+  const kindOf = (span: any) => attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"];
+  const got = allSpans().map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kindOf(span)})`);
+  expect({ got, exported: allSpans().length > 0 }).toEqual({ got, exported: true });
+  expect(output.stderr).not.toMatch(/FI_DISPATCHER_UNKNOWN|Collector export failed|load @traceai\/auto first/);
+  for (const forbidden of ["mock-fi-api-key", "mock-fi-secret-key", "x-api-key", "x-secret-key"]) expect(output.stderr).not.toContain(forbidden);
 }, 60000);
 test.each([
   ["an AI call from an integration the agent does not scope", "unscoped", "unscoped model call"],

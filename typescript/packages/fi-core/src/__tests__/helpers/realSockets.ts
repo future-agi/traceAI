@@ -34,20 +34,22 @@ export async function sink(options: { tls?: { key: string; cert: string }; respo
   cleanups.push(() => new Promise<void>(done => { for (const s of sockets) s.destroy(); server.close(() => done()); }));
   return state;
 }
-/** A CONNECT proxy that tunnels every request to `upstream`, recording what it was asked for. */
-export async function connectProxy(upstreamPort: number): Promise<Counter & { connects: string[] }> {
-  const state = { port: 0, url: "", connections: 0, bytes: 0, connects: [] as string[] };
+/** A CONNECT proxy that tunnels every request to `upstream`, recording what it was asked for and every byte that crossed it (as latin1 text). */
+export async function connectProxy(upstreamPort: number, options: { tls?: { key: string; cert: string }; upstreamHost?: string } = {}): Promise<Counter & { connects: string[]; seen: string; proxyHeaders: string[] }> {
+  const state = { port: 0, url: "", connections: 0, bytes: 0, connects: [] as string[], seen: "", proxyHeaders: [] as string[] };
   const sockets = new Set<net.Socket>();
-  const server = http.createServer((_req, res) => { res.statusCode = 502; res.end(); });
-  server.on("connection", (socket: net.Socket) => { state.connections++; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); socket.on("error", () => {}); });
-  server.on("connect", (req, clientSocket) => {
+  const handler = (_req: http.IncomingMessage, res: http.ServerResponse) => { res.statusCode = 502; res.end(); };
+  const server = options.tls ? https.createServer(options.tls, handler) : http.createServer(handler);
+  server.on(options.tls ? "secureConnection" : "connection", (socket: net.Socket) => { state.connections++; sockets.add(socket); socket.on("close", () => sockets.delete(socket)); socket.on("error", () => {}); });
+  server.on("connect", (req: http.IncomingMessage, clientSocket: net.Socket) => {
     state.connects.push(req.url ?? "");
-    const upstream = net.connect(upstreamPort, "127.0.0.1", () => { clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n"); upstream.pipe(clientSocket); clientSocket.pipe(upstream); });
+    if (req.headers["proxy-authorization"]) state.proxyHeaders.push(String(req.headers["proxy-authorization"]));
+    const upstream = net.connect(upstreamPort, options.upstreamHost ?? "127.0.0.1", () => { clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n"); upstream.pipe(clientSocket); clientSocket.pipe(upstream); });
     upstream.on("error", () => clientSocket.destroy()); clientSocket.on("error", () => upstream.destroy());
-    clientSocket.on("data", chunk => { state.bytes += chunk.length; });
+    clientSocket.on("data", chunk => { state.bytes += chunk.length; state.seen += chunk.toString("latin1"); });
   });
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
-  state.port = (server.address() as AddressInfo).port; state.url = `http://127.0.0.1:${state.port}`;
+  state.port = (server.address() as AddressInfo).port; state.url = `${options.tls ? "https" : "http"}://127.0.0.1:${state.port}`;
   cleanups.push(() => new Promise<void>(done => { for (const s of sockets) s.destroy(); server.close(() => done()); }));
   return state;
 }
