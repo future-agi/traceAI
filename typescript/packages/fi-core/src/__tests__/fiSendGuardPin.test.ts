@@ -130,6 +130,36 @@ describe("every transport primitive in the key-carrying modules is inside the gu
   });
 });
 
+describe("undici is imported only where it is pinned, every import counted", () => {
+  // The site list above names a function once however many imports it holds; this counts each import, so a second one in a file is a failure.
+  const undiciImports = (): string[] => {
+    const found: string[] = [];
+    for (const { id, sf } of PARSED) walk(sf, node => {
+      const spec = specifierOf(node);
+      if (spec === undefined || !/^undici(?:\/|$)/.test(spec)) return;
+      const typeOnly = ts.isImportDeclaration(node) && node.importClause?.isTypeOnly === true;
+      found.push(`${id} ${typeOnly ? "type " : "value "}${spec}`);
+    });
+    return found.sort();
+  };
+  test("only fi-transport.ts imports undici modules as values, by deep path", () => {
+    expect(undiciImports()).toEqual([
+      "fi-core/fi-send-guard.ts type undici",
+      "fi-core/fi-transport.ts type undici",
+      "fi-core/fi-transport.ts value undici/lib/api/index.js",
+      "fi-core/fi-transport.ts value undici/lib/dispatcher/agent.js",
+      "fi-core/fi-transport.ts value undici/lib/dispatcher/dispatcher.js",
+      "fi-core/fi-transport.ts value undici/lib/dispatcher/proxy-agent.js",
+    ]);
+  });
+  test("a second undici import in a key-carrying file changes the list", () => {
+    const sample = ts.createSourceFile("sample.ts", 'import a from "undici/lib/dispatcher/agent.js";\nimport { fetch } from "undici";\nconst x = require("undici/lib/global.js");', ts.ScriptTarget.Latest, true);
+    const specs: string[] = [];
+    walk(sample, node => { const spec = specifierOf(node); if (spec !== undefined && /^undici(?:\/|$)/.test(spec)) specs.push(spec); });
+    expect(specs).toHaveLength(3);
+  });
+});
+
 describe("the one judging function is called from the three guarded entry points only", () => {
   test("guardSend", () => {
     expect(sites(node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "guardSend")).toEqual([
