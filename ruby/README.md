@@ -117,8 +117,8 @@ What happens at startup:
 - Export to Future AGI always uses the agent's built-in exporter, which sends
   OTLP/HTTP protobuf to `${FI_BASE_URL}/tracer/v1/traces` (default base
   `https://api.futureagi.com`). It loads OpenSSL itself when your application has
-  not, and it connects directly: `HTTPS_PROXY` and other proxy settings are not
-  used.
+  not. It connects directly, or through an HTTPS proxy when `https_proxy` or
+  `HTTPS_PROXY` is set (see "Exporting behind an HTTPS proxy").
 - On Ruby older than 3.2 the agent prints one warning and the application runs
   untraced. Any initialization error also leaves the application running.
 - Files and environment values are read as UTF-8 whatever the process locale,
@@ -264,6 +264,27 @@ instrumentations = ["wire", "rack"]
 wire_max_body_bytes = 4194304
 sample_rate = 1.0
 ```
+
+### Exporting behind an HTTPS proxy
+
+Set `https_proxy` or `HTTPS_PROXY` (the lower-case name is read first) to an `http://` or
+`https://` URL, for example `https://user:password@proxy.corp:3128`. Exports to an
+`https://` `FI_BASE_URL` then go through the proxy with a `CONNECT` request.
+
+- A host matched by `no_proxy` or `NO_PROXY` (`*`, `host`, `.domain`, `*.domain`, `host:port`) and a
+  loopback host connect directly.
+- Verification is always on. The tunnelled session is checked in full against the Future AGI host,
+  never against the proxy, and a certificate that is not trusted or does not match the host is
+  refused before any key is written. An `https://` proxy has its own certificate and name verified
+  too. `SSL_CERT_FILE` and `SSL_CERT_DIR` name extra trusted authorities.
+- Plaintext is never proxied. An `http://` target, loopback included, connects directly and ignores
+  `HTTP_PROXY`, so Future AGI keys never reach a proxy in the clear.
+- Credentials in the proxy URL are sent to the proxy only, as `Proxy-Authorization: Basic`.
+  The keys are never placed in the proxy URL or in a proxy header, and no log line shows the proxy URL.
+- A proxy that refuses the tunnel, answers with a redirect, uses another scheme (for example
+  `socks5://`) or has a value that cannot be read refuses the export with one warning that names a
+  reason. The export is never retried directly.
+- The settings are read once, when the exporter starts.
 
 ## What is captured
 
@@ -456,9 +477,9 @@ install anything.
   report shows `pending` until then. Your framework's instrumentation still
   decides where the Rack middleware goes. The `traceai-roast` gem is not enabled
   automatically.
-- The built-in exporter does not use HTTP proxies (`HTTPS_PROXY` is ignored).
-  It loads OpenSSL itself only when that cannot conflict with a version your
-  application pins.
+- The built-in exporter sends through an HTTPS proxy only with `CONNECT` and only for
+  `https://` targets; `HTTP_PROXY` and every other plaintext path are ignored. It loads
+  OpenSSL itself only when that cannot conflict with a version your application pins.
 - Before the agent has started, request credentials are learned only when the
   process has a Future AGI key pair or an OpenTelemetry SDK tracer provider, and
   a proxy `CONNECT` is not observed: the proxy credentials of a connection

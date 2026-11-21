@@ -281,7 +281,7 @@ class KeyTransportTest < Minitest::Test
     assert_equal false, A::KeyTransport.allowed?('http://api.futureagi.com')
   end
 
-  # Rule 5: no environment proxy is ever consulted; the opt-in send goes direct.
+  # A plaintext send never uses a proxy; the opt-in send goes direct.
   def test_opt_in_plaintext_send_goes_direct_when_a_proxy_is_in_the_environment
     proxy = MockHTTP.new { |_| [200, {}, ''] }
     collector = MockHTTP.new { |_| [200, {}, ''] }
@@ -297,9 +297,14 @@ class KeyTransportTest < Minitest::Test
     proxy&.stop; collector&.stop
   end
 
-  # An https export is never refused or broken because a proxy variable is set.
-  def test_https_export_is_not_refused_when_proxy_variables_are_set
-    ENV['HTTPS_PROXY'] = ENV['https_proxy'] = ENV['HTTP_PROXY'] = ENV['http_proxy'] = 'http://127.0.0.1:9'
+  # An https export goes to the proxy named by the https variable (CONNECT, see test_https_proxy.rb); the plaintext
+  # variable is ignored for it.
+  def test_https_export_dials_the_https_proxy_and_ignores_the_plaintext_variable
+    ENV['HTTPS_PROXY'] = 'http://127.0.0.1:9'
+    ENV['HTTP_PROXY'] = ENV['http_proxy'] = 'http://127.0.0.1:8'
+    _, attempts, = export_to('https://api.futureagi.com')
+    assert_equal [['127.0.0.1', 9]], attempts
+    ENV.delete('HTTPS_PROXY')
     _, attempts, = export_to('https://api.futureagi.com')
     assert_equal [['api.futureagi.com', 443]], attempts
   end

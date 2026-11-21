@@ -8,12 +8,13 @@ module TraceAI
     # 3. A target whose written and parsed host could differ is refused.
     # 4. Any other plaintext target needs FI_ALLOW_INSECURE_HTTP to be exactly "1";
     #    that opt-in warns once per process, without values.
-    # 5. No proxy is consulted: the exporter opens its own socket to the peer.
+    # 5. Only an https target may go through a proxy (CONNECT, see ProxyTunnel); a plaintext send, loopback
+    #    included, always goes direct, and a refused proxy never turns into a direct send.
     # 6. A 3xx answer to a key-carrying send is a refusal.
     # Refusals carry no configured value and no key.
     module KeyTransport
       # `reason` is one of REASONS; it is the only detail a refusal warning prints.
-      REASONS = ['insecure target', 'redirect', 'peer not loopback', 'unparseable URL'].freeze
+      REASONS = ['insecure target', 'redirect', 'peer not loopback', 'unparseable URL', 'proxy unsupported', 'proxy refused'].freeze
       class Refused < StandardError
         attr_reader :reason
         def initialize(message = 'FI keys are not sent over this transport', reason: 'insecure target')

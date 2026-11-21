@@ -464,7 +464,11 @@ class HttpsProxyTest < Minitest::Test
     redirecting = track(TlsTarget.new(Pki.target))
     redirecting.define_singleton_method(:serve) do |client|
       ssl = OpenSSL::SSL::SSLSocket.new(client, @context); ssl.sync_close = true; ssl.accept
-      while (header = ssl.gets) && header != "\r\n"; end
+      length = 0
+      while (header = ssl.gets) && header != "\r\n"
+        length = header.split(':', 2).last.to_i if header.downcase.start_with?('content-length')
+      end
+      ssl.read(length)
       @requests << {}
       ssl.write "HTTP/1.1 302 Found\r\nLocation: https://elsewhere.test/\r\nContent-Length: 0\r\n\r\n"
     rescue OpenSSL::SSL::SSLError, IOError, SystemCallError

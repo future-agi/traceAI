@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 require_relative 'privacy'
 require_relative 'key_transport'
+require_relative 'proxy_tunnel'
 module TraceAI
   module Auto
     # Internal serialization records, shared by SDK forwarding and dependency-free
@@ -75,6 +76,8 @@ module TraceAI
         @endpoint = Auto.config['base_url'].to_s.sub(%r{/+$}, '') + '/tracer/v1/traces'
         # Fixed with the endpoint: a later change of the environment does not change the decision.
         @insecure_opt_in = ENV['FI_ALLOW_INSECURE_HTTP']
+        # The proxy settings are read the same way: once, for the one target this exporter sends to.
+        @route = ProxyTunnel.route(@endpoint, ENV)
       end
       def export(records, timeout: nil)
         return 1 if @shutdown
@@ -100,16 +103,26 @@ module TraceAI
         headers = {'Host' => "#{host}:#{url.port}", 'Connection' => 'close', 'Content-Type' => 'application/x-protobuf',
                    'Content-Length' => payload.bytesize.to_s, 'X-Api-Key' => Auto.config['api_key'], 'X-Secret-Key' => Auto.config['secret_key']}
         return 1 unless headers.values.all? { |value| Codec.type(value) == String && !value.match?(/[\r\n\0]/) }
-        socket = socket_class.tcp(url.host, url.port, connect_timeout: timeout)
-        unless KeyTransport.peer_agrees?(KeyTransport.written_host(@endpoint), socket)
-          socket.close
-          raise KeyTransport::Refused.new('connected peer is not loopback', reason: 'peer not loopback')
+        if @route.is_a?(ProxyTunnel::Unsupported)
+          raise KeyTransport::Refused.new('proxy setting is not supported', reason: @route.reason)
+        elsif @route.is_a?(ProxyTunnel::Config)
+          # The proxy is the only peer dialled; a refusal by it is a refusal of the send, never a direct send.
+          socket = socket_class.tcp(@route.host, @route.port, connect_timeout: timeout)
+          tunnel = ProxyTunnel.open(@route, url.host, url.port, socket, tls_class: tls_socket, context_class: tls_context,
+                                    unix_class: native_class('UNIXSocket')) { |waiting, state| wait_for(waiting, state, deadline) }
+          io = tunnel.io
+        else
+          socket = socket_class.tcp(url.host, url.port, connect_timeout: timeout)
+          unless KeyTransport.peer_agrees?(KeyTransport.written_host(@endpoint), socket)
+            socket.close
+            raise KeyTransport::Refused.new('connected peer is not loopback', reason: 'peer not loopback')
+          end
+          io = socket
         end
-        io = socket
         if tls_socket
           context = tls_context.new
           context.set_params
-          io = tls_socket.new(socket, context); io.sync_close = true; io.hostname = url.host
+          io = tls_socket.new(io, context); io.sync_close = true; io.hostname = url.host
           loop do
             state = io.connect_nonblock(exception: false)
             break unless %i[wait_readable wait_writable].include?(state)
@@ -149,6 +162,7 @@ module TraceAI
         Auto.debug(e); 1
       ensure
         io&.close
+        tunnel&.close
         socket&.close unless socket&.closed?
       end
       def load_socket
