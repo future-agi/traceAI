@@ -73,16 +73,13 @@ export interface OwnResponse {
   json(): Promise<unknown>;
 }
 
+/** Drops a body nobody reads: its connection is released at once instead of being held until undici's body timeout. */
+function dropBody(body: { destroy(): unknown }): void { body.destroy(); }
+
 /**
  * A response of a plain object, not a global `Response` or `Headers`: Node loads its own undici lazily on first use of those, and that load
  * reads the process-wide dispatcher slot (running a getter the application put there) or fills it when it is empty.
  */
-/** Drops a body: undici's readable emits an abort error when destroyed, which nothing listens to. */
-function dropBody(body: { destroy(): unknown; on?: (event: string, listener: () => void) => unknown }): void {
-  try { body.on?.("error", () => undefined); } catch { /* nothing to listen on */ }
-  body.destroy();
-}
-
 function ownResponse(statusCode: number, headers: Map<string, string>, body: (Readable & { destroy(): unknown }) | null): OwnResponse {
   let read: Promise<Buffer> | undefined;
   const bytes = (): Promise<Buffer> => {
@@ -125,6 +122,9 @@ export async function ownFetch(url: string, init: OwnFetchInit): Promise<OwnResp
     body: init.body,
     signal: init.signal,
   });
+  // Every body has an error listener from the start: a socket that fails after the headers destroys the body with an error, and an 'error'
+  // event nobody listens to is an uncaught exception in the host application. A read of the body still rejects with the real error.
+  response.body.on("error", () => undefined);
   const out = new Map<string, string>();
   for (const [name, value] of Object.entries(response.headers)) {
     if (value !== undefined) out.set(name.toLowerCase(), Array.isArray(value) ? value.join(", ") : String(value));

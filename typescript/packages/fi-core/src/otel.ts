@@ -276,7 +276,9 @@ class HTTPSpanExporter implements SpanExporter {
 
     // The one guarded fetch: the final headers and the proxy exposure are judged right before the send, redirects are not followed.
     guardedFetch({ url: this.endpoint, init: { method: "POST", headers: this.headers, body: JSON.stringify(spansData) }, intended: this.intended, allowInsecureHttp: this.allowInsecureHttp, httpsProxy: this.httpsProxy })
-      .then((response) => {
+      .then(async (response) => {
+        // The answer's body is not read: drop it so its connection is released.
+        await response.body?.cancel();
         if (response.ok) {
           resultCallback({ code: ExportResultCode.SUCCESS });
         } else {
@@ -952,6 +954,7 @@ async function checkCustomEvalConfigExists(
       throw error;
     }
     if (!response.ok) {
+      await response.body?.cancel();
       diag.error(
         `checkCustomEvalConfigExists: Failed to check custom eval config: ${response.status} ${response.statusText}`,
       );
@@ -1025,6 +1028,7 @@ export async function checkCustomEvalTemplateExists(
       throw error;
     }
     if (!response.ok) {
+      await response.body?.cancel();
       diag.error(
         `checkCustomEvalTemplateExists: Failed to check custom eval template: ${response.status} ${response.statusText}`,
       );
