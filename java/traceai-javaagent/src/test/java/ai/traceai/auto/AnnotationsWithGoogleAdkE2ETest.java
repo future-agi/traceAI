@@ -166,7 +166,10 @@ class AnnotationsWithGoogleAdkE2ETest {
             for (Map<String, Object> call : llm) assertEquals(agent.get("spanId"), call.get("parentSpanId"), where);
             Set<Object> adkIds = llm.stream().map(s -> s.get("spanId")).collect(Collectors.toSet()); adkIds.add(agent.get("spanId"));
             assertTrue(adkIds.contains(adkTool.get("parentSpanId")), where + ": the ADK tool span runs under the agent's model call or the agent");
-            assertEquals(adkTool.get("spanId"), annotatedTool.get("parentSpanId"), where + ": the annotated method ADK calls nests under the ADK tool span, not under the outer annotated span");
+            // Under the ADK tool span, or under the model call that asked for it when this ADK version runs the tool inside that call's scope.
+            assertTrue(annotatedTool.get("parentSpanId").equals(adkTool.get("spanId")) || annotatedTool.get("parentSpanId").equals(adkTool.get("parentSpanId")),
+                where + ": the annotated method ADK calls nests under an ADK span, not under the outer annotated span");
+            assertNotEquals(planner.get("spanId"), annotatedTool.get("parentSpanId"), where);
             assertEquals(annotatedTool.get("spanId"), wire.get(0).get("parentSpanId"), where + ": the HTTP call made inside the annotated method nests under it");
             assertEquals("TOOL", attributes(annotatedTool).get("fi.span.kind"), where);
             for (Map<String, Object> span : spans) assertEquals(planner.get("traceId"), span.get("traceId"), where + ": one trace");
