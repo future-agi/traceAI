@@ -8,6 +8,10 @@ import java.util.regex.Pattern;
 
 /** S6 recognition, loaded once from the shared catalog. No transport or application objects. */
 final class PrivacyCatalog {
+    private static final String DIGEST_PARAMETER = "[A-Za-z][A-Za-z0-9_-]{0,31}\\s{0,4}=\\s{0,4}(?:\"[^\"\\r\\n]{0,512}\"|[^\\s,\"]{0,512})";
+    private static final List<String> AUTHORIZATION_SHAPES = List.of(
+        "\\b(?:Negotiate|NTLM)\\s+[A-Za-z0-9+/_=-]{8,}",
+        "\\bDigest\\s+" + DIGEST_PARAMETER + "(?:\\s{0,4},\\s{0,4}" + DIGEST_PARAMETER + "){0,31}");
     static final PrivacyCatalog INSTANCE = new PrivacyCatalog();
     private final List<String> credentialPatterns;
     private final List<Exclusion> exclusions = new ArrayList<>();
@@ -56,6 +60,9 @@ final class PrivacyCatalog {
             if (!flags.replace("i", "").isEmpty()) throw new IllegalStateException("Unsupported value-shape flags: " + flags);
             valueShapes.add(Pattern.compile(WireCore.str(WireCore.get(rule, "regex")), flags.contains("i") ? Pattern.CASE_INSENSITIVE : 0));
         }
+        // Authorization schemes with no name in front of them, besides the catalog's Bearer and Basic: Negotiate and NTLM carry a token, Digest a
+        // comma-separated list of name=value parameters.
+        for (String shape : AUTHORIZATION_SHAPES) valueShapes.add(Pattern.compile(shape, Pattern.CASE_INSENSITIVE));
         for (Object container : WireCore.list(WireCore.get(catalog.get("scalar_metrics"), "containers"))) {
             boolean typed = "nonnegative_safe_integer".equals(WireCore.get(container, "value_type"));
             for (Object key : WireCore.list(WireCore.get(container, "keys"))) scalarMetrics.merge((String)key, typed, Boolean::logicalOr);
