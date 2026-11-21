@@ -334,10 +334,9 @@ public final class GoogleAdk {
          * message, and from what this span tells its ancestors (their input and output text).
          */
         private Map<String, Object> withheld(Map<String, Object> attrs) {
-            boolean fails = failed || failure() != null;
+            boolean fails = failed || failure() != null || "TOOL".equals(kind) && AdkAttributes.toolResultFailed(toolResult);
             if (!fails || state == null || !TraceAIAuto.hidesErrorText(state.config())) return attrs;
-            Map<String, Object> out = new LinkedHashMap<>(attrs);
-            out.keySet().removeIf(key -> key.equals("output.value") || key.equals("output.mime_type") || key.startsWith("gen_ai.output."));
+            Map<String, Object> out = AdkAttributes.withoutFailedOutput(attrs);
             outputText = null;
             return out;
         }
@@ -394,10 +393,9 @@ public final class GoogleAdk {
             int limit = Math.min(state.provider().getSpanLimits().getMaxNumberOfAttributes(), snapshot.attributeLimit() == null ? Integer.MAX_VALUE : snapshot.attributeLimit());
             String failure = failure();
             boolean fails = failed || failure != null;
-            if (fails && TraceAIAuto.hidesErrorText(config)) {
+            if ((fails || "TOOL".equals(kind) && AdkAttributes.toolResultFailed(toolResult)) && TraceAIAuto.hidesErrorText(config)) {
                 // A failed call's output can carry the error's own text; withheld as on the wire path.
-                attrs = new LinkedHashMap<>(attrs);
-                attrs.remove("output.value"); attrs.remove("output.mime_type");
+                attrs = AdkAttributes.withoutFailedOutput(attrs);
             }
             try {
                 int samplingSlots = shadow instanceof io.opentelemetry.sdk.trace.ReadableSpan readable

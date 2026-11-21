@@ -350,6 +350,27 @@ public final class AdkAttributes {
         return attrs;
     }
 
+    /**
+     * True when a tool's result reports a failure of the call: a map with an {@code error} entry, or with {@code status} set to
+     * {@code error} (the shape ADK's own function tool answers with when its function throws).
+     */
+    public static boolean toolResultFailed(Object result) {
+        if (!(result instanceof Map<?, ?> map)) return false;
+        return map.get("error") != null || "error".equalsIgnoreCase(String.valueOf(map.get("status")));
+    }
+
+    /**
+     * The attributes of a failed call without its output: a failed call's output can carry the error's own text, so under
+     * hideErrorDetails the output value, its mime type, the output messages and a tool's result are withheld. Returns {@code
+     * attributes} itself when there is nothing to withhold.
+     */
+    public static Map<String, Object> withoutFailedOutput(Map<String, Object> attributes) {
+        Map<String, Object> kept = new LinkedHashMap<>(attributes);
+        kept.keySet().removeIf(key -> key.equals("output.value") || key.equals("output.mime_type")
+            || key.equals("gen_ai.tool.call.result") || key.startsWith("gen_ai.output."));
+        return kept;
+    }
+
     /** Attributes of one agent run. */
     public static Map<String, Object> agent(String name, String description) {
         Map<String, Object> attrs = new LinkedHashMap<>();
