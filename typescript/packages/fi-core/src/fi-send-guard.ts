@@ -66,10 +66,6 @@ function firstRefusal(): boolean {
   } catch { return false; }
 }
 /**
- * The end of a log line for a failed send: for a refusal, the explanatory message the first time in the process and only the code after that
- * (`not sent (FI_...)`); for any other error, its value-free description. Pre-setting the latch only hides the message, never a refusal.
- */
-/**
  * What an export reports to its caller for a refusal: the refusal's code and nothing else (`not sent (FI_...)`). The explanation is given once per
  * process by the log line of the refusal (`failureSuffix`), so the error an export returns (which OpenTelemetry passes to its error handler for
  * every refused batch) and the status details of a gRPC call do not repeat it.
@@ -80,6 +76,10 @@ function reportedRefusal(error: FiKeyRefusal): FiKeyRefusal {
   Object.defineProperty(reported, "message", { value: refusalSummary(error), enumerable: false, writable: true, configurable: true });
   return reported;
 }
+/**
+ * The end of a log line for a failed send: for a refusal, the explanatory message the first time in the process and only the code after that
+ * (`not sent (FI_...)`); for any other error, its value-free description. Pre-setting the latch only hides the message, never a refusal.
+ */
 export function failureSuffix(error: unknown): string {
   if (error instanceof FiKeyRefusal) return firstRefusal() ? `: ${error.message}` : ` (${error.code})`;
   return `: ${describeFailure(error)}`;
