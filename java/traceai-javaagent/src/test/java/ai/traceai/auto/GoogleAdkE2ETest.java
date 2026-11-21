@@ -509,6 +509,37 @@ class GoogleAdkE2ETest {
         for (Map<String, Object> call : named("call_llm")) assertEquals(agent.get("spanId"), call.get("parentSpanId"));
     }
 
+    /** No exported span refers to a parent that was not exported, and every parent is in the span's own trace. */
+    void assertNoOrphans() {
+        Map<String, Map<String, Object>> byId = new java.util.HashMap<>();
+        for (Map<String, Object> s : spans) byId.put(String.valueOf(s.get("spanId")), s);
+        for (Map<String, Object> s : spans) {
+            Object parent = s.get("parentSpanId");
+            if (parent == null || "".equals(parent)) continue;
+            Map<String, Object> p = byId.get(String.valueOf(parent));
+            assertNotNull(p, "the parent of " + s.get("name") + " is an exported span: " + spans);
+            assertEquals(p.get("traceId"), s.get("traceId"), "the parent is in the same trace: " + spans);
+        }
+    }
+
+    /** A wrapped tool that runs a sub-agent: the sub-agent's spans start while the tool runs, and the tool's own span is skipped. */
+    @Test void withSkippingOnAWrappedAgentToolNoExportedSpanRefersToAnUnexportedOne() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "wrapped-agent-tool");
+        assertEquals(1, withName(idLines(log, "WRAP"), "execute_tool").size(), log);
+        assertEquals(List.of(), named("execute_tool"), "the wrapped call is recorded once: " + spans);
+        assertFalse(named("invoke_agent sub_agent").isEmpty(), "the sub-agent's own spans are recorded: " + spans);
+        assertNoOrphans();
+    }
+
+    /** A wrapped tool whose work is subscribed to lazily and makes an HTTP call of its own. */
+    @Test void withSkippingOnAWrappedDeferredToolNoExportedSpanRefersToAnUnexportedOne() throws Exception {
+        String log = run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "wrapped-deferred-tool");
+        assertEquals(1, withName(idLines(log, "WRAP"), "execute_tool").size(), log);
+        assertEquals(List.of(), named("execute_tool"), "the wrapped call is recorded once: " + spans);
+        assertEquals(1, byLayer("wire").size(), "the tool's HTTP call is a wire span: " + spans);
+        assertNoOrphans();
+    }
+
     @Test void withSkippingOnCallsThatDoNotGoThroughTheWrappersAreStillRecorded() throws Exception {
         run("sdk", PROMPT, Map.of(SKIP, "true"), "none", "single");
         assertEquals(2, named("call_llm").size(), spans.toString());
