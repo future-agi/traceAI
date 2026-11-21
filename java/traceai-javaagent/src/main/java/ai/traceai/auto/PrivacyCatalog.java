@@ -130,6 +130,18 @@ final class PrivacyCatalog {
         for (Exclusion rule : exclusions) if (rule.regex.matcher(folded).matches() && rule.guards.stream().noneMatch(folded::contains)) return true;
         return false;
     }
+    /** Names that are credentials as a whole or as a segment ({@code dbPass}, {@code db.pwd}, {@code Set-Cookie}), besides the catalog's patterns. Over-redaction (a name like {@code pin}) fails closed. */
+    private static final Set<String> VOCABULARY = Set.of("pwd", "pass", "passphrase", "passwd", "passcode", "pin");
+    private static boolean vocabulary(String name) {
+        StringBuilder word = new StringBuilder();
+        for (int i = 0; i <= name.length(); i++) {
+            char c = i < name.length() ? name.charAt(i) : '-';
+            boolean boundary = !Character.isLetterOrDigit(c) || i > 0 && Character.isUpperCase(c) && Character.isLowerCase(name.charAt(i - 1));
+            if (boundary && word.length() > 0) { if (VOCABULARY.contains(word.toString())) return true; word.setLength(0); }
+            if (Character.isLetterOrDigit(c)) word.append(Character.toLowerCase(c));
+        }
+        return false;
+    }
     boolean credentialName(String name) { return credentialName(name, false); }
     boolean credentialName(String name, boolean environmentSeed) {
         // S5 initialization deliberately seeds all credential-marked environment names, including
@@ -142,11 +154,11 @@ final class PrivacyCatalog {
             if (!context.isEmpty()) context.append('.'); context.append(folded);
             String current = context.toString();
             if (excluded(folded) || contextualExclusions.stream().anyMatch(rule -> rule.matcher(current).matches())) excluded = true;
-            else if (credentialPatterns.stream().anyMatch(folded::contains)) return true;
+            else if (credentialPatterns.stream().anyMatch(folded::contains) || vocabulary(part)) return true;
         }
         if (excluded) return false;
         String folded = normalize(name);
-        return !excluded(folded) && credentialPatterns.stream().anyMatch(folded::contains);
+        return !excluded(folded) && (credentialPatterns.stream().anyMatch(folded::contains) || vocabulary(name));
     }
     boolean queryName(String name) { return signed.contains(normalize(name)) || credentialName(name); }
     boolean base64(String value) {

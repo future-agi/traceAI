@@ -61,6 +61,9 @@ final class CapturedValue {
             }
             if (value instanceof String string) return text(string);
             if (value instanceof java.net.URI uri) return text(uriText(uri));
+            // A Date or Path that an application defines may declare its own text: epoch milliseconds for the first, the type for the second.
+            if (value instanceof Date date && !jdk(value.getClass())) return text(Long.toString(date.getTime()));
+            if (value instanceof java.nio.file.Path && !jdk(value.getClass())) return placeholder(value.getClass());
             if (value instanceof Character || value instanceof Enum<?> || value instanceof UUID || value instanceof Class<?>
                 || value instanceof java.nio.file.Path || value instanceof Date || value instanceof Locale
                 || value.getClass().getName().startsWith("java.time.")) {
@@ -122,22 +125,22 @@ final class CapturedValue {
      */
     private String text(String value) {
         long room = Math.max(maxChars - chars, 0);
-        if (value.length() <= room) { String clean = redactCredentialPairs(value); chars += clean.length(); return clean; }
-        chars = maxChars;
         try {
+            // The order on every string path: known secrets, then the catalog's credential shapes, then the pair rule. A shape (a Basic or
+            // Bearer value, a key, a JWT) must be matched before the pair rule removes the word that anchors it.
             KnownSecrets.Snapshot snapshot = KnownSecrets.PROCESS.snapshot();
-            int reach = (int)Math.min((long)value.length(), room + Math.max(snapshot.longest(), SHAPE_REACH));
+            if (value.length() <= room) { String clean = replaced(snapshot, value, value.length()); chars += clean.length(); return clean; }
+            chars = maxChars;
+            // One bounded read: the cut plus a fixed reach for a credential that straddles it. The work does not depend on the value's length.
+            int reach = (int)Math.min((long)value.length(), room + Math.max(snapshot.longest(), SHAPE_REACH) + READ_MARGIN);
             String read = replaced(snapshot, value, reach);
-            // Replacements shrink the window. When what is left does not reach past the cut by a full shape reach, the cut would land at the
-            // window's edge, where a shape that started before it is cut short (a prefix under the shape's minimum is not matched). Read on.
-            while (reach < value.length() && read.length() < room + SHAPE_REACH) {
-                reach = (int)Math.min((long)value.length(), (long)reach + (room + SHAPE_REACH - read.length()) + 1024);
-                read = replaced(snapshot, value, reach);
-            }
             if (reach == value.length() && read.length() <= room) return read; // all read, and it fits once replaced
             int end = (int)Math.min((long)read.length(), room);
             if (end > 0 && end < read.length() && Character.isHighSurrogate(read.charAt(end - 1))) end--;
             String kept = read.substring(0, end);
+            // Replacements shrank the window: the cut is at (or near) its edge, where a shape that began before the cut may have been cut
+            // short and no longer match. Fail closed: drop the trailing token that could start one, and the scheme word before it.
+            if (reach < value.length() && read.length() - end < SHAPE_GUARD) kept = dropShapePrefix(kept);
             kept = kept.substring(0, kept.length() - snapshot.trailingPartial(kept));
             // A cut that lands inside a placeholder drops the part of it.
             int open = kept.lastIndexOf('<');
@@ -146,14 +149,34 @@ final class CapturedValue {
         } catch (RuntimeException unavailable) { return CUT; }
     }
 
-    /** The first {@code reach} characters with known secrets, credential shapes and credential-named pairs replaced. */
+    /** What is left of the window beyond the cut, below which the cut counts as being at the window's edge. */
+    private static final int SHAPE_GUARD = 512, READ_MARGIN = 1024;
+
+    /** The first {@code reach} characters with known secrets, credential shapes and credential-named pairs replaced, in that order. */
     private static String replaced(KnownSecrets.Snapshot snapshot, String value, int reach) {
-        return redactCredentialPairs(PrivacyCatalog.INSTANCE.scrubValueShapes(snapshot.scrub(value.substring(0, reach))));
+        String head = reach == value.length() ? value : value.substring(0, reach);
+        return redactCredentialPairs(PrivacyCatalog.INSTANCE.scrubValueShapes(snapshot.scrub(head)));
+    }
+
+    private static boolean tokenChar(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || "+/_=.-".indexOf(c) >= 0; }
+
+    /** Cuts back to before the last token, and before a scheme word (Bearer, Basic) in front of it. */
+    private static String dropShapePrefix(String kept) {
+        int end = kept.length();
+        while (end > 0 && tokenChar(kept.charAt(end - 1))) end--;
+        int word = end;
+        while (word > 0 && kept.charAt(word - 1) == ' ') word--;
+        for (String scheme : new String[] {"Bearer", "Basic"}) {
+            if (word >= scheme.length() && kept.regionMatches(true, word - scheme.length(), scheme, 0, scheme.length())
+                && (word == scheme.length() || !tokenChar(kept.charAt(word - scheme.length() - 1)))) { end = word - scheme.length(); break; }
+        }
+        return kept.substring(0, end);
     }
 
     /** An accessor that threw. */
     private static final class Failed { }
 
+    private static boolean jdk(Class<?> type) { String name = type.getName(); return name.startsWith("java.") || name.startsWith("jdk.") || name.startsWith("sun."); }
     private static String placeholder(Class<?> type) { return "<" + type.getName() + ">"; }
 
     private Object array(Object array, Class<?> type, int depth) {
@@ -180,7 +203,8 @@ final class CapturedValue {
                 Map<String, Object> out = new LinkedHashMap<>(); int n = 0;
                 for (Map.Entry<?, ?> entry : map.entrySet()) {
                     if (n++ >= MAX_ITEMS || nodes > MAX_NODES || chars >= maxChars) { out.put(CUT, null); break; }
-                    out.put(key(entry.getKey()), walk(entry.getValue(), depth + 1));
+                    String shown = key(entry.getKey());
+                    out.put(shown, credentialName(shown) ? "<redacted>" : walk(entry.getValue(), depth + 1));
                 }
                 return out;
             }
@@ -233,49 +257,143 @@ final class CapturedValue {
         } finally { path.remove(value); }
     }
 
-    /** Segments of a name that make it a credential by themselves, besides what the export catalog says. */
-    private static final Set<String> CREDENTIAL_SEGMENTS = Set.of("pwd", "pass", "passphrase", "passwd", "password", "passcode", "pin", "secret", "token", "apikey", "credential", "credentials", "auth", "authorization");
-
     /**
-     * Whether a name, as a parameter, a record component or a name in text, is a credential name: the export catalog's rule, and also
-     * {@code pwd}, {@code pass}, {@code passphrase} and the like as a whole name or as a segment of a dotted, dashed or camel-case one
-     * ({@code db.password}, {@code --password}, {@code -Ddb.password}, {@code dbPass}). Over-redaction fails closed.
+     * Whether a name, as a parameter, a record component, a Map key or a name in text, is a credential name. It is the export catalog's
+     * rule, which also knows {@code pwd}, {@code pass}, {@code passphrase}, {@code passcode}, {@code pin} and cookie names as a whole name or
+     * a segment ({@code db.password}, {@code dbPass}), here with the command-line and bracket spellings undone first: {@code --password},
+     * {@code -Ddb.password} and {@code user[password]}. Over-redaction fails closed.
      */
     static boolean credentialName(String name) {
         if (name == null || name.isEmpty()) return false;
         String stripped = name.replaceFirst("^-+", "");
         if (stripped.startsWith("D") && stripped.length() > 1 && name.startsWith("-D")) stripped = stripped.substring(1);
-        if (stripped.isEmpty()) return false;
-        if (WirePrivacy.credentialKey(stripped) || WirePrivacy.credentialKey(name)) return true;
-        for (String part : stripped.split("[.\\-_]|(?<=[a-z0-9])(?=[A-Z])")) if (CREDENTIAL_SEGMENTS.contains(part.toLowerCase(Locale.ROOT)) || WirePrivacy.credentialKey(part)) return true;
-        return false;
+        stripped = stripped.replace('[', '.').replace(']', '.');
+        return !stripped.isEmpty() && (WirePrivacy.credentialKey(stripped) || WirePrivacy.credentialKey(name));
     }
 
-    private static final java.util.regex.Pattern PAIR = java.util.regex.Pattern.compile("(?<![A-Za-z0-9_])(-{0,2}[A-Za-z_][\\w.\\-]*)(\\s*[=:]\\s*)");
-    /** The start of another pair after a separator: a name, then a colon, or an equals sign that is not base64 padding. */
-    private static final java.util.regex.Pattern NEXT_PAIR = java.util.regex.Pattern.compile("\\G\\s*-{0,2}[A-Za-z_][\\w.\\-]*\\s*(?::|=(?![=\\s]|$))");
-    private static final java.util.regex.Pattern NEXT_PAIR_TIGHT = java.util.regex.Pattern.compile("\\G-{0,2}[A-Za-z_][\\w.\\-]*(?::|=(?![=\\s]|$))");
+    /** Headers whose value is itself a list of pairs: everything to the end of the line is the value. */
+    private static boolean listHeader(String name) {
+        String folded = PrivacyCatalog.normalize(name);
+        return folded.equals("cookie") || folded.equals("setcookie") || folded.equals("authorization") || folded.equals("proxyauthorization");
+    }
+    /** The index of the opening quote of the JSON name that ends just before the colon at {@code colon}, or -1 when there is none. */
+    private static int jsonName(String text, int colon) {
+        int end = colon;
+        while (end > 0 && Character.isWhitespace(text.charAt(end - 1)) && colon - end < 8) end--;
+        if (end < 3 || text.charAt(end - 1) != '"') return -1;
+        int open = text.lastIndexOf('"', end - 2);
+        return open >= 0 && end - 1 - open <= 130 ? open : -1;
+    }
+
+    /** The index after the JSON value that starts at {@code start}: a string, a balanced object or array (quote-aware), or a scalar. */
+    private static int jsonValueEnd(String text, int start) {
+        int length = text.length();
+        if (start >= length) return start;
+        char first = text.charAt(start);
+        if (first == '"') {
+            for (int i = start + 1; i < length; i++) {
+                char c = text.charAt(i);
+                if (c == '\\') i++;
+                else if (c == '"') return i + 1;
+            }
+            return length;
+        }
+        if (first == '{' || first == '[') {
+            int depth = 0;
+            for (int i = start; i < length; i++) {
+                char c = text.charAt(i);
+                if (c == '"') { i = jsonValueEnd(text, i) - 1; continue; }
+                if (c == '{' || c == '[') depth++;
+                else if ((c == '}' || c == ']') && --depth == 0) return i + 1;
+            }
+            return length;
+        }
+        int i = start;
+        while (i < length && ",}] \t\r\n".indexOf(text.charAt(i)) < 0) i++;
+        return i;
+    }
+
+    private static boolean nameChar(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-' || c == '[' || c == ']'; }
 
     /**
-     * The value of every {@code name=value} / {@code name: value} pair whose name is a credential name becomes the placeholder.
-     * A value ends only where the next pair starts (after a comma, semicolon, line break or space) or at the end of the text; no
-     * bracket, parenthesis, brace or quote inside it ends it early, so a credential that contains one is replaced whole (and what
-     * closes a group around the pair is replaced with it: over-redaction fails closed). A value that starts with a private key
-     * header runs to the end line of the key. A scheme word ({@code Basic}, {@code Bearer}) and the credential after it are one value.
+     * The start of another pair after a separator: a name, then a colon, or an equals sign that is not base64 padding (an equals sign
+     * followed by nothing, a space, another equals sign or a closing or separating character is padding or an empty value). A bounded
+     * run of spaces may come first; every part is anchored at one position, so scanning is linear.
+     */
+    private static final java.util.regex.Pattern NEXT_PAIR = java.util.regex.Pattern.compile("\\G[ \\t]{0,8}-{0,2}[A-Za-z_][\\w.\\-\\[\\]]{0,127}[ ]{0,8}(?::|=(?![=\\s,;)\\]}\"']|$))");
+    private static final java.util.regex.Pattern NEXT_PAIR_TIGHT = java.util.regex.Pattern.compile("\\G-{0,2}[A-Za-z_][\\w.\\-\\[\\]]{0,127}(?::|=(?![=\\s,;)\\]}\"']|$))");
+
+    /**
+     * The value of every {@code name=value} / {@code name: value} pair whose name is a credential name becomes the placeholder, in one
+     * left-to-right pass whose work is linear in the text. A value ends only where the next pair starts (after a comma, semicolon, line
+     * break or space) or at the end of the text; no bracket, parenthesis, brace or quote inside it ends it early, so a credential that
+     * contains one is replaced whole (and what closes a group around the pair goes with it: over-redaction fails closed). A value that
+     * starts with a private key header runs to the end line of the key. For a header whose value is a list of pairs (cookie, set-cookie,
+     * authorization, proxy-authorization) the value is the rest of the line. A command-line flag with a credential name takes the next
+     * word ({@code --password value}), and the user information of any {@code scheme://user:password@host} is replaced.
+     * The limit: a credential value that itself contains {@code , name=} (or {@code ; name:}) ends there, where it looks like the next pair.
      */
     static String redactCredentialPairs(String text) {
-        java.util.regex.Matcher matcher = PAIR.matcher(text);
-        StringBuilder out = null; int copied = 0, from = 0;
-        while (from <= text.length() && matcher.find(from)) {
-            int start = matcher.end();
-            if (!credentialName(matcher.group(1))) { from = start; continue; }
-            int end = valueEnd(text, start);
-            if (out == null) out = new StringBuilder(text.length());
-            out.append(text, copied, start).append("<redacted>");
-            copied = end; from = Math.max(end, start);
-            if (from >= text.length()) break;
+        int length = text.length();
+        StringBuilder out = null; int copied = 0;
+        java.util.HashMap<String, Boolean> known = new java.util.HashMap<>();
+        for (int i = 0; i < length; ) {
+            char c = text.charAt(i);
+            int from = -1, to = -1; String replacement = "<redacted>";
+            int quoted = c == ':' && i > 0 && i < length ? jsonName(text, i) : -1;
+            if (quoted >= 0) {
+                // "name": value in JSON text: the value is read exactly (a string, an object or array, or a scalar) and replaced by a JSON string.
+                String name = text.substring(quoted + 1, text.lastIndexOf('"', i - 1));
+                if (known.computeIfAbsent(name, CapturedValue::credentialName)) {
+                    int valueStart = i + 1;
+                    while (valueStart < length && Character.isWhitespace(text.charAt(valueStart))) valueStart++;
+                    int end = jsonValueEnd(text, valueStart);
+                    if (end > valueStart) { from = valueStart; to = end; replacement = "\"<redacted>\""; }
+                }
+                if (from < 0) { i++; continue; }
+            } else if (c == ':' && text.startsWith("//", i + 1)) {
+                // scheme://user:password@host: the user information goes, for any scheme.
+                int limit = Math.min(length, i + 3 + 512), end = i + 3;
+                while (end < limit && "/?# \t\r\n".indexOf(text.charAt(end)) < 0) end++;
+                int at = text.lastIndexOf('@', end - 1);
+                if (at >= i + 3 && at < end) { from = i + 3; to = at; }
+                else { i += 3; continue; }
+            } else if (c == '=' || c == ':') {
+                int nameEnd = i;
+                while (nameEnd > copied && i - nameEnd < 8 && text.charAt(nameEnd - 1) == ' ') nameEnd--;
+                int nameStart = nameEnd;
+                while (nameStart > copied && nameEnd - nameStart < 128 && nameChar(text.charAt(nameStart - 1))) nameStart--;
+                if (nameEnd - nameStart >= 2) {
+                    String name = text.substring(nameStart, nameEnd);
+                    if (known.computeIfAbsent(name, CapturedValue::credentialName)) {
+                        int valueStart = i + 1;
+                        while (valueStart < length && valueStart - i <= 8 && text.charAt(valueStart) == ' ') valueStart++;
+                        from = valueStart;
+                        if (listHeader(name)) {
+                            to = from;
+                            while (to < length && text.charAt(to) != '\n' && text.charAt(to) != '\r') to++;
+                        } else to = valueEnd(text, valueStart);
+                    }
+                }
+            } else if (c == '-' && text.startsWith("--", i) && (i == 0 || Character.isWhitespace(text.charAt(i - 1)))) {
+                int end = i + 2;
+                while (end < length && nameChar(text.charAt(end)) && end - i < 130) end++;
+                if (end < length && text.charAt(end) == ' ' && end - i > 2 && known.computeIfAbsent(text.substring(i, end), CapturedValue::credentialName)) {
+                    int valueEnd = end + 1;
+                    while (valueEnd < length && !Character.isWhitespace(text.charAt(valueEnd))) valueEnd++;
+                    if (valueEnd > end + 1) { from = end + 1; to = valueEnd; }
+                }
+                if (from < 0) { i = end; continue; }
+            }
+            if (from >= copied && to >= from) {
+                if (out == null) out = new StringBuilder(length);
+                out.append(text, copied, from).append(replacement);
+                copied = to; i = Math.max(to, i + 1);
+                continue;
+            }
+            i++;
         }
-        return out == null ? text : out.append(text, copied, text.length()).toString();
+        return out == null ? text : out.append(text, copied, length).toString();
     }
 
     private static int valueEnd(String text, int start) {

@@ -262,4 +262,37 @@ class CapturedValueTest {
             assertFalse(captured.contains(basic.substring(0, 12)), captured);
         }
     }
+
+    static final class SecretDate extends Date { SecretDate() { super(1_700_000_000_000L); } @Override public String toString() { return "date-with-SYNTH-SECRET"; } }
+    @Test void anApplicationDateIsEpochMillisAndAnApplicationPathIsAPlaceholder() {
+        assertEquals("\"1700000000000\"", text(new SecretDate()));
+        java.nio.file.Path app = new java.nio.file.Path() {
+            public java.nio.file.FileSystem getFileSystem() { return null; } public boolean isAbsolute() { return false; } public java.nio.file.Path getRoot() { return null; }
+            public java.nio.file.Path getFileName() { return null; } public java.nio.file.Path getParent() { return null; } public int getNameCount() { return 0; }
+            public java.nio.file.Path getName(int index) { return null; } public java.nio.file.Path subpath(int a, int b) { return null; }
+            public boolean startsWith(java.nio.file.Path other) { return false; } public boolean endsWith(java.nio.file.Path other) { return false; }
+            public java.nio.file.Path normalize() { return this; } public java.nio.file.Path resolve(java.nio.file.Path other) { return this; }
+            public java.nio.file.Path relativize(java.nio.file.Path other) { return this; } public java.net.URI toUri() { return null; }
+            public java.nio.file.Path toAbsolutePath() { return this; } public java.nio.file.Path toRealPath(java.nio.file.LinkOption... options) { return this; }
+            public java.nio.file.WatchKey register(java.nio.file.WatchService w, java.nio.file.WatchEvent.Kind<?>[] k, java.nio.file.WatchEvent.Modifier... m) { return null; }
+            public int compareTo(java.nio.file.Path other) { return 0; }
+            @Override public String toString() { return "path-with-SYNTH-SECRET"; }
+        };
+        String captured = text(app);
+        assertFalse(captured.contains("SYNTH"), captured);
+        assertTrue(captured.startsWith("\"<"), captured);
+        assertEquals("\"/tmp/x\"", text(java.nio.file.Path.of("/tmp/x")));
+    }
+
+    @Test void inputNamesCookiesFlagsAndUserInfoAreRedactedInPlainText() {
+        for (String[] c : new String[][] {
+            {"Cookie: a=SYNTHONE; b=SYNTHTWO; c=SYNTHTHREE", "SYNTH"}, {"Set-Cookie: sid=SYNTHSID; Path=/", "SYNTH"},
+            {"proxy-authorization: Digest username=\"SYNTHU\", response=\"SYNTHR\"", "SYNTH"}, {"run --passphrase SYNTHFLAG now", "SYNTH"},
+            {"x user[pwd]=SYNTHBR&a=1", "SYNTH"}, {"jdbc:postgresql://u:SYNTHUI@h:5432/db", "SYNTH"}, {"{\"pass\": \"SYNTHJ\", \"n\": 1}", "SYNTH"}, {"{\"pin\":{\"a\":\"SYNTHNEST\"},\"n\":1}", "SYNTH"}}) {
+            String captured = text(c[0]);
+            assertFalse(captured.contains(c[1]), c[0] + " -> " + captured);
+        }
+        assertEquals("\"{\\\"pass\\\":\\\"<redacted>\\\",\\\"n\\\":1}\"", text("{\"pass\":\"x\",\"n\":1}"));
+        assertEquals("\"note=keep, id=7\"", text("note=keep, id=7"));
+    }
 }

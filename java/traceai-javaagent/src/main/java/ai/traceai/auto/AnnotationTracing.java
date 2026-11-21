@@ -134,7 +134,8 @@ final class AnnotationTracing {
         Map<String, Object> values = new LinkedHashMap<>();
         for (int i = 0; i < parameters.length && i < arguments.length; i++) {
             if (excluded(parameters[i])) continue;
-            values.put(parameters[i].isNamePresent() ? parameters[i].getName() : "arg" + i, arguments[i]);
+            String name = parameters[i].isNamePresent() ? parameters[i].getName() : "arg" + i;
+            values.put(name, CapturedValue.credentialName(name) ? "<redacted>" : arguments[i]);
         }
         if (values.isEmpty()) return;
         // One walk over all the arguments, so the depth, item, node and character bounds hold for the whole input.
