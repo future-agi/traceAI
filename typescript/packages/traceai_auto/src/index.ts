@@ -1,7 +1,18 @@
 import { trace, SpanKind, SpanStatusCode, TraceFlags, Context, TracerProvider } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { AlwaysOffSampler, AlwaysOnSampler, ParentBasedSampler, TraceIdRatioBasedSampler, Sampler, SamplingDecision, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
+import { getAttributesFromContext, ProjectType, register, resolveTraceEndpoint, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
+// The Future AGI route factory is provided by @traceai/fi-core through a process-wide symbol, not a package export.
+const FI_ROUTE_FACTORY = Symbol.for("traceai.fi-core.fi-route-factory.v1");
+function createFiRouteSpanExporter(options: Record<string, unknown>): SpanExporter {
+  const factory = (globalThis as any)[FI_ROUTE_FACTORY];
+  if (typeof factory !== "function") {
+    const message = "The installed @traceai/fi-core does not provide a compatible Future AGI route (protocol v1), or a different version of it was loaded first. Install one matching @traceai/fi-core version.";
+    warn("fi-route", message);
+    throw new Error(message);
+  }
+  return factory(options);
+}
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
 import { Config, credentialsForConfig, enabled, explicitlyEnabled, incompleteCredentialSources, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
 import { createOutgoingPrivacy, noteOutgoingSpanStart } from "./outgoing-privacy";
@@ -17,7 +28,7 @@ import { HTTP_SCOPE } from "./incoming-parent";
 import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
 import { samplingRatioAdmission, type SamplerSelection } from "./sampling-ratio";
 
-const VERSION = "0.4.1"; // x-release-please-version
+const VERSION = "0.4.2"; // x-release-please-version
 import { chainSigterm } from "./signals";
 import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";
@@ -47,6 +58,14 @@ const STATE_KEY = Symbol.for("traceai.auto.agent.v1");
 let state: AgentState | undefined;
 function sharedState(): AgentState | undefined { return state ??= (globalThis as any)[STATE_KEY]; }
 const warned = new Set<string>();
+/**
+ * The message for a collector export that failed: when fi-core refused to send (its refusal carries a value-free code), the code. No URL, header or value is named.
+ */
+function collectorFailure(error: unknown): string {
+  const code = (error as { name?: unknown; code?: unknown } | undefined)?.name === "FiKeyRefusal" ? (error as { code?: unknown }).code : undefined;
+  if (typeof code !== "string" || !/^FI_[A-Z_]+$/.test(code)) return "Collector export failed; the application will continue.";
+  return `Collector export failed: Future AGI keys were not sent (${code}). The application will continue.`;
+}
 function warn(key: string, message: string): void {
   if (warned.has(key)) return; warned.add(key);
   try { console.warn(`[traceai:auto] ${message}`); } catch { /* Host logger may throw. */ }
@@ -149,7 +168,7 @@ function guardedExporter(exporter: SpanExporter, agent: AgentState, options: Opt
         if (called) return; called = true;
         agent.unsent = Math.max(0, agent.unsent - spans.length);
         agent.collector = result.code === ExportResultCode.SUCCESS ? "accepted" : "failed";
-        if (result.code !== ExportResultCode.SUCCESS) { agent.collectorFailed = true; warn("collector", "Collector export failed; the application will continue."); }
+        if (result.code !== ExportResultCode.SUCCESS) { agent.collectorFailed = true; warn("collector", collectorFailure(result.error)); }
         callback(result);
       };
       try {
@@ -263,7 +282,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     options = { ...options, traceConfig: config.traceConfig };
     state = agent; (globalThis as any)[STATE_KEY] = agent;
     seedSecrets(process.env, credentialsForConfig(config));
-    const fiCredentials = !!config.apiKey && !!config.secretKey;
+    const fiCredentials = !!config.apiKey?.trim() && !!config.secretKey?.trim();
     // The FI route: the Future AGI collector, or an exporter/processor given to init().
     const route = fiCredentials || !!options.exporter || !!options.spanProcessor;
     // Without a route or a provider given to init(), install nothing: no provider,
@@ -285,7 +304,14 @@ export function init(options: Options = {}): TracerProvider | undefined {
       rememberAutoSpanSink(processor, supplied);
     }
     else if (options.exporter || fiCredentials) {
-      const exporter = guardedExporter(options.exporter ?? createSpanExporter({ endpoint: config.baseUrl,
+      // The FI keys go to the resolved base URL. When a file or profile chose it, say which host, once.
+      if (!options.exporter && (config.baseUrlSource === "config file" || config.baseUrlSource === "profile")) {
+        // The host the exporter dials, resolved by the exporter's own rule (a base URL it cannot read falls back to the environment's route).
+        let host = "<invalid URL>";
+        try { host = new URL(resolveTraceEndpoint(config.baseUrl)).host || host; } catch { /* Reported as invalid. */ }
+        warn("base-host", `Sending traces to ${host} (base URL from the ${config.baseUrlSource}).`);
+      }
+      const exporter = guardedExporter(options.exporter ?? createFiRouteSpanExporter({ endpoint: config.baseUrl, allowInsecureHttp: options.allowInsecureHttp === true, httpsProxy: options.httpsProxy,
         headers: { "x-api-key": config.apiKey!, "x-secret-key": config.secretKey! }, verbose: false, traceConfig: config.traceConfig,
         resourceAttributes: { project_name: config.projectName, project_type: config.projectType } }), agent, options, failedCaptures);
       processor = new BatchSpanProcessor(exporter);
@@ -336,7 +362,8 @@ export function init(options: Options = {}): TracerProvider | undefined {
         delete process.env.OTEL_TRACES_SAMPLER;
         delete process.env.OTEL_TRACES_SAMPLER_ARG;
         agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
-          setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor], sampler });
+          setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor], sampler,
+          allowInsecureHttp: options.allowInsecureHttp === true, httpsProxy: options.httpsProxy });
       } finally {
         if (samplerName === undefined) delete process.env.OTEL_TRACES_SAMPLER;
         else process.env.OTEL_TRACES_SAMPLER = samplerName;
@@ -458,7 +485,10 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // collector has not failed.
     agent.removeSignals = chainSigterm(forceFlush, () => !agent.collectorFailed && (agent.unsent > 0 || (agent.fetch?.pending.size ?? 0) > 0));
     if (config.debug) console.info(JSON.stringify(report(), null, 2));
-  } catch {
+  } catch (error) {
+    // A refusal of the Future AGI route (a plaintext base URL, an ambiguous host) names no value and says what to change: show it.
+    const refusal = error as { name?: unknown; code?: unknown; message?: unknown } | null;
+    if (refusal?.name === "FiKeyRefusal" && typeof refusal.code === "string" && refusal.code.startsWith("FI_") && typeof refusal.message === "string") warn("fi-route", refusal.message);
     warn("init", "Auto-instrumentation could not initialize; the application will continue.");
     const failed = state;
     if (failed) {

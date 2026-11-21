@@ -15,6 +15,7 @@ import { FITracer } from "../trace/trace-config/FITracer";
 
 // What the FI exporter hands to its transport, after the export boundary.
 const delivered: any[][] = [];
+jest.mock("../fi-send-guard", () => ({ ...(jest.requireActual("../fi-send-guard") as object), guardOtlpHttpExporter: jest.fn(), guardOtlpGrpcExporter: jest.fn() }));
 jest.mock("@opentelemetry/exporter-trace-otlp-http", () => ({ OTLPTraceExporter: class {
   export(spans: any[], callback: Function) { delivered.push(spans); callback({ code: 0 }); }
   async shutdown() {} async forceFlush() {}
@@ -50,7 +51,7 @@ function snapshot(attributes: Attributes): any {
 }
 
 test.each(["startSpan", "startActiveSpan", "setAttributes"])("with no privacy flags, session and user identity export as set (%s)", async route => {
-  jest.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+  jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue(new Response("{}"));
   const provider = register({ ...routing, sessionName: SESSION_NAME });
   try {
     const tracer = new FITracer({ tracer: provider.getTracer("identity") });
@@ -76,7 +77,7 @@ test.each(["startSpan", "startActiveSpan", "setAttributes"])("with no privacy fl
 });
 
 test("with inputs and outputs hidden, identity still exports while message content is masked", async () => {
-  jest.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+  jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue(new Response("{}"));
   const traceConfig = { hideInputs: true, hideOutputs: true };
   const provider = register({ ...routing, sessionName: SESSION_NAME, traceConfig });
   try {

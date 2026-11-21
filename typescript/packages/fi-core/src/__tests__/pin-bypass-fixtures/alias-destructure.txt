@@ -1,0 +1,2 @@
+const { fetch: f } = globalThis;
+f("https://example.invalid/");

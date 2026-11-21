@@ -5,7 +5,7 @@ import { ProjectType } from "../fi_types";
 describe("additive auto-instrumentation provider options", () => {
   it("uses supplied processors, does no startup I/O and preserves the experiment default", async () => {
     const exporter = new InMemorySpanExporter();
-    const fetch = jest.spyOn(globalThis, "fetch");
+    const fetch = jest.spyOn(require("../fi-transport"), "ownFetch");
     const signals = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
     const provider = register({ projectName: "auto-options", setGlobalTracerProvider: false, spanProcessors: [new SimpleSpanProcessor(exporter)] });
     provider.getTracer("test").startSpan("test").end(); await provider.forceFlush();
@@ -22,7 +22,7 @@ describe("additive auto-instrumentation provider options", () => {
     expect(exporter.getFinishedSpans()).toHaveLength(0); await provider.shutdown();
   });
   it("constructs a standard exporter without exporting at startup", async () => {
-    const fetch = jest.spyOn(globalThis, "fetch");
+    const fetch = jest.spyOn(require("../fi-transport"), "ownFetch");
     const exporter = createSpanExporter({ endpoint: "http://127.0.0.1:1", headers: { "x-api-key": "mock" } });
     expect(exporter).toBeDefined(); expect(fetch).not.toHaveBeenCalled();
     await exporter.shutdown(); fetch.mockRestore();

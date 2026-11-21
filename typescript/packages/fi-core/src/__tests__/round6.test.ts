@@ -6,6 +6,7 @@ import { registerSecret, getRegisteredSecrets } from "../secrets";
 import { privacyFilter } from "../export-privacy";
 
 const delivered: any[][] = [];
+jest.mock("../fi-send-guard", () => ({ ...(jest.requireActual("../fi-send-guard") as object), guardOtlpHttpExporter: jest.fn(), guardOtlpGrpcExporter: jest.fn() }));
 jest.mock("@opentelemetry/exporter-trace-otlp-http", () => ({ OTLPTraceExporter: class {
   export(spans: any[], callback: Function) { delivered.push(spans); callback({ code: 0 }); }
   async shutdown() {} async forceFlush() {}
@@ -27,7 +28,7 @@ function fixture(): any {
 }
 test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "register-default", "register-batch", "direct-provider"])("A2 every owned %s route applies S1 on a detached span; manual policy is preserved", async route => {
   registerSecret("registered-manual-private");
-  const fetch = jest.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+  const fetch = jest.spyOn(require("../fi-transport"), "ownFetch").mockResolvedValue(new Response("{}") as any);
   const original = fixture(), before = JSON.stringify(original);
   let provider: FITracerProvider | undefined, exporter: any;
   if (route.startsWith("register")) provider = register({ ...options, batch: route === "register-batch" });
@@ -44,7 +45,7 @@ test.each(["factory-http", "factory-grpc", "legacy-http", "legacy-grpc", "regist
     if (route === "register-batch") expect(delivered).toHaveLength(0);
     await provider.forceFlush();
   } else await new Promise<void>(done => exporter.export([original], () => done()));
-  const spans = route === "legacy-http" ? JSON.parse(String(fetch.mock.calls[0][1]!.body)) : delivered[0];
+  const spans = route === "legacy-http" ? JSON.parse(String((fetch.mock.calls[0] as any[])[1].body)) : delivered[0];
   expect(spans).toHaveLength(1);
   if (provider) {
     expect(spans[0].attributes).toMatchObject({ database_password: "<redacted>", echoed: "<redacted>", "input.value": "__REDACTED__" });

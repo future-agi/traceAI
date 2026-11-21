@@ -24,5 +24,6 @@ module.exports = {
   moduleNameMapper: {
     '^@traceai/fi-semantic-conventions$': '<rootDir>/../fi-semantic-conventions/src'
   },
+  setupFiles: ['<rootDir>/test/jest-fetch-forwarder.cjs'],
   testTimeout: 10000
 }; 
