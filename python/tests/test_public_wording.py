@@ -103,10 +103,48 @@ def test_the_docstrings_comments_and_names_of_the_plain_channel_tests_use_the_pu
     assert python_text((ROOT / "tests" / module).read_text()) == {}
 
 
-def test_each_changelog_bullet_that_names_the_proxied_code_carries_a_breaking_label():
+# Each refusal of a bullet that names `proxied` has its own "Breaking:" label, so the number of labels is the number of
+# refusals the bullet lists. A bullet that is added or that loses a refusal changes this table on purpose.
+PROXIED_BULLET_LABELS = {
+    "- A `requests.Session` you pass to an exporter is checked when the channel is plain": 1,
+    "- On a plain channel that carries Future AGI keys, what is checked is:": 1,
+    "- On a plain channel that carries Future AGI keys the exporter sends with `requests.Session` itself": 1,
+    "- On a plain channel that carries Future AGI keys, each adapter of the sending session": 4,
+    "- `UnsupportedFutureAGIEndpointError` has a `code` attribute:": 1,
+}
+ADAPTER_BULLET_REFUSALS = (
+    "Breaking: an adapter on a plain-http Future AGI channel whose `max_retries` is a `Retry` subclass is refused with the code `proxied`",
+    "Breaking: a custom `auth` callable, or `auth` given as a list, raises `proxied`",
+    "Breaking: a routing function replaced on the session or adapter object itself",
+    "Breaking: a subclass of `requests.Session` that overrides a routing function raises `proxied`",
+)
+
+
+def proxied_bullets():
     section = changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.5.2")
-    bullets = [line for line in section.splitlines() if line.startswith("- ") and "`proxied`" in line]
-    assert len(bullets) >= 4 and [b[:60] for b in bullets if "Breaking:" not in b] == []
+    return [line for line in section.splitlines() if line.startswith("- ") and "`proxied`" in line]
+
+
+def test_each_changelog_bullet_that_names_the_proxied_code_carries_a_breaking_label_for_every_refusal():
+    counts = {}
+    for bullet in proxied_bullets():
+        prefixes = [prefix for prefix in PROXIED_BULLET_LABELS if bullet.startswith(prefix)]
+        assert len(prefixes) == 1, bullet[:80]
+        counts[prefixes[0]] = bullet.count("Breaking:")
+    assert counts == PROXIED_BULLET_LABELS
+
+
+def test_every_refusal_of_the_adapter_bullet_starts_with_its_own_breaking_label():
+    (bullet,) = [b for b in proxied_bullets() if b.startswith("- On a plain channel that carries Future AGI keys, each adapter")]
+    for refusal in ADAPTER_BULLET_REFUSALS:
+        assert bullet.count(refusal) == 1, refusal
+    assert bullet.count("Breaking:") == len(ADAPTER_BULLET_REFUSALS)
+
+
+def test_no_line_of_the_changelog_section_has_a_stray_separator_before_a_semicolon():
+    section = changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.5.2")
+    stray = re.compile(r",\s*;|\s{2,};|\s;")
+    assert [match.group(0) + " in: " + line[:60] for line in section.splitlines() for match in [stray.search(line)] if match] == []
 
 
 def test_the_changelog_names_why_a_futures_session_is_refused_and_the_user_action_for_each_refusal():
