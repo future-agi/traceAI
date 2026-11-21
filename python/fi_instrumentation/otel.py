@@ -1,4 +1,5 @@
 import atexit
+import collections
 import contextlib
 import inspect
 import json
@@ -1111,16 +1112,20 @@ def _copy_adapter(adapter: Any) -> Any:
         return requests.adapters.HTTPAdapter(**settings_of)
 
 
-def _copy_session(session: requests.Session, hooks: bool = True) -> requests.Session:
+def _copy_session(session: requests.Session, hooks: bool = True, plain: bool = False) -> requests.Session:
     """A new session with the caller's settings and adapters, whose headers can be changed freely.
 
     The copy is an instance of the caller's session class when that class can be created without arguments, and a
-    ``requests.Session`` otherwise.
+    ``requests.Session`` otherwise. With ``plain`` it is always ``requests.Session`` itself, so no method of a caller's subclass
+    runs on it.
     """
-    try:
-        copy = type(session)()
-    except (TypeError, ValueError, AttributeError):  # a subclass that needs arguments
+    if plain:
         copy = requests.Session()
+    else:
+        try:
+            copy = type(session)()
+        except (TypeError, ValueError, AttributeError):  # a subclass that needs arguments
+            copy = requests.Session()
     copy.headers = session.headers.copy()
     copy.auth = session.auth
     copy.proxies = dict(session.proxies)
@@ -1354,9 +1359,12 @@ def _session_is_stock(session: Any, allowed: Mapping[str, Any] | None = None) ->
     if type(hooks) is not dict or any(dict.__getitem__(hooks, key) for key in list(dict.keys(hooks))):
         return False
     adapters = getattr(session, "adapters", None)
-    # By exact type: a subclass of HTTPAdapter can choose the connection it uses (a pool key, a dial, an ssl context).
-    return hasattr(adapters, "values") and all(
-        type(adapter) is HTTPAdapter and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING) for adapter in adapters.values()
+    # The container is a dict or an OrderedDict (what ``requests`` uses), read by direct iteration: a subclass can show less than it
+    # holds. Each adapter is judged by exact type: a subclass of HTTPAdapter can choose the connection it uses (a pool key, a dial,
+    # an ssl context).
+    return type(adapters) in (dict, collections.OrderedDict) and all(
+        type(adapter) is HTTPAdapter and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING)
+        for adapter in dict.values(adapters)
     )
 
 
@@ -1508,9 +1516,10 @@ def _requests_session_of(exporter: Any) -> Any:
 
 
 def _isolated_session(session: requests.Session) -> requests.Session:
-    """The session a plain channel that carries Future AGI keys sends with: a copy of ``session`` with its own adapters (settings
+    """The session a plain channel that carries Future AGI keys sends with: ``requests.Session`` itself (a method of a caller's
+    subclass is not used to send) holding a copy of the settings of ``session`` that were inspected, with its own adapters (settings
     and TLS configuration kept), no proxies, no environment, and no hooks."""
-    isolated = _copy_session(session, hooks=False)
+    isolated = _copy_session(session, hooks=False, plain=True)
     _without_proxies(isolated)
     return isolated
 
@@ -1522,7 +1531,15 @@ def _sender_is_sound(sender: Any, guard: Any = None) -> bool:
     allowed = {"request": guard} if guard is not None else None
     if guard is not None and getattr(sender, "__dict__", {}).get("request") is not guard:
         return False
-    return _session_is_stock(sender, allowed) and sender.trust_env is False and not sender.proxies
+    proxies = getattr(sender, "proxies", None)
+    # Exactly requests.Session, and proxies held in a plain dict that holds nothing (a subclass can read as empty while it holds entries).
+    return (
+        type(sender) is requests.Session
+        and _session_is_stock(sender, allowed)
+        and sender.trust_env is False
+        and type(proxies) is dict
+        and dict.__len__(proxies) == 0
+    )
 
 
 def _install_session(exporter: Any, session: requests.Session) -> None:
