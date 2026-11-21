@@ -14,7 +14,7 @@ module TraceAI
     # Refusals carry no configured value and no key.
     module KeyTransport
       # `reason` is one of REASONS; it is the only detail a refusal warning prints.
-      REASONS = ['insecure target', 'redirect', 'peer not loopback', 'unparseable URL', 'proxy unsupported', 'proxy refused'].freeze
+      REASONS = ['insecure target', 'redirect', 'peer not loopback', 'unparseable URL', 'proxy unsupported', 'proxy refused', 'tunnel not verified'].freeze
       class Refused < StandardError
         attr_reader :reason
         def initialize(message = 'FI keys are not sent over this transport', reason: 'insecure target')

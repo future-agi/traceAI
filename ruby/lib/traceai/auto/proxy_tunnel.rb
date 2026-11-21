@@ -22,6 +22,14 @@ module TraceAI
         # Decides the route for `target` (a written https or http URL) from the environment given. Returns DIRECT, a
         # Config or an Unsupported.
         def route(target, env)
+          route_for(target, env)
+        rescue StandardError
+          # Whatever is wrong with a setting (bytes that are not text, for one), the exporter still starts and the
+          # send is refused with the one value-free warning.
+          Unsupported.new('proxy unsupported')
+        end
+
+        def route_for(target, env)
           scheme = target.to_s[/\A(https?):\/\//i, 1].to_s.downcase
           return DIRECT unless scheme == 'https'
           written = KeyTransport.written_host(target.to_s) or return DIRECT
@@ -50,12 +58,22 @@ module TraceAI
           Unsupported.new('proxy unsupported')
         end
 
-        def open(config, host, port, socket, tls_class:, context_class:, unix_class:, &wait)
+        def open(config, host, port, socket, tls_class:, context_class:, unix_class:, deadline:, &wait)
           raise KeyTransport::Refused.new('proxy unusable', reason: 'proxy refused') unless host.to_s.match?(/\A[^\s\r\n\0]+\z/)
           outer = socket
           if config.scheme == 'https'
             outer = handshake(socket, config.host, tls_class, context_class, &wait)
           end
+          begin
+            connect(config, host, port, outer, socket, unix_class, deadline, &wait)
+          rescue Exception # rubocop:disable Lint/RescueException
+            # A refused or failed CONNECT closes the proxy TLS session; the raw socket is closed by the caller.
+            outer.close if outer.respond_to?(:sync_close=) && !outer.closed?
+            raise
+          end
+        end
+
+        def connect(config, host, port, outer, socket, unix_class, deadline, &wait)
           label = host.include?(':') ? "[#{host}]:#{port}" : "#{host}:#{port}"
           lines = ["CONNECT #{label} HTTP/1.1", "Host: #{label}"]
           lines << "Proxy-Authorization: #{config.authorization}" if config.authorization
@@ -63,11 +81,11 @@ module TraceAI
           status = read_head(outer, &wait)
           raise KeyTransport::Refused.new('redirect answered a key-carrying send', reason: 'redirect') if KeyTransport.refuses_redirect?(status)
           raise KeyTransport::Refused.new('proxy refused the tunnel', reason: 'proxy refused') unless status.match?(/\AHTTP\/1\.[01] 2\d\d(?: |\r)/)
-          return Tunnel.new(outer, nil, nil) if config.scheme == 'http'
+          return Tunnel.new(outer, nil, nil, deadline) if config.scheme == 'http'
           inner, far = unix_class.pair
-          relay = Thread.new { pump(outer, socket, far) }
+          relay = Thread.new { pump(outer, socket, far, deadline) }
           relay.report_on_exception = false
-          Tunnel.new(inner, [outer, far], relay)
+          Tunnel.new(inner, [outer, far], relay, deadline)
         end
 
         private
@@ -81,16 +99,44 @@ module TraceAI
           LOOPBACK.include?(name) || name.match?(/\A127\.\d+\.\d+\.\d+\z/)
         end
 
-        # The entries Ruby's own proxy lookup honours: `*`, host, .domain, host:port and *.domain.
+        # Ruby's URI::Generic.use_proxy? for the one address this code can know without a lookup: entries are
+        # `host`, `host:port`, `.domain` (subdomains only), and for an IPv4 literal target an address or CIDR. A bare
+        # name matches the host and its subdomains. `*` and `*.domain` are ordinary text, as in Ruby. Ruby also
+        # resolves a name to an address to test IP entries and loopback; no lookup runs on the export path, so a name
+        # that resolves to an address in an IP entry is proxied, and a name that resolves to loopback is proxied
+        # unless it is written as a loopback name.
         def no_proxy?(list, host, port)
-          name = host.downcase.delete_suffix('.')
-          list.split(/[\s,]+/).reject(&:empty?).any? do |entry|
-            return true if entry == '*'
-            found = /\A(?<host>.+?)(?::(?<port>\d+))?\z/.match(entry.downcase) or next false
-            next false if found[:port] && Integer(found[:port], 10) != port
-            pattern = found[:host].sub(/\A\*?\./, '').delete_suffix('.')
-            name == pattern || name.end_with?(".#{pattern}")
+          name = host.downcase
+          dotted = ".#{name}"
+          address = ipv4(name)
+          list.scan(/([^:,\s]+)(?::(\d+))?/) do |entry, entry_port|
+            next if entry_port && Integer(entry_port, 10) != port
+            if entry.start_with?('.')
+              return true if name.end_with?(entry.downcase)
+            elsif dotted.end_with?(".#{entry.downcase}")
+              return true
+            end
+            return true if address && cidr_includes?(entry, address)
           end
+          false
+        end
+
+        def ipv4(text)
+          found = /\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\z/.match(text) or return nil
+          octets = found.captures.map { |part| Integer(part, 10) }
+          return nil if octets.any? { |octet| octet > 255 }
+          octets.inject(0) { |sum, octet| (sum << 8) | octet }
+        end
+
+        def cidr_includes?(entry, address)
+          base, mask = entry.split('/', 2)
+          network = ipv4(base) or return false
+          bits = if mask.nil? then 32
+                 elsif mask.match?(/\A\d{1,2}\z/) then Integer(mask, 10)
+                 end
+          return false if bits.nil? || bits > 32
+          shift = 32 - bits
+          (network >> shift) == (address >> shift)
         end
 
         def decode(text) = text.gsub(/%\h\h/) { |hex| hex[1..].to_i(16).chr }.b
@@ -141,10 +187,12 @@ module TraceAI
         end
 
         # Copies bytes both ways between the proxy connection and the end the destination handshake runs on.
-        def pump(outer, raw, far)
+        def pump(outer, raw, far, deadline)
           loop do
             pending = outer.respond_to?(:pending) && outer.pending.to_i.positive?
-            ready = pending ? [raw] : IO.select([raw, far], nil, nil, 30)&.first
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            break if remaining <= 0
+            ready = pending ? [raw] : IO.select([raw, far], nil, nil, remaining)&.first
             break unless ready
             if ready.include?(raw)
               data = outer.read_nonblock(16_384, exception: false)
@@ -167,12 +215,17 @@ module TraceAI
       # The IO the destination handshake runs on, and what must be closed with it.
       class Tunnel
         attr_reader :io
-        def initialize(io, extras, relay)
-          @io = io; @extras = extras; @relay = relay
+        def initialize(io, extras, relay, deadline)
+          @io = io; @extras = extras; @relay = relay; @deadline = deadline
         end
 
+        # The relay is stopped and has finished before the TLS object it shares is closed. The wait is bounded by the
+        # export deadline, and a stopped thread ends at once.
         def close
-          @relay&.kill
+          if @relay
+            @relay.kill
+            @relay.join([@deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0.05].max)
+          end
           [@io, *@extras].each do |io|
             io.close unless io.nil? || io.closed?
           rescue StandardError

@@ -107,9 +107,16 @@ module TraceAI
           raise KeyTransport::Refused.new('proxy setting is not supported', reason: @route.reason)
         elsif @route.is_a?(ProxyTunnel::Config)
           # The proxy is the only peer dialled; a refusal by it is a refusal of the send, never a direct send.
-          socket = socket_class.tcp(@route.host, @route.port, connect_timeout: timeout)
-          tunnel = ProxyTunnel.open(@route, url.host, url.port, socket, tls_class: tls_socket, context_class: tls_context,
-                                    unix_class: native_class('UNIXSocket')) { |waiting, state| wait_for(waiting, state, deadline) }
+          begin
+            socket = socket_class.tcp(@route.host, @route.port, connect_timeout: timeout)
+            tunnel = ProxyTunnel.open(@route, url.host, url.port, socket, tls_class: tls_socket, context_class: tls_context,
+                                      unix_class: native_class('UNIXSocket'), deadline: deadline) { |waiting, state| wait_for(waiting, state, deadline) }
+          rescue KeyTransport::Refused
+            raise
+          rescue StandardError
+            # Connect, EOF, an oversized head or a timeout: the same one value-free warning, and never a direct send.
+            raise KeyTransport::Refused.new('proxy failed', reason: 'proxy refused')
+          end
           io = tunnel.io
         else
           socket = socket_class.tcp(url.host, url.port, connect_timeout: timeout)
@@ -122,13 +129,18 @@ module TraceAI
         if tls_socket
           context = tls_context.new
           context.set_params
-          io = tls_socket.new(io, context); io.sync_close = true; io.hostname = url.host
-          loop do
-            state = io.connect_nonblock(exception: false)
-            break unless %i[wait_readable wait_writable].include?(state)
-            wait_for(io, state, deadline)
+          begin
+            io = tls_socket.new(io, context); io.sync_close = true; io.hostname = url.host
+            loop do
+              state = io.connect_nonblock(exception: false)
+              break unless %i[wait_readable wait_writable].include?(state)
+              wait_for(io, state, deadline)
+            end
+            io.post_connection_check(url.host)
+          rescue StandardError
+            raise unless tunnel
+            raise KeyTransport::Refused.new('tunnelled TLS session was not verified', reason: 'tunnel not verified')
           end
-          io.post_connection_check(url.host)
         end
         request = "POST #{url.path} HTTP/1.1\r\n" + headers.map { |key, value| "#{key}: #{value}\r\n" }.join + "\r\n"
         [request.b, payload].each do |part|

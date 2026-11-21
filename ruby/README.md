@@ -271,8 +271,13 @@ Set `https_proxy` or `HTTPS_PROXY` (the lower-case name is read first) to an `ht
 `https://` URL, for example `https://user:password@proxy.corp:3128`. Exports to an
 `https://` `FI_BASE_URL` then go through the proxy with a `CONNECT` request.
 
-- A host matched by `no_proxy` or `NO_PROXY` (`*`, `host`, `.domain`, `*.domain`, `host:port`) and a
-  loopback host connect directly.
+- A host matched by `no_proxy` or `NO_PROXY` connects directly. Entries are read as Ruby reads
+  them: `host` matches that host and its subdomains, `.domain` matches subdomains only,
+  `host:port` limits the match to that port, and an IPv4 address or CIDR (`10.0.0.0/8`) matches an
+  IPv4 target written as an address. `*` and `*.domain` are not special. The agent does not resolve
+  a name to test it against an address entry, so a name that resolves into such an entry is still
+  proxied. The names `localhost`, `127.x.x.x` and `::1` connect directly; another name that resolves
+  to loopback is proxied.
 - Verification is always on. The tunnelled session is checked in full against the Future AGI host,
   never against the proxy, and a certificate that is not trusted or does not match the host is
   refused before any key is written. An `https://` proxy has its own certificate and name verified
@@ -283,7 +288,9 @@ Set `https_proxy` or `HTTPS_PROXY` (the lower-case name is read first) to an `ht
   The keys are never placed in the proxy URL or in a proxy header, and no log line shows the proxy URL.
 - A proxy that refuses the tunnel, answers with a redirect, uses another scheme (for example
   `socks5://`) or has a value that cannot be read refuses the export with one warning that names a
-  reason. The export is never retried directly.
+  reason; so does a proxy that cannot be reached, closes, or answers too much or too slowly, and
+  a tunnelled session that cannot be verified. The agent keeps running and the export is never
+  retried directly.
 - The settings are read once, when the exporter starts.
 
 ## What is captured
