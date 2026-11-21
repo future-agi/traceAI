@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require_relative 'test_helper'
+require 'minitest/mock'
 require_relative '../lib/traceai/auto/agent'
 require_relative '../lib/traceai/auto/privacy'
 require_relative '../lib/traceai/auto/export'
@@ -145,7 +146,10 @@ class SpanWorkBoundTest < Minitest::Test
     attributes = (0...200).to_h { |i| ["app.value.#{i}", value] }
     record = span_with(attributes)
     config = TraceAI::Auto::Config.new({}, env: {})
-    copy = TraceAI::Auto::Privacy.snapshot(record, TraceAI::Auto::ExportResource.new({'service.name' => 'checkout-service'}), config, registry)
+    # The process-wide registry is whatever other tests left in it; the test's own list is the whole registry.
+    copy = TraceAI::Auto.stub(:secret_values, []) do
+      TraceAI::Auto::Privacy.snapshot(record, TraceAI::Auto::ExportResource.new({'service.name' => 'checkout-service'}), config, registry)
+    end
     assert_equal 'identity-span', copy.name
     assert_equal 'checkout-service', copy.resource.attributes['service.name']
     kept = (0...200).take_while { |i| copy.attributes["app.value.#{i}"] == value }
