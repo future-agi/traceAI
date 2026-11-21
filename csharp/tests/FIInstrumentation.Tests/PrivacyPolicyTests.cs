@@ -90,7 +90,9 @@ public partial class PrivacyPolicyTests
     public void GenericAttributeSetterMustApplyTraceConfig(string key)
     {
         var config = TraceConfig.Builder().HideInputs().HideOutputs().HideEmbeddingVectors().HideLlmInvocationParameters().Build();
-        Assert.Equal(TraceConfig.RedactedValue, config.Mask(key, Secret));
+        // Python drops message keys under the whole-direction flags; every other content key is redacted.
+        if (key is "gen_ai.input.messages" or "gen_ai.output.messages") Assert.Null(config.Mask(key, Secret));
+        else Assert.Equal(TraceConfig.RedactedValue, config.Mask(key, Secret));
         using var capture = new Capture(config);
         capture.Tracer.Llm("attribute-privacy", span => span.SetAttribute(key, Secret));
         Assert.Single(capture.Handler.Payloads);

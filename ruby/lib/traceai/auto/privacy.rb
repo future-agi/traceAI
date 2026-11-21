@@ -9,6 +9,15 @@ module TraceAI
     module Privacy
       INVOCATION_FAMILIES = %w[gen_ai.request anthropic.request anthropic.thinking].freeze
       REQUEST_IDENTITY_KEYS = %w[gen_ai.request.model gen_ai.request.stream anthropic.request.id].freeze
+      # Raw input and raw output (and their children) are withheld while any
+      # content hide setting is on, whichever one it is.
+      RAW_CONTENT_SWITCHES = %w[hide_inputs hide_outputs hide_input_messages hide_output_messages hide_input_text hide_output_text
+                                hide_input_images hide_embedding_vectors hide_llm_invocation_parameters].freeze
+      # A tool call's identity is not content; its arguments belong to the input
+      # side and its result to the output side.
+      TOOL_IDENTITY_KEYS = %w[gen_ai.tool.name gen_ai.tool.call.id gen_ai.tool.type].freeze
+      TOOL_ARGUMENT_SWITCHES = %w[hide_inputs hide_input_text hide_input_messages].freeze
+      TOOL_RESULT_SWITCHES = %w[hide_outputs hide_output_text hide_output_messages].freeze
       SESSION_ID = 'session.id'
       # Unlike other protected families, usage permits application-defined suffixes.
       # Only these literal schema keys are recoverable without a working registry.
@@ -27,6 +36,21 @@ module TraceAI
       module_function
       def ivar(value, name) = Object.instance_method(:instance_variable_get).bind_call(value, name)
       def field(value, name) = Struct.instance_method(:[]).bind_call(value, name)
+      # Events and links are Structs in some SDK/API releases and plain objects with
+      # instance variables in others. Both are read without calling any method the
+      # application's object defines.
+      def part(value, name)
+        if Object.instance_method(:is_a?).bind_call(value, Struct)
+          Struct.instance_method(:members).bind_call(value).include?(name) ? field(value, name) : nil
+        else
+          ivar(value, :"@#{name}")
+        end
+      end
+      def record_member?(value, name)
+        Struct.instance_method(:members).bind_call(value).include?(name)
+      rescue StandardError
+        false
+      end
       def safe_string(value)
         Codec.type(value) == String ? value : Codec.type_name(value)
       end
@@ -429,6 +453,11 @@ module TraceAI
           output_messages = k == 'gen_ai.output.messages' || k.start_with?('gen_ai.output.messages.')
           system = k == 'gen_ai.system_instructions' || k.start_with?('gen_ai.system_instructions.')
           tools = k == 'gen_ai.tool' || k.start_with?('gen_ai.tool.')
+          tool_arguments = k == 'gen_ai.tool.call.arguments'
+          tool_result = k == 'gen_ai.tool.call.result'
+          tools &&= !(tool_arguments || tool_result || TOOL_IDENTITY_KEYS.include?(k))
+          raw = k == 'raw.input' || k.start_with?('raw.input.') || k == 'raw.output' || k.start_with?('raw.output.')
+          next if raw && RAW_CONTENT_SWITCHES.any? { |flag| hide.call(flag) }
           parameters = !REQUEST_IDENTITY_KEYS.include?(k) && INVOCATION_FAMILIES.any? { |family| k == family || k.start_with?(family + '.') }
           next if (input_messages || system) && (hide.call('hide_inputs') || hide.call('hide_input_messages'))
           next if output_messages && (hide.call('hide_outputs') || hide.call('hide_output_messages'))
@@ -445,6 +474,8 @@ module TraceAI
           hidden ||= k == 'input.value' && (hide.call('hide_input_messages') || hide.call('hide_input_images') || hide.call('hide_llm_invocation_parameters'))
           hidden ||= k == 'output.value' && hide.call('hide_output_messages')
           hidden ||= tools && %w[hide_inputs hide_outputs hide_input_text hide_output_text].any? { |flag| hide.call(flag) }
+          hidden ||= tool_arguments && TOOL_ARGUMENT_SWITCHES.any? { |flag| hide.call(flag) }
+          hidden ||= tool_result && TOOL_RESULT_SWITCHES.any? { |flag| hide.call(flag) }
           out[k] = hidden ? '__REDACTED__' : v
         end
       end
@@ -503,7 +534,9 @@ module TraceAI
         # Identity and timing are copied separately, so an error anywhere in the
         # sanitizer cannot drop a span/batch or allow unsanitized content through.
         copy = ExportRecord.new
-        %i[kind parent_span_id start_timestamp end_timestamp span_id trace_id trace_flags parent_span_is_remote].each { |key| copy[key] = field(record, key) }
+        %i[kind parent_span_id start_timestamp end_timestamp span_id trace_id trace_flags].each { |key| copy[key] = field(record, key) }
+        # SDK releases before 1.10 have no parent_span_is_remote member; their spans report a local parent.
+        copy.parent_span_is_remote = record_member?(record, :parent_span_is_remote) ? field(record, :parent_span_is_remote) : false
         flags = copy.trace_flags
         flags = ivar(flags, :@flags) unless Codec.type(flags) == Integer
         copy.trace_flags = Codec.type(flags) == Integer ? flags & 255 : 0
@@ -528,8 +561,8 @@ module TraceAI
           original_events = field(record, :events) || []; original_links = field(record, :links) || []
           raise Limit unless Codec.type(original_events) == Array && Codec.type(original_links) == Array
           raise Limit if original_events.size + original_links.size > Budget::MAX_NODES
-          lossy ||= original_events.any? { |event| truncated_attributes?(field(event, :attributes)) } ||
-                    original_links.any? { |link| truncated_attributes?(ivar(link, :@attributes)) }
+          lossy ||= original_events.any? { |event| truncated_attributes?(part(event, :attributes)) } ||
+                    original_links.any? { |link| truncated_attributes?(part(link, :attributes)) }
           status = field(record, :status)
           code = Codec.type(status) == LocalStatus ? field(status, :code) : ivar(status, :@code)
           description = Codec.type(status) == LocalStatus ? field(status, :description) : ivar(status, :@description)
@@ -555,15 +588,15 @@ module TraceAI
           safe_scope = ExportScope.new(scrub(safe_string(scope_name || ''), secrets, nil, 0, budget), scrub(safe_string(scope_version || ''), secrets, nil, 0, budget), apply.call(scope_attrs))
           events = original_events.map do |event|
             budget.spend
-            SafeEvent.new(scrub(safe_string(field(event, :name)), secrets, nil, 0, budget), apply_media.call(field(event, :attributes), event_media[event.object_id]), field(event, :timestamp))
+            SafeEvent.new(scrub(safe_string(part(event, :name)), secrets, nil, 0, budget), apply_media.call(part(event, :attributes), event_media[event.object_id]), part(event, :timestamp))
           end
           links = original_links.map do |link|
             budget.spend
-            ctx = ivar(link, :@span_context)
+            ctx = part(link, :span_context)
             link_flags = ivar(ctx, :@trace_flags)
             link_flags = ivar(link_flags, :@flags) unless Codec.type(link_flags) == Integer
             link_flags = Codec.type(link_flags) == Integer ? link_flags & 255 : 0
-            SafeLink.new(SafeContext.new(ivar(ctx, :@trace_id), ivar(ctx, :@span_id), state(ivar(ctx, :@tracestate), secrets, budget), link_flags, ivar(ctx, :@remote) == true), apply_media.call(ivar(link, :@attributes), link_media[link.object_id]))
+            SafeLink.new(SafeContext.new(ivar(ctx, :@trace_id), ivar(ctx, :@span_id), state(ivar(ctx, :@tracestate), secrets, budget), link_flags, ivar(ctx, :@remote) == true), apply_media.call(part(link, :attributes), link_media[link.object_id]))
           end
           tracestate = state(field(record, :tracestate), secrets, budget)
           # Commit only after every field succeeds: fail closed on limits/errors.

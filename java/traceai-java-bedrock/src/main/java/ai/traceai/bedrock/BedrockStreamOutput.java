@@ -1,5 +1,6 @@
 package ai.traceai.bedrock;
 
+import ai.traceai.privacy.KnownSecrets;
 import ai.traceai.SemanticConventions;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -19,6 +20,7 @@ import java.util.TreeMap;
 final class BedrockStreamOutput {
     private static final int MAX_CHARACTERS = 32000;
     private static final int MAX_BLOCKS = 128;
+    private boolean cutByLastBound;
     private final BedrockTracing tracing;
     private final Span span;
     private final Map<Integer, Block> blocks = new TreeMap<>();
@@ -58,20 +60,26 @@ final class BedrockStreamOutput {
         if (tracing.hideStreamOutput()) return;
         if (event instanceof MessageStartEvent) {
             String value = ((MessageStartEvent) event).roleAsString();
-            if (value != null) role = bounded(value);
+            if (value != null) role = whole(value);
         } else if (event instanceof ContentBlockStartEvent) {
             var start = (ContentBlockStartEvent) event;
             Block block = block(start.contentBlockIndex());
             if (block != null && start.start() != null && start.start().toolUse() != null) {
-                block.toolId = bounded(start.start().toolUse().toolUseId());
-                block.toolName = bounded(start.start().toolUse().name());
+                block.toolId = whole(start.start().toolUse().toolUseId());
+                block.toolName = whole(start.start().toolUse().name());
             }
         } else if (event instanceof ContentBlockDeltaEvent) {
             var delta = (ContentBlockDeltaEvent) event;
             Block block = block(delta.contentBlockIndex());
             if (block != null && delta.delta() != null) {
-                if (delta.delta().text() != null) block.text.append(bounded(delta.delta().text()));
-                if (delta.delta().toolUse() != null) block.arguments.append(bounded(delta.delta().toolUse().input()));
+                if (delta.delta().text() != null) {
+                    block.text.append(bounded(delta.delta().text()));
+                    block.textCut |= cutByLastBound;
+                }
+                if (delta.delta().toolUse() != null) {
+                    block.arguments.append(bounded(delta.delta().toolUse().input()));
+                    block.argumentsCut |= cutByLastBound;
+                }
             }
         }
     }
@@ -108,13 +116,13 @@ final class BedrockStreamOutput {
                 tool.addProperty("toolUseId", block.toolId);
                 tool.addProperty("name", block.toolName);
                 try {
-                    tool.add("input", BedrockTracing.boundedCopy(JsonParser.parseString(block.arguments.toString()), 0));
+                    tool.add("input", BedrockTracing.boundedCopy(JsonParser.parseString(finished(block.arguments, block.argumentsCut)), 0));
                 } catch (RuntimeException malformedOrPartial) {
-                    tool.addProperty("input", block.arguments.toString());
+                    tool.addProperty("input", finished(block.arguments, block.argumentsCut));
                 }
                 value.add("toolUse", tool);
             } else {
-                value.addProperty("text", block.text.toString());
+                value.addProperty("text", finished(block.text, block.textCut));
             }
             content.add(value);
         }
@@ -137,16 +145,33 @@ final class BedrockStreamOutput {
     }
 
     private String bounded(String value) {
+        cutByLastBound = false;
         if (value == null) return null;
         int length = Math.min(value.length(), MAX_CHARACTERS - characters);
         characters += length;
-        if (length < value.length()) truncated = true;
+        if (length < value.length()) {
+            truncated = true;
+            cutByLastBound = true;
+        }
         return value.substring(0, length);
+    }
+
+    /** A single value (role, tool id, tool name): when the cap cuts it, no part of a known secret may remain. */
+    private String whole(String value) {
+        String kept = bounded(value);
+        return cutByLastBound ? KnownSecrets.sealCut(kept) : kept;
+    }
+
+    /** Text accumulated across chunks that the cap cut: no part of a known secret that continued past the cut. */
+    private static String finished(StringBuilder text, boolean cut) {
+        return cut ? KnownSecrets.sealCut(text.toString()) : text.toString();
     }
 
     private static final class Block {
         final StringBuilder text = new StringBuilder();
         final StringBuilder arguments = new StringBuilder();
+        boolean textCut;
+        boolean argumentsCut;
         String toolId;
         String toolName;
     }

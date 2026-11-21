@@ -1,4 +1,5 @@
 import logging
+import sys
 from enum import Enum
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 from urllib.parse import urlparse
@@ -17,6 +18,22 @@ class MiniMaxBaseURL(str, Enum):
     """MiniMax API base URL hostnames."""
     API_IO = "api.minimax.io"
     API_CHAT = "api.minimax.chat"
+
+
+def shared_openai_is_active() -> bool:
+    """The shared OpenAI instrumentor owns requests when both entry points are enabled.
+
+    Checked at call time (the optional package is never imported), so either
+    enable/disable order works.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(
+        instrumentor
+        and getattr(instrumentor, "_supports_deepseek_extensions", False)
+        and getattr(instrumentor, "_supports_minimax_provider", False)
+        and instrumentor().is_instrumented_by_opentelemetry
+    )
 
 
 def is_minimax_client(instance: Any) -> bool:

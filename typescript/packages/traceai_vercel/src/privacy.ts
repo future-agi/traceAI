@@ -63,6 +63,17 @@ const outputKeys = new Set([
   'message.tool_calls', 'reranker.output_documents', 'ai.decision.answers', 'ai.ranking',
 ]);
 
+/** True for the entry itself or any `<entry>.N...` child: the same family semantics as fi-core. */
+function inFamily(entries: Set<string>, key: string): boolean {
+  if (entries.has(key)) return true;
+  for (let dot = key.indexOf('.'); dot !== -1; dot = key.indexOf('.', dot + 1)) {
+    if (entries.has(key.slice(0, dot))) return true;
+  }
+  return false;
+}
+
+const embeddingVectorKeys = new Set(['ai.embedding', 'ai.embeddings', 'embedding.vector']);
+
 function maskAttributes(attributes: Attributes, config: PrivacyConfig): Attributes {
   const masked: Attributes = {};
   for (const [key, value] of Object.entries(attributes)) {
@@ -70,11 +81,11 @@ function maskAttributes(attributes: Attributes, config: PrivacyConfig): Attribut
     // private gateways can use arbitrary custom authentication header names.
     if (key.toLowerCase().startsWith('ai.request.headers.')) continue;
     if (config.hideErrorDetails && /(?:^|\.)(?:exception\.(?:message|stacktrace)|error\.message|error_message)$/.test(key)) continue;
-    if (config.hideInputs && (inputKeys.has(key) || /^embedding\.embeddings\.\d+\.embedding\.text$/.test(key))) continue;
-    if (config.hideOutputs && outputKeys.has(key)) continue;
-    if ((config.hideInputs || config.hideOutputs) && key === 'ai.response.providerMetadata') continue;
+    if (config.hideInputs && (inFamily(inputKeys, key) || /^embedding\.embeddings\.\d+\.embedding\.text$/.test(key))) continue;
+    if (config.hideOutputs && inFamily(outputKeys, key)) continue;
+    if ((config.hideInputs || config.hideOutputs) && (key === 'ai.response.providerMetadata' || key.startsWith('ai.response.providerMetadata.'))) continue;
     if ((config.hideOutputs || config.hideEmbeddingVectors) &&
-      (key === 'ai.embedding' || key === 'ai.embeddings' || key === 'embedding.vector' ||
+      (inFamily(embeddingVectorKeys, key) ||
         /^embedding\.embeddings\.\d+\.embedding\.vector$/.test(key))) continue;
     if (value !== undefined) masked[key] = value;
   }

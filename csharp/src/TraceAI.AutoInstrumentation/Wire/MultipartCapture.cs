@@ -11,6 +11,7 @@ internal sealed class MultipartObserver
     private readonly byte[] _first, _delimiter;
     private readonly byte[] _buffer=new byte[16384];
     private readonly MemoryStream _field=new();
+    private bool _fieldCut;
     private readonly Dictionary<string,string> _fields=new();
     private readonly List<FilePart> _files=[];
     private int _count, _state; // first boundary, headers, body, boundary suffix, done
@@ -90,7 +91,7 @@ internal sealed class MultipartObserver
     }
     private void StartPart(string headers)
     {
-        _name=""; _file=null; _size=0; _field.SetLength(0);
+        _name=""; _file=null; _size=0; _field.SetLength(0); _fieldCut=false;
         string? mime=null; ContentDispositionHeaderValue? disposition=null;
         foreach(var line in headers.Split("\r\n"))
         {
@@ -108,7 +109,7 @@ internal sealed class MultipartObserver
         if(_file!=null||_name.Length==0) return;
         if(_fields.Count>=128 && !_fields.ContainsKey(_name)) { _request.Truncated=true; return; }
         int take=(int)Math.Min(bytes.Length,65536-_field.Length);
-        if(take<bytes.Length) _request.Truncated=true;
+        if(take<bytes.Length) { _request.Truncated=true; _fieldCut=true; }
         if(take>0) _field.Write(bytes[..take]);
     }
     private void EndPart()
@@ -120,9 +121,10 @@ internal sealed class MultipartObserver
         else if(_name.Length>0 && (_fields.Count<128||_fields.ContainsKey(_name)))
         {
             var text=Encoding.UTF8.GetString(_field.GetBuffer(),0,(int)_field.Length);
-            while(Encoding.UTF8.GetByteCount(text)>65536) text=text[..^1];
-            _fields[_name]=text;
+            while(Encoding.UTF8.GetByteCount(text)>65536) { text=text[..^1]; _fieldCut=true; }
+            // Credentials are learned from everything read; what is kept is cut back past any secret the cap could have split.
             _request.CredentialDiscoveryIncomplete|=WirePrivacy.ObserveField(_name,text,_size==_field.Length);
+            _fields[_name]=WireCore.CutBeforeCap(text,_fieldCut);
         }
     }
 }

@@ -611,8 +611,12 @@ def _is_blank(value: Any) -> bool:
     return not str(value).strip()
 
 
-def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
+def _with_fi_auth_headers(headers: Any, add_env_keys: bool = True) -> Dict[str, Any]:
     """Lower-case explicit headers and add the FI_API_KEY/FI_SECRET_KEY pair once.
+
+    The environment pair is added only when ``add_env_keys`` is true, which the
+    exporters set for a Future AGI endpoint; a collector the user chose does not
+    receive the Future AGI keys.
 
     Explicit credentials win: the environment pair is added only when no
     Authorization, X-Api-Key or X-Secret-Key header was passed. A credential
@@ -630,11 +634,166 @@ def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
         if name in _CREDENTIAL_HEADERS and _is_blank(value):
             continue
         merged[name] = value
-    if not any(name in merged for name in _CREDENTIAL_HEADERS):
+    if add_env_keys and not any(name in merged for name in _CREDENTIAL_HEADERS):
         auth_header = get_env_fi_auth_header()
         if auth_header:
             merged.update({k.lower(): v for k, v in auth_header.items()})
     return merged
+
+
+_AMBIENT_HEADER_ENV_VARS = ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")
+_MISSING = object()
+
+
+def _ambient_headers() -> dict[str, str]:
+    """Headers named by the OTLP environment variables, keyed by lower-case name.
+
+    Upstream OpenTelemetry exporters read these when they are built (and, from
+    1.4x, merge them under the headers passed in). They are meant for the
+    collector the user configured, which is not necessarily Future AGI.
+    """
+    from opentelemetry.util.re import parse_env_headers
+
+    found: dict[str, str] = {}
+    for var in reversed(_AMBIENT_HEADER_ENV_VARS):
+        raw = os.environ.get(var)
+        if raw:
+            found.update({k.lower(): v for k, v in parse_env_headers(raw, liberal=True).items()})
+    return found
+
+
+def _is_future_agi_endpoint(endpoint: str | None) -> bool:
+    """True when ``endpoint`` is a Future AGI endpoint.
+
+    ``endpoint`` is the URL (HTTP) or host:port (gRPC) an exporter resolved. It
+    counts when its host matches FI_TRACES_URL, FI_BASE_URL, FI_GRPC_URL or the
+    Future AGI hosts, with the same port when both name one. Anything else,
+    including no endpoint at all, is a collector the user chose and keeps
+    standard OpenTelemetry environment behaviour.
+    """
+    if not endpoint:
+        return False
+
+    def _origin(url: str | None) -> tuple[str, int | None] | None:
+        if not url:
+            return None
+        parsed = urlparse(url if "://" in url else f"//{url}")
+        return (parsed.hostname or "").lower(), parsed.port
+
+    known = [
+        get_env_traces_endpoint(),
+        get_env_collector_endpoint(),
+        get_env_grpc_collector_endpoint(),
+        "https://api.futureagi.com",
+        "https://grpc.futureagi.com",
+    ]
+    target = _origin(endpoint)
+    for url in known:
+        origin = _origin(url)
+        if origin and target and origin[0] == target[0] and (
+            origin[1] == target[1] or origin[1] is None or target[1] is None
+        ):
+            return True
+    return False
+
+
+_SUPPORTED_OTLP_EXPORTERS = "1.29.0 to 1.45.x"
+
+
+class UnsupportedOTLPExporterError(RuntimeError):
+    """An exporter bound for Future AGI whose headers this release cannot set."""
+
+
+def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporterError:
+    """The error for an exporter bound for Future AGI whose headers cannot be pinned.
+
+    The message names the exporter class, the package version and the setting
+    that could leak, and no header or environment value.
+    """
+    try:
+        from importlib.metadata import version
+
+        installed = version(package)
+    except Exception:  # pragma: no cover - metadata unavailable
+        installed = "unknown version"
+    return UnsupportedOTLPExporterError(
+        f"Cannot send traces to Future AGI with {type(exporter).__name__} from {package} {installed}: "
+        "its header handling is not one this release can set, so settings from "
+        "OTEL_EXPORTER_OTLP_HEADERS could reach Future AGI. "
+        f"Supported versions are {_SUPPORTED_OTLP_EXPORTERS}."
+    )
+
+
+def _pin_http_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+    """Make an HTTP exporter send the OTLP defaults plus exactly ``sdk_headers``.
+
+    OpenTelemetry 1.29 sends from ``exporter._session.headers`` (and
+    ``exporter._headers``); both take environment headers only when no headers
+    are passed. From 1.4x the sent headers live in ``exporter._client._headers``
+    and always include the environment headers. Both are rewritten here, so the
+    environment is not read again at export time and ``os.environ`` is untouched.
+    An exporter with neither layout raises UnsupportedOTLPExporterError, so it
+    cannot send.
+    """
+    try:
+        from opentelemetry.exporter.otlp.proto.http import _OTLP_HTTP_HEADERS
+    except ImportError:  # pragma: no cover - layout of an unknown release
+        _OTLP_HTTP_HEADERS = {}
+    defaults = {k.lower(): v for k, v in _OTLP_HTTP_HEADERS.items()}
+    sdk = {str(k).lower(): v for k, v in sdk_headers.items()}
+    ambient = _ambient_headers()
+
+    pinned_any = False
+    client = getattr(exporter, "_client", None)
+    current = getattr(client, "_headers", None)
+    if isinstance(current, dict):
+        pinned_any = True
+        pinned = dict(defaults)
+        # The client adds Content-Encoding for the compression in use; it is not an environment header.
+        for key, value in current.items():
+            if key.lower() == "content-encoding" and "content-encoding" not in ambient:
+                pinned["content-encoding"] = value
+        pinned.update(sdk)
+        current.clear()
+        current.update(pinned)
+
+    session = getattr(exporter, "_session", None)
+    session_headers = getattr(session, "headers", None)
+    if session_headers is not None and isinstance(getattr(exporter, "_headers", None), dict):
+        pinned_any = True
+        for name, value in ambient.items():
+            if name not in sdk and session_headers.get(name) == value:
+                del session_headers[name]
+                if name in defaults:
+                    session_headers[name] = defaults[name]
+        session_headers.update(sdk)
+        exporter._headers = dict(sdk)
+    if not pinned_any:
+        raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-http")
+
+
+def _pin_grpc_headers(exporter: Any, sdk_headers: Mapping[str, Any]) -> None:
+    """Make a gRPC exporter send its metadata from exactly ``sdk_headers``.
+
+    The metadata is ``exporter._headers`` in 1.29 and 1.4x. Both take environment
+    headers whenever no headers are passed, so the pairs that came from the
+    environment are removed and the SDK's are set. ``None`` means no metadata;
+    any other layout raises UnsupportedOTLPExporterError, so it cannot send.
+    """
+    sdk = {str(k).lower(): v for k, v in sdk_headers.items()}
+    current = getattr(exporter, "_headers", _MISSING)
+    if current is None:
+        exporter._headers = tuple(sdk.items()) or None
+        return
+    if not isinstance(current, (tuple, list)):
+        raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-grpc")
+    ambient = _ambient_headers()
+    kept = [
+        (k, v)
+        for k, v in current
+        if str(k).lower() not in sdk and not (str(k).lower() in ambient and ambient[str(k).lower()] == v)
+    ]
+    exporter._headers = tuple(kept) + tuple(sdk.items())
 
 
 class GRPCSpanExporter(_GRPCSpanExporter):
@@ -643,8 +802,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
     Args:
         endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
             `FI_GRPC_URL` is used, defaulting to the Future AGI gRPC endpoint.
-        headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
-            and `FI_SECRET_KEY` environment variables will be used.
+        headers: Headers to send when exporting. For a Future AGI endpoint, the
+            `FI_API_KEY` and `FI_SECRET_KEY` environment variables are added when no
+            credential header is given.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -652,13 +812,18 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
-        bound_args.arguments["headers"] = (
-            _with_fi_auth_headers(bound_args.arguments.get("headers")) or None
-        )
-
         if bound_args.arguments.get("endpoint") is None:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
+        future_agi = _is_future_agi_endpoint(bound_args.arguments["endpoint"])
+        sdk_headers = _with_fi_auth_headers(bound_args.arguments.get("headers"), add_env_keys=future_agi)
+        bound_args.arguments["headers"] = sdk_headers or None
+
         super().__init__(*bound_args.args, **bound_args.kwargs)
+        # Decide on the endpoint the exporter resolved, not only the argument.
+        if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
+            _pin_grpc_headers(self, sdk_headers)
+        elif future_agi:
+            raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-grpc")
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -682,8 +847,9 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
             the endpoint is derived from `FI_TRACES_URL`, else `FI_BASE_URL`, defaulting to the
             Future AGI HTTP endpoint.
-        headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
-            and `FI_SECRET_KEY` environment variables will be used.
+        headers: Headers to send when exporting. For a Future AGI endpoint, the
+            `FI_API_KEY` and `FI_SECRET_KEY` environment variables are added when no
+            credential header is given.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -695,9 +861,16 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
-        bound_args.arguments["headers"] = _with_fi_auth_headers(headers) or None
+        future_agi = _is_future_agi_endpoint(endpoint)
+        sdk_headers = _with_fi_auth_headers(headers, add_env_keys=future_agi)
+        bound_args.arguments["headers"] = sdk_headers or None
 
         super().__init__(*bound_args.args, **bound_args.kwargs)
+        # Decide on the endpoint the exporter resolved, not only the argument.
+        if _is_future_agi_endpoint(getattr(self, "_endpoint", None)):
+            _pin_http_headers(self, sdk_headers)
+        elif future_agi:
+            raise _unsupported_exporter(self, "opentelemetry-exporter-otlp-proto-http")
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""

@@ -144,10 +144,13 @@ public class TracedChatCompletionService implements ChatCompletionService {
                 captureInputMessages(span, chatHistory);
 
                 StringBuilder content = new StringBuilder();
+                boolean[] cut = {false};
                 invocation.onFinish(signal -> {
                     String fullContent;
                     synchronized (content) {
-                        fullContent = content.toString();
+                        // Text cut at the cap loses what could be the start of a known secret.
+                        fullContent = cut[0] ? ai.traceai.privacy.KnownSecrets.sealCut(
+                            content.substring(0, MAX_STREAM_CONTENT - ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER.length()), MAX_STREAM_CONTENT) : content.toString();
                     }
                     if (!fullContent.isEmpty()) {
                         tracer.setOutputValue(span, fullContent);
@@ -167,6 +170,7 @@ public class TracedChatCompletionService implements ChatCompletionService {
                                     content.append(chunk, 0, Math.min(remaining, chunk.length()));
                                 }
                                 if (chunk.length() > remaining) {
+                                    cut[0] = true;
                                     span.setAttribute("semantic_kernel.output_truncated", true);
                                 }
                             }

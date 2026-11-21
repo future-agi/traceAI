@@ -40,7 +40,7 @@ jobs:
         run: |
           python -m pip install './python/frameworks/cognee[dev]'
           if [ "$COGNEE_VERSION" = latest ]; then
-            python -m pip install --upgrade 'cognee[tracing]'
+            python -m pip install --upgrade 'cognee[tracing,instructor]'
           else
             python -m pip install "cognee[tracing]==$COGNEE_VERSION"
           fi

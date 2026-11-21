@@ -26,6 +26,8 @@ _HOSTS = {
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
     "api.x.ai": FiLLMProviderValues.XAI.value,
     "api.z.ai": "zai",
+    "api.minimax.io": "minimax",
+    "api.minimax.chat": "minimax",
     "api.together.ai": "together",
     "api.fireworks.ai": "fireworks",
     "inference.baseten.co": "baseten",

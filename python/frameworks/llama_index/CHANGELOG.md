@@ -1,3 +1,9 @@
+## [0.1.12] - 2026-11-19
+
+### Changed
+- With any input hide setting, an in-progress LLM event records only its response as output, because the event also carries the request.
+- Requires Python 3.10 or later.
+
 ## [0.1.11](https://github.com/future-agi/traceAI/compare/traceai-llamaindex-v0.1.10...traceai-llamaindex-v0.1.11) (2026-11-05)
 
 

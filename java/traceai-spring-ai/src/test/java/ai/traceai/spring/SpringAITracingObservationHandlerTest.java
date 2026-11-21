@@ -17,6 +17,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationContext;
@@ -31,6 +32,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SpringAITracingObservationHandlerTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     private static final String SECRET = "synthetic-private-error-31";
 
     static Stream<Observation.Context> aiContexts() {
@@ -136,6 +144,30 @@ class SpringAITracingObservationHandlerTest {
     private static ChatClientObservationContext client() {
         return ChatClientObservationContext.builder()
             .request(ChatClientRequest.builder().prompt(new Prompt("input")).build()).build();
+    }
+
+    /** Secrets with characters Gson escapes by default, or that JSON escapes: never exported, raw or escaped. */
+    @ParameterizedTest @ValueSource(strings = {"abcdEFGH1234==", "p<a>s&s'w\"o\\rd"})
+    void secretsWithJsonSensitiveCharactersAreReplacedInTheMessagesAttributes(String secret) {
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        try (var fixture = new Fixture(true)) {
+            fixture.registry.observationConfig().observationFilter(new SpringAIObservationFilter(true, true));
+            var context = ChatModelObservationContext.builder().prompt(new Prompt("my secret is " + secret + " ok"))
+                .provider("synthetic").build();
+            context.setResponse(new org.springframework.ai.chat.model.ChatResponse(List.of(
+                new org.springframework.ai.chat.model.Generation(
+                    new org.springframework.ai.chat.messages.AssistantMessage("answer " + secret + " done")))));
+            Observation.start("synthetic", () -> context, fixture.registry).stop();
+            var out = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+            ai.traceai.privacy.SecretReplacingSpanExporter.wrap(out).export(fixture.exporter.getFinishedSpanItems());
+            String all = out.getFinishedSpanItems().toString();
+            String jsonEscaped = new com.google.gson.GsonBuilder().disableHtmlEscaping().create().toJson(secret);
+            String gsonDefault = new com.google.gson.Gson().toJson(secret);
+            assertThat(all).doesNotContain(secret)
+                .doesNotContain(jsonEscaped.substring(1, jsonEscaped.length() - 1))
+                .doesNotContain(gsonDefault.substring(1, gsonDefault.length() - 1))
+                .contains("<redacted>");
+        }
     }
 
     private static AdvisorObservationContext advisor() {

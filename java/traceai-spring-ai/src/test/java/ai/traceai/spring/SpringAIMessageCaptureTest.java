@@ -18,6 +18,13 @@ import org.springframework.ai.chat.prompt.Prompt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SpringAIMessageCaptureTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     @ParameterizedTest @ValueSource(strings = {"text", "\"\\\n\u0001<&>", "😀"})
     void largeEscapedValuesRemainBoundedValidJsonAndLeaveOriginalUntouched(String fragment) {
         String large = fragment.repeat(100_000);
@@ -41,8 +48,11 @@ class SpringAIMessageCaptureTest {
         assertThat(captured.get("id").getAsString()).isEqualTo("call-1");
         String arguments = captured.getAsJsonObject("function").get("arguments").getAsString();
         assertThat(arguments).isNotEmpty().isNotEqualTo(large);
-        assertThat(large).startsWith(arguments);
-        assertThat(Character.isHighSurrogate(arguments.charAt(arguments.length() - 1))).isFalse();
+        assertThat(arguments).endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        String kept = arguments.substring(0, arguments.length() - ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER.length());
+        assertThat(large).startsWith(kept);
+        assertThat(kept).isNotEmpty();
+        assertThat(Character.isHighSurrogate(kept.charAt(kept.length() - 1))).isFalse();
         assertThat(context.getRequest().getContents()).isEqualTo(large);
         assertThat(context.getResponse()).isSameAs(response);
         assertThat(message.getText()).isEqualTo(large);
@@ -87,5 +97,83 @@ class SpringAIMessageCaptureTest {
     private static void assertBoundedJson(SpringAIMessageCapture capture) {
         assertThat(capture.json().length()).isLessThanOrEqualTo(32_000);
         assertThat(JsonParser.parseString(capture.json()).getAsJsonArray().isEmpty()).isFalse();
+    }
+
+    @Test
+    void aKnownSecretStraddlingTheMessageBudgetLeavesNoPrefix() {
+        String secret = "PFX-SPRING-MESSAGE-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        for (int pad = 31_700; pad <= 32_000; pad += 7) {
+            String text = "a".repeat(pad) + secret + "tail".repeat(100);
+            var message = AssistantMessage.builder().content(text).build();
+            var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("synthetic").build();
+            context.setResponse(new ChatResponse(List.of(new Generation(message))));
+            new SpringAIObservationFilter(true, true).map(context);
+            for (String key : List.of("gen_ai.input.messages", "gen_ai.output.messages")) {
+                assertThat(context.getHighCardinalityKeyValue(key).getValue()).as("%s at pad %d", key, pad).doesNotContain("PFX");
+            }
+        }
+    }
+
+    /** Several short secrets seal a field; the sealed value must still fit, so the messages JSON parses and stays under the cap. */
+    @Test
+    void aSealedFieldStillFitsTheBudgetAndTheMessagesJsonParses() {
+        // Eight-character secrets become the ten-character placeholder, so sealing grows the text.
+        ai.traceai.privacy.KnownSecrets.process().register("SHORTSEC");
+        ai.traceai.privacy.KnownSecrets.process().register("SHORTSE2");
+        for (int pad = 0; pad < 40; pad += 3) {
+            String text = "x".repeat(pad) + "SHORTSEC SHORTSE2 \"".repeat(2_500);
+            var message = AssistantMessage.builder().content(text).build();
+            var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("synthetic").build();
+            context.setResponse(new ChatResponse(List.of(new Generation(message))));
+            new SpringAIObservationFilter(true, true).map(context);
+            for (String key : List.of("gen_ai.input.messages", "gen_ai.output.messages")) {
+                String json = context.getHighCardinalityKeyValue(key).getValue();
+                assertThat(json.length()).as("%s at pad %d", key, pad).isLessThanOrEqualTo(32_000);
+                assertThat(JsonParser.parseString(json).getAsJsonArray()).as("%s at pad %d", key, pad).hasSize(1);
+            }
+        }
+    }
+
+    /** Sealed cut text sits inside the JSON; a secret registered after the capture is trimmed there at export. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @ValueSource(ints = {1, 2, 40})
+    void aSecretLearnedAfterTheCaptureLeavesNoPrefixInsideTheMessagesJson(int inside) {
+        String late = "PFX-SPRING-LATE-" + inside + "-" + "L".repeat(70);
+        String filler = "a".repeat(31_000);
+        String text = filler + late + "tail".repeat(400);
+        var message = AssistantMessage.builder().content(text).build();
+        var context = ChatModelObservationContext.builder().prompt(new Prompt(text)).provider("synthetic").build();
+        context.setResponse(new ChatResponse(List.of(new Generation(message))));
+        new SpringAIObservationFilter(true, true).map(context);
+        // Slide the secret so that exactly `inside` characters of it precede the cut.
+        String json = context.getHighCardinalityKeyValue("gen_ai.output.messages").getValue();
+        int cut = json.indexOf(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        assertThat(cut).isPositive();
+        String shifted = json.substring(0, cut) + late.substring(0, inside) + json.substring(cut);
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        String exported = ai.traceai.privacy.KnownSecrets.process().snapshot().scrub(shifted);
+        for (int k = 1; k < late.length(); k++) {
+            assertThat(exported).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+        assertThat(exported).contains("<redacted>" + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+    }
+
+    /** One registry snapshot serves the budget probe and the seal of a field: the capture asks for it once per field, and uses it throughout. */
+    @Test
+    void aFieldIsProbedAndSealedWithOneSnapshot() {
+        ai.traceai.privacy.KnownSecrets registry = new ai.traceai.privacy.KnownSecrets();
+        registry.register("SNAPSHOT-SECRET-1234");
+        int[] calls = {0};
+        var capture = new SpringAIMessageCapture(() -> { calls[0]++; return registry.snapshot(); });
+        // Larger than the budget, so the content is cut and sealed with that snapshot's secrets.
+        String text = ("filler SNAPSHOT-SECRET-1234 ").repeat(3_000);
+        capture.add(AssistantMessage.builder().content(text).build());
+        // One call for the role and one for the content: never one per probe step.
+        assertThat(calls[0]).isEqualTo(2);
+        String json = capture.json();
+        assertThat(json).doesNotContain("SNAPSHOT-SECRET-1234").contains(ai.traceai.privacy.KnownSecrets.PLACEHOLDER);
+        assertThat(json.length()).isLessThanOrEqualTo(32_000);
+        assertThat(JsonParser.parseString(json).getAsJsonArray()).hasSize(1);
     }
 }

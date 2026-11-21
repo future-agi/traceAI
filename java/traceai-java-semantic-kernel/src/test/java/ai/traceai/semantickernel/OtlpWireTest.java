@@ -19,10 +19,15 @@ import io.opentelemetry.proto.common.v1.KeyValue;
 import io.opentelemetry.proto.trace.v1.Span;
 import io.opentelemetry.proto.trace.v1.Status;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -136,15 +141,17 @@ class OtlpWireTest {
         });
         collector.start();
         GlobalOpenTelemetry.resetForTest();
+        TrackingExporter exporter = new TrackingExporter(OtlpHttpSpanExporter.builder()
+            .setEndpoint("http://127.0.0.1:" + collector.getAddress().getPort() + "/v1/traces")
+            .build());
         SdkTracerProvider provider = SdkTracerProvider.builder()
-            .addSpanProcessor(SimpleSpanProcessor.create(OtlpHttpSpanExporter.builder()
-                .setEndpoint("http://127.0.0.1:" + collector.getAddress().getPort() + "/v1/traces")
-                .build())).build();
+            .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
         OpenTelemetrySdk.builder().setTracerProvider(provider).buildAndRegisterGlobal();
         try (Scope ignored = Context.root().makeCurrent()) {
             operation.accept(new FITracer(provider.get("traceai-test"), TraceConfig.builder()
                 .hideInputs(true).hideOutputs(true).hideErrorDetails(true).build()));
-            assertThat(provider.forceFlush().join(10, TimeUnit.SECONDS).isSuccess()).isTrue();
+            // Not provider.forceFlush(): see TrackingExporter.
+            assertThat(exporter.awaitExports().join(10, TimeUnit.SECONDS).isSuccess()).isTrue();
         } finally {
             provider.close();
             collector.stop(0);
@@ -159,6 +166,47 @@ class OtlpWireTest {
             .flatMap(request -> request.getResourceSpansList().stream())
             .flatMap(resource -> resource.getScopeSpansList().stream())
             .flatMap(scope -> scope.getSpansList().stream()).collect(Collectors.toList());
+    }
+
+    /**
+     * Remembers the result of every export so the test can wait for them itself.
+     *
+     * <p>{@code SimpleSpanProcessor.forceFlush()} (opentelemetry-sdk-trace 1.35.0, line 135) calls
+     * {@code CompletableResultCode.ofAll(pendingExports)} on its live concurrent set. {@code ofAll}
+     * (CompletableResultCode.java, lines 44-47) reads {@code codes.size()} and then iterates the set; an
+     * export that completes in between is removed by the processor (SimpleSpanProcessor.java, line 93), so
+     * fewer callbacks than {@code size()} are registered, the countdown never reaches zero and the flush
+     * result never completes. That is the intermittent 10 s stall, with every export already answered.
+     * Waiting on a snapshot taken after the operation has finished cannot lose a completion.
+     */
+    private static final class TrackingExporter implements SpanExporter {
+        private final SpanExporter delegate;
+        private final List<CompletableResultCode> results = new CopyOnWriteArrayList<>();
+
+        TrackingExporter(SpanExporter delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CompletableResultCode export(Collection<SpanData> spans) {
+            CompletableResultCode result = delegate.export(spans);
+            results.add(result);
+            return result;
+        }
+
+        CompletableResultCode awaitExports() {
+            return CompletableResultCode.ofAll(new ArrayList<>(results));
+        }
+
+        @Override
+        public CompletableResultCode flush() {
+            return delegate.flush();
+        }
+
+        @Override
+        public CompletableResultCode shutdown() {
+            return delegate.shutdown();
+        }
     }
 
     private static ExportTraceServiceRequest decode(byte[] body) {

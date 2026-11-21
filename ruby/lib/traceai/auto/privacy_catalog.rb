@@ -316,6 +316,147 @@ module TraceAI
         end.join('&') + hashmark + fragment
         candidate != value && URL_VALUE.match?(candidate)
       end
+      # Three limits bound what the fragment matcher may do for one value (not for a whole span: every string value of
+      # a span has its own, so a span of max_nodes strings can cost that many times MATCH_WORK):
+      #   MATCH_ROUNDS - rounds over every secret that may still change the value;
+      #   MATCH_STEPS  - automaton steps, in total;
+      #   MATCH_WORK   - everything scanned, in total: each character of every scan of the text, every candidate
+      #                  examined for every secret (and every character a membership test reads), the output built
+      #                  for a replacement, and the automaton steps. Each amount is charged BEFORE the work it pays
+      #                  for, so the charged total never exceeds the limit.
+      # Past any limit, the whole value becomes the placeholder; a fragment is never left behind. A value that still
+      # changes in the last round is replaced whole only if one more pass over it would change it again.
+      MATCH_ROUNDS = 8
+      MATCH_STEPS = 200_000
+      MATCH_WORK = 16_000_000
+      class MatchLimit < StandardError; end
+
+      # A secret learned after a span was captured, or one that overlaps another, can leave part of itself next to a
+      # placeholder: two secrets that share their edges leave the rest of the longer one beside the placeholder of the
+      # other, and a secret overlapped at both ends by others is left as its middle. Whatever the shape, an
+      # occurrence of a secret in the text is the secret with any number of disjoint runs of its characters replaced
+      # by placeholders (a placeholder may also reach past the secret's end). So a secret S is matched here as the
+      # language "S, in which any non-empty substrings may be a placeholder": an automaton whose state is the position
+      # in S and whose placeholder step moves to any later position. A match holds at least one placeholder and one
+      # literal character, and is replaced by one placeholder. A replacement can complete a match for another secret
+      # (a chain), so the secrets are applied again until nothing changes. Every round that changes something adds a
+      # placeholder and removes characters, so the process ends; the round and step limits bound the work, and a
+      # value that reaches either is replaced whole.
+      def close_fragments(text, secrets, work = [0, 0])
+        return text unless text.include?(REDACTED)
+        # work: characters and candidates scanned, automaton steps. The scan is rebuilt only after a change and then
+        # serves the rest of the round, the next round, and the final check.
+        scan = fragment_scan(text, work)
+        MATCH_ROUNDS.times do
+          changed = false
+          secrets.each do |secret|
+            replaced = replace_fragments(scan, secret, work)
+            next if replaced.nil?
+            text = replaced; changed = true
+            scan = fragment_scan(text, work)
+          end
+          return text unless changed
+        end
+        secrets.any? { |secret| replace_fragments(scan, secret, work) } ? REDACTED : text
+      rescue MatchLimit
+        REDACTED
+      end
+
+      # Charges `amount` before the work it pays for; past the limit the work is never done.
+      def spend(work, amount)
+        raise MatchLimit if work[0] + amount > MATCH_WORK
+        work[0] += amount
+      end
+
+      # The text as items (a character's code point, or nil for a placeholder), the placeholder positions, and the positions of
+      # each character, so that one secret finds its candidate starts without reading the whole text.
+      def fragment_scan(text, work)
+        spend(work, text.length + 1)
+        items = []
+        parts = text.split(REDACTED, -1)
+        parts.each_with_index do |part, index|
+          items.concat(part.codepoints)
+          items << nil unless index == parts.length - 1
+        end
+        tokens = []; positions = Hash.new { |hash, key| hash[key] = [] }
+        items.each_with_index do |item, index|
+          tokens << index if item.nil?
+          positions[item] << index
+        end
+        [items, tokens, positions]
+      end
+
+      # `text` with every match of `secret` beside a placeholder replaced by one, or nil when there is none.
+      def replace_fragments(scan, secret, work)
+        items, tokens, positions = scan
+        size = secret.length
+        spend(work, tokens.length + 1)
+        codes = secret.codepoints
+        listed = positions.fetch(codes[0], nil)
+        starts = []
+        second = codes[1]
+        tokens.each do |token|
+          # A match that starts at the placeholder goes on with a character of the secret (or another placeholder).
+          following = items[token + 1]
+          if token + 1 >= items.length || following.nil?
+            starts << token
+          else
+            spend(work, size) # include? reads up to the whole secret
+            starts << token if secret.include?([following].pack('U'))
+          end
+          next unless listed
+          low = token - size + 1
+          first = listed.bsearch_index { |index| index >= low }
+          next unless first
+          last = listed.bsearch_index { |index| index >= token } || listed.length
+          spend(work, last - first + 1) # the window walk below
+          (first...last).each do |at|
+            following = items[listed[at] + 1]
+            starts << listed[at] if following.nil? || following == second
+          end
+        end
+        return nil if starts.empty?
+        spend(work, starts.length + size)
+        table = Hash.new(0)
+        codes.each_with_index { |code, index| table[code] |= 1 << index }
+        full = (1 << (size + 1)) - 1
+        accept = 1 << size
+        output = []; cursor = 0; found = false
+        starts.uniq.sort.each do |start|
+          next if start < cursor
+          stop = match_end(items, start, table, full, accept, work)
+          next unless stop
+          spend(work, start - cursor + 1)
+          output.concat(items[cursor...start]); output << nil
+          cursor = stop; found = true
+        end
+        return nil unless found
+        spend(work, (items.length - cursor) + output.length + 1) # the final copy, then map and join of the whole output
+        output.concat(items[cursor..])
+        output.slice_when { |a, b| a.nil? != b.nil? }.map { |run| run.first.nil? ? REDACTED * run.length : run.pack('U*') }.join
+      end
+
+      # The end of the longest match of the automaton from `start` that holds a placeholder and a literal, or nil.
+      def match_end(items, start, table, full, accept, work)
+        mask = 1; position = start; best = nil; token = false; literal = false
+        while mask != 0 && position < items.length
+          work[1] += 1
+          raise MatchLimit if work[1] > MATCH_STEPS
+          spend(work, 1)
+          item = items[position]
+          if item.nil?
+            lowest = mask & -mask
+            mask = full & ~((lowest << 1) - 1)
+            token = true
+          else
+            mask = (mask & table[item]) << 1
+            literal = true
+          end
+          position += 1
+          best = position if token && literal && mask & accept != 0
+        end
+        best
+      end
       def clean_string(value, secrets, budget = Budget.new, framed = true)
         budget.spend(value.bytesize)
         text = value.encode('UTF-8', invalid: :replace, undef: :replace)
@@ -339,10 +480,13 @@ module TraceAI
             end
           end
         end
-        secrets.each do |secret|
-          next unless Codec.type(secret) == String && secret.length >= 8 && secret != REDACTED
+        # Secrets first, none matching across a placeholder; then whatever of an overlapping secret the first pass left
+        # beside a placeholder (see close_fragments).
+        plain = secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 && secret != REDACTED && !secret.include?(REDACTED) }
+        plain.each do |secret|
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end
+        text = close_fragments(text, plain)
         VALUE_SHAPES.each { |shape| text = text.gsub(shape, REDACTED) }
         text
       end

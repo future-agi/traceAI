@@ -19,9 +19,10 @@ def test_opaque_payloads_are_not_evaluated(flag, keys):
         raise AssertionError("private lazy value must not be evaluated")
 
     for key in keys:
-        assert config.mask(key, private_value) == REDACTED_VALUE
+        raw = key.startswith("raw.")  # raw payloads are not recorded while any hide setting is on
+        assert config.mask(key, private_value) == (None if raw else REDACTED_VALUE)
         if "messages" not in key:
-            assert config.mask(key + ".nested", private_value) == REDACTED_VALUE
+            assert config.mask(key + ".nested", private_value) == (None if raw else REDACTED_VALUE)
     assert config.mask("gen_ai.request.model", "visible-model") == "visible-model"
     assert config.mask("gen_ai.usage.input_tokens", 12) == 12
 

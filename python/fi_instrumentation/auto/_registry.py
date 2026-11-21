@@ -37,6 +37,12 @@ class Integration:
     default: bool = True
     note: str = ""
     scopes: Tuple[str, ...] = ()
+    # An OpenAI-compatible provider wraps the shared OpenAI client. It is on by default only when the installed
+    # provider package declares DEFERS_TO_SHARED_OPENAI (so one span per call holds on any version mix) and the
+    # installed traceai-openai has every capability in ``needs_openai``; otherwise it keeps ``skew_note`` and stays off.
+    shared_openai: bool = False
+    needs_openai: Tuple[str, ...] = ()
+    skew_note: str = ""
 
 
 def _covered_by_openai(provider: str) -> str:
@@ -47,12 +53,15 @@ def _covered_by_openai(provider: str) -> str:
     )
 
 
+_EXTENSIONS = ("_supports_deepseek_extensions",)
+
 INTEGRATIONS: Tuple[Integration, ...] = (
     # Model providers
     Integration("openai", ("openai",), "traceAI-openai", "traceai_openai", "OpenAIInstrumentor"),
     Integration("openai_realtime", ("openai.resources.realtime.realtime",), "traceAI-openai-realtime", "traceai_openai_realtime", "OpenAIRealtimeInstrumentor", category="voice"),
     Integration("anthropic", ("anthropic",), "traceAI-anthropic", "traceai_anthropic", "AnthropicInstrumentor"),
     Integration("google_genai", ("google.genai",), "traceAI-google-genai", "traceai_google_genai", "GoogleGenAIInstrumentor"),
+    Integration("google_generativeai", ("google.generativeai",), "traceAI-google-generativeai", "traceai_google_generativeai", "GoogleGenerativeAIInstrumentor"),
     Integration("google_genai_live", ("google.genai",), "traceAI-google-genai-live", "traceai_google_genai_live", "GoogleGenAILiveInstrumentor", category="voice"),
     Integration("vertexai", ("vertexai",), "traceAI-vertexai", "traceai_vertexai", "VertexAIInstrumentor"),
     Integration("bedrock", ("boto3",), "traceAI-bedrock", "traceai_bedrock", "BedrockInstrumentor"),
@@ -68,18 +77,21 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("transformers", ("transformers",), "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     Integration("litellm", ("litellm",), "traceAI-litellm", "traceai_litellm", "LiteLLMInstrumentor", category="gateway"),
     Integration("openrouter", ("openrouter",), "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor", category="gateway"),
+    Integration("agentspec", ("pyagentspec",), "traceAI-agentspec", "traceai_agentspec", "AgentSpecInstrumentor"),
     Integration("writer", ("writerai",), "traceAI-writer", "traceai_writer", "WriterInstrumentor"),
+    Integration("alephalpha", ("aleph_alpha_client",), "traceAI-alephalpha", "traceai_alephalpha", "AlephAlphaInstrumentor"),
+    Integration("promptflow", ("promptflow",), "traceAI-promptflow", "traceai_promptflow", "PromptflowInstrumentor"),
     Integration("portkey", ("portkey_ai",), "traceAI-portkey", "traceai_portkey", "PortkeyInstrumentor", category="gateway"),
     Integration("watsonx", ("ibm_watsonx_ai",), "traceAI-watsonx", "traceai_watsonx", "WatsonxInstrumentor"),
     Integration("replicate", ("replicate",), "traceAI-replicate", "traceai_replicate", "ReplicateInstrumentor"),
     Integration("voyage", ("voyageai",), "traceAI-voyage", "traceai_voyage", "VoyageInstrumentor"),
     Integration("discoveryengine", ("google.cloud.discoveryengine",), "traceAI-discoveryengine", "traceai_discoveryengine", "DiscoveryEngineInstrumentor", category="retrieval"),
     Integration("typesafe", ("typesafe_sdk",), "traceAI-typesafe", "traceai_typesafe", "TypeSafeInstrumentor", category="guardrail"),
-    Integration("deepseek", ("openai",), "traceAI-deepseek", "traceai_deepseek", "DeepSeekInstrumentor", default=False, note=_covered_by_openai("DeepSeek")),
-    Integration("fireworks", ("openai",), "traceAI-fireworks", "traceai_fireworks", "FireworksInstrumentor", default=False, note=_covered_by_openai("Fireworks")),
-    Integration("xai", ("openai",), "traceAI-xai", "traceai_xai", "XAIInstrumentor", default=False, note=_covered_by_openai("xAI")),
-    Integration("minimax", ("openai",), "traceAI-minimax", "traceai_minimax", "MiniMaxInstrumentor", default=False, note=_covered_by_openai("MiniMax")),
-    Integration("vllm", ("openai",), "traceAI-vllm", "traceai_vllm", "VLLMInstrumentor", default=False, note=_covered_by_openai("vLLM servers")),
+    Integration("deepseek", ("openai",), "traceAI-deepseek", "traceai_deepseek", "DeepSeekInstrumentor", shared_openai=True, needs_openai=_EXTENSIONS, skew_note=_covered_by_openai("DeepSeek")),
+    Integration("fireworks", ("openai",), "traceAI-fireworks", "traceai_fireworks", "FireworksInstrumentor", shared_openai=True, skew_note=_covered_by_openai("Fireworks")),
+    Integration("xai", ("openai",), "traceAI-xai", "traceai_xai", "XAIInstrumentor", shared_openai=True, needs_openai=_EXTENSIONS, skew_note=_covered_by_openai("xAI")),
+    Integration("minimax", ("openai",), "traceAI-minimax", "traceai_minimax", "MiniMaxInstrumentor", shared_openai=True, needs_openai=_EXTENSIONS + ("_supports_minimax_provider",), skew_note=_covered_by_openai("MiniMax")),
+    Integration("vllm", ("openai",), "traceAI-vllm", "traceai_vllm", "VLLMInstrumentor", shared_openai=True, skew_note=_covered_by_openai("vLLM servers")),
     # Agent and orchestration frameworks
     Integration("langchain", ("langchain_core",), "traceAI-langchain", "traceai_langchain", "LangChainInstrumentor", category="framework"),
     Integration("langgraph", ("langgraph",), "traceAI-langchain", "traceai_langchain", "LangGraphInstrumentor", category="framework"),
@@ -148,6 +160,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("chromadb", ("chromadb",), "traceAI-chromadb", "traceai_chromadb", "ChromaDBInstrumentor", category="vector_db"),
     Integration("pinecone", ("pinecone",), "traceAI-pinecone", "traceai_pinecone", "PineconeInstrumentor", category="vector_db"),
     Integration("qdrant", ("qdrant_client",), "traceAI-qdrant", "traceai_qdrant", "QdrantInstrumentor", category="vector_db"),
+    Integration("elasticsearch", ("elasticsearch",), "traceAI-elasticsearch", "traceai_elasticsearch", "ElasticsearchInstrumentor", category="vector_db"),
     Integration("marqo", ("marqo",), "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor", category="vector_db"),
     Integration("weaviate", ("weaviate",), "traceAI-weaviate", "traceai_weaviate", "WeaviateInstrumentor", category="vector_db"),
     Integration("milvus", ("pymilvus",), "traceAI-milvus", "traceai_milvus", "MilvusInstrumentor", category="vector_db"),

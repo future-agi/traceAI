@@ -1,6 +1,5 @@
 package ai.traceai.auto;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.*;
@@ -87,7 +86,8 @@ public final class TraceAIAuto {
         try { start(options, null); } catch (Throwable ignored) { warn("Initialization failed; application runs without auto-instrumentation"); }
         RuntimeState state = RUNTIME.get(); return state == null ? null : state.provider();
     }
-    static synchronized void start(Map<String, ?> options, Instrumentation instrumentation) {
+    static synchronized void start(Map<String, ?> options, Instrumentation instrumentation) { start(options, instrumentation, System.getenv()); }
+    static synchronized void start(Map<String, ?> options, Instrumentation instrumentation, Map<String, String> environment) {
         // A later init() after a -javaagent start without keys reuses the JVM's handle instead of attaching again.
         if (instrumentation != null) AGENT_INSTRUMENTATION = instrumentation; else instrumentation = AGENT_INSTRUMENTATION;
         if (initialized) {
@@ -97,8 +97,8 @@ public final class TraceAIAuto {
         }
         initialized = true;
         try {
-            config = AutoConfig.resolve(options);
-            KnownSecrets.PROCESS.seed(config, System.getenv());
+            config = AutoConfig.resolve(options, environment);
+            KnownSecrets.PROCESS.seed(config, environment);
             reportLibraries();
             if (config.flag("OTEL_SDK_DISABLED")) { STATUS.put("wire", "disabled"); return; }
             if (OtelJavaAgent.present()) { offBesideOtelJavaAgent(); return; }
@@ -106,6 +106,15 @@ public final class TraceAIAuto {
                 // Nothing was installed, so a later init() that supplies keys can still start.
                 initialized = false;
                 STATUS.put("wire", "disabled (missing credentials)"); warn("FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is off"); return;
+            }
+            // The target and the ambient OTLP headers are judged once, here, before any exporter or instrumentation exists: a refusal logs one
+            // value-free warning and installs nothing. (The export path judges them again before each send.)
+            try { config.checkKeyTransport(); }
+            catch (ai.traceai.KeyTransport.Refused refused) {
+                initialized = false;
+                STATUS.put("wire", "disabled (key transport refused)");
+                warn("Keys are sent only to a permitted target and without ambient OTLP key headers; auto-instrumentation is off");
+                return;
             }
             OtlpJsonExporter exporter = new OtlpJsonExporter(config);
             BatchSpanProcessor processor = BatchSpanProcessor.builder(exporter).setScheduleDelay(200, TimeUnit.MILLISECONDS).setExporterTimeout(3, TimeUnit.SECONDS).build();
@@ -116,8 +125,8 @@ public final class TraceAIAuto {
                 .setResource(resource)
                 .addSpanProcessor(new WireResourceProcessor(processor)).build();
             OpenTelemetrySdk sdk = OpenTelemetrySdk.builder().setTracerProvider(provider).build();
-            try { GlobalOpenTelemetry.set(sdk); } catch (IllegalStateException ignored) { }
-            // Only this agent's own spans are exported. Application providers, processors and spans are left alone.
+            // The SDK stays private: it is never registered globally. Only this agent's own spans are exported;
+            // application providers, processors and spans are left alone.
             RUNTIME.set(new RuntimeState(config, provider, sdk.getTracer(SCOPE, "1.0.0"), exporter, processor, resource));
             if (instrumentation == null) instrumentation = ByteBuddyAgent.install();
             STATUS.put("java.net.http", transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");
@@ -137,6 +146,7 @@ public final class TraceAIAuto {
         active = false;
         STATUS.put("wire", "disabled (OpenTelemetry Java agent detected)");
         STATUS.put("servlet", "disabled (OpenTelemetry Java agent detected)");
+        STATUS.put(GoogleAdk.INTEGRATION, "disabled (OpenTelemetry Java agent detected)");
         warn("The OpenTelemetry Java agent is also running; the Future AGI agent stays off and the application runs unchanged");
     }
     /**
@@ -246,7 +256,30 @@ public final class TraceAIAuto {
     static void warn(String text) { if (WARNED.compareAndSet(false, true)) System.err.println("[traceai-auto] " + text); }
     static void debug(String text) { if (config != null && config.flag("FI_AUTO_DEBUG")) System.err.println("[traceai-auto] " + text); }
     static boolean transportEnabled(String name) { return config != null && config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && !AutoConfig.names(config.get("FI_DISABLED_INSTRUMENTATIONS")).contains(name); }
-    static void integrationInstrumented(String name) { STATUS.put(name, transportEnabled(name) ? "instrumented" : "disabled"); }
+    /** A tool-span integration is on once its library's first class is rewritten; the chat calls themselves stay wire-captured. */
+    static void toolIntegrationInstrumented(String name) {
+        if (config == null || !config.enabled(name)) { STATUS.put(name, "disabled"); return; }
+        String before = STATUS.get(name);
+        if (before != null && before.startsWith("instrumented")) return;
+        // Chat calls are covered only when wire capture is on; the manual-wrapper hint for chat spans stays.
+        STATUS.put(name, "instrumented (execute_tool spans" + (transportEnabled(name) ? "; chat calls through wire" : "") + ")"
+            + (before != null && before.startsWith("manual") ? "; chat spans: " + before : ""));
+    }
+    /** Test hook: whether this JVM has an installed exporter runtime. */
+    static boolean runtimeInstalled() { return RUNTIME.get() != null; }
+    /** Test hook: closes the runtime and forgets every start, so the next start begins as in a new JVM (installed transformers stay). */
+    static synchronized void resetForTest() {
+        shutdown(java.time.Duration.ofSeconds(5));
+        RUNTIME.set(null); initialized = false; REPEATED.set(false); WARNED.set(false); STATUS.clear(); config = null;
+    }
+    /** Test hook: one status entry of the doctor report. */
+    static String statusOf(String key) { return STATUS.get(key); }
+    /** An integration that is not a wire transport: gated on the agent being configured and its own name only. */
+    static boolean integrationEnabled(String name) { return config != null && config.enabled(name); }
+    static void integrationInstrumented(String name) {
+        boolean enabled = GoogleAdk.INTEGRATION.equals(name) ? integrationEnabled(name) : transportEnabled(name);
+        STATUS.put(name, enabled ? "instrumented" : "disabled");
+    }
     static void integrationFailed(String name) {
         STATUS.put(name, "failed");
         // An OpenTelemetry Java agent listed after this one rewrites the same classes once its own
@@ -293,7 +326,7 @@ public final class TraceAIAuto {
                     String.valueOf(capture.match.endpoint().get("operation")));
                 for (Map.Entry<String, Object> e : attrs.entrySet()) {
                     String k = e.getKey(); Object v = e.getValue();
-                    if (hidden(k, capture.match, state.config())) continue;
+                    if (hidden(k, v, capture.match, state.config())) continue;
                     // With the error details hidden, a failed call's output is withheld as well: it may be the provider's error body.
                     if (!result.ok() && state.config().masking.isHideErrorDetails() && (k.equals("output.value") || k.equals("output.mime_type"))) continue;
                     if (v instanceof String) span.setAttribute(k, (String)v);
@@ -306,19 +339,44 @@ public final class TraceAIAuto {
             } finally { WireResourceProcessor.end(span, capture.endEpochNanos, resource, limit); }
         } catch (Throwable ignored) { }
     }
+    private static final List<String> RAW_KEYS = List.of("raw.input", "fi.raw_input", "raw.output", "fi.raw_output");
     static boolean hidden(String key, WireCore.Match match) { return hidden(key, match, config); }
-    static boolean hidden(String key, WireCore.Match match, AutoConfig config) {
+    static boolean hidden(String key, WireCore.Match match, AutoConfig config) { return hidden(key, "", match, config); }
+    /**
+     * True when the attribute is withheld. The content keys are the core SDK's shared table (ai.traceai.ContentKeys, the
+     * same list and semantics as Python's TraceConfig). The agent's own rules below stay: audio transcripts of a wire call
+     * are direction-aware (a speech-to-text transcript is output, a text-to-speech one is input), and the rules for the
+     * wire-specific keys (cohere.preamble, message.tool_calls, error attributes, the image / text / parameter switches).
+     * The value type does not matter: a content key is masked whether its value is a string, number or boolean.
+     * Counts and flags stay visible because their keys sit outside the content prefixes.
+     */
+    static boolean hidden(String key, Object value, WireCore.Match match, AutoConfig config) {
+        boolean wireOperation = match != null && match.endpoint() != null && !"chat".equals(String.valueOf(match.endpoint().get("operation")));
+        boolean directional = key.equals("gen_ai.audio.transcript") && wireOperation;
+        // The core decision by key; a non-text value is passed as itself so a reranker document count stays a count.
+        Object probe = value instanceof Number || value instanceof Boolean ? value : "v";
+        if (!directional && config.masking.maskTypedAttribute(key, probe) != probe) return true;
+        // The raw request and response are withheld under every hide switch, the agent's own switches included, as core does for its flags.
+        if (hidesContent(config) && RAW_KEYS.stream().anyMatch(raw -> key.equals(raw) || key.startsWith(raw + "."))) return true;
         if (config.hides("FI_HIDE_LLM_INVOCATION_PARAMETERS") && (key.equals("gen_ai.request.parameters") || key.equals("llm.invocation_parameters"))) return true;
         if (config.hides("FI_HIDE_INPUT_IMAGES") && (key.toLowerCase(Locale.ROOT).contains("image") || key.toLowerCase(Locale.ROOT).contains("file") && (key.endsWith(".uri") || key.endsWith(".url")) || key.equals("input.value") || key.equals("fi.raw_input"))) return true;
+        // The tool name identifies the span, as the span name does: it is not content, and every wrapper and Python keep it.
+        if (key.equals("gen_ai.tool.name")) return false;
         boolean input = config.masking.isHideInputs(), output = config.masking.isHideOutputs();
         boolean inputText = input || config.hides("FI_HIDE_INPUT_TEXT"), outputText = output || config.hides("FI_HIDE_OUTPUT_TEXT");
         boolean inputMessages = input || config.masking.isHideInputMessages(), outputMessages = output || config.masking.isHideOutputMessages();
         if ((inputText || inputMessages) && (key.equals("fi.raw_input") || key.startsWith("input.") || key.startsWith("gen_ai.input.") || key.equals("gen_ai.system_instructions") || key.startsWith("gen_ai.tool.") || key.equals("gen_ai.request.parameters")
+            || key.equals("raw.input") || key.equals("llm.prompt_template.variables") || key.startsWith("llm.prompt_template.variables.")
+            || key.equals("gen_ai.prompt.template.variables") || key.startsWith("gen_ai.prompt.template.variables.")
+            || key.startsWith("embedding.embeddings.") && key.endsWith(".embedding.text")
             || key.equals("cohere.preamble") || key.equals("embedding.input_text") || key.startsWith("embedding.input_text.") || key.equals("gen_ai.reranker.query"))) return true;
         // Existing wrappers also emit generated tool calls outside gen_ai.output.messages.
-        if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
+        if ((outputText || outputMessages) && (key.equals("fi.raw_output") || key.equals("raw.output") || key.startsWith("output.") || key.startsWith("gen_ai.output.") || key.equals("message.tool_calls") || key.startsWith("message.tool_calls."))) return true;
         if ((inputText || inputMessages || outputText || outputMessages || config.masking.isHideErrorDetails()) && Set.of("exception.message", "exception.stacktrace", "error.message", "error.stack").contains(key)) return true;
-        return key.equals("gen_ai.audio.transcript") && ("text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages);
+        if (!key.equals("gen_ai.audio.transcript")) return false;
+        // The agent's wire calls know the direction; an application span's transcript is hidden by either side's switch.
+        if (!wireOperation) return inputText || inputMessages || outputText || outputMessages;
+        return "text_to_speech".equals(match.endpoint().get("operation")) ? inputText || inputMessages : outputText || outputMessages;
     }
     /** True when the error text (status description, exception and error attributes) is withheld: its own switch, or any content switch. */
     static boolean hidesErrorText(AutoConfig config) { return config.masking.isHideErrorDetails() || hidesContent(config); }
@@ -358,6 +416,7 @@ public final class TraceAIAuto {
         };
         for (String[] library : libraries) STATUS.put(library[0], !config.enabled(library[0]) ? "disabled" : !present(library[1]) ? "not_installed" : !present(library[2]) ? "missing_instrumentor (known HTTP protocols still covered by wire)" : "manual (use " + library[2] + "; wrapper/listener registration required)");
         STATUS.put("servlet", config.credentials() && transportEnabled("servlet") ? "pending (joins incoming W3C trace context when loaded)" : "disabled");
+        STATUS.put(GoogleAdk.INTEGRATION, !config.credentials() || !config.enabled(GoogleAdk.INTEGRATION) ? "disabled" : !present("com.google.adk.runner.Runner") ? "not_installed" : "pending (enabled when loaded)");
         boolean wire = config.enabled("wire") && config.flag("FI_WIRE_CAPTURE") && config.credentials();
         STATUS.putIfAbsent("wire", wire ? "pending (agent not initialized)" : "disabled");
         STATUS.putIfAbsent("java.net.http", wire && transportEnabled("java.net.http") ? "pending (enabled when loaded)" : "disabled");

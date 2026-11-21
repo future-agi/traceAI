@@ -101,6 +101,10 @@ public final class AutoConfig {
         result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
         result.put("FI_CONFIG_FILE", path);
         AutoConfig built = new AutoConfig(result, credentialValues);
+        built.insecureOptIn = "1".equals(environment.get(ai.traceai.KeyTransport.ALLOW_INSECURE_SETTING)) || explicitOptIn(explicit.get(ai.traceai.KeyTransport.ALLOW_INSECURE_SETTING));
+        Map<String, String> headerVariables = new LinkedHashMap<>();
+        for (String name : List.of("OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS")) if (environment.get(name) != null) headerVariables.put(name, environment.get(name));
+        built.ambient = Map.copyOf(headerVariables);
         if (unusable != null) built.reportUnusableFile(path, unusable);
         return built;
     }
@@ -224,6 +228,24 @@ public final class AutoConfig {
         return line;
     }
     String get(String key) { return values.get(key); }
+    /** The explicit option: a boolean true (as the text "true") or the text "1"; the environment variable is exactly "1". */
+    private static boolean explicitOptIn(String value) { return "1".equals(value) || "true".equals(value); }
+    /** The opt-in for plaintext to another host: FI_ALLOW_INSECURE_HTTP=1 in the environment or the explicit option, never a file. */
+    private boolean insecureOptIn;
+    /** The ambient OTLP header variables, as the process environment had them. */
+    private Map<String, String> ambient = Map.of();
+    /** The settings KeyTransport reads the opt-in from. */
+    Map<String, String> insecureSettings() { return insecureOptIn ? Map.of(ai.traceai.KeyTransport.ALLOW_INSECURE_SETTING, "1") : Map.of(); }
+    /**
+     * Refuses a target, or ambient OTLP headers, that may not receive the keys. Run once at startup and again before each send.
+     * The message names no value.
+     */
+    void checkKeyTransport() {
+        ai.traceai.KeyTransport.check(get("FI_BASE_URL"), credentials(), insecureSettings(), false);
+        List<String> keys = new ArrayList<>(credentialValues);
+        for (String name : List.of("FI_API_KEY", "FI_SECRET_KEY")) if (get(name) != null) keys.add(get(name));
+        ai.traceai.KeyTransport.checkAmbientHeaders(ambient, keys);
+    }
     boolean flag(String key) { return "true".equalsIgnoreCase(get(key)); }
     boolean credentials() { return WireCore.truth(get("FI_API_KEY")) && WireCore.truth(get("FI_SECRET_KEY")); }
     boolean enabled(String name) {

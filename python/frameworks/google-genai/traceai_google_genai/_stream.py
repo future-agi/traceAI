@@ -23,8 +23,10 @@ from wrapt import ObjectProxy
 
 from fi_instrumentation import safe_json_dumps
 from traceai_google_genai._utils import (
+    _RESPONSE_FIELDS,
     _as_output_attributes,
     _finish_tracing,
+    _input_hidden,
     _ValueAndType,
 )
 from traceai_google_genai._with_span import _WithSpan
@@ -128,7 +130,10 @@ class _Stream(ObjectProxy):  # type: ignore
         if self._is_finished:
             return
         self._is_finished = True
-        response_extractor = _ResponseExtractor(response_accumulator=self._response_accumulator)
+        response_extractor = _ResponseExtractor(
+            response_accumulator=self._response_accumulator,
+            hide_input=_input_hidden(getattr(self._with_span, "_span", None)),
+        )
         _finish_tracing(
             with_span=self._with_span,
             attributes=response_extractor.get_attributes(),
@@ -171,17 +176,23 @@ class _ResponseAccumulator:
 
 
 class _ResponseExtractor:
-    __slots__ = ("_response_accumulator",)
+    __slots__ = ("_response_accumulator", "_hide_input")
 
     def __init__(
         self,
         response_accumulator: _ResponseAccumulator,
+        hide_input: bool = False,
     ) -> None:
         self._response_accumulator = response_accumulator
+        self._hide_input = hide_input
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._response_accumulator._result()):
             return
+        if self._hide_input:
+            # Under any input hide setting only the response-side fields are recorded, as for a
+            # non-streamed call: the chunks can carry request echoes such as the call history.
+            result = {k: result[k] for k in _RESPONSE_FIELDS if k in result}
         json_string = safe_json_dumps(result)
         yield from _as_output_attributes(
             _ValueAndType(json_string, FiMimeTypeValues.JSON)

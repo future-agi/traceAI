@@ -1,0 +1,81 @@
+name: OpenAI-compatible providers (cross-package)
+
+# The default-on rules for DeepSeek, Fireworks, xAI, MiniMax and vLLM across the real openai SDK, traceai-openai
+# and the five provider packages. The core jobs install only fi-instrumentation-otel, so these tests live here.
+# Every test must run: python/tests_cross_package/openai_compatible/conftest.py turns a skip into a failure.
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/tests_cross_package/**'
+      - 'python/frameworks/openai/**'
+      - 'python/frameworks/deepseek/**'
+      - 'python/frameworks/fireworks/**'
+      - 'python/frameworks/xai/**'
+      - 'python/frameworks/minimax/**'
+      - 'python/frameworks/vllm/**'
+      - '.github/workflows/openai-compatible-providers-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/tests_cross_package/**'
+      - 'python/frameworks/openai/**'
+      - 'python/frameworks/deepseek/**'
+      - 'python/frameworks/fireworks/**'
+      - 'python/frameworks/xai/**'
+      - 'python/frameworks/minimax/**'
+      - 'python/frameworks/vllm/**'
+      - '.github/workflows/openai-compatible-providers-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  providers:
+    name: Providers / Python ${{ matrix.python }} / openai ${{ matrix.openai }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python: '3.10', openai: '1.69.0'}
+          - {python: '3.12', openai: '3.42.1'}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the core, openai, traceai-openai and the five provider packages from the repository
+        env:
+          SDK_VERSION: ${{ matrix.openai }}
+        run: |
+          python -m venv "$RUNNER_TEMP/providers-venv"
+          PYTHON="$RUNNER_TEMP/providers-venv/bin/python"
+          "$PYTHON" -m pip install -e python
+          "$PYTHON" -m pip install "openai==$SDK_VERSION" 'httpx==0.27.2' pytest pytest-asyncio
+          "$PYTHON" -m pip install \
+            -e python/frameworks/openai \
+            -e python/frameworks/deepseek \
+            -e python/frameworks/fireworks \
+            -e python/frameworks/xai \
+            -e python/frameworks/minimax \
+            -e python/frameworks/vllm
+          "$PYTHON" -m pip check
+      - name: Run with only loopback networking
+        env:
+          FI_BASE_URL: http://127.0.0.1:9
+          FI_GRPC_URL: http://127.0.0.1:9
+        run: |
+          # ubuntu-26.04 sudo ignores -E; pass exactly the variables the tests need.
+          sudo --preserve-env=RUNNER_TEMP,FI_BASE_URL,FI_GRPC_URL unshare --net bash -euo pipefail -c '
+            ip link set lo up
+            PYTHON="$RUNNER_TEMP/providers-venv/bin/python"
+            "$PYTHON" -I -m pytest -q -p no:cacheprovider python/tests_cross_package/openai_compatible
+          '

@@ -272,6 +272,15 @@ class _RunWrapper:
                 else:
                     if isinstance(agent_output, FinalAnswerStep):
                         agent_output = agent_output.output
+            # A full run result carries the task and the model input messages (`steps`; up to
+            # smolagents 1.21 the field is `messages`): while an input hide setting is on, only its
+            # output is recorded.
+            if (
+                _hides_input(span)
+                and hasattr(agent_output, "output")
+                and (hasattr(agent_output, "steps") or hasattr(agent_output, "messages"))
+            ):
+                agent_output = agent_output.output
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(agent_output))
             span.set_attribute(
                 GEN_AI_USAGE_INPUT_TOKENS, agent.monitor.total_input_token_count
@@ -657,6 +666,14 @@ def _get_raw_input(args: Any, **kwargs: Any) -> Iterator[Tuple[str, Any]]:
     raw_input = safe_json_dumps({"args": _to_dict(args), **(_to_dict(kwargs) or {})})
 
     yield INPUT_VALUE, raw_input
+
+
+def _hides_input(span: Any) -> bool:
+    config = getattr(span, "_self_config", None)
+    return any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images")
+    )
 
 
 def _get_raw_output(response: Any):

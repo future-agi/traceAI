@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.futureagi</groupId>
+        <artifactId>traceai-java-parent</artifactId>
+        <version>1.4.1</version>
+    </parent>
+
+    <artifactId>traceai-java-google-adk</artifactId>
+    <name>TraceAI Java Google ADK</name>
+    <description>Google Agent Development Kit (ADK) for Java instrumentation for TraceAI Java SDK</description>
+
+    <dependencies>
+        <!-- TraceAI Core -->
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-core</artifactId>
+        </dependency>
+
+        <!-- Google ADK for Java (provided - user brings their own; 1.0.0 to 1.15.0 are covered) -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>${google-adk.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- The classpath of the test application (AdkApp: a real ADK agent) for the javaagent module's
+                 child-JVM tests, which read it from here so ADK stays off their own classpath. The ADK version is
+                 the one this module is built with (-Dgoogle-adk.version=...). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <execution>
+                        <id>adk-app-classpath</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>build-classpath</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>test</includeScope>
+                            <outputFile>${project.build.directory}/adk-app.classpath</outputFile>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

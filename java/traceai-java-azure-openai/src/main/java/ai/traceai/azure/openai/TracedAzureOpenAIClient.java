@@ -342,17 +342,15 @@ public class TracedAzureOpenAIClient {
                     ChatCompletionsToolCall toolCall = message.getToolCalls().get(i);
                     if (toolCall instanceof ChatCompletionsFunctionToolCall) {
                         ChatCompletionsFunctionToolCall functionToolCall = (ChatCompletionsFunctionToolCall) toolCall;
-                        span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
-                            + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_ID, functionToolCall.getId());
+                        String toolCallKey = SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
+                            + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + ".";
+                        // Tool-call fields are content: go through the tracer so the hide settings apply.
+                        tracer.setAttribute(span, toolCallKey + SemanticConventions.TOOL_CALL_ID,
+                            functionToolCall.getId());
                         if (functionToolCall.getFunction() != null) {
-                            span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
-                                + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                                + SemanticConventions.TOOL_CALL_FUNCTION_NAME,
+                            tracer.setAttribute(span, toolCallKey + SemanticConventions.TOOL_CALL_FUNCTION_NAME,
                                 functionToolCall.getFunction().getName());
-                            span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
-                                + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                                + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
+                            tracer.setAttribute(span, toolCallKey + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
                                 functionToolCall.getFunction().getArguments());
                         }
                     }

@@ -6,7 +6,7 @@ OpenTelemetry instrumentation for Java AI applications. Trace LLM calls, embeddi
 
 Release coordinates use **`com.futureagi`**. Artifact names are unchanged, and **Java package names remain `ai.traceai.*`**; existing imports do not change.
 
-The install examples track Java SDK `1.4.0`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
+The install examples track Java SDK `1.4.1`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
 
 > **Unreleased API:** the [provider ownership and shutdown](#provider-ownership-and-shutdown) behavior below, including `TraceAI.init(TraceConfig, OpenTelemetry)`, is not in the immutable Central releases `1.0.0` or `1.0.1`. Until a new release containing it is published and passes the [external-consumer check](#validate-readme-coordinates), that section requires a verified source build of this checkout. Installing an older Central release or the historical JitPack commit below is not sufficient. The basic OpenAI quickstart remains available from Central.
 
@@ -20,7 +20,7 @@ Import the BOM once, then add the instrumentation you need:
         <dependency>
             <groupId>com.futureagi</groupId>
             <artifactId>traceai-bom</artifactId>
-            <version>1.4.0</version> <!-- x-release-please-version -->
+            <version>1.4.1</version> <!-- x-release-please-version -->
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -42,7 +42,7 @@ Import the BOM once, then add the instrumentation you need:
 </dependencies>
 ```
 
-Without the BOM, specify `<version>1.4.0</version>` on each traceAI dependency. <!-- x-release-please-version -->
+Without the BOM, specify `<version>1.4.1</version>` on each traceAI dependency. <!-- x-release-please-version -->
 
 For Spring Boot auto-configuration, **add** `traceai-spring-boot-starter` alongside `traceai-java-openai` and the OpenAI SDK shown above:
 
@@ -63,7 +63,7 @@ repositories {
 }
 
 dependencies {
-    implementation platform('com.futureagi:traceai-bom:1.4.0') // x-release-please-version
+    implementation platform('com.futureagi:traceai-bom:1.4.1') // x-release-please-version
     implementation 'com.futureagi:traceai-java-openai'
     implementation 'com.openai:openai-java:0.8.0'
     // For Spring Boot auto-configuration, add this as well (do not replace OpenAI):
@@ -170,7 +170,7 @@ TraceAI.init(TraceConfig.builder()
     .build());
 ```
 
-Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
+Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Export requires both `FI_API_KEY` and `FI_SECRET_KEY`. Future AGI hosts use `https://`; plaintext `http://` is accepted for literal `localhost`, `127.0.0.1` and `::1`, and for other hosts only when `FI_ALLOW_INSECURE_HTTP=1`. Export requests do not follow redirects, and a plaintext send does not use a proxy. Console export can include request and response content; enable it only when that is appropriate.
 
 ### Provider ownership and shutdown
 
@@ -190,7 +190,7 @@ Add `com.futureagi:traceai-java-core` to your application using the BOM above, o
 <dependency>
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-core</artifactId>
-    <version>1.4.0</version> <!-- x-release-please-version -->
+    <version>1.4.1</version> <!-- x-release-please-version -->
 </dependency>
 ```
 
@@ -217,6 +217,8 @@ TraceAI.init(TraceConfig.builder()
 
 You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection, resource or sampler settings. An application-owned provider keeps its own sampler, regardless of these options or environment variables. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
 
+Known secrets: `TraceAI.init` registers the configured API and secret keys. The Future AGI and console exporters it creates replace every occurrence of a known secret (including overlapping ones) with `<redacted>` at export time, on span names, string and string-array attributes, event and link attributes, status descriptions, and resource and instrumentation scope names, versions and attributes; other attribute types are not rewritten, and spans keep their raw values. Values shorter than 8 characters are not registered (one warning per process says so). The registry holds at most 1024 values and 4 MiB of characters; beyond that it fails closed, the exporter drops spans, and one warning per process names the bound. Where TraceAI itself cuts content to a length cap, a known secret that straddles the cut is replaced first, or the text kept before the cut loses its last characters; the cut text ends with `...[truncated]`. At export every `...[truncated]` marker in a value is a cut point, so a secret learned later also loses its start before a marker inside a JSON attribute, and a secret is replaced in its raw and its JSON-escaped (quotes, backslashes, control characters) form. Exporters on an application-owned SDK are not covered unless you wrap them: `SecretReplacingSpanExporter.wrap(exporter)` (package `ai.traceai.privacy`), and `KnownSecrets.process().register(value)` adds any other credential your application wants replaced. What is replaced before a truncation marker: any run of characters right before a `...[truncated]` marker that is a prefix of a known secret (one character or more) becomes `<redacted>`, so a short legitimate run there can be replaced, and a one-character prefix shows the full placeholder. A replaced region never splits a JSON escape: one that would start or end inside an escape (`\n`, `\t`, `\"`, `\uXXXX`) takes the whole escape, so JSON attributes still parse. `KnownSecrets.cap` and `sealCut(text, limit)` return at most `limit` characters (the cut moves back when a replacement lengthens the text); `sealCut(text)` without a limit has no fixed growth bound over the text plus the marker (each replaced match of eight or nine characters becomes the ten-character placeholder, and the number of matches is not bounded); use `sealCut(text, limit)` for a bounded result. An escaped surrogate pair (`\ud83d\ude00`) is replaced as one unit, so no lone surrogate is left. A value too large for the replacement work bound (its length times the number of secrets) is replaced whole by `<redacted>`, which is not JSON even when the attribute held JSON. Not matched: a secret written as `\u2028` or `\u2029`, and a secret inside double-encoded JSON.
+
 The first initialization wins until `TraceAI.shutdown()`. Shutdown flushes and closes only a TraceAI-owned provider, with a ten-second wait each for flush and shutdown. In borrowed mode it only detaches TraceAI; the application remains responsible for flushing and closing its SDK. Reinitialization is supported in either mode. Obtain a new `FITracer` and rebuild wrappers after restarting a TraceAI-owned provider; existing wrappers retain their previous tracer.
 
 **Migrating from global registration:** older versions implicitly installed their provider globally. If you relied on that behavior for spans created outside TraceAI, configure an application-owned SDK for all those spans and pass it to the overload above. TraceAI no longer claims ownership of the process-wide SDK.
@@ -235,7 +237,7 @@ TraceConfig config = TraceConfig.builder()
 
 - `hideInputs` suppresses input values, raw input and input messages. In Cohere it also suppresses the preamble and rerank query.
 - `hideOutputs` suppresses output values, raw output and output messages. In Cohere it also suppresses generated tool-call names and arguments.
-- `hideInputMessages` and `hideOutputMessages` suppress only message attributes (including Cohere's preamble and tool calls respectively). They do not suppress values or raw payloads, which can contain the same content. Setting a message flag to `false` cannot override `hideInputs(true)` or `hideOutputs(true)`.
+- `hideInputMessages` and `hideOutputMessages` suppress the message attributes of their direction (including Cohere's preamble and tool calls respectively) and also redact that direction's aggregate and raw text (string) content, because it can contain the same text: `input.value`, `raw.input`, `fi.raw_input` and the prompt-template variables under `hideInputMessages`; `output.value`, `raw.output` and `fi.raw_output` under `hideOutputMessages`. Embedding input text is redacted under `hideInputMessages` too. Setting a message flag to `false` cannot override `hideInputs(true)` or `hideOutputs(true)`.
 - `hideErrorDetails` suppresses `error.message`, exception messages, exception stack traces and ERROR status descriptions written by `FITracer.setError`, including errors from Cohere chat, embed and rerank. ERROR status, `error.type` and an exception event containing `exception.type` remain available.
 
 Input, output and error-detail hiding each default to `false`. Both `TraceConfig.builder().build()` and `TraceConfig.fromEnvironment()` read `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and `FI_HIDE_ERROR_DETAILS`. Each variable enables its flag only for `true` (case-insensitive); unset or other values mean `false`. Explicit builder values, including `false`, override the corresponding environment variable. For example, `.hideInputs(false)` intentionally disables input hiding even when `FI_HIDE_INPUTS=true`. Input/output hiding does not implicitly enable error-detail hiding. The message-only flags remain builder options.
@@ -258,7 +260,11 @@ traceai:
   hide-outputs: false
   hide-input-messages: false
   hide-output-messages: false
+  allow-insecure-http: false      # the explicit form of FI_ALLOW_INSECURE_HTTP=1
+  fail-on-refused-transport: true # false: log one value-free warning and disable export instead of failing the startup
 ```
+
+`allow-insecure-http` lets plaintext `http://` go to a host that is neither literal loopback nor a Future AGI host; it never applies to a Future AGI host and a plaintext send is never proxied. When the target, or `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, may not receive the keys, the starter fails the application context with a `KeyTransport.Refused` error whose message names no value (and `FI_ALLOW_INSECURE_HTTP` when plaintext is the reason). With `fail-on-refused-transport: false` the context starts, one value-free warning is logged and nothing is exported anywhere: no exporter is created and `FI_BASE_URL` and the keys are not read again, so an approved `FI_BASE_URL` is not used either.
 
 ## Instrumentation modules
 
@@ -272,6 +278,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | LLM | Anthropic | `traceai-java-anthropic` |
 | LLM | Cohere | `traceai-java-cohere` |
 | LLM | Google GenAI | `traceai-java-google-genai` |
+| Framework | Google ADK for Java (1.0.0 to 1.15.0) | `traceai-java-google-adk` |
 | LLM | Ollama | `traceai-java-ollama` |
 | LLM | AWS Bedrock | `traceai-java-bedrock` |
 | LLM | Google Vertex AI | `traceai-java-vertexai` |
@@ -345,7 +352,7 @@ Search methods return lazy `SearchPagedIterable` results. Consume the results to
 
 ## Build and test
 
-Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode; the Arconia and Quarkus examples have their own Java 21 requirements.
+Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode, except `traceai-java-quarkus-langchain4j`, which requires Java 21; the Arconia and Quarkus examples also have their own Java 21 requirements. CI tests the complete reactor on Java 21, and on Java 17 without `traceai-java-quarkus-langchain4j`.
 
 ```bash
 cd java

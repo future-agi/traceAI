@@ -7,6 +7,36 @@ using TraceAI.AutoInstrumentation.Wire;
 
 namespace TraceAI.AutoInstrumentation;
 
+/// <summary>What the agent put on a span it created, kept in an agent-side table keyed by the Activity (never on the Activity itself): the unreplaced name,
+/// status description and attributes, beside what the application's copy was given. The Future AGI copy is replaced at export
+/// from the unreplaced values, except for anything a later processor changed on the shared Activity: that is exported from the
+/// Activity as it is, and sanitized like any other host value.</summary>
+internal sealed class WireRecord(string name,string? description,bool capDescription,KeyValuePair<string,object?>[] unreplaced,IEnumerable<KeyValuePair<string,object?>> applied,string appliedName,string? appliedDescription)
+{
+    // Keyed by the Activity, not stored on it: neither a custom property, a tag nor any other member the application can read.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Activity,WireRecord> Records=new();
+    internal static void Keep(Activity activity,WireRecord record)=>Records.AddOrUpdate(activity,record);
+    internal static WireRecord? For(Activity activity)=>Records.TryGetValue(activity,out var record)?record:null;
+    /// <summary>The description cap applies to the replaced text of a non-JSON response body, never to the unreplaced one.</summary>
+    internal string Cap(Activity current,string replaced)=>capDescription&&current.StatusDescription==appliedDescription?WireCore.CapDescription(replaced):replaced;
+    private readonly Dictionary<string,object?> _unreplaced=unreplaced.ToDictionary(pair=>pair.Key,pair=>pair.Value);
+    private readonly Dictionary<string,object?> _applied=applied.ToDictionary(pair=>pair.Key,pair=>pair.Value);
+    internal string Name(Activity current)=>current.DisplayName==appliedName?name:current.DisplayName;
+    internal string OperationName(Activity current)=>current.OperationName==appliedName?name:current.OperationName;
+    internal string? Description(Activity current)=>current.StatusDescription==appliedDescription?description:current.StatusDescription;
+    /// <summary>The Activity's tags with the unreplaced value in place of each one the agent set and nobody changed.</summary>
+    internal IEnumerable<KeyValuePair<string,object?>> Tags(Activity current)
+    {
+        foreach(var tag in current.TagObjects)
+            yield return _applied.TryGetValue(tag.Key,out var applied)&&Same(applied,tag.Value)&&_unreplaced.TryGetValue(tag.Key,out var kept)?new(tag.Key,kept):tag;
+    }
+    private static bool Same(object? a,object? b)
+    {
+        if(Equals(a,b)) return true;
+        return a is Array x&&b is Array y&&x.Length==y.Length&&x.Cast<object?>().Zip(y.Cast<object?>(),Equals).All(same=>same);
+    }
+}
+
 /// <summary>
 /// The sole authoritative export boundary. Detached framework shells retain IDs,
 /// flags and timestamps, but no mutable content, parent or application objects.
@@ -78,7 +108,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
         foreach(var pair in AttributeProjection.Order(materialized))
         {
             var key=redact(pair.Key);
-            var value=pair.Value==null?null:safe(pair.Key,WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints),operation);
+            var value=pair.Value==null?null:safe(pair.Key,WirePrivacy.Scrub(pair.Value,path:AutoProcessor.ScrubPath(pair.Key),hints:hints,shapes:false),operation);
             budget.Value(value);
             if(value is string text) value=redact(text);
             result[key]=value;
@@ -147,16 +177,18 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
             try
             {
                 var budget=new Budget(shared:shared);
+                var unreplaced=WireRecord.For(original);
                 var operation=original.GetTagItem("gen_ai.operation.name") as string;
                 Set(copy,"<Source>k__BackingField",Scope(original.Source,budget,safe,redact));
                 Set(copy,"_traceState",original.TraceStateString==null?null:budget.Text(original.TraceStateString,redact));
-                copy.DisplayName=budget.Text(original.DisplayName,redact);
-                Set(copy,"<OperationName>k__BackingField",budget.Text(original.OperationName,redact));
+                copy.DisplayName=budget.Text(unreplaced?.Name(original)??original.DisplayName,redact);
+                Set(copy,"<OperationName>k__BackingField",budget.Text(unreplaced?.OperationName(original)??original.OperationName,redact));
                 // Hidden error details keep the status code but never its description.
+                var statusText=unreplaced==null?original.StatusDescription:unreplaced.Description(original);
                 copy.SetStatus(original.Status==ActivityStatusCode.Unset?ActivityStatusCode.Ok:original.Status,
-                    hideErrorDetails||original.StatusDescription==null?null:budget.Text(original.StatusDescription,redact));
+                    hideErrorDetails||statusText==null?null:unreplaced==null?budget.Text(statusText,redact):unreplaced.Cap(original,budget.Text(statusText,redact)));
                 var startContext=original.GetCustomProperty(AutoProcessor.ContextProperty) as KeyValuePair<string,string>[];
-                foreach(var tag in Tags(WithContext(original.TagObjects,startContext),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
+                foreach(var tag in Tags(WithContext(unreplaced?.Tags(original)??original.TagObjects,startContext),budget,safe,redact,operation)) copy.SetTag(tag.Key,tag.Value);
                 foreach(var item in original.Events)
                 {
                     budget.Node();
@@ -196,10 +228,10 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                 RuntimeLayout.Field(typeof(ActivitySource),"<TelemetrySchemaUrl>k__BackingField")?.SetValue(source,null);
                 Set(copy,"<Source>k__BackingField",source); Set(copy,"_traceState",null);
                 string Text(string text) { try { return redact(text); } catch { return "traceai.redacted"; } }
-                copy.DisplayName=Text(original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(original.OperationName)); copy.SetStatus(original.Status);
+                copy.DisplayName=Text(WireRecord.For(original) is {} named?named.Name(original):original.DisplayName); Set(copy,"<OperationName>k__BackingField",Text(WireRecord.For(original) is {} wired?wired.OperationName(original):original.OperationName)); copy.SetStatus(original.Status);
                 var retained=new ActivityTagsCollection();
                 var operation=original.GetTagItem("gen_ai.operation.name") as string;
-                var originalTags=original.TagObjects.Take(PrivacyCatalog.MaxNodes+1).ToArray();
+                var originalTags=(WireRecord.For(original) is {} kept?kept.Tags(original):original.TagObjects).Take(PrivacyCatalog.MaxNodes+1).ToArray();
                 Dictionary<string,PrivacyCatalog.Hint>? hints;
                 try { hints=originalTags.Length<=PrivacyCatalog.MaxNodes?PrivacyCatalog.IndexHints(originalTags):null; } catch { hints=null; }
                 foreach(var tag in originalTags.Where(tag=>AttributeProjection.Protected(tag.Key)))
@@ -207,7 +239,7 @@ internal sealed class ExportSnapshot(Activity[] spans,Resource resource)
                     string key;
                     try { key=redact(tag.Key); }
                     catch { if(!FixedSemanticKey(tag.Key)) continue; key=tag.Key; }
-                    object? value=tag.Value==null?null:hints==null?WirePrivacy.Redacted:WirePrivacy.Scrub(tag.Value,path:tag.Key,hints:hints);
+                    object? value=tag.Value==null?null:hints==null?WirePrivacy.Redacted:WirePrivacy.Scrub(tag.Value,path:tag.Key,hints:hints,shapes:false);
                     try
                     {
                         value=value==null?null:safe(tag.Key,value,operation);

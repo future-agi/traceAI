@@ -42,7 +42,100 @@ const maskEmbeddingVectorsRule: MaskingRule = {
  */
 const retrievalDocuments = `${SemanticAttributePrefixes.retrieval}.${RetrievalAttributePostfixes.documents}`;
 
+/**
+ * Content keys masked as a whole, by prefix (the key itself or anything below `prefix.`), so that
+ * this SDK masks exactly what Python's `TraceConfig.mask` masks
+ * (python/fi_instrumentation/instrumentation/config.py: `_INPUT_CONTENT_PREFIXES`,
+ * `_OUTPUT_CONTENT_PREFIXES`, `_MIXED_CONTENT_PREFIXES`). Names, ids, counts, model and usage keys
+ * are not content and are not listed. The `alias` entries are older names that TypeScript packages
+ * write for a field Python spells differently (`SemanticConventions.TOOL_PARAMETERS` is
+ * `tool.parameters`, Python's `gen_ai.tool.parameters`).
+ *
+ * | list   | Python key                                  | here                                   |
+ * | ------ | ------------------------------------------- | -------------------------------------- |
+ * | input  | gen_ai.system_instructions, gen_ai.request.parameters, gen_ai.request.stop_sequences, gen_ai.tool.definitions, gen_ai.tool.call.arguments, gen_ai.input.images, tool.json_schema, ... | listed below; before this list only llm.tools / llm.invocation_parameters (exact keys), prompt template, input.value and message keys were masked |
+ * | input  | gen_ai.tool.parameters                      | listed, plus alias tool.parameters     |
+ * | input  | gen_ai.tool.description                     | listed, plus alias tool.description    |
+ * | output | gen_ai.tool.call.result, retrieval, reranker output documents, image / guardrail / evaluation / computer-use results | listed below |
+ * | either | voice and audio transcripts / urls, computer-use screenshot and current url, gen_ai.tool.call | listed below |
+ */
+const INPUT_CONTENT_PREFIXES: readonly string[] = [
+  "gen_ai.system_instructions",
+  "gen_ai.request.parameters",
+  "gen_ai.request.stop_sequences",
+  "gen_ai.agent.description",
+  "gen_ai.image.prompt",
+  "gen_ai.image.negative_prompt",
+  "gen_ai.input.images",
+  "gen_ai.prompts",
+  "gen_ai.tool.definitions",
+  "gen_ai.tool.description",
+  "gen_ai.tool.call.arguments",
+  "gen_ai.tool.parameters",
+  "tool_call.function.arguments",
+  "message.function_call_arguments_json",
+  "gen_ai.computer_use.text",
+  "gen_ai.computer_use.element_selector",
+  "tool.json_schema",
+  "gen_ai.retrieval.query",
+  "gen_ai.reranker.query",
+  "gen_ai.reranker.input_documents",
+  "reranker.query",
+  "reranker.input_documents",
+  // aliases
+  "tool.parameters",
+  "tool.description",
+];
+const OUTPUT_CONTENT_PREFIXES: readonly string[] = [
+  "gen_ai.tool.call.result",
+  "gen_ai.image.revised_prompt",
+  "gen_ai.image.output_urls",
+  "gen_ai.guardrail.modified_output",
+  "gen_ai.evaluation.explanation",
+  "gen_ai.computer_use.result",
+  "retrieval.documents",
+  "gen_ai.retrieval.documents",
+  "gen_ai.reranker.output_documents",
+  "reranker.output_documents",
+];
+// Public fields that do not encode a direction and may hold either side.
+const MIXED_CONTENT_PREFIXES: readonly string[] = [
+  "gen_ai.voice.transcript",
+  "gen_ai.voice.recording.url",
+  "gen_ai.voice.recording.stereo_url",
+  "gen_ai.voice.recording.customer_url",
+  "gen_ai.voice.recording.assistant_url",
+  "gen_ai.audio.url",
+  // gen_ai.audio.transcript is deliberately not listed: the auto-instrumentation wire layer knows
+  // whether a transcript is the input (tts) or the output (stt) and masks it by direction, which
+  // is stricter than Python's either-flag rule (traceai_auto test/e2e.test.ts, "audio transcript
+  // respects its content side").
+  "gen_ai.computer_use.screenshot",
+  "gen_ai.computer_use.current_url",
+];
+
+function hasContentPrefix(key: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}.`));
+}
+
+function anyHideSettingOn(config: TraceConfig): boolean {
+  return Boolean(
+    config.hideInputs || config.hideOutputs ||
+    config.hideInputMessages || config.hideOutputMessages ||
+    config.hideInputText || config.hideOutputText ||
+    config.hideInputImages || config.hideEmbeddingVectors
+  );
+}
+
 const maskingRules: MaskingRule[] = [
+  {
+    // The raw request and response objects are not recorded while any hide setting is on: a response
+    // object can carry the request and a request can carry the response, so neither is kept.
+    condition: ({ config, key }) =>
+      anyHideSettingOn(config) &&
+      (key === SemanticConventions.RAW_INPUT || key === SemanticConventions.RAW_OUTPUT),
+    action: () => undefined,
+  },
   {
     // Retrieved documents are outputs too, including metadata that can duplicate
     // private content. Cover both opaque payloads and flattened document fields.
@@ -58,12 +151,31 @@ const maskingRules: MaskingRule[] = [
     action: () => undefined,
   },
   {
+    // The aggregate tool call can hold both arguments and results: hide it if either side is private.
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideOutputs) && key === SemanticConventions.GEN_AI_TOOL_CALL,
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideOutputs) && hasContentPrefix(key, MIXED_CONTENT_PREFIXES),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    condition: ({ config, key }) => config.hideInputs && hasContentPrefix(key, INPUT_CONTENT_PREFIXES),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    condition: ({ config, key }) => config.hideOutputs && hasContentPrefix(key, OUTPUT_CONTENT_PREFIXES),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
     // Opaque inputs include tool schemas (descriptions, enums, defaults) and
     // their copies in invocation parameters. Do not parse provider-specific
     // JSON: separately recorded model/token metadata remains available.
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
-      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT ||
+      (key === SemanticConventions.INPUT_VALUE ||
         key === SemanticConventions.LLM_TOOLS || key === SemanticConventions.LLM_INVOCATION_PARAMETERS),
     action: () => REDACTED_VALUE as AttributeValue,
   },
@@ -89,8 +201,7 @@ const maskingRules: MaskingRule[] = [
   {
     condition: ({ config, key }) =>
       (config.hideOutputs || config.hideOutputText || config.hideOutputMessages || config.hideEmbeddingVectors) &&
-      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT ||
-        key === SemanticConventions.LLM_FUNCTION_CALL),
+      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.LLM_FUNCTION_CALL),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {

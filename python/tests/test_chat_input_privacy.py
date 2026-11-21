@@ -100,6 +100,14 @@ def test_typed_modalities_in_actual_otlp(key, options, hidden):
         assert SECRET.encode() not in wire
         for value in hidden:
             assert value.encode() not in wire
+        if key == "raw.input" and any(getattr(config, f) for f in (
+                "hide_inputs", "hide_outputs", "hide_input_messages", "hide_output_messages",
+                "hide_input_text", "hide_output_text", "hide_input_images",
+                "hide_embedding_vectors", "hide_llm_invocation_parameters")):
+            # raw payloads are not recorded while any hide setting is on
+            assert key not in attrs
+            assert attrs["gen_ai.request.model"] == "visible-model"
+            return
         if TEXT not in hidden:
             assert TEXT in attrs[key]
         if IMAGE not in hidden:
@@ -173,7 +181,7 @@ def test_malformed_and_active_values_fail_closed_without_hooks(value, flag):
     # Forge without __init__, or replace the slot after a legitimate construction.
     forged = object.__new__(ChatInput)
     forged._payload = value
-    assert config.mask("raw.input", forged) == REDACTED_VALUE
+    assert config.mask("raw.input", forged) is None
     with exported(config) as (tracer, records):
         span = tracer.start_span("malformed")
         span.set_attribute("input.value", forged)
@@ -241,7 +249,7 @@ def test_opaque_json_and_lazy_values_still_cannot_opt_in():
     assert config.mask("input.value", json.dumps(payload())) == REDACTED_VALUE
     assert config.mask("input.value", Active()) == REDACTED_VALUE
     assert config.mask("input.value", lambda: ChatInput(payload())) == REDACTED_VALUE
-    assert config.mask("raw.input", {"type": "ChatInput", "payload": payload()}) == REDACTED_VALUE
+    assert config.mask("raw.input", {"type": "ChatInput", "payload": payload()}) is None
 
 
 def test_huge_builtin_integer_cannot_break_serialization():

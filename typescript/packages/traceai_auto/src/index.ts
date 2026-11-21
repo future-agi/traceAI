@@ -17,7 +17,7 @@ import { HTTP_SCOPE } from "./incoming-parent";
 import { forwardedHiding, hideForwardedContent } from "./forwarded-content";
 import { samplingRatioAdmission, type SamplerSelection } from "./sampling-ratio";
 
-const VERSION = "0.4.0"; // x-release-please-version
+const VERSION = "0.4.1"; // x-release-please-version
 import { chainSigterm } from "./signals";
 import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";

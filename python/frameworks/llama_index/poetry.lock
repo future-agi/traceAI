@@ -196,7 +196,7 @@ description = "Timeout context manager for asyncio programs"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "python_version < \"3.11\""
+markers = "python_version == \"3.10\""
 files = [
     {file = "async_timeout-5.0.1-py3-none-any.whl", hash = "sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c"},
     {file = "async_timeout-5.0.1.tar.gz", hash = "sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3"},
@@ -236,7 +236,6 @@ files = [
 
 [package.dependencies]
 deprecated = "*"
-eval-type-backport = {version = "*", markers = "python_version < \"3.10\""}
 griffe = "*"
 jinja2 = "*"
 platformdirs = "*"
@@ -431,29 +430,13 @@ files = [
 ]
 
 [[package]]
-name = "eval-type-backport"
-version = "0.2.2"
-description = "Like `typing._eval_type`, but lets older Python versions use newer typing features."
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-markers = "python_version < \"3.10\""
-files = [
-    {file = "eval_type_backport-0.2.2-py3-none-any.whl", hash = "sha256:cb6ad7c393517f476f96d456d0412ea80f0a8cf96f6892834cd9340149111b0a"},
-    {file = "eval_type_backport-0.2.2.tar.gz", hash = "sha256:f0576b4cf01ebb5bd358d02314d31846af5e07678387486e2c798af0e7d849c1"},
-]
-
-[package.extras]
-tests = ["pytest"]
-
-[[package]]
 name = "exceptiongroup"
 version = "1.3.0"
 description = "Backport of PEP 654 (exception groups)"
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "python_version < \"3.11\""
+markers = "python_version == \"3.10\""
 files = [
     {file = "exceptiongroup-1.3.0-py3-none-any.whl", hash = "sha256:4d111e6e0c13d0644cad6ddaa7ed0261a0b36971f6d23e7ec9b4b9097da78a10"},
     {file = "exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88"},
@@ -467,14 +450,14 @@ test = ["pytest (>=6)"]
 
 [[package]]
 name = "fi-instrumentation-otel"
-version = "1.2.2"
+version = "1.5.0"
 description = "OpenTelemetry tracing for AI applications: tracer setup, span helpers, exporters, and semantic conventions for Future AGI."
 optional = false
-python-versions = "<3.14,>3.9"
+python-versions = "<3.16,>=3.10"
 groups = ["main"]
 files = [
-    {file = "fi_instrumentation_otel-1.2.2-py3-none-any.whl", hash = "sha256:25cf88f93e33aa928d4fae0f631afe8a32565639490862b715869e0633becbaf"},
-    {file = "fi_instrumentation_otel-1.2.2.tar.gz", hash = "sha256:b675df47d7a03c506fbd2e4b0420fe4f74d12a6353a88b219bfd97797b276d4c"},
+    {file = "fi_instrumentation_otel-1.5.0-py3-none-any.whl", hash = "sha256:90f3fa59c8e1fa0ec0953e02b5ab985567317366078b9cf155d08fa14af71d80"},
+    {file = "fi_instrumentation_otel-1.5.0.tar.gz", hash = "sha256:a669aa1bbcb41f79c6206222622450ba3603032368334da9c416c8c2e3c20183"},
 ]
 
 [package.dependencies]
@@ -941,7 +924,6 @@ banks = ">=2.2.0,<3"
 dataclasses-json = "*"
 deprecated = ">=1.2.9.3"
 dirtyjson = ">=1.0.8,<2"
-eval-type-backport = {version = ">=0.2.0,<0.3", markers = "python_version < \"3.10\""}
 filetype = ">=1.2.0,<2"
 fsspec = ">=2023.5.0"
 httpx = "*"
@@ -993,7 +975,6 @@ files = [
 ]
 
 [package.dependencies]
-eval-type-backport = {version = ">=0.2.2", markers = "python_full_version < \"3.10.0\""}
 llama-index-instrumentation = ">=0.1.0"
 pydantic = ">=2.11.5"
 
@@ -2718,5 +2699,5 @@ type = ["pytest-mypy"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">3.9, <3.14"
-content-hash = "83aa02765d0560122de8cbd53d4d21d610a5b54913aa4a8735e6d917065c3e14"
+python-versions = ">=3.10,<3.14"
+content-hash = "f3bdf61042c44ae9530139748bc4c47899268b7bb43c8c8a5ad3175fe8bdd5e1"

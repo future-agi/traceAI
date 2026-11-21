@@ -78,12 +78,19 @@ public static class TraceAIAuto
                 }
                 else if(!config.Disabled) Warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required for the default collector; no exporter or provider was supplied, so auto-instrumentation is disabled.");
             }
-            catch { s_failed=true; Warn("init", "Agent initialization failed; application continues without tracing."); }
+            catch(BlankBaseUrlException) { s_failed=true; Warn("base-url-blank","FI_BASE_URL is set but empty; the agent did not start and no traces are sent. Unset it or give it a URL."); }
+            catch (Exception error)
+            {
+                s_failed=true;
+                // A refused destination names the setting to change and no value.
+                if(error is FiKeyRefusedException refused) Warn("route-"+refused.Code,refused.Message);
+                Warn("init", "Agent initialization failed; application continues without tracing.");
+            }
         }
     }
     /// <summary>Registers an additional credential for process-wide export redaction.
     /// Values shorter than eight characters are ignored. Never logs credential values.</summary>
-    public static void RegisterSecret(string? value) => KnownSecrets.Register(value);
+    public static void RegisterSecret(string? value) => KnownSecrets.RegisterExplicit(value);
 
     /// <summary>No network unless testExport is explicitly true. Secrets are never printed.</summary>
     public static string Doctor(bool testExport = false)
@@ -105,6 +112,27 @@ public static class TraceAIAuto
             return WirePrivacy.ScrubString(report,KnownSecrets.Snapshot());
         }
         catch { return "{\"enabled\":false,\"error\":\"diagnostics unavailable\"}"; }
+    }
+    /// <summary>The settings the ASP.NET Core hosting startup needs, or null when it must stay off: the agent
+    /// is not running, or neither the extensions_ai nor the agents integration is enabled.</summary>
+    public static string? HostingStartupPlan()
+    {
+        try { var config=s_config; return s_agent==null || config==null ? null : HostingStartupPlanFor(config); }
+        catch { return null; }
+    }
+    /// <summary>The libraries' sensitive-content switch is on unless FI_AUTO_CAPTURE_CONTENT is set false (false, 0, no or off),
+    /// so prompts and responses are recorded as in every other traceAI language. Any traceAI hide setting keeps it off.
+    /// The libraries' switch puts content on their spans for every listener the application has, not only this agent; the hosting
+    /// startup prints one value-free line when it actually turns the switch on. Content still reaches Future AGI only through the agent's own
+    /// processor, which applies the hide mask and scrubs known secrets.</summary>
+    internal static string? HostingStartupPlanFor(AutoConfig config)
+    {
+        bool chat=config.Enabled("extensions_ai"),agents=config.Enabled("agents");
+        if(!chat && !agents) return null;
+        var mask=config.Options.TraceConfig??AutoProcessor.FromHideSwitches(config);
+        bool hidden=mask.HideInputs||mask.HideOutputs||mask.HideInputMessages||mask.HideOutputMessages||mask.HideInputText||mask.HideOutputText||mask.HideInputImages;
+        bool sensitive=config.CaptureContent && !hidden;
+        return $"chat={(chat?1:0)};agent={(agents?1:0)};sensitive={(sensitive?1:0)}";
     }
     public static IReadOnlyList<IntegrationStatus> GetStatus()
     {
@@ -190,12 +218,16 @@ internal sealed class Agent : IDisposable
             foreach(var integration in Integrations.Where(i=>config.Enabled(i.Name))) foreach(var prefix in integration.Sources) builder.AddSource(integration.Exact?prefix:prefix+"*");
         }
         BaseExporter<Activity>? exporter=null;
-        if(config.Options.Exporter!=null) exporter=new BorrowedExporter(config.Options.Exporter,privacy,_completion);
-        else if(_ownsProvider) exporter=_otlp=new TrackingOtlpExporter(new OtlpExporterOptions {
-            Endpoint=new Uri(config.Get("BASE_URL").TrimEnd('/')+"/tracer/v1/traces"), Protocol=OtlpExportProtocol.HttpProtobuf,
-            Headers="X-Api-Key="+Uri.EscapeDataString(config.Get("API_KEY"))+",X-Secret-Key="+Uri.EscapeDataString(config.Get("SECRET_KEY"))+",fi-project-name="+Uri.EscapeDataString(config.Get("PROJECT_NAME")),
-            TimeoutMilliseconds=2000
-        },privacy,_completion);
+        if(config.Options.Exporter!=null)
+        {
+            // A collector of the caller's own: the OTLP exporter it may be built on merges OTEL_EXPORTER_OTLP_(TRACES_)HEADERS, so those must carry no
+            // Future AGI key header and no known secret.
+            // "Known" here is a Future AGI key value (environment, options, config file) and a secret registered through RegisterSecret: another
+            // vendor's credential in the environment, or a value the wire layer observed, must not disable the agent for that vendor's collector.
+            FiKeyTransport.AssertNoFiKeysInAmbientHeaders(config.CredentialValues.Concat(KnownSecrets.Registered()));
+            exporter=new BorrowedExporter(config.Options.Exporter,privacy,_completion);
+        }
+        else if(_ownsProvider) exporter=_otlp=new TrackingOtlpExporter(FiRouteOptions(config),privacy,_completion);
         if(exporter!=null)
         {
             _batch=new PrivacyBatchProcessor(exporter,sampler,requireRecorded:!_ownsProvider,()=>Volatile.Read(ref _disposed)==0);
@@ -238,6 +270,21 @@ internal sealed class Agent : IDisposable
         if(config.Enabled("semantic_kernel")) AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics",true);
         if(config.Enabled("azure_inference")||config.Enabled("azure_openai")) AppContext.SetSwitch("Azure.Experimental.EnableActivitySource",true);
     }
+    /// <summary>
+    /// The options of the Future AGI route: the one decision (FiKeyTransport.Decide) is taken on the base URL before the keys are put in the headers, and the
+    /// route's HTTP client follows no redirect and, for a plaintext send under FI_ALLOW_INSECURE_HTTP, uses no proxy.
+    /// </summary>
+    internal static OtlpExporterOptions FiRouteOptions(AutoConfig config)
+    {
+        // The Future AGI exporter is built on the OTLP exporter, which merges OTEL_EXPORTER_OTLP_(TRACES_)HEADERS: those carry no key header and no known secret.
+        FiKeyTransport.AssertNoFiKeysInAmbientHeaders(config.CredentialValues.Concat(KnownSecrets.Registered()));
+        var decision=FiKeyTransport.Decide(config.Get("BASE_URL").TrimEnd('/')+"/tracer/v1/traces",grpc:false,keys:true,allowInsecureHttp:config.Options.AllowInsecureHttp==true);
+        return new OtlpExporterOptions {
+            Endpoint=new Uri(decision.Endpoint), Protocol=OtlpExportProtocol.HttpProtobuf,
+            Headers="X-Api-Key="+Uri.EscapeDataString(config.Get("API_KEY"))+",X-Secret-Key="+Uri.EscapeDataString(config.Get("SECRET_KEY"))+",fi-project-name="+Uri.EscapeDataString(config.Get("PROJECT_NAME")),
+            TimeoutMilliseconds=2000, HttpClientFactory=FiKeyTransport.HttpClientFactory(decision,2000)
+        };
+    }
     internal static Integration? IntegrationForSource(string source) => Integrations.FirstOrDefault(i=>i.Sources.Any(p=>i.Exact?source==p:source.StartsWith(p,StringComparison.Ordinal)));
     /// <summary>The agent's own wire source and every AI integration source.</summary>
     internal static bool AiSource(string source) => source==TraceAIAuto.Source.Name || IntegrationForSource(source) is { Name:not "aspnetcore" };
@@ -247,7 +294,14 @@ internal sealed class Agent : IDisposable
         if(i.Name=="wire") return new(i.Name,"instrumented","HttpClient DiagnosticListener with bounded response tee");
         bool loaded=AppDomain.CurrentDomain.GetAssemblies().Any(a=>i.Assemblies.Any(p=>a.GetName().Name?.StartsWith(p,StringComparison.Ordinal)==true));
         bool installed=loaded||_installed.Any(a=>i.Assemblies.Any(p=>a.StartsWith(p,StringComparison.Ordinal)));
-        if(i.Manual) return new(i.Name,installed?"manual":"not_installed", "Listener ready; library must opt in with UseOpenTelemetry()/OpenTelemetryChatClient; custom source names are not detected");
+        if(i.Manual)
+        {
+            // The hosting startup records what it wrapped; a web host with a registered client or agent is traced automatically.
+            var wrapped=(AppContext.GetData("TraceAI.AutoInstrumentation.HostingStartup.Decorated") as string)?.Split(',')??[];
+            bool auto=i.Name=="extensions_ai"?wrapped.Contains("chat")||wrapped.Contains("embedding"):wrapped.Contains("agent");
+            if(auto) return new(i.Name,"instrumented","auto (web host): registered services are wrapped with the library's OpenTelemetry wrapper; other apps call UseOpenTelemetry()");
+            return new(i.Name,installed?"manual":"not_installed", "manual: web hosts are traced automatically for registered services; other apps call UseOpenTelemetry()/OpenTelemetryChatClient; custom source names are not detected");
+        }
         if(_seen.ContainsKey(i.Name)) return new(i.Name,"instrumented","built-in ActivitySource listener attached");
         if(loaded) return new(i.Name,"pending","assembly loaded; waiting for a supported ActivitySource");
         return new(i.Name,installed?"pending":"not_installed",installed?"built-in listener ready for late load":"library absent from loaded assemblies and app dependency manifest");
@@ -559,7 +613,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         // unrecognised value reported, only when they decide what is hidden.
         _mask=config.Options.TraceConfig??FromHideSwitches(config);
     }
-    private static TraceConfig FromHideSwitches(AutoConfig config)
+    internal static TraceConfig FromHideSwitches(AutoConfig config)
     {
         bool Hidden(string key)=>config.Hide(key)==true;
         bool inputs=Hidden("HIDE_INPUTS"),outputs=Hidden("HIDE_OUTPUTS"),
@@ -635,7 +689,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         foreach(var activity in batch) activities.Add(activity);
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
-        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),operation);
+        object? Safe(string key,object value,string? operation) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),false,operation);
         string Redact(string text) => secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets);
         return ExportSnapshot.Create(activities,WithRouting(resource),Safe,Redact,EventKey,attributeLimit,HideErrorDetails,
             sampled:_sampler==null?null:_sampler.Export,samplingMetadata:_sampler==null?null:_sampler.ApplyMetadata);
@@ -655,7 +709,7 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         string[]? secrets;
         try { secrets=KnownSecrets.ForExport(_config); } catch { secrets=null; }
         return ExportSnapshot.SanitizeResource(resource,
-            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key))),
+            (key,value)=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):Mask(key,WirePrivacy.Scrub(value,secrets,path:ScrubPath(key)),false),
             text=>secrets==null?throw new InvalidDataException("Credential privacy unavailable"):WirePrivacy.ScrubString(text,secrets));
     }
     private static string EventKey(string name,string key) => name switch {
@@ -668,7 +722,11 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
     /// values are still removed from its value.</summary>
     internal const string SessionKey="session.id";
     internal static string ScrubPath(string key)=>key==SessionKey?"":key;
-    internal object? Mask(string key,object value,string? operation=null)
+    /// <summary>Applies the hide policy to a value. With <paramref name="replaceSecrets"/> every known secret is replaced and then
+    /// the value shapes run, in that order and in one call. Without it neither runs: the caller (the export snapshot, the resource, a
+    /// wire span's raw values) replaces them itself, once, from one registry snapshot, and a shape run first could cut a known
+    /// secret in two. There is deliberately no default.</summary>
+    internal object? Mask(string key,object value,bool replaceSecrets,string? operation=null)
     {
         if(key!=SessionKey && (WirePrivacy.CredentialKey(key)||IsSensitiveKey(key))) return TraceConfig.RedactedValue;
         bool tool=key.StartsWith("gen_ai.tool.",StringComparison.Ordinal);
@@ -700,16 +758,17 @@ internal sealed class AutoProcessor : BaseProcessor<Activity>
         if(decision==TraceConfig.RedactedValue) return TraceConfig.RedactedValue;
         if(_mask.HideErrorDetails && key=="otel.status_description") return null;
         if(_mask.HideInputImages && (key.Contains("image",StringComparison.OrdinalIgnoreCase)||key.Contains("file_uri",StringComparison.OrdinalIgnoreCase)||key.Contains("fileUri",StringComparison.Ordinal)||key.Contains("file_url",StringComparison.OrdinalIgnoreCase)||key.Contains("file.uri",StringComparison.OrdinalIgnoreCase)||key.Contains("file.url",StringComparison.OrdinalIgnoreCase))) return TraceConfig.RedactedValue;
-        value=WirePrivacy.Scrub(value,path:ScrubPath(key));
+        string[]? known=null;
+        if(replaceSecrets) { try { known=_config.KnownValues(); } catch { return WirePrivacy.Redacted; } }
+        value=WirePrivacy.Scrub(value,known,path:ScrubPath(key),shapes:replaceSecrets);
         if(value is string str)
         {
-            str=_config.RedactSecrets(str);
             if(_mask.HideInputImages && WireCore.Parse(System.Text.Encoding.UTF8.GetBytes(str)) is System.Text.Json.Nodes.JsonNode node && node is System.Text.Json.Nodes.JsonObject or System.Text.Json.Nodes.JsonArray)
             { HideImages(node); str=WireCore.J(node); }
             return str;
         }
-        if(value is string[] strings) return strings.Select(item=>item==null?null:(string?)Mask(key,item,operation)).ToArray();
-        if(value is object[] objects) return objects.Select(item=>item==null?null:Mask(key,item,operation)).ToArray();
+        if(value is string[] strings) return strings.Select(item=>item==null?null:(string?)Mask(key,item,replaceSecrets,operation)).ToArray();
+        if(value is object[] objects) return objects.Select(item=>item==null?null:Mask(key,item,replaceSecrets,operation)).ToArray();
         return value;
     }
     private static bool IsSensitiveKey(string key)

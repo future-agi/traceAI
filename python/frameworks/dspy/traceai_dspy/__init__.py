@@ -107,7 +107,7 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
             module=_DSPY_MODULE,
             name="Retrieve.forward",
             factory=CopyableFunctionWrapper,
-            args=(_RetrieverForwardWrapper(self._tracer),),
+            args=(_RetrieverForwardWrapper(self._tracer, config),),
         )
 
         wrap_object(
@@ -433,6 +433,13 @@ class _RetrieverForwardWrapper(_WithTracer):
     decided to instrument it.
     """
 
+    def __init__(
+        self, tracer: trace_api.Tracer, config: Optional[TraceConfig] = None
+    ) -> None:
+        super().__init__(tracer)
+        # Without a config, the default TraceConfig applies (it reads the FI_HIDE_* settings).
+        self._hides_input = _hides_input(config if config is not None else TraceConfig())
+
     def __call__(
         self,
         wrapped: Callable[..., Any],
@@ -452,7 +459,8 @@ class _RetrieverForwardWrapper(_WithTracer):
                         GEN_AI_SPAN_KIND: RETRIEVER.value,
                         INPUT_VALUE: _get_input_value(wrapped, *args, **kwargs),
                         INPUT_MIME_TYPE: JSON,
-                        **dict(_raw_output(arguments)),
+                        # The bound arguments carry the query: not recorded while an input setting is on.
+                        **({} if self._hides_input else dict(_raw_output(arguments))),
                     }
                 )
             ),
@@ -778,6 +786,13 @@ def _convert_to_dict(obj: Any) -> Any:
     elif isinstance(obj, (list, tuple)):
         return [_convert_to_dict(item) for item in obj]
     return obj
+
+
+def _hides_input(config: TraceConfig) -> bool:
+    return any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images")
+    )
 
 
 def _raw_input(raw_input: Any) -> Iterator[Tuple[str, Any]]:

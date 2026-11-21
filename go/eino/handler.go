@@ -65,6 +65,7 @@ type Handler struct {
 	scrub   *scrubber
 	closed  atomic.Bool
 	pending sync.WaitGroup
+	deflt   bool // registered by a package for the application: yields to application handlers
 }
 
 var (
@@ -75,6 +76,16 @@ var (
 // callbacks.AppendGlobalHandlers (once per process) or to a run's
 // compose.WithCallbacks / adk.WithCallbacks option.
 func NewHandler(opts ...Option) *Handler {
+	return newHandler(false, opts...)
+}
+
+// NewDefaultHandler is [NewHandler] for a handler that a package registers on
+// the application's behalf (the go/eino/auto blank import). It steps aside for
+// every run an application-built handler handles: see [HandledManually].
+// Applications call [NewHandler].
+func NewDefaultHandler(opts ...Option) *Handler { return newHandler(true, opts...) }
+
+func newHandler(isDefault bool, opts ...Option) *Handler {
 	c := &config{}
 	for _, o := range opts {
 		o(c)
@@ -91,6 +102,7 @@ func NewHandler(opts ...Option) *Handler {
 		tracer: tp.Tracer(ScopeName, trace.WithInstrumentationVersion(Version)),
 		tc:     c.tc,
 		scrub:  newScrubber(),
+		deflt:  isDefault,
 	}
 }
 
@@ -133,6 +145,10 @@ type runState struct {
 }
 
 type stateKey struct{}
+
+// errorRecordedKey marks, on a context, the run whose unannounced error a
+// default handler has already recorded.
+type errorRecordedKey struct{}
 
 func stateFrom(ctx context.Context) *runState {
 	st, _ := ctx.Value(stateKey{}).(*runState)
@@ -180,7 +196,10 @@ func parentContext(ctx context.Context, prev *runState, ambient trace.Span) cont
 func (h *Handler) start(ctx context.Context, info *callbacks.RunInfo, attrs []attribute.KeyValue) (context.Context, *runState) {
 	prevSpan := trace.SpanFromContext(ctx)
 	st := &runState{info: info, prev: stateFrom(ctx), prevSpan: prevSpan}
-	if h.closed.Load() {
+	// A default handler yields a run another handler has already started the
+	// span of (an application handler registered after it runs first): it acts
+	// as if shut down for this run, so the later timings stay balanced.
+	if h.closed.Load() || (h.deflt && RunTraced(ctx, info)) {
 		st.ended.Store(true)
 		return context.WithValue(ctx, stateKey{}, st), st
 	}
@@ -279,8 +298,17 @@ func (h *Handler) OnError(ctx context.Context, info *callbacks.RunInfo, err erro
 		if ctx == nil {
 			return ctx
 		}
+		// The default handler runs before an application handler registered
+		// after it: it leaves a mark, so the application's handler does not
+		// record the same error span again.
+		if !h.deflt && ctx.Value(errorRecordedKey{}) == info {
+			return ctx
+		}
 		_, st = h.start(ctx, info, nil)
 		h.finish(st, nil, err)
+		if h.deflt {
+			return context.WithValue(ctx, errorRecordedKey{}, info)
+		}
 		return ctx
 	}
 	out = restore(ctx, st)

@@ -168,11 +168,10 @@ test.each(["option", "environment"])("hideInputs via %s does not leak rejected i
     expect(await new Guard().parse(secret)).toBe(result);
     const attrs = exporter.getFinishedSpans()[0].attributes;
     expect(attrs["input.value"]).toBe("__REDACTED__");
-    expect(attrs["raw.input"]).toBe("__REDACTED__");
+    expect(attrs["raw.input"]).toBeUndefined();
     expect(JSON.stringify(attrs)).not.toContain(secret);
-    for (const key of ["output.value", "raw.output"]) {
-      expect(JSON.parse(attrs[key] as string)).toEqual({ validatedOutput: null, validationPassed: false });
-    }
+    expect(JSON.parse(attrs["output.value"] as string)).toEqual({ validatedOutput: null, validationPassed: false });
+    expect(attrs["raw.output"]).toBeUndefined();
     expect(result.rawLlmOutput).toBe(secret);
     expect(result.reask.incorrectValue).toBe(secret);
   } finally {
@@ -188,10 +187,10 @@ test.each([false, true])("validated output remains independently controlled by h
   expect(await new Guard().parse(result.rawLlmOutput)).toBe(result);
   const attrs = exporter.getFinishedSpans()[0].attributes;
   expect(JSON.stringify(attrs)).not.toContain(result.rawLlmOutput);
-  for (const key of ["output.value", "raw.output"]) {
-    if (hideOutputs) expect(attrs[key]).toBe("__REDACTED__");
-    else expect(JSON.parse(attrs[key] as string)).toEqual({ validatedOutput: { count: 7 }, validationPassed: true });
-  }
+  if (hideOutputs) expect(attrs["output.value"]).toBe("__REDACTED__");
+  else expect(JSON.parse(attrs["output.value"] as string)).toEqual({ validatedOutput: { count: 7 }, validationPassed: true });
+  // hideInputs is on in both cases: the raw response is not recorded.
+  expect(attrs["raw.output"]).toBeUndefined();
 });
 
 test("a pending ReAsk is not a completed retry", async () => {

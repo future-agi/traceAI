@@ -1,3 +1,13 @@
+## Unreleased
+
+### Added
+- `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
+
+## [0.4.1] - 2026-11-19
+
+### Changed
+- Depends on `@traceai/fi-core` 1.4.1, which redacts input, output and either-direction content keys and their dotted descendants under `hideInputs` / `hideOutputs`.
+
 ## [0.4.0] - 2026-11-19
 
 ### Added

@@ -1,5 +1,9 @@
 # @traceai/voltagent
 
+## [0.1.1] - 2026-11-19
+
+- Content keys are masked as families: a hide setting covers the key itself and every key below it (`key.<anything>`), whatever the value type. The numeric count exception applies only to the count keys VoltAgent writes, and the message flags cover every child key.
+
 ## 0.1.0
 
 - Initial release: `FIVoltAgentSpanProcessor` for `ObservabilityConfig.spanProcessors` in `@voltagent/core` 2.x. Maps VoltAgent span kinds, model, usage, session and tool keys onto Future AGI / GenAI keys on an exported copy, keeps promoted token keys on model-call spans only, and batches through the `register()` provider's exporter.

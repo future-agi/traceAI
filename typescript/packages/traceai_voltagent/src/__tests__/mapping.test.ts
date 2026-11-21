@@ -196,7 +196,14 @@ describe("mapVoltAgentAttributes (AC-02)", () => {
     );
     expect(attributes["gen_ai.tool.name"]).toBe("get_weather");
     expect(attributes["gen_ai.tool.call.id"]).toBe("call-1");
-    expect(attributes["gen_ai.tool.description"]).toBe("weather");
+    // The description is tool definition content: hidden with the inputs, shown otherwise.
+    expect(attributes["gen_ai.tool.description"]).toBeUndefined();
+    expect(attributes["tool.description"]).toBeUndefined();
+    const shown = mapVoltAgentAttributes(
+      { "span.type": "tool", "tool.name": "get_weather", "tool.description": "weather" },
+      ON,
+    ).attributes;
+    expect(shown["gen_ai.tool.description"]).toBe("weather");
     expect(attributes["gen_ai.operation.name"]).toBe("execute_tool");
     expect(attributes.input).toBeUndefined();
   });

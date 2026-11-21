@@ -173,13 +173,13 @@ public class RuntimeTests : InitIsolation
     public void SessionIdKeepsItsValueButStillLosesCredentials()
     {
         var processor=new AutoProcessor(Config(new MemoryExporter()));
-        Assert.Equal("session-42",processor.Mask("session.id","session-42"));
+        Assert.Equal("session-42",processor.Mask("session.id","session-42",true));
         // Registered secrets and credential-shaped values are still removed from the value.
-        Assert.Equal("chat <redacted>",processor.Mask("session.id","chat runtime-secret"));
-        Assert.Equal("chat <redacted>",processor.Mask("session.id","chat "+"sk-"+"test-PLACEHOLDER-"+new string('0',10)));
+        Assert.Equal("chat <redacted>",processor.Mask("session.id","chat runtime-secret",true));
+        Assert.Equal("chat <redacted>",processor.Mask("session.id","chat "+"sk-"+"test-PLACEHOLDER-"+new string('0',10),true));
         // Only that exact key is exempt from the credential name rule.
-        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("session_token","session-42"));
-        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("session.key","session-42"));
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("session_token","session-42",true));
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("session.key","session-42",true));
     }
     [Fact]
     public async Task ProviderKeysEchoedInErrorsAreRedactedWithoutChangingTheResponse()
@@ -205,9 +205,9 @@ public class RuntimeTests : InitIsolation
     public void NestedAudioAndCredentialFieldsAreNeverExported()
     {
         var processor=new AutoProcessor(Config(new MemoryExporter()));
-        var masked=processor.Mask("input.value","{\"apiKey\":\"foreign-key\",\"messages\":[{\"content\":[{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"RAW-AUDIO\",\"format\":\"wav\"}}]}]}")!.ToString();
+        var masked=processor.Mask("input.value","{\"apiKey\":\"foreign-key\",\"messages\":[{\"content\":[{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"RAW-AUDIO\",\"format\":\"wav\"}}]}]}",true)!.ToString();
         Assert.DoesNotContain("foreign-key",masked); Assert.DoesNotContain("RAW-AUDIO",masked);
-        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("gen_ai.embeddings.vectors",new[]{1.0,2.0}));
+        Assert.Equal(TraceConfig.RedactedValue,processor.Mask("gen_ai.embeddings.vectors",new[]{1.0,2.0},true));
     }
     private sealed class UntouchableContent : HttpContent
     {

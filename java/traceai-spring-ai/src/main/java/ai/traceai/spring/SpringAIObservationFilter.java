@@ -1,5 +1,6 @@
 package ai.traceai.spring;
 
+import ai.traceai.privacy.KnownSecrets;
 import ai.traceai.SemanticConventions;
 import io.micrometer.common.KeyValue;
 import io.micrometer.observation.Observation;
@@ -49,35 +50,35 @@ public final class SpringAIObservationFilter implements ObservationFilter {
             tag(context, SemanticConventions.FI_SPAN_KIND, "LLM");
             tag(context, SemanticConventions.LLM_PROVIDER, chat.getOperationMetadata().provider());
             if (captureInputs) {
-                StringBuilder text = new StringBuilder();
+                Text text = new Text();
                 SpringAIMessageCapture messages = new SpringAIMessageCapture();
                 for (var message : chat.getRequest().getInstructions()) {
                     append(text, message.getText());
                     if (!messages.add(message)) break;
                 }
-                tag(context, SemanticConventions.INPUT_VALUE, text.toString());
+                tag(context, SemanticConventions.INPUT_VALUE, text.finished());
                 tag(context, SemanticConventions.LLM_INPUT_MESSAGES, messages.json());
             }
             if (captureOutputs && chat.getResponse() != null) {
-                StringBuilder text = new StringBuilder();
+                Text text = new Text();
                 SpringAIMessageCapture messages = new SpringAIMessageCapture();
                 for (var generation : chat.getResponse().getResults()) {
                     append(text, generation.getOutput().getText());
                     if (!messages.add(generation.getOutput())) break;
                 }
-                tag(context, SemanticConventions.OUTPUT_VALUE, text.toString());
+                tag(context, SemanticConventions.OUTPUT_VALUE, text.finished());
                 tag(context, SemanticConventions.LLM_OUTPUT_MESSAGES, messages.json());
             }
         } else if (context instanceof EmbeddingModelObservationContext embedding) {
             tag(context, SemanticConventions.FI_SPAN_KIND, "EMBEDDING");
             tag(context, SemanticConventions.LLM_PROVIDER, embedding.getOperationMetadata().provider());
             if (captureInputs) {
-                StringBuilder text = new StringBuilder();
+                Text text = new Text();
                 for (String input : embedding.getRequest().getInstructions()) {
                     append(text, input);
-                    if (text.length() >= MAX_CONTENT_LENGTH) break;
+                    if (text.full()) break;
                 }
-                tag(context, SemanticConventions.INPUT_VALUE, text.toString());
+                tag(context, SemanticConventions.INPUT_VALUE, text.finished());
             }
         } else if (context instanceof ToolCallingObservationContext tool) {
             tag(context, SemanticConventions.FI_SPAN_KIND, "TOOL");
@@ -88,17 +89,39 @@ public final class SpringAIObservationFilter implements ObservationFilter {
         return context;
     }
 
-    private static void append(StringBuilder text, String value) {
-        if (value == null || value.isEmpty() || text.length() >= MAX_CONTENT_LENGTH) return;
-        if (!text.isEmpty()) text.append('\n');
-        int remaining = MAX_CONTENT_LENGTH - text.length();
-        text.append(value, 0, Math.min(remaining, value.length()));
+    /** Captured text and whether the cap cut anything off it. */
+    private static final class Text {
+        final StringBuilder builder = new StringBuilder();
+        boolean cut;
+
+        boolean full() {
+            return builder.length() >= MAX_CONTENT_LENGTH;
+        }
+
+        /** Only text that was really cut loses what could start a known secret and ends with the marker. */
+        String finished() {
+            if (!cut) return builder.toString();
+            return KnownSecrets.sealCut(builder.substring(0, Math.min(builder.length(),
+                MAX_CONTENT_LENGTH - KnownSecrets.TRUNCATION_MARKER.length())), MAX_CONTENT_LENGTH);
+        }
+    }
+
+    private static void append(Text text, String value) {
+        if (value == null || value.isEmpty()) return;
+        if (text.full()) {
+            text.cut = true;
+            return;
+        }
+        if (text.builder.length() > 0) text.builder.append('\n');
+        int remaining = MAX_CONTENT_LENGTH - text.builder.length();
+        if (value.length() > remaining) text.cut = true;
+        text.builder.append(value, 0, Math.min(remaining, value.length()));
     }
 
     private static void tag(Observation.Context context, String key, String value) {
         if (value != null) {
             context.addHighCardinalityKeyValue(KeyValue.of(key,
-                value.length() > MAX_CONTENT_LENGTH ? value.substring(0, MAX_CONTENT_LENGTH) : value));
+                KnownSecrets.cap(value, MAX_CONTENT_LENGTH)));
         }
     }
 }

@@ -239,6 +239,7 @@ class AgentE2ETest {
             var foreign = jar.stream().map(java.util.zip.ZipEntry::getName)
                 .filter(name -> !name.startsWith("ai/traceai/auto/") && !name.startsWith("META-INF/") && !name.equals("ai/") && !name.equals("ai/traceai/")).toList();
             assertEquals(List.of(), foreign);
+            assertNotNull(jar.getEntry("ai/traceai/auto/shaded/googleadk/AdkAttributes.class"), "the attribute mapping is bundled, relocated");
             for (String helper : List.of("SamplingRatioSampler.class", "SamplingRatioSampler$KnownRatioSampler.class",
                     "SamplingRatioSampler$1.class")) {
                 assertNotNull(jar.getEntry("ai/traceai/auto/shaded/core/" + helper),
@@ -286,7 +287,8 @@ class AgentE2ETest {
             assertEquals(safeUrl, WireCore.get(WireCore.get(WireCore.parse(output), "config"), "FI_BASE_URL"));
             if (premain) {
                 Object report = WireCore.parse(debug.lines().filter(line -> line.startsWith("{")).findFirst().orElseThrow());
-                assertEquals(safeUrl, WireCore.get(WireCore.get(report, "config"), "FI_BASE_URL")); assertEquals(true, WireCore.get(report, "active"));
+                assertEquals(safeUrl, WireCore.get(WireCore.get(report, "config"), "FI_BASE_URL")); // The target carries userinfo, so the startup check refuses it: the report is still printed, scrubbed, with the agent off.
+                assertEquals(false, WireCore.get(report, "active"));
             }
             assertTrue(spans.isEmpty()); assertTrue(collectorPayloads.isEmpty(), "doctor without --check must not export");
         } finally { process.destroyForcibly(); Files.deleteIfExists(stdout); Files.deleteIfExists(stderr); }
