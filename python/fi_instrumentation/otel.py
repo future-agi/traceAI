@@ -1095,11 +1095,19 @@ _RETRY_FIELDS = (
 
 def _unreadable_adapter() -> UnsupportedFutureAGIEndpointError:
     return UnsupportedFutureAGIEndpointError(
-        "The requests session the exporter sends with cannot be inspected (an adapter holds a retry setting that is not a number, a "
-        "flag or a list of plain values), so Future AGI keys are not sent over a plain channel with it. Use https, or mount "
-        "requests.adapters.HTTPAdapter with max_retries set to a number or to urllib3.util.Retry.",
+        "The requests session the exporter sends with cannot be inspected (an adapter's max_retries is not an integer or "
+        "urllib3.util.Retry itself), so Future AGI keys are not sent over a plain channel with it. Use https, or mount "
+        "requests.adapters.HTTPAdapter with max_retries set to an integer or to urllib3.util.Retry.",
         "proxied",
     )
+
+
+def _retries_are_plain(retries: Any) -> bool:
+    """True when ``max_retries`` of an adapter is an ``int`` or exactly ``urllib3.util.Retry``: a subclass can run its own code
+    (and choose the pool) on the send path."""
+    from urllib3.util import Retry
+
+    return type(retries) in (int, Retry)
 
 
 def _plain_retry_value(name: str, value: Any) -> Any:
@@ -1120,16 +1128,18 @@ def _plain_retry_value(name: str, value: Any) -> Any:
 
 
 def _plain_retries(retries: Any) -> Any:
-    """``max_retries`` of an adapter as an ``int``, or as exactly ``urllib3.util.Retry`` with the values the caller's has (a
-    ``Retry`` subclass is rebuilt as a plain ``Retry``: nothing it overrides runs on the send path). Anything else raises ``proxied``."""
+    """``max_retries`` of an adapter as an ``int``, or as a new ``urllib3.util.Retry`` with the values the caller's has. Anything
+    else (a ``Retry`` subclass included) raises ``proxied``."""
     import inspect
 
     from urllib3.util import Retry
 
+    if not _retries_are_plain(retries):
+        raise _unreadable_adapter()
     if type(retries) is int:
         return retries
     held = getattr(retries, "__dict__", None)
-    if not isinstance(retries, Retry) or not isinstance(held, dict):
+    if not isinstance(held, dict):
         raise _unreadable_adapter()
     accepted = inspect.signature(Retry.__init__).parameters
     settings = {name: _plain_retry_value(name, held[name]) for name in _RETRY_FIELDS if name in held and name in accepted}
@@ -1145,7 +1155,7 @@ def _copy_adapter(adapter: Any, plain: bool = False) -> Any:
 
     With ``plain`` the copy is a new ``requests.adapters.HTTPAdapter`` made from plain settings only: the pool sizes and blocking,
     and ``max_retries`` as an ``int`` or exactly ``urllib3.util.Retry`` (see ``_plain_retries``). Nothing the caller's adapter holds
-    on the instance, and no subclass of ``Retry``, reaches it.
+    on the instance reaches it, and a ``Retry`` subclass is refused.
 
     Otherwise an ``HTTPAdapter`` is copied as it is (a subclass keeps what it holds, such as an ssl context) and its pools are built
     again by its own ``init_poolmanager``; any other adapter is built from the same settings."""
@@ -1443,7 +1453,9 @@ def _session_is_stock(session: Any, allowed: Mapping[str, Any] | None = None) ->
     # holds. Each adapter is judged by exact type: a subclass of HTTPAdapter can choose the connection it uses (a pool key, a dial,
     # an ssl context).
     return type(adapters) in (dict, collections.OrderedDict) and all(
-        type(adapter) is HTTPAdapter and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING)
+        type(adapter) is HTTPAdapter
+        and _retries_are_plain(getattr(adapter, "max_retries", None))
+        and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING)
         for adapter in dict.values(adapters)
     )
 
