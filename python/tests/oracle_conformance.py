@@ -256,9 +256,12 @@ def environment(updates):
 class OpaqueAdapter(requests.adapters.BaseAdapter):
     """A session adapter this package cannot look into: it dials the first proxy sink, as a caller's own transport might."""
 
-    def __init__(self, port):
+    port = None
+
+    def __init__(self, port=None, **settings):
+        # A release that copies the caller's session builds the adapter again from its pool settings.
         super().__init__()
-        self.port = port
+        self.port = port if port is not None else type(self).port
 
     def send(self, request, **kwargs):
         parts = urlsplit(request.url)
@@ -281,7 +284,7 @@ def caller_session(caller, ports):
     if caller == "client_with_proxy":
         session.proxies = {"http": f"http://127.0.0.1:{ports['A']}", "https": f"http://127.0.0.1:{ports['A']}"}
     else:
-        opaque = OpaqueAdapter(ports["A"])
+        opaque = type("Opaque", (OpaqueAdapter,), {"port": ports["A"]})()
         session.mount("http://", opaque)
         session.mount("https://", opaque)
     return session
@@ -382,7 +385,9 @@ def run_row(oracle, row, listeners, opt_in, caller, unguarded=False):
                 if transport == "http":
                     exporter = otel.HTTPSpanExporter(timeout=0.4, **({"session": session} if session is not None else {}))
                     try:
-                        exporter.export([one_span()])
+                        # OpenTelemetry 1.29 lets a failed request raise out of export(); the processors catch it.
+                        with contextlib.suppress(requests.exceptions.RequestException):
+                            exporter.export([one_span()])
                     finally:
                         exporter.shutdown()
                 elif transport == "grpc":

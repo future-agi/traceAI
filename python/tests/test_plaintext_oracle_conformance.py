@@ -5,6 +5,7 @@ marker keys against loopback listeners with byte counters (see ``oracle_conforma
 error code and put no marker byte on any listener, a built row must reach the route the row names.
 """
 import collections
+import contextlib
 import http.server
 import threading
 
@@ -143,7 +144,8 @@ def _http_send(listeners, env, base="http://example.com:{T}/", session=None, opt
         try:
             exporter = otel.HTTPSpanExporter(timeout=0.4, **({"session": session} if session is not None else {}))
             try:
-                exporter.export([oc.one_span()])
+                with contextlib.suppress(requests.exceptions.RequestException):
+                    exporter.export([oc.one_span()])
             finally:
                 exporter.shutdown()
         except otel.UnsupportedFutureAGIEndpointError as error:
@@ -266,7 +268,8 @@ def test_the_http_exporter_does_not_follow_a_redirect_and_no_marker_byte_reaches
     with oc.environment(env):
         exporter = otel.HTTPSpanExporter(timeout=0.5)
         try:
-            exporter.export([oc.one_span()])
+            with contextlib.suppress(requests.exceptions.RequestException):  # 1.29 raises a failed request out of export()
+                exporter.export([oc.one_span()])
         finally:
             exporter.shutdown()
     assert redirecting.requests >= 1
