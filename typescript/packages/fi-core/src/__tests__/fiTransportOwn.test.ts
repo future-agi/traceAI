@@ -269,3 +269,47 @@ describe("the SDK-owned https proxy", () => {
     expect(target.connections).toBeGreaterThanOrEqual(1); quiet(proxy);
   });
 });
+
+describe("sends that carry no key are not subject to the keyed-send rules", () => {
+  const KEYLESS = `
+    const core = require(${JSON.stringify(INDEX)});
+    const { BasicTracerProvider } = require("@opentelemetry/sdk-trace-base");
+    const { diag, DiagLogLevel } = require("@opentelemetry/api");
+    diag.setLogger({ verbose() {}, debug() {}, info() {}, warn: (...a) => console.log("LOG " + a.join(" ")), error: (...a) => console.log("LOG " + a.join(" ")) }, DiagLogLevel.WARN);
+    const exporter = core.createSpanExporter({ endpoint: process.argv[1], timeoutMillis: 4000 });
+    const p = new BasicTracerProvider({ spanProcessors: [{ onStart() {}, onEnd(s) { exporter.export([s], (r) => { console.log("OTLP " + r.code); process.exit(0); }); }, forceFlush: async () => {}, shutdown: async () => {} }] });
+    p.getTracer("t").startSpan("one").end();
+  `;
+  test("RED a keyless OTLP export to a plaintext collector is sent direct while an SDK proxy or Node's environment-proxy switch is set", async () => {
+    for (const extra of [{ FI_HTTPS_PROXY: "PROXY" }, { NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: "PROXY", HTTP_PROXY: "PROXY" }]) {
+      const target = await sink(), proxy = await counter();
+      const output = await runChild(KEYLESS, [`${target.url}/v1/traces`], Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, v === "PROXY" ? proxy.url : v])));
+      expect(count(output, /OTLP 0/g)).toBe(1); expect(target.requests).toHaveLength(1); quiet(proxy);
+      expect(output).not.toContain("FI_PLAINTEXT_PROXIED");
+    }
+  });
+  test("RED a keyless OTLP export to an https collector ignores an unsupported FI_HTTPS_PROXY: it is sent, and the proxy setting is never read for it", async () => {
+    const target = await sink({ tls: cert });
+    const output = await runChild(KEYLESS, [`https://localhost:${target.port}/v1/traces`], { NODE_EXTRA_CA_CERTS: cert.caFile, FI_HTTPS_PROXY: "socks5://127.0.0.1:1" });
+    expect(count(output, /OTLP 0/g)).toBe(1); expect(target.requests).toHaveLength(1);
+    expect(output).not.toContain("FI_PROXY_UNSUPPORTED");
+  });
+  test("RED a collector URL with userinfo is sent without it and the userinfo is not logged", async () => {
+    const target = await sink();
+    const output = await runChild(KEYLESS, [`http://collectoruser:collectorpass@127.0.0.1:${target.port}/v1/traces`], {});
+    expect(count(output, /OTLP 0/g)).toBe(1); expect(target.requests).toHaveLength(1);
+    expect(target.requests[0].headers.authorization).toBeUndefined();
+    expect(output).not.toMatch(/collectoruser|collectorpass/);
+  });
+});
+
+describe("NO_PROXY for the environment proxy uses the scheme's default port", () => {
+  const PROBE = `const guard = require(${JSON.stringify(BUILT_GUARD)}); let r; try { r = guard.resolveProxy(process.argv[1], undefined); } catch (e) { r = "REFUSED " + e.code; }
+    console.log("PROXY " + (r === undefined ? "none" : typeof r === "string" && r.startsWith("REFUSED") ? r : "set"));`;
+  test.each([
+    ["api.example.com:443", "none"], ["api.example.com:80", "set"], ["api.example.com", "none"], [".example.com", "none"], ["other.example.com", "set"], ["*", "none"],
+  ])("RED NO_PROXY=%s for https://api.example.com is %s", async (noProxy, expected) => {
+    const output = await runChild(PROBE, ["https://api.example.com/x"], { NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: "http://127.0.0.1:1", NO_PROXY: noProxy });
+    expect(output).toContain(`PROXY ${expected}`);
+  });
+});
