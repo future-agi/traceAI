@@ -1,4 +1,5 @@
 import atexit
+import contextlib
 import inspect
 import json
 import logging
@@ -1084,7 +1085,33 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
     )
 
 
-def _copy_session(session: requests.Session) -> requests.Session:
+def _copy_adapter(adapter: Any) -> Any:
+    """A new adapter with the settings of ``adapter`` and pools of its own, so closing one does not close the other's. An
+    ``HTTPAdapter`` is copied as it is (a subclass keeps what it holds, such as an ssl context) and its pools are built again by
+    its own ``init_poolmanager``; any other adapter is built from the same settings."""
+    settings_of = {
+        "pool_connections": getattr(adapter, "_pool_connections", 10),
+        "pool_maxsize": getattr(adapter, "_pool_maxsize", 10),
+        "max_retries": getattr(adapter, "max_retries", 0),
+        "pool_block": getattr(adapter, "_pool_block", False),
+    }
+    if isinstance(adapter, requests.adapters.HTTPAdapter):
+        try:
+            # Not ``copy.copy``: an HTTPAdapter's pickling state drops what a subclass holds.
+            fresh = object.__new__(type(adapter))
+            fresh.__dict__.update(adapter.__dict__)
+            fresh.proxy_manager = {}
+            fresh.init_poolmanager(settings_of["pool_connections"], settings_of["pool_maxsize"], block=settings_of["pool_block"])
+            return fresh
+        except Exception:  # an adapter class whose pools cannot be rebuilt this way
+            logger.debug("adapter copy fell back to a new adapter of the same settings", exc_info=True)
+    try:
+        return type(adapter)(**settings_of)
+    except (TypeError, ValueError):  # an adapter class with its own constructor
+        return requests.adapters.HTTPAdapter(**settings_of)
+
+
+def _copy_session(session: requests.Session, hooks: bool = True) -> requests.Session:
     """A new session with the caller's settings and adapters, whose headers can be changed freely.
 
     The copy is an instance of the caller's session class when that class can be created without arguments, and a
@@ -1097,7 +1124,7 @@ def _copy_session(session: requests.Session) -> requests.Session:
     copy.headers = session.headers.copy()
     copy.auth = session.auth
     copy.proxies = dict(session.proxies)
-    copy.hooks = {name: list(hooks) for name, hooks in session.hooks.items()}
+    copy.hooks = {name: list(held) if hooks else [] for name, held in session.hooks.items()}
     copy.params = session.params
     copy.stream = session.stream
     copy.verify = session.verify
@@ -1108,17 +1135,7 @@ def _copy_session(session: requests.Session) -> requests.Session:
     # Fresh adapters with the same settings: closing the exporter closes these, not the caller's connection pools.
     copy.adapters = type(session.adapters)()
     for prefix, adapter in session.adapters.items():
-        settings_of = {
-            "pool_connections": getattr(adapter, "_pool_connections", 10),
-            "pool_maxsize": getattr(adapter, "_pool_maxsize", 10),
-            "max_retries": getattr(adapter, "max_retries", 0),
-            "pool_block": getattr(adapter, "_pool_block", False),
-        }
-        try:
-            fresh = type(adapter)(**settings_of)
-        except (TypeError, ValueError):  # an adapter class with its own constructor
-            fresh = requests.adapters.HTTPAdapter(**settings_of)
-        copy.adapters[prefix] = fresh
+        copy.adapters[prefix] = _copy_adapter(adapter)
     return copy
 
 
@@ -1282,13 +1299,33 @@ _SESSION_ROUTING = ("request", "send", "prepare_request", "get_adapter", "merge_
 _ADAPTER_ROUTING = ("send", "get_connection", "get_connection_with_tls_context", "proxy_manager_for", "init_poolmanager")
 
 
-def _routing_is_stock(owner: Any, stock: Any, names: tuple[str, ...]) -> bool:
-    """True when ``owner``'s class overrides none of the routing methods of ``stock`` that ``owner`` is a kind of, and no
-    instance attribute of ``owner`` replaces one of them (a patched ``send`` on the object itself is not the library's)."""
+def _pinned(owner: Any, names: tuple[str, ...]) -> dict[str, Any]:
+    return {name: getattr(owner, name, None) for name in names}
+
+
+# The routing functions of ``requests`` as they were when this package was imported. A class patched afterwards (a test double, an
+# instrumentation) differs from these, and one patched before shows a function that does not belong to ``requests``.
+_PINNED_SESSION = _pinned(requests.Session, _SESSION_ROUTING)
+_PINNED_ADAPTER = _pinned(requests.adapters.HTTPAdapter, _ADAPTER_ROUTING)
+
+
+def _is_requests_function(function: Any) -> bool:
+    return getattr(function, "__module__", "").startswith("requests.")
+
+
+def _routing_is_stock(owner: Any, pinned: Mapping[str, Any], names: tuple[str, ...], allowed: Mapping[str, Any] | None = None) -> bool:
+    """True when ``owner``'s class keeps the routing functions ``requests`` had when this package was imported, and no instance
+    attribute of ``owner`` replaces one of them (a patched ``send`` on the object itself is not the library's). ``allowed`` names
+    instance attributes this package set itself, by identity."""
     instance = getattr(owner, "__dict__", None)
-    if not isinstance(instance, dict) or any(name in instance for name in names):
+    allowed = allowed or {}
+    if not isinstance(instance, dict) or any(name in instance and instance[name] is not allowed.get(name) for name in names):
         return False
-    return all(getattr(type(owner), name, None) is getattr(stock, name, None) for name in names)
+    for name in names:
+        function = getattr(type(owner), name, None)
+        if function is not pinned.get(name) or (function is not None and not _is_requests_function(function)):
+            return False
+    return True
 
 
 def _auth_is_stock(auth: Any) -> bool:
@@ -1303,17 +1340,21 @@ def _auth_is_stock(auth: Any) -> bool:
     return type(auth) in (requests_auth.HTTPBasicAuth, requests_auth.HTTPProxyAuth, requests_auth.HTTPDigestAuth)
 
 
-def _session_is_stock(session: Any) -> bool:
-    """True when ``session`` and its adapters keep the routing methods of ``requests``, so its proxies can be read."""
+def _session_is_stock(session: Any, allowed: Mapping[str, Any] | None = None) -> bool:
+    """True when ``session`` and its adapters keep the routing functions of ``requests`` and the session has no hook, so its proxies
+    can be read and nothing runs on a request or a response besides ``requests``."""
     from requests.adapters import HTTPAdapter
 
-    if not isinstance(session, requests.Session) or not _routing_is_stock(session, requests.Session, _SESSION_ROUTING):
+    if not isinstance(session, requests.Session) or not _routing_is_stock(session, _PINNED_SESSION, _SESSION_ROUTING, allowed):
         return False
     if not _auth_is_stock(getattr(session, "auth", None)):
         return False
+    hooks = getattr(session, "hooks", None)
+    if not isinstance(hooks, dict) or any(hooks.values()):
+        return False
     adapters = getattr(session, "adapters", None)
     return hasattr(adapters, "values") and all(
-        isinstance(adapter, HTTPAdapter) and _routing_is_stock(adapter, HTTPAdapter, _ADAPTER_ROUTING) for adapter in adapters.values()
+        isinstance(adapter, HTTPAdapter) and _routing_is_stock(adapter, _PINNED_ADAPTER, _ADAPTER_ROUTING) for adapter in adapters.values()
     )
 
 
@@ -1342,12 +1383,6 @@ def _client_may_proxy(session: Any, host: str, port: int) -> bool:
         return bool((proxies.get("http") or proxies.get("all")) and not urllib.request.proxy_bypass_environment(f"{host}:{port}"))
     except Exception:  # an environment that cannot be read counts as proxied
         return True
-
-
-def _session_may_leave_its_route(session: Any, host: str, port: int) -> bool:
-    """The judgement of ``_client_may_proxy``, taken again at send time for a session the caller passed: the session and the
-    environment are read as they are when the export runs, so a change made after the exporter was built is judged too."""
-    return _client_may_proxy(session, host, port)
 
 
 def _authorize_plain_text(host: str, port: int, allow: bool = False, session: Any = None, grpc: bool = False) -> None:
@@ -1395,8 +1430,8 @@ _DECODE_LIMIT = 8
 
 
 def _environment_names_a_key_header_by_an_encoded_delimiter() -> bool:
-    """True when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS``, read after URL decoding (once, twice
-    up to eight times), has an entry whose name is a Future AGI key header. That covers a name joined to its value by an encoded
+    """True when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS``, read as written and after URL decoding (up to eight
+    times), has an entry whose name is a Future AGI key header. That covers a name joined to its value by an encoded
     ``=`` (``x-api-key%3D...``) and a pair carried inside another header's value (``a=b%2Cx-api-key%3D...``), which a consumer
     that decodes the text again reads as a key header."""
     from urllib.parse import unquote
@@ -1407,9 +1442,11 @@ def _environment_names_a_key_header_by_an_encoded_delimiter() -> bool:
         for _ in range(_DECODE_LIMIT + 1):
             if not text:
                 break
-            for entry in text.replace(";", ",").split(","):
-                if _folds_to_key_header(entry.split("=", 1)[0]):
-                    return True
+            # A consumer that reads ``+`` as a space (form decoding) sees the same entries with the blanks around the name dropped.
+            for view in (text, text.replace("+", " ")):
+                for entry in view.replace(";", ",").split(","):
+                    if _folds_to_key_header(entry.split("=", 1)[0]):
+                        return True
             decoded = unquote(text)
             if decoded == text:
                 break
@@ -1437,8 +1474,8 @@ class _RedirectRefused(requests.exceptions.RequestException):
     """A request that carries Future AGI keys was answered with a redirect, which is not followed."""
 
 
-def _refuse_redirects(session: requests.Session) -> None:
-    """Make ``session`` answer a redirect with ``_RedirectRefused`` instead of following it."""
+def _refuse_redirects(session: requests.Session) -> Any:
+    """Make ``session`` answer a redirect with ``_RedirectRefused`` instead of following it. Returns the function that does so."""
     request = session.request
 
     def guarded(method: Any, url: Any, **kwargs: Any) -> Any:
@@ -1451,6 +1488,7 @@ def _refuse_redirects(session: requests.Session) -> None:
         return response
 
     session.request = guarded  # type: ignore[method-assign]
+    return guarded
 
 
 def _without_proxies(session: requests.Session) -> None:
@@ -1467,28 +1505,63 @@ def _requests_session_of(exporter: Any) -> Any:
     return session if isinstance(session, requests.Session) else None
 
 
-def _secure_http_transport(exporter: Any, plain: bool, caller_session: Any) -> None:
-    """Set up the transport of an HTTP exporter that sends Future AGI keys: no redirects, and no proxies on a plain channel.
+def _isolated_session(session: requests.Session) -> requests.Session:
+    """The session a plain channel that carries Future AGI keys sends with: a copy of ``session`` with its own adapters (settings
+    and TLS configuration kept), no proxies, no environment, and no hooks."""
+    isolated = _copy_session(session, hooks=False)
+    _without_proxies(isolated)
+    return isolated
 
-    A session the caller passed is left as built (its proxies were checked by ``_authorize_plain_text``); on 1.29 the
-    exporter holds a copy of it, which is set up like a session of this package's own.
+
+def _sender_is_sound(sender: Any, guard: Any = None) -> bool:
+    """True when the session that sends a plain request that carries keys is still what ``_isolated_session`` made: it keeps the
+    routing functions of ``requests`` (``guard`` is the only function this package set on it), has no proxy, reads no environment
+    and runs no hook."""
+    allowed = {"request": guard} if guard is not None else None
+    return _session_is_stock(sender, allowed) and sender.trust_env is False and not sender.proxies
+
+
+def _install_session(exporter: Any, session: requests.Session) -> None:
+    """Make an HTTP exporter send with ``session``: ``_session`` where the release has one (1.29), else the transport's."""
+    if getattr(exporter, "_session", None) is not None:
+        exporter._session = session
+    else:
+        exporter._client._transport._session = session
+
+
+def _secure_http_transport(exporter: Any, plain: bool, caller_session: Any) -> None:
+    """Set up the transport of an HTTP exporter that sends Future AGI keys: no redirects, and on a plain channel an isolated copy.
+
+    On a plain channel the exporter sends with ``_isolated_session`` of the session it holds (the caller's, or the one the
+    OpenTelemetry release built): what the caller does to their own session afterwards cannot reach the copy. The copy is judged
+    again on every export (see ``HTTPSpanExporter.export``). On a channel with TLS a session the caller passed is left as built; on
+    1.29 the exporter holds a copy of it, which is set up like a session of this package's own.
     """
     session = _requests_session_of(exporter)
     if session is None:
         if plain:
             raise _unsupported_exporter(exporter, "opentelemetry-exporter-otlp-proto-http")
         return
-    if session is caller_session:
-        return
     if plain:
         if not _session_is_stock(session):
-            # A session this package did not build (for example one the OpenTelemetry release loads itself) that cannot be inspected.
+            # A session that cannot be inspected: a hook, a routing function replaced on a class or an object, or an auth that
+            # rewrites the request (for example one the OpenTelemetry release loads itself).
             raise UnsupportedFutureAGIEndpointError(
-                "The requests session the exporter sends with cannot be inspected, so Future AGI keys are not sent over a plain "
-                "channel with it. Use https, or do not use a session loader.",
+                "The requests session the exporter sends with cannot be inspected (it has a hook, or a routing function of requests "
+                "is replaced), so Future AGI keys are not sent over a plain channel with it. Use https, or do not pass such a "
+                "session.",
                 "proxied",
             )
-        _without_proxies(session)
+        isolated = _isolated_session(session)
+        guard = _refuse_redirects(isolated)
+        _install_session(exporter, isolated)
+        if session is not caller_session:
+            with contextlib.suppress(Exception):
+                session.close()
+        exporter._fi_sender = (isolated, guard)
+        return
+    if session is caller_session:
+        return
     _refuse_redirects(session)
 
 
@@ -1657,9 +1730,10 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         allow_insecure_http (bool): Allow Future AGI keys over plain http to a self-hosted host other than
             loopback, like ``FI_ALLOW_INSECURE_HTTP=1``. It does not apply to a Future AGI host. A plain
             channel with a session this exporter builds reads no proxy; a session you pass that may use a proxy,
-            or cannot be inspected, raises ``UnsupportedFutureAGIEndpointError`` (code ``proxied``). The session is judged
-            again on every export: a change made after the exporter was built (proxies, an environment proxy, a mounted
-            adapter, a replaced routing method, an ``auth`` hook) makes that export send nothing and return a failure.
+            or cannot be inspected (a hook, a routing function of ``requests`` replaced on a class or the session), raises
+            ``UnsupportedFutureAGIEndpointError`` (code ``proxied``). The exporter then sends with an isolated copy of it, made
+            when the exporter is built: changes the caller makes to their own session afterwards do not reach the copy. The copy
+            is judged on every export: a change to it makes that export send nothing and return a failure.
     """
 
     def __init__(self, *args: Any, allow_insecure_http: bool = False, **kwargs: Any):
@@ -1693,24 +1767,20 @@ class HTTPSpanExporter(_HTTPSpanExporter):
                 origin = _http_origin(getattr(self, "_endpoint", None))
                 plain = bool(origin and origin[0] == "http")
                 _secure_http_transport(self, plain, bound_args.arguments.get("session"))
-                caller_session = bound_args.arguments.get("session")
-                if plain and origin is not None and caller_session is not None:
-                    # The caller keeps its session and may change it, or the environment, after this point: every export
-                    # judges it again (see ``export``).
-                    self._fi_session_watch = (caller_session, _written_host(getattr(self, "_endpoint", None)) or origin[1], origin[2])
         except (UnsupportedFutureAGIEndpointError, UnsupportedOTLPExporterError):
             _close_after_refusal(self, _HTTPSpanExporter)
             raise
 
     def export(self, spans: Any, *args: Any, **kwargs: Any) -> Any:
-        """Export ``spans``. On a plain channel that carries Future AGI keys with a session the caller passed, the session is
-        judged again first, as it is when the export runs: one that may send through a proxy, or whose routing cannot be
-        inspected, sends nothing and the export fails with ``UnsupportedFutureAGIEndpointError`` code ``proxied`` logged."""
-        watch = self.__dict__.get("_fi_session_watch")
-        if watch is not None and _session_may_leave_its_route(*watch):
+        """Export ``spans``. On a plain channel that carries Future AGI keys, the session that sends is judged first, as it is when
+        the export runs: it must still be the isolated copy this exporter installed, with no proxy, no environment, no hook and the
+        routing functions of ``requests``. Otherwise nothing is sent and the export fails with ``UnsupportedFutureAGIEndpointError``
+        code ``proxied`` logged."""
+        held = self.__dict__.get("_fi_sender")
+        if held is not None and (_requests_session_of(self) is not held[0] or not _sender_is_sound(*held)):
             logger.error(
-                "Future AGI keys are not sent over a plain channel with the requests session passed to the exporter: it may "
-                "send through a proxy, or cannot be inspected (code proxied). Use https, or do not pass a session."
+                "Future AGI keys are not sent over a plain channel with a session that may send through a proxy, runs a hook or "
+                "cannot be inspected (code proxied): the session this exporter sends with was changed after it was built."
             )
             from opentelemetry.sdk.trace.export import SpanExportResult
 
