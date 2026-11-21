@@ -1086,16 +1086,82 @@ def _unsupported_exporter(exporter: Any, package: str) -> UnsupportedOTLPExporte
     )
 
 
-def _copy_adapter(adapter: Any) -> Any:
-    """A new adapter with the settings of ``adapter`` and pools of its own, so closing one does not close the other's. An
-    ``HTTPAdapter`` is copied as it is (a subclass keeps what it holds, such as an ssl context) and its pools are built again by
-    its own ``init_poolmanager``; any other adapter is built from the same settings."""
+_RETRY_FIELDS = (
+    "total", "connect", "read", "redirect", "status", "other", "allowed_methods", "status_forcelist", "backoff_factor",
+    "backoff_max", "backoff_jitter", "raise_on_redirect", "raise_on_status", "respect_retry_after_header",
+    "remove_headers_on_redirect",
+)
+
+
+def _unreadable_adapter() -> UnsupportedFutureAGIEndpointError:
+    return UnsupportedFutureAGIEndpointError(
+        "The requests session the exporter sends with cannot be inspected (an adapter holds a retry setting that is not a number, a "
+        "flag or a list of plain values), so Future AGI keys are not sent over a plain channel with it. Use https, or mount "
+        "requests.adapters.HTTPAdapter with max_retries set to a number or to urllib3.util.Retry.",
+        "proxied",
+    )
+
+
+def _plain_retry_value(name: str, value: Any) -> Any:
+    """The value of one ``Retry`` field as a plain value, or raise ``proxied``: numbers, flags and ``None`` as they are, and the
+    method, status and header collections as a frozenset of plain values."""
+    if name in ("allowed_methods", "status_forcelist", "remove_headers_on_redirect"):
+        if value is None or value is False:
+            return value
+        if isinstance(value, (set, frozenset, list, tuple)):
+            items = list(value)
+            kind = int if name == "status_forcelist" else str
+            if all(type(item) is kind for item in items):
+                return frozenset(items)
+        raise _unreadable_adapter()
+    if value is None or type(value) in (bool, int, float):
+        return value
+    raise _unreadable_adapter()
+
+
+def _plain_retries(retries: Any) -> Any:
+    """``max_retries`` of an adapter as an ``int``, or as exactly ``urllib3.util.Retry`` with the values the caller's has (a
+    ``Retry`` subclass is rebuilt as a plain ``Retry``: nothing it overrides runs on the send path). Anything else raises ``proxied``."""
+    import inspect
+
+    from urllib3.util import Retry
+
+    if type(retries) is int:
+        return retries
+    held = getattr(retries, "__dict__", None)
+    if not isinstance(retries, Retry) or not isinstance(held, dict):
+        raise _unreadable_adapter()
+    accepted = inspect.signature(Retry.__init__).parameters
+    settings = {name: _plain_retry_value(name, held[name]) for name in _RETRY_FIELDS if name in held and name in accepted}
+    return Retry(**settings)
+
+
+def _plain_size(value: Any, default: int) -> int:
+    return value if type(value) is int and value > 0 else default
+
+
+def _copy_adapter(adapter: Any, plain: bool = False) -> Any:
+    """A new adapter with the settings of ``adapter`` and pools of its own, so closing one does not close the other's.
+
+    With ``plain`` the copy is a new ``requests.adapters.HTTPAdapter`` made from plain settings only: the pool sizes and blocking,
+    and ``max_retries`` as an ``int`` or exactly ``urllib3.util.Retry`` (see ``_plain_retries``). Nothing the caller's adapter holds
+    on the instance, and no subclass of ``Retry``, reaches it.
+
+    Otherwise an ``HTTPAdapter`` is copied as it is (a subclass keeps what it holds, such as an ssl context) and its pools are built
+    again by its own ``init_poolmanager``; any other adapter is built from the same settings."""
     settings_of = {
         "pool_connections": getattr(adapter, "_pool_connections", 10),
         "pool_maxsize": getattr(adapter, "_pool_maxsize", 10),
         "max_retries": getattr(adapter, "max_retries", 0),
         "pool_block": getattr(adapter, "_pool_block", False),
     }
+    if plain:
+        return requests.adapters.HTTPAdapter(
+            pool_connections=_plain_size(settings_of["pool_connections"], 10),
+            pool_maxsize=_plain_size(settings_of["pool_maxsize"], 10),
+            max_retries=_plain_retries(settings_of["max_retries"]),
+            pool_block=settings_of["pool_block"] is True,
+        )
     if isinstance(adapter, requests.adapters.HTTPAdapter):
         try:
             # Not ``copy.copy``: an HTTPAdapter's pickling state drops what a subclass holds.
@@ -1110,6 +1176,20 @@ def _copy_adapter(adapter: Any) -> Any:
         return type(adapter)(**settings_of)
     except (TypeError, ValueError):  # an adapter class with its own constructor
         return requests.adapters.HTTPAdapter(**settings_of)
+
+
+def _copy_cookies(jar: Any) -> Any:
+    """A copy of a session's cookie jar: a ``RequestsCookieJar`` copies itself, any other jar (the standard library's
+    ``http.cookiejar.CookieJar``) is read cookie by cookie into a ``RequestsCookieJar``."""
+    import copy as copy_module
+
+    try:
+        return jar.copy()
+    except AttributeError:
+        fresh = requests.cookies.RequestsCookieJar()
+        for cookie in jar:
+            fresh.set_cookie(copy_module.copy(cookie))
+        return fresh
 
 
 def _copy_session(session: requests.Session, hooks: bool = True, plain: bool = False) -> requests.Session:
@@ -1136,11 +1216,11 @@ def _copy_session(session: requests.Session, hooks: bool = True, plain: bool = F
     copy.cert = session.cert
     copy.max_redirects = session.max_redirects
     copy.trust_env = session.trust_env
-    copy.cookies = session.cookies.copy()
+    copy.cookies = _copy_cookies(session.cookies)
     # Fresh adapters with the same settings: closing the exporter closes these, not the caller's connection pools.
     copy.adapters = type(session.adapters)()
     for prefix, adapter in session.adapters.items():
-        copy.adapters[prefix] = _copy_adapter(adapter)
+        copy.adapters[prefix] = _copy_adapter(adapter, plain)
     return copy
 
 
@@ -1334,13 +1414,13 @@ def _routing_is_stock(owner: Any, pinned: Mapping[str, Any], names: tuple[str, .
 
 
 def _auth_is_stock(auth: Any) -> bool:
-    """True when a session's ``auth`` is unset, a ``(user, password)`` pair or one of the authentication handlers of
+    """True when a session's ``auth`` is unset, a ``(user, password)`` tuple or one of the authentication handlers of
     ``requests``. Any other callable can rewrite the request, URL included, so it cannot be inspected."""
     from requests import auth as requests_auth
 
     if auth is None:
         return True
-    if isinstance(auth, (tuple, list)):
+    if type(auth) is tuple:
         return len(auth) == 2
     return type(auth) in (requests_auth.HTTPBasicAuth, requests_auth.HTTPProxyAuth, requests_auth.HTTPDigestAuth)
 
@@ -1484,11 +1564,19 @@ class _RedirectRefused(requests.exceptions.RequestException):
     """A request that carries Future AGI keys was answered with a redirect, which is not followed."""
 
 
-def _refuse_redirects(session: requests.Session) -> Any:
-    """Make ``session`` answer a redirect with ``_RedirectRefused`` instead of following it. Returns the function that does so."""
+class _SenderRefused(requests.exceptions.RequestException):
+    """The session that sends a request that carries Future AGI keys was changed after it was built."""
+
+
+def _refuse_redirects(session: requests.Session, recheck: Any = None) -> Any:
+    """Make ``session`` answer a redirect with ``_RedirectRefused`` instead of following it. Returns the function that does so.
+
+    ``recheck`` is called immediately before each send; when it returns false nothing is sent and ``_SenderRefused`` is raised."""
     request = session.request
 
     def guarded(method: Any, url: Any, **kwargs: Any) -> Any:
+        if recheck is not None and not recheck():
+            raise _SenderRefused("The session that sends a request that carries Future AGI keys was changed after it was built.")
         kwargs["allow_redirects"] = False
         response = request(method, url, **kwargs)
         status = getattr(response, "status_code", None)
@@ -1539,6 +1627,19 @@ def _sender_is_sound(sender: Any, guard: Any = None) -> bool:
         and sender.trust_env is False
         and type(proxies) is dict
         and dict.__len__(proxies) == 0
+        and all(_adapter_holds_no_proxy(adapter) for adapter in dict.values(sender.adapters))
+    )
+
+
+def _adapter_holds_no_proxy(adapter: Any) -> bool:
+    """True when a mounted adapter's pool manager is exactly ``urllib3.PoolManager`` and it holds no proxy manager."""
+    import urllib3
+
+    proxy_managers = getattr(adapter, "proxy_manager", None)
+    return (
+        type(getattr(adapter, "poolmanager", None)) is urllib3.PoolManager
+        and type(proxy_managers) is dict
+        and dict.__len__(proxy_managers) == 0
     )
 
 
@@ -1574,7 +1675,7 @@ def _secure_http_transport(exporter: Any, plain: bool, caller_session: Any) -> N
                 "proxied",
             )
         isolated = _isolated_session(session)
-        guard = _refuse_redirects(isolated)
+        guard = _refuse_redirects(isolated, lambda: _sender_is_sound(isolated, guard))
         _install_session(exporter, isolated)
         if session is not caller_session:
             with contextlib.suppress(Exception):
@@ -1798,15 +1899,20 @@ class HTTPSpanExporter(_HTTPSpanExporter):
         routing functions of ``requests``. Otherwise nothing is sent and the export fails with ``UnsupportedFutureAGIEndpointError``
         code ``proxied`` logged."""
         held = self.__dict__.get("_fi_sender")
+        changed = (
+            "Future AGI keys are not sent over a plain channel with a session that may send through a proxy, runs a hook or "
+            "cannot be inspected (code proxied): the session this exporter sends with was changed after it was built."
+        )
         if held is not None and (_requests_session_of(self) is not held[0] or not _sender_is_sound(*held)):
-            logger.error(
-                "Future AGI keys are not sent over a plain channel with a session that may send through a proxy, runs a hook or "
-                "cannot be inspected (code proxied): the session this exporter sends with was changed after it was built."
-            )
-            from opentelemetry.sdk.trace.export import SpanExportResult
-
+            logger.error(changed)
             return SpanExportResult.FAILURE
-        return super().export(spans, *args, **kwargs)
+        try:
+            return super().export(spans, *args, **kwargs)
+        except _SenderRefused:
+            logger.error(changed)
+        except _RedirectRefused:
+            logger.error("A request that carries Future AGI keys was answered with a redirect, which is not followed.")
+        return SpanExportResult.FAILURE
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
