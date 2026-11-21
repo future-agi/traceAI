@@ -162,4 +162,98 @@ class SpanWorkBoundTest < Minitest::Test
     assert_equal [value, PLACEHOLDER], named.map(&:last).uniq.sort_by { |item| item == PLACEHOLDER ? 1 : 0 }
     assert_operator named.length, :<=, kept.length + 1
   end
+
+  # Past the span's bound every leaf is the placeholder, numbers and booleans too, and the hide settings still apply
+  # by the attribute's own name: a name that became the placeholder cannot lose the rule that removes its value.
+  HEAVY_REGISTRY = Array.new(1024) { |i| format('registered-credential-%04d-', i) + ('k' * 180) }.freeze
+  HEAVY_VALUE = ('x' + PLACEHOLDER) * 100
+  def heavy_attributes
+    (0...200).to_h { |i| ["app.value.#{i}", HEAVY_VALUE] }
+  end
+
+  def snapshot_past_the_bound(record, settings, resource: {'service.name' => 'checkout-service'})
+    config = TraceAI::Auto::Config.new(settings, env: {})
+    TraceAI::Auto.stub(:secret_values, []) do
+      TraceAI::Auto::Privacy.snapshot(record, TraceAI::Auto::ExportResource.new(resource), config, HEAVY_REGISTRY)
+    end
+  end
+
+  def exported_text(copy)
+    # The filler values are left out so a failure message stays readable.
+    own = copy.attributes.reject { |key, _| key.start_with?('app.value.') }
+    JSON.generate(own) + JSON.generate(copy.events.map { |event| event.attributes })
+  end
+
+  def test_an_embedding_vector_past_the_bound_is_removed_when_hide_embedding_vectors_is_on
+    attributes = heavy_attributes.merge('embedding.embeddings.0.embedding.vector' => [0.123456, 0.654321, 0.111222])
+    copy = snapshot_past_the_bound(span_with(attributes), {'hide_embedding_vectors' => true})
+    assert_equal 'identity-span', copy.name
+    refute_includes exported_text(copy), '0.123456'
+    refute_includes exported_text(copy), '0.654321'
+  end
+
+  def test_an_invocation_parameter_past_the_bound_is_removed_when_hide_llm_invocation_parameters_is_on
+    attributes = heavy_attributes.merge('gen_ai.request.temperature' => 0.7351)
+    copy = snapshot_past_the_bound(span_with(attributes), {'hide_llm_invocation_parameters' => true})
+    refute_includes exported_text(copy), '0.7351'
+  end
+
+  def test_a_number_past_the_bound_is_the_placeholder
+    attributes = heavy_attributes.merge('app.count' => 424242, 'app.flag' => true, 'app.series' => [31415, 27182])
+    copy = snapshot_past_the_bound(span_with(attributes), {})
+    refute_includes exported_text(copy), '424242'
+    refute_includes exported_text(copy), '31415'
+    assert_equal PLACEHOLDER, copy.attributes[PLACEHOLDER]
+  end
+
+  def test_an_event_numeric_attribute_past_the_bound_is_the_placeholder
+    record = span_with(heavy_attributes)
+    record.events = [OpenTelemetry::SDK::Trace::Event.new('event', {'app.count' => 777777, 'embedding.embeddings.0.embedding.vector' => [0.4242, 0.2424]}, 123)]
+    copy = snapshot_past_the_bound(record, {'hide_embedding_vectors' => true})
+    assert_equal 1, copy.events.length
+    refute_includes exported_text(copy), '777777'
+    refute_includes exported_text(copy), '0.4242'
+  end
+
+  def test_a_link_numeric_attribute_past_the_bound_is_the_placeholder_and_hide_settings_apply
+    record = span_with(heavy_attributes)
+    context = OpenTelemetry::Trace::SpanContext.new
+    record.links = [OpenTelemetry::Trace::Link.new(context, {'app.count' => 888888, 'gen_ai.request.temperature' => 0.9191, 'embedding.embeddings.0.embedding.vector' => [0.5151, 0.1515]})]
+    copy = snapshot_past_the_bound(record, {'hide_embedding_vectors' => true, 'hide_llm_invocation_parameters' => true})
+    assert_equal 1, copy.links.length
+    exported = JSON.generate(copy.links.map { |link| link.attributes })
+    refute_includes exported, '888888'
+    refute_includes exported, '0.9191'
+    refute_includes exported, '0.5151'
+  end
+
+  def test_a_text_to_speech_transcript_past_the_bound_is_hidden_with_hide_inputs
+    # The operation name comes after the values that use up the bound, so it is read past it.
+    attributes = {'gen_ai.audio.transcript' => 'PRIVATE_SPOKEN_TEXT'}.merge(heavy_attributes).merge('gen_ai.operation.name' => 'text_to_speech')
+    copy = snapshot_past_the_bound(span_with(attributes), {'hide_inputs' => true})
+    refute_includes exported_text(copy), 'PRIVATE_SPOKEN_TEXT'
+  end
+
+  def test_a_speech_to_text_transcript_past_the_bound_is_hidden_with_hide_outputs
+    attributes = {'gen_ai.audio.transcript' => 'OUTPUT_SIDE_TEXT'}.merge(heavy_attributes).merge('gen_ai.operation.name' => 'speech_to_text')
+    copy = snapshot_past_the_bound(span_with(attributes), {'hide_outputs' => true})
+    refute_includes exported_text(copy), 'OUTPUT_SIDE_TEXT'
+  end
+
+  # A caller's secret that is a byte slice cutting through a multi-byte character: the valid run inside it is a secret
+  # of its own, so the text it protects is replaced although the cut bytes spell a valid character there.
+  def test_a_secret_cut_through_a_multibyte_character_still_protects_its_valid_run
+    secret = "ACCOUNT-KEY-1234\u20AC".b.byteslice(0, "ACCOUNT-KEY-1234".bytesize + 2).force_encoding(Encoding::UTF_8)
+    refute secret.valid_encoding?
+    text = "key ACCOUNT-KEY-1234\u20AC end"
+    assert_equal "key #{PLACEHOLDER}\u20AC end", P.scrub(text, [secret])
+    assert_equal "key #{PLACEHOLDER}\u20AC end", P.clean_string(text, [secret])
+    refute_includes JSON.generate(P.scrub_provider_response({'choices' => [{'index' => 0, 'message' => {'role' => 'assistant', 'content' => text}}]}, [secret])), 'ACCOUNT-KEY-1234'
+  end
+
+  def test_a_binary_tagged_secret_with_invalid_bytes_protects_its_valid_runs_in_text
+    secret = "\xFFRUN-ONE-123456\xFERUN-TWO-654321\xFF".b
+    text = "a RUN-ONE-123456 b RUN-TWO-654321 c"
+    assert_equal "a #{PLACEHOLDER} b #{PLACEHOLDER} c", P.scrub(text, [secret])
+  end
 end
