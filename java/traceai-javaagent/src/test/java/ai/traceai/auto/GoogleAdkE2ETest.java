@@ -212,6 +212,17 @@ class GoogleAdkE2ETest {
         assertFalse(everything.contains("SEED-FAILED-OUTPUT"), everything);
     }
 
+    @Test void theResultOfAFailedToolCallIsRecordedOnlyWhileErrorDetailsAreShown() throws Exception {
+        run("plain", PROMPT, Map.of(), "subscribe", "tool-error");
+        assertTrue(String.valueOf(attributes(tool()).get("gen_ai.tool.call.result")).contains("SEED-TOOL-ERROR"), "control: " + spans);
+        spans.clear();
+        run("plain", PROMPT, Map.of("FI_HIDE_ERROR_DETAILS", "true"), "subscribe", "tool-error");
+        Map<String, Object> tool = tool();
+        assertFalse(tool.toString().contains("SEED-TOOL-ERROR"), tool.toString());
+        for (String key : List.of("gen_ai.tool.call.result", "output.value", "output.mime_type")) assertFalse(attributes(tool).containsKey(key), key + " of a failed tool call is withheld: " + tool);
+        assertEquals("weather", attributes(tool).get("gen_ai.tool.name"));
+    }
+
     /** A span-less request (a thread of the application with no span) is never dropped because another context's model call is open. */
     @Test void aSpanLessRequestIsNeverDroppedByAnotherSessionsOpenModelCall() throws Exception {
         for (String mode : List.of("plain", "sdk")) {

@@ -43,6 +43,8 @@ public class AdkApp {
     static volatile boolean failingModel;
     /** The name of the function the model asks for: the plain tool, or (scenario "annotated-tool") the one that carries a TraceAI annotation. */
     static volatile String toolName = "weather";
+    /** Scenario "tool-error": the tool reports a failure in its result, and the model answers after it. */
+    static volatile boolean failingTool;
     static final java.util.concurrent.CountDownLatch ENTERED = new java.util.concurrent.CountDownLatch(1);
     static final java.util.concurrent.CountDownLatch RELEASE = new java.util.concurrent.CountDownLatch(1);
 
@@ -69,6 +71,21 @@ public class AdkApp {
     public static Map<String, Object> annotatedWeather(@Schema(name = "city") String city) throws Exception {
         post();
         return Map.of("city", city, "forecast", "SENTINEL-TOOL-RESULT");
+    }
+
+    /** The weather tool as a tool of its own that reports a failure in its result, with the seed in the message. */
+    static final class FailingTool extends com.google.adk.tools.BaseTool {
+        private final FunctionTool function = FunctionTool.create(AdkApp.class, "weather");
+        FailingTool() { super("weather", "answers with an error"); }
+
+        @Override
+        public java.util.Optional<com.google.genai.types.FunctionDeclaration> declaration() { return function.declaration(); }
+
+        @Override
+        public io.reactivex.rxjava3.core.Single<Map<String, Object>> runAsync(Map<String, Object> args, com.google.adk.tools.ToolContext context) {
+            // The shape ADK's own FunctionTool answers with when its function throws, with the seed as the message.
+            return io.reactivex.rxjava3.core.Single.just(Map.of("status", "error", "message", "SEED-TOOL-ERROR"));
+        }
     }
 
     static final class Model extends BaseLlm {
@@ -121,12 +138,13 @@ public class AdkApp {
         toolCallsModel = scenario.equals("tool-call");
         failingModel = scenario.equals("error");
         if (scenario.equals("annotated-tool")) toolName = "annotatedWeather";
+        failingTool = scenario.equals("tool-error");
         InMemorySpanExporter own = InMemorySpanExporter.create();
         if (mode.equals("sdk")) {
             OpenTelemetrySdk.builder().setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(own)).build()).buildAndRegisterGlobal();
         }
         LlmAgent agent = LlmAgent.builder().name("weather_agent").description("answers weather questions").model(new Model(send)).instruction("Be brief")
-            .tools(FunctionTool.create(AdkApp.class, toolName)).build();
+            .tools(failingTool ? new FailingTool() : FunctionTool.create(AdkApp.class, toolName)).build();
         InMemoryRunner runner = new InMemoryRunner(agent);
         var session = runner.sessionService().createSession(runner.appName(), "user-1").blockingGet();
         Thread slow = null;
