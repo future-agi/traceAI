@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 require_relative 'test_helper'
+require_relative '../lib/traceai/auto/agent'
 require_relative '../lib/traceai/auto/privacy'
+require_relative '../lib/traceai/auto/export'
 
 # The fragment matcher's work is bounded for one value (MATCH_WORK) and, together, for every value of one span: values
 # past the span's bound are replaced by the placeholder, and the scrub of the span ends in bounded time.
@@ -82,5 +84,53 @@ class SpanWorkBoundTest < Minitest::Test
   def test_the_overlap_chain_control_is_unchanged
     text = 'see AAAAAAAAAAAAXYYYYYYYYYYYY here'.sub('AAAAAAAAAAAAX', PLACEHOLDER)
     assert_equal "see #{PLACEHOLDER} here", P.clean_string(text, ['XYYYYYYYYYYYY'])
+  end
+
+  # A caller's secret with invalid bytes is read as the registry reads it: the invalid bytes become U+FFFD and the
+  # valid characters stay. The text it protects holds the same replacement characters.
+  def test_a_provider_response_secret_with_invalid_bytes_around_a_valid_run_is_replaced_not_skipped
+    broken = "\xFF\xFEVALIDRUN-1234\xFF".dup.force_encoding(Encoding::UTF_8)
+    refute broken.valid_encoding?
+    response = {'choices' => [{'index' => 0, 'message' => {'role' => 'assistant', 'content' => "hello \uFFFD\uFFFDVALIDRUN-1234\uFFFD world"}}]}
+    cleaned = P.scrub_provider_response(response, [broken])
+    assert_equal "hello #{PLACEHOLDER} world", cleaned['choices'][0]['message']['content']
+    refute_includes JSON.generate(cleaned), 'VALIDRUN-1234'
+  end
+
+  def test_the_other_scrub_entry_points_read_an_invalid_byte_secret_the_same_way
+    broken = "\xFF\xFEVALIDRUN-1234\xFF".dup.force_encoding(Encoding::UTF_8)
+    text = "hello \uFFFD\uFFFDVALIDRUN-1234\uFFFD world"
+    assert_equal "hello #{PLACEHOLDER} world", P.scrub(text, [broken])
+    assert_equal "hello #{PLACEHOLDER} world", P.clean_string(text, [broken])
+  end
+
+  # The cost of a span grows with its placeholders times the registered secrets. A full registry of long secrets and
+  # a few hundred placeholder-bearing values pass the span bound; the span keeps its identity and the values past the
+  # bound are the placeholder.
+  def span_with(attributes)
+    memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+    provider = OpenTelemetry::SDK::Trace::TracerProvider.new
+    provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory))
+    provider.tracer('app').start_span('identity-span').finish
+    record = memory.finished_spans.first
+    record.attributes = attributes
+    record.total_recorded_attributes = attributes.size
+    record
+  end
+
+  def test_a_span_that_passes_the_bound_keeps_its_name_and_resource_and_replaces_the_values_past_it
+    registry = Array.new(1024) { |i| format('registered-credential-%04d-', i) + ('k' * 180) }
+    value = ('x' + PLACEHOLDER) * 100
+    attributes = (0...200).to_h { |i| ["app.value.#{i}", value] }
+    record = span_with(attributes)
+    config = TraceAI::Auto::Config.new({}, env: {})
+    copy = TraceAI::Auto::Privacy.snapshot(record, TraceAI::Auto::ExportResource.new({'service.name' => 'checkout-service'}), config, registry)
+    assert_equal 'identity-span', copy.name
+    assert_equal 'checkout-service', copy.resource.attributes['service.name']
+    values = (0...200).map { |i| copy.attributes["app.value.#{i}"] }
+    kept = values.take_while { |item| item == value }
+    assert_operator kept.length, :>, 0
+    assert_operator kept.length, :<, 200, 'the bound is reached'
+    assert_equal [PLACEHOLDER], values.drop(kept.length).uniq
   end
 end
