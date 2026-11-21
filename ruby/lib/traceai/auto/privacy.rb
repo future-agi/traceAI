@@ -74,6 +74,7 @@ module TraceAI
         strings.flat_map { |secret| [Config.utf8(secret), *valid_runs(secret)] }.select { |secret| secret.length >= 8 }.uniq
       end
       def valid_runs(secret) = Config.valid_runs(secret)
+      def secret_list?(secrets) = [Array, NormalizedSecrets].include?(Codec.type(secrets))
       # The secrets of a span, read as above and sorted longest first, built once for the span: the copies it makes are made once,
       # and not again for each of the span's names, values, events and links.
       def normalized_secrets(secrets)
@@ -385,7 +386,7 @@ module TraceAI
                      end
         begin
           known = Auto.secret_values
-          known += secrets if Codec.type(secrets) == Array
+          known += secrets if secret_list?(secrets)
           known = normalize_secrets(known).uniq.sort_by { |secret| [-secret.length, secret] }
         rescue StandardError
           known = nil
@@ -560,7 +561,7 @@ module TraceAI
       # The name and the resource each scrub with a Budget of their own, apart from the snapshot's (see MATCH_SPAN_WORK).
       def recover_identity(copy, record, resource, config, secrets)
         known = Auto.secret_values
-        known = (known + secrets).uniq if Codec.type(secrets) == Array
+        known = (known + secrets).uniq if secret_list?(secrets)
         begin
           copy.name = scrub(safe_string(field(record, :name)), known)
         rescue StandardError
