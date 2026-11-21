@@ -239,4 +239,27 @@ class CapturedValueTest {
         for (String leaked : List.of("user", "pw-synthetic", "abc-synthetic", "frag-synthetic", "x=1")) assertFalse(captured.contains(leaked), leaked + " in " + captured);
         assertTrue(captured.contains("example.com") && captured.contains("/path/x") && captured.contains("token"), captured);
     }
+
+    /** A huge string is read once, in time that does not grow with its length, and what is exported is bounded. */
+    @Test void hugeStringsAreReadOnceInBoundedTime() {
+        String secret = "H".repeat(4096);
+        KnownSecrets.PROCESS.register(secret);
+        Map<String, String> inputs = new LinkedHashMap<>();
+        inputs.put("pairs", ("password=x(" + "filler ".repeat(3)).repeat(5_000_000 / 32));
+        inputs.put("dashed name run", "a-".repeat(2_500_000));
+        inputs.put("shrinking secrets", (secret + " ").repeat(1200));
+        inputs.put("separators", ", ".repeat(2_500_000));
+        inputs.forEach((label, value) -> {
+            String captured = assertTimeoutPreemptively(java.time.Duration.ofSeconds(1), () -> text(value), label + " took longer than a second");
+            assertTrue(captured.length() <= 70_000, label + ": " + captured.length());
+        });
+    }
+
+    @Test void aSingleEqualsPaddingNeverStartsAPairInsideACredentialValue() {
+        String basic = java.util.Base64.getEncoder().encodeToString("user:SYNTHB64PASS".getBytes());
+        for (String text : List.of("authorization=Basic " + basic + ", id=5", "Authorization: Basic " + basic + ")", "authorization=Negotiate " + basic + ",", "authorization=Basic " + basic + "; id=5", "authorization=Basic " + basic + "\", id=5")) {
+            String captured = text(text);
+            assertFalse(captured.contains(basic.substring(0, 12)), captured);
+        }
+    }
 }

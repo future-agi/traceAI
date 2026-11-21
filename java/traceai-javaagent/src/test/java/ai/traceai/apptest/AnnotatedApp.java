@@ -75,6 +75,12 @@ public final class AnnotatedApp {
                 }
                 System.out.println("RESULT=" + count);
             }
+            case "name_vocabulary" -> {
+                service.unlock("SYNTHPASSPHRASE");
+                service.mapCall(new java.util.LinkedHashMap<>(Map.of("pwd", "SYNTHMAPPWD", "pass", "SYNTHMAPPASS", "passphrase", "SYNTHMAPPHRASE", "note", "keep-note")));
+                service.echo("{\"pwd\":\"SYNTHJSONPWD\",\"pass\":\"SYNTHJSONPASS\",\"passphrase\":\"SYNTHJSONPHRASE\",\"note\":\"keep-json\"}");
+                System.out.println("RESULT=ok");
+            }
             case "record_credentials" -> System.out.println("RESULT=" + service.signIn(new Service.Login("bob", "SYNTHPW1", "SYNTHPW2", "SYNTHPW3", "SYNTHPW4", "SYNTHPW5", "keep-me")));
             case "publisher_object" -> {
                 Object returned = service.asObject(); Object same = Service.PUBLISHED;
@@ -179,6 +185,11 @@ public final class AnnotatedApp {
         /** Returns what it is given: the text is exported as an input and as an output. */
         @Chain(name = "echo")
         public String echo(String text) { return text; }
+
+        @Tool(name = "unlock")
+        public String unlock(String passphrase) { return "ok"; }
+        @Chain(name = "map_call")
+        public String mapCall(Map<String, String> values) { return "ok"; }
 
         public record Login(String user, String password, String pwd, String pass, String passphrase, String apiToken, String note) { }
         @Chain(name = "sign_in")
@@ -286,7 +297,16 @@ public final class AnnotatedApp {
             "java -Ddb.password=SYNTHDOTD -jar app.jar",
             "pwd=SYNTHPWD id=10",
             "passphrase=SYNTHPHRASE id=11",
-            "pass=SYNTHPASS id=12");
+            "pass=SYNTHPASS id=12",
+            "authorization=Basic " + basic + ", id=5",
+            "Authorization: Basic " + basic + ")",
+            "authorization=Negotiate " + basic + ", id=6",
+            "Cookie: PHPSESSID=SYNTHCOOKIE1; connect.sid=SYNTHCOOKIE2; theme=SYNTHCOOKIE3",
+            "Authorization: Digest username=\"SYNTHDUSER\", response=\"SYNTHDRESP\", nonce=\"SYNTHDNONCE\"",
+            "run --password SYNTHSPACE now",
+            "user[password]=SYNTHBRACKET&x=1",
+            "connect postgres://dbuser:SYNTHURIPW@db.internal:5432/app now",
+            "queue amqp://guest:SYNTHAMQP@broker/vhost");
     }
 
     /** Application objects whose declared toString() carries a credential in a shape a naive reader would cut short. */

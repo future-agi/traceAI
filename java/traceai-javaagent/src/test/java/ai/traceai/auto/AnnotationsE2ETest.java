@@ -326,11 +326,11 @@ class AnnotationsE2ETest {
     /** Credentials in plain String arguments and returns, asserted on what the collector received. */
     @Test void credentialsInPlainStringsNeverReachTheExporterWhateverTheirShape() throws Exception {
         String log = run("agent", "credential_strings", Map.of());
-        assertTrue(log.contains("RESULT=10"), log);
+        assertTrue(log.contains("RESULT=19"), log);
         String bytes = exported();
         assertFalse(spans.isEmpty());
         String basic = java.util.Base64.getEncoder().encodeToString("user:SYNTHB64PASS".getBytes());
-        for (String marker : List.of(basic, basic.substring(0, 12), "SYNTHPAREN", "TAILPAREN", "SYNTHBRACK", "TAILBRACK", "SYNTHQUOTE", "TAILQUOTE", "SYNTHDASH", "SYNTHDOTD", "SYNTHPWD", "SYNTHPHRASE", "SYNTHPASS"))
+        for (String marker : List.of(basic, basic.substring(0, 12), "SYNTHPAREN", "TAILPAREN", "SYNTHBRACK", "TAILBRACK", "SYNTHQUOTE", "TAILQUOTE", "SYNTHDASH", "SYNTHDOTD", "SYNTHPWD", "SYNTHPHRASE", "SYNTHPASS", "SYNTHCOOKIE", "SYNTHDUSER", "SYNTHDRESP", "SYNTHDNONCE", "SYNTHSPACE", "SYNTHBRACKET", "SYNTHURIPW", "SYNTHAMQP"))
             assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
         assertTrue(bytes.contains("id=7") || bytes.contains("run ") , "the surrounding text is kept where it is not part of a value: " + bytes);
     }
@@ -346,6 +346,16 @@ class AnnotationsE2ETest {
             for (String marker : List.of("eyJ", "sk-S", "sk-", "SYNTHKEY", "SYNTHSIG"))
                 assertFalse(bytes.contains(marker), marker + " reached the exporter in " + attrs(span).get("input.value"));
         }
+    }
+
+    /** The credential vocabulary is one rule for parameter names, Map keys and JSON fields. */
+    @Test void parameterNamesMapKeysAndJsonFieldsShareTheCredentialVocabulary() throws Exception {
+        String log = run("agent", "name_vocabulary", Map.of());
+        assertTrue(log.contains("RESULT=ok"), log);
+        String bytes = exported();
+        for (String marker : List.of("SYNTHPASSPHRASE", "SYNTHMAPPWD", "SYNTHMAPPASS", "SYNTHMAPPHRASE", "SYNTHJSONPWD", "SYNTHJSONPASS", "SYNTHJSONPHRASE"))
+            assertFalse(bytes.contains(marker), marker + " reached the exporter: " + bytes);
+        assertTrue(bytes.contains("keep-note") && bytes.contains("keep-json"), "ordinary values stay: " + bytes);
     }
 
     @Test void aRecordComponentWithACredentialNameIsRedactedByName() throws Exception {
