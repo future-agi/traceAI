@@ -212,4 +212,23 @@ public class KeyTransportSendTests : IDisposable
         Assert.Equal(1, first.Count);
         Assert.Equal(0, target.Count);
     }
+
+    [Theory]
+    [InlineData("OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=ambient-key-synthetic-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "X-Secret-Key=ambient-secret-synthetic-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_HEADERS", "x%2Dapi%2Dkey=ambient-key-synthetic-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "a=b%2Cx-secret-key%3Dv")]
+    [InlineData("OTEL_EXPORTER_OTLP_HEADERS", "x-trace=synthetic-fi-secret-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-trace%3Dsynthetic%2Dfi%2Dkey%2D0001")]
+    public void RegisterRefusesAmbientHeadersThatCarryAFutureAgiKeyBeforeAnyRequest(string variable, string headers)
+    {
+        using var sink = new Sink();
+        Environment.SetEnvironmentVariable(variable, headers);
+        Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => RegisterAndSend($"http://127.0.0.1:{sink.Port}")).Code);
+        Assert.Equal(0, sink.Count);
+        TraceAI.Shutdown();
+        Environment.SetEnvironmentVariable(variable, "authorization=Bearer%20other-backend-token");
+        RegisterAndSend($"http://127.0.0.1:{sink.Port}");
+        Assert.Equal(1, sink.Count);
+    }
 }

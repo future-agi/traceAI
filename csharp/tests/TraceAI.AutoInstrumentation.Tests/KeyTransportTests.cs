@@ -246,6 +246,9 @@ public class KeyTransportAutoTests : InitIsolation
         {
             var options = Agent.FiRouteOptions(Config(baseUrl, allow: optIn ? true : null));
             using var client = options.HttpClientFactory();
+            // The handler behind the client: no proxy for a plaintext request that carries keys, and no redirect.
+            var handler = Assert.IsType<SocketsHttpHandler>(typeof(HttpMessageInvoker).GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
+            Assert.False(handler.UseProxy); Assert.False(handler.AllowAutoRedirect);
             Assert.Equal(2000, options.TimeoutMilliseconds);
             Assert.Equal(TimeSpan.FromMilliseconds(2000), client.Timeout);
         }
@@ -340,6 +343,89 @@ public class KeyTransportAutoTests : InitIsolation
             var text = errors.ToString();
             Assert.Contains("FI_ALLOW_INSECURE_HTTP", text);
             Assert.DoesNotContain("synthetic", text); Assert.DoesNotContain("collector.example", text);
+        }
+        finally { Restore(); }
+    }
+
+    /// <summary>A raw loopback HTTP listener on one address family (HttpListener cannot take an IPv6 prefix): it counts requests and answers 200.</summary>
+    private sealed class V6Sink : IDisposable
+    {
+        private readonly TcpListener _tcp;
+        public readonly int Port; public int Count;
+        public V6Sink(string host)
+        {
+            _tcp = new TcpListener(host.Contains(':') ? IPAddress.IPv6Loopback : IPAddress.Loopback, 0); _tcp.Start(); Port = ((IPEndPoint)_tcp.LocalEndpoint).Port;
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    TcpClient client;
+                    try { client = await _tcp.AcceptTcpClientAsync(); } catch { return; }
+                    try
+                    {
+                        var stream = client.GetStream(); var buffer = new byte[4096]; var n = await stream.ReadAsync(buffer);
+                        if (n > 0) Interlocked.Increment(ref Count);
+                        await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+                    }
+                    catch { }
+                    client.Dispose();
+                }
+            });
+        }
+        public void Dispose() => _tcp.Stop();
+    }
+
+    [Theory]
+    [InlineData("localhost", false)]
+    [InlineData("localhost", true)]
+    [InlineData("::1", false)]
+    [InlineData("::1", true)]
+    public void AnAgentRouteToALoopbackNameNeverGoesThroughAConfiguredProxy(string host, bool compatibility)
+    {
+        try
+        {
+            if (host == "::1" && !Socket.OSSupportsIPv6) return;
+            using var proxy = new Listener();
+            using var target = new V6Sink(host == "localhost" ? "127.0.0.1" : host);
+            HttpClient.DefaultProxy = new WebProxy($"http://127.0.0.1:{proxy.Port}", BypassOnLocal: false);
+            Send(Config($"http://{(host.Contains(':') ? "[" + host + "]" : host)}:{target.Port}"), compatibility);
+            Assert.Equal(0, proxy.Connections);
+            Assert.True(target.Count >= 1, "the request reached the target directly");
+        }
+        finally { Restore(); }
+    }
+
+    [Theory]
+    [InlineData("OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=ambient-key-synthetic-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "X-Secret-Key=ambient-secret-synthetic-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_HEADERS", "x%2Dapi%2Dkey=ambient-key-synthetic-0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-trace%3Dsynthetic%2Dfi%2Dkey%2D0001")]
+    [InlineData("OTEL_EXPORTER_OTLP_HEADERS", "x-trace=synthetic-fi-secret-0001")]
+    public void TheAgentsOwnFutureAgiRouteIsRefusedWhenTheAmbientHeadersCarryAKey(string variable, string headers)
+    {
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, headers);
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => Agent.FiRouteOptions(Config("https://collector.example:4318"))).Code);
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => new Agent(Config(null))).Code);
+            Environment.SetEnvironmentVariable(variable, "authorization=Bearer%20other-backend-token");
+            using var agent = new Agent(Config(null));
+        }
+        finally { Restore(); }
+    }
+
+    [Fact]
+    public void ARegisteredSecretInTheAmbientHeadersRefusesTheAgentsOwnRouteAndInitContinuesWithoutTracing()
+    {
+        try
+        {
+            TraceAIAuto.RegisterSecret("registered-secret-synthetic-0004");
+            Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "x-trace=registered-secret-synthetic-0004");
+            Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => Agent.FiRouteOptions(Config("https://collector.example:4318"))).Code);
+            var errors = new StringWriter(); Console.SetError(errors);
+            TraceAIAuto.Init(o => { o.ApiKey = "synthetic-fi-key-0001"; o.SecretKey = "synthetic-fi-secret-0001"; o.ConfigFile = Path.Combine(WireFixtureTests.Repo, "csharp", "absent.toml"); });
+            Assert.Contains("OTEL_EXPORTER_OTLP_HEADERS", errors.ToString());
+            Assert.DoesNotContain("registered-secret", errors.ToString()); Assert.DoesNotContain("synthetic", errors.ToString());
         }
         finally { Restore(); }
     }

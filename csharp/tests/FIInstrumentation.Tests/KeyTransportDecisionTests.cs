@@ -162,4 +162,107 @@ public class KeyTransportDecisionTests : IDisposable
         Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20other-backend-token");
         FiKeyTransport.AssertNoFiKeysInAmbientHeaders(new[] { "registered-secret-synthetic-0004" });
     }
+
+    [Theory]
+    [InlineData("x%2Dapi%2Dkey=v-synthetic-0005")]
+    [InlineData("X%2DSecret%2DKey=v-synthetic-0005")]
+    [InlineData("a=b%2Cx-api-key%3Dv-synthetic-0005")]
+    [InlineData("authorization=Bearer%20x,%3D,x%2Dapi%2Dkey=v-synthetic-0005")]
+    [InlineData("=orphan,,nameless,x%2Dsecret%2Dkey=v-synthetic-0005,k=%zz")]
+    public void AKeyHeaderNameIsFoundAfterTheWholeStringIsUnescapedAsTheExporterDoes(string headers)
+    {
+        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", headers);
+        Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.AssertNoFiKeysInAmbientHeaders()).Code);
+        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", null);
+        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_HEADERS", headers);
+        Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.AssertNoFiKeysInAmbientHeaders()).Code);
+    }
+
+    [Theory]
+    [InlineData("x-trace=env%2Dsecret%2Dsynthetic%2D0003")]
+    [InlineData("x-trace%3Denv%2Dsecret%2Dsynthetic%2D0003")]
+    [InlineData("junk,x-trace%3Denv%2Dsecret%2Dsynthetic%2D0003,=")]
+    [InlineData("a=b%2Cx-trace%3Dprefix-env-secret-synthetic-0003")]
+    public void AnEncodedFutureAgiSecretUnderAnyNameOrNoNameIsRefused(string headers)
+    {
+        Environment.SetEnvironmentVariable("FI_SECRET_KEY", "env-secret-synthetic-0003");
+        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", headers);
+        Assert.Equal("FI_AMBIENT_KEY_HEADERS", Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.AssertNoFiKeysInAmbientHeaders()).Code);
+    }
+
+    [Fact]
+    public void AMalformedPairNextToAnEncodedKeyNameIsStillRefusedAndNeighboursOfAnUnrelatedPairAreKept()
+    {
+        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "%E0%A4%A,k%3D,x%2Dapi%2Dkey=v-synthetic-0005");
+        Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.AssertNoFiKeysInAmbientHeaders());
+        Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", "%E0%A4%A,k%3D,authorization=Bearer%20other-backend-token,x%2Dtenant=acme");
+        FiKeyTransport.AssertNoFiKeysInAmbientHeaders(new[] { "registered-secret-synthetic-0004" });
+    }
+
+    [Theory]
+    [InlineData("https://\u0430pi.futureagi.com/tracer/v1/traces")]
+    [InlineData("https://api.futureagi.com\u0430/")]
+    [InlineData("https://\uFF41pi.futureagi.com/tracer/v1/traces")]
+    [InlineData("https://api\u3002futureagi\u3002com/tracer/v1/traces")]
+    [InlineData("https://api\uFF0Efutureagi.com/")]
+    [InlineData("https://collector\u3002example:4318/")]
+    [InlineData("https://m\u00FCnchen.example/")]
+    public void ATargetWhoseHostAndIdnHostDiffersIsRefusedWithoutNamingIt(string target)
+    {
+        var refused = Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.Decide(target, false, true));
+        Assert.Equal("FI_HOST_MISMATCH", refused.Code);
+        Assert.DoesNotContain("futureagi", refused.Message); Assert.DoesNotContain("example", refused.Message);
+        Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.Decide(target, true, true, allowInsecureHttp: true));
+        // With no keys on the request nothing is decided.
+        Assert.False(FiKeyTransport.Decide(target, false, false).Keys);
+    }
+
+    [Theory]
+    [InlineData("https://api.futureagi.com/tracer/v1/traces")]
+    [InlineData("https://API.FutureAGI.com./x")]
+    [InlineData("https://collector.example:4318/")]
+    [InlineData("https://xn--mnchen-3ya.example/")]
+    public void PlainAsciiHostsAreDecidedAsBefore(string target) => Assert.True(FiKeyTransport.Decide(target, false, true).Tls);
+
+    [Theory]
+    [InlineData("http://[fe80::1%25eth0]:4318")]
+    [InlineData("http://[::1%25lo]:4318")]
+    public void AZoneLiteralIsNotLoopbackAndIsRefusedWithoutTheOptIn(string target)
+    {
+        Assert.Equal("FI_PLAINTEXT_NOT_ALLOWED", Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.Decide(target, false, true)).Code);
+    }
+
+    [Theory]
+    [InlineData("http://[fe80::1%25eth0]:4318")]
+    [InlineData("http://[::1%25lo]:4318")]
+    public void AZoneLiteralWithTheOptInIsAPlaintextNonLoopbackTargetWithOneWarningAndNoProxy(string target)
+    {
+        var field = typeof(FiKeyTransport).GetField("s_warned", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        var saved = Console.Error; var errors = new StringWriter(); Console.SetError(errors); field.SetValue(null, 0);
+        try
+        {
+            var decision = FiKeyTransport.Decide(target, false, true, allowInsecureHttp: true);
+            FiKeyTransport.Decide(target, false, true, allowInsecureHttp: true);
+            Assert.True(decision.Keys); Assert.False(decision.Tls); Assert.True(decision.PlaintextOptIn);
+            Assert.False(FiKeyTransport.CreateHandler(decision).UseProxy);
+            Assert.Single(errors.ToString().Split('\n').Where(l => l.Contains("AllowInsecureHttp")));
+        }
+        finally { Console.SetError(saved); field.SetValue(null, 0); }
+    }
+
+    [Fact]
+    public void TheWarningAndTheRefusalNameTheSettingsTheCodeReads()
+    {
+        var field = typeof(FiKeyTransport).GetField("s_warned", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        var saved = Console.Error; var errors = new StringWriter(); Console.SetError(errors); field.SetValue(null, 0);
+        try
+        {
+            FiKeyTransport.Decide("http://collector.example:4318", false, true, allowInsecureHttp: true);
+            var text = errors.ToString();
+            Assert.Contains("RegisterOptions.AllowInsecureHttp", text); Assert.Contains("AutoOptions.AllowInsecureHttp", text); Assert.Contains("FI_ALLOW_INSECURE_HTTP", text);
+            var refusal = Assert.Throws<FiKeyRefusedException>(() => FiKeyTransport.Decide("http://collector.example:4318", false, true)).Message;
+            Assert.Contains("RegisterOptions.AllowInsecureHttp", refusal); Assert.Contains("AutoOptions.AllowInsecureHttp", refusal); Assert.Contains("FI_ALLOW_INSECURE_HTTP", refusal);
+        }
+        finally { Console.SetError(saved); field.SetValue(null, 0); }
+    }
 }
