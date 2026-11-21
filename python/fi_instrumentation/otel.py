@@ -654,14 +654,40 @@ def _ambient_headers() -> dict[str, str]:
     1.4x, merge them under the headers passed in). They are meant for the
     collector the user configured, which is not necessarily Future AGI.
     """
-    from opentelemetry.util.re import parse_env_headers
-
     found: dict[str, str] = {}
     for var in reversed(_AMBIENT_HEADER_ENV_VARS):
         raw = os.environ.get(var)
         if raw:
-            found.update({k.lower(): v for k, v in parse_env_headers(raw, liberal=True).items()})
+            found.update({k.lower(): v for k, v in _parse_env_headers_quietly(raw).items()})
     return found
+
+
+class _DropRecords(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return False
+
+
+_PARSER_LOG_LOCK = threading.Lock()
+
+
+def _parse_env_headers_quietly(raw: str) -> Mapping[str, str]:
+    """``opentelemetry.util.re.parse_env_headers`` (liberal) without its log records: for a pair it cannot read it logs the whole
+    environment value, and the value can hold a key."""
+    from opentelemetry.util.re import parse_env_headers
+
+    parser_log = logging.getLogger("opentelemetry.util.re")
+    silence = _DropRecords()
+    with _PARSER_LOG_LOCK:
+        parser_log.addFilter(silence)
+        try:
+            return parse_env_headers(raw, liberal=True)
+        finally:
+            parser_log.removeFilter(silence)
+
+
+def _folds_to_key_header(name: str) -> bool:
+    """Whether ``name`` is a Future AGI key header once case is dropped and ``_`` is read as ``-`` (servers that fold them)."""
+    return name.strip().lower().replace("_", "-") in _FI_KEY_HEADER_NAMES
 
 
 def _materialize_headers(headers: Any, lower: bool = False) -> dict[str, Any] | None:
@@ -1365,20 +1391,24 @@ def _authorize_http_endpoint(endpoint: str | None, allow: bool = False, session:
         _authorize_plain_text(_written_host(endpoint) or origin[1], origin[2], allow, session)
 
 
+_DECODE_LIMIT = 8
+
+
 def _environment_names_a_key_header_by_an_encoded_delimiter() -> bool:
     """True when ``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_TRACES_HEADERS``, read after URL decoding (once, twice
-    or three times), has an entry whose name is a Future AGI key header. That covers a name joined to its value by an encoded
+    up to eight times), has an entry whose name is a Future AGI key header. That covers a name joined to its value by an encoded
     ``=`` (``x-api-key%3D...``) and a pair carried inside another header's value (``a=b%2Cx-api-key%3D...``), which a consumer
     that decodes the text again reads as a key header."""
     from urllib.parse import unquote
 
     for var in _AMBIENT_HEADER_ENV_VARS:
         text = os.environ.get(var)
-        for _ in range(4):
+        # The text as written, then decoded until it stops changing (at most eight times).
+        for _ in range(_DECODE_LIMIT + 1):
             if not text:
                 break
             for entry in text.replace(";", ",").split(","):
-                if entry.split("=", 1)[0].strip().lower() in _FI_KEY_HEADER_NAMES:
+                if _folds_to_key_header(entry.split("=", 1)[0]):
                     return True
             decoded = unquote(text)
             if decoded == text:
@@ -1393,7 +1423,7 @@ def _refuse_fi_header_names_in_environment() -> None:
     Called for an exporter that does not send to Future AGI: OpenTelemetry sends those environment headers to the collector
     that exporter is configured for.
     """
-    names = {name for name in _ambient_headers() if name in _FI_KEY_HEADER_NAMES}
+    names = {name for name in _ambient_headers() if _folds_to_key_header(name)}
     if names or _environment_names_a_key_header_by_an_encoded_delimiter():
         raise UnsupportedFutureAGIEndpointError(
             "OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS names a Future AGI key header (x-api-key or "
