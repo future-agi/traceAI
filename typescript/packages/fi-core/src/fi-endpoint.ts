@@ -124,8 +124,8 @@ export function targetShape(endpoint: string, transport: EndpointTransport): Tar
   const parts = writtenParts(endpoint, transport);
   if (!parts) return { emptyAuthority: false, ambiguous: false, fiDisagreement: false };
   const unix = parts.scheme?.toLowerCase() === "unix";
-  const emptyAuthority = !unix && parts.authority === "";
-  const ambiguous = /\\|%5c/i.test(parts.rawAuthority) || (parts.rest.includes("@"));
+  const emptyAuthority = !unix && /^(?::\d*)?$/.test(parts.authority);
+  const ambiguous = /\\|%5c|%40|@/i.test(parts.rawAuthority) || (parts.rest.includes("@"));
   const written = writtenHost(endpoint, transport), parsed = endpointTarget(endpoint, transport)?.hostname;
   const fiDisagreement = written !== undefined && parsed !== undefined && isFiHostName(written) !== isFiHostName(parsed);
   return { emptyAuthority, ambiguous, fiDisagreement };

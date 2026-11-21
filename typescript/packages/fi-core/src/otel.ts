@@ -28,7 +28,7 @@ import {
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
-import { describeFailure, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
+import { channelCredentials, describeFailure, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
 import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
 import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
 import { assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
@@ -321,7 +321,8 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     seedSecrets(process.env, metadataKnown);
     // One decision, on the target and the final outgoing set (the caller's metadata merged with the headers).
     const decision = decide({ target: endpoint, transport: "grpc", headers: callerHeaders, metadata: callerMetadata, credentials: callerCredentials, allowInsecureHttp, declaredFi: isFiRouteDeclared(options) });
-    const { fiBound, metadata, credentials: channelCredentials } = decision;
+    const { fiBound, metadata } = decision;
+    const decidedCredentials = decision.credentials ?? (decision.credentialsKind ? channelCredentials(decision.credentialsKind) : undefined);
     // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
     if (!fiBound) assertNoKeysInAmbientHeaders([...fiKeyHeaderValues(callerHeaders, callerStrings), ...metadataKeyValues(callerMetadata)]);
     const headers = decision.headers ?? {};
@@ -331,7 +332,7 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       ...restOptions,
       url: endpoint,
       metadata: metadata,
-      ...(channelCredentials ? { credentials: channelCredentials } : {}),
+      ...(decidedCredentials ? { credentials: decidedCredentials } : {}),
     };
 
     try {

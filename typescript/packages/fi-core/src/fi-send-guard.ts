@@ -22,9 +22,9 @@
  */
 import * as grpc from "@grpc/grpc-js";
 import { diag } from "@opentelemetry/api";
-import { isLiteralLoopback, type EndpointTransport } from "./fi-endpoint";
+import { type EndpointTransport } from "./fi-endpoint";
 import { UNSUPPORTED_EXPORTER_LAYOUT } from "./otlp-header-isolation";
-import { decideFiRequest, FiKeyRefusal, hasCompleteKeyPair, isRedirect, matchesNoProxy, proxiedByPython, type FiDecision } from "./fi-request-policy";
+import { decideFiRequest, FiKeyRefusal, hasCompleteKeyPair, isRedirect, matchesNoProxy, type FiDecision } from "./fi-request-policy";
 
 type Env = Readonly<Record<string, string | undefined>>;
 type Entry = [string, string];
@@ -103,7 +103,9 @@ function judgeFinalSet(entries: readonly Entry[], intended: Intended): boolean {
       if (value.includes(secret) || decoded(value).includes(secret) || value.includes(encodeURIComponent(secret))) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
     }
   }
-  return present.size > 0 && hasCompleteKeyPair(Object.fromEntries(present));
+  // A key header, even a lone one, makes the send key-carrying; the set must be the decision's own, no half of it.
+  if (present.size > 0 && [...intended.keys.keys()].some(name => !present.has(name))) throw new FiKeyRefusal("FI_AMBIENT_KEY_HEADERS");
+  return present.size > 0;
 }
 
 // --- proxies and dispatchers ---------------------------------------------------------------------------------------
@@ -123,73 +125,64 @@ function dataProperty(object: unknown, key: PropertyKey): unknown {
     return descriptor && "value" in descriptor ? descriptor.value : undefined;
   } catch { return undefined; }
 }
-/** An own data property whose key is the symbol described as `description` (undici keeps its state under such symbols). */
-function symbolProperty(object: unknown, description: string): unknown {
+const GLOBAL_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
+type Slot = { kind: "empty" } | { kind: "data"; value: unknown } | { kind: "uninspectable" };
+/** The undici global-dispatcher slot, read as an own data property only: an accessor is not run, an inherited value is not read. */
+function readSlot(): Slot {
   try {
-    const symbol = Object.getOwnPropertySymbols(object as object).find(candidate => candidate.description === description);
-    return symbol === undefined ? undefined : dataProperty(object, symbol);
-  } catch { return undefined; }
-}
-/** The class name of a dispatcher, read from the prototype's own data property `constructor`; undefined when it is not a plain data reading. */
-function constructorName(dispatcher: unknown): string | undefined {
-  try {
-    if (typeof dispatcher !== "object" || dispatcher === null) return undefined;
-    if (Object.getOwnPropertyDescriptor(dispatcher, "constructor") !== undefined) return undefined; // an own constructor is not the class
-    const proto = Object.getPrototypeOf(dispatcher);
-    const klass = dataProperty(proto, "constructor");
-    const name = dataProperty(klass, "name");
-    return typeof name === "string" && name !== "" ? name : undefined;
-  } catch { return undefined; }
-}
-const DEFAULT_FACTORY = /^function defaultFactory\s*\(origin, opts\)\s*\{\s*return opts && opts\.connections === 1\s*\?\s*new Client\(origin, opts\)\s*:\s*new Pool\(origin, opts\)\s*;?\s*\}$/;
-/**
- * What a dispatcher is, judged on data alone and never by its name only:
- *   - "direct": a plain undici Agent whose recorded options name no connect, socketPath or factory, so nothing redirects its dial;
- *   - "proxy": a proxy or environment-reading agent (ProxyAgent, EnvHttpProxyAgent), which routes through a proxy by design;
- *   - "unknown": anything else. That includes an Agent with a custom connect function or socketPath or factory, and every origin-bound
- *     dispatcher (Pool, Client, BalancedPool, RoundRobinPool, H2CClient): undici keeps their connect and socketPath only in an opaque
- *     connector function, so a dispatcher of that kind cannot be shown to dial the origin it names.
- */
-type DispatcherKind = "direct" | "proxy" | "unknown";
-function classifyDispatcher(dispatcher: unknown): DispatcherKind {
-  const name = constructorName(dispatcher);
-  if (name === undefined) return "unknown";
-  if (/Proxy/.test(name)) return /^(?:ProxyAgent|EnvHttpProxyAgent)$/.test(name) ? "proxy" : "unknown";
-  if (name !== "Agent") return "unknown";
-  const options = symbolProperty(dispatcher, "options");
-  if (typeof options !== "object" || options === null) return "unknown";
-  for (const key of ["connect", "socketPath", "factory"]) {
-    const descriptor = Object.getOwnPropertyDescriptor(options, key);
-    // undici records an unset option as an own key with the value undefined; only a set one (or an accessor) can redirect the dial.
-    if (descriptor !== undefined && (!("value" in descriptor) || descriptor.value !== undefined)) return "unknown";
-  }
-  const factory = symbolProperty(dispatcher, "factory");
-  if (typeof factory !== "function") return "unknown";
-  try { return DEFAULT_FACTORY.test(Function.prototype.toString.call(factory).trim()) ? "direct" : "unknown"; } catch { return "unknown"; }
-}
-function undiciGlobal(): unknown {
-  return dataProperty(globalThis, Symbol.for("undici.globalDispatcher.1"));
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, GLOBAL_DISPATCHER);
+    if (descriptor === undefined) return GLOBAL_DISPATCHER in globalThis ? { kind: "uninspectable" } : { kind: "empty" };
+    if (!("value" in descriptor)) return { kind: "uninspectable" };
+    return descriptor.value === undefined || descriptor.value === null ? { kind: "empty" } : { kind: "data", value: descriptor.value };
+  } catch { return { kind: "uninspectable" }; }
 }
 /**
- * The dispatcher check for a key-carrying request, run for plaintext and https alike. The dispatcher is the caller's, else (for a fetch the
- * SDK sends itself) the global one read now; an empty global slot is the default Agent. An unknown dispatcher is refused: its dial may go
- * anywhere. For https a proxy or environment-reading agent keeps its normal behaviour (the keys travel inside TLS to the verified host);
- * for plaintext it is refused, and so is NODE_USE_ENV_PROXY / --use-env-proxy for the SDK's own fetch. A plain Agent sends direct; for a
- * caller's Agent and plaintext, Python's proxy_bypass_environment is applied as well (loopback: the library's resolution alone).
+ * Node's own default dispatcher, by provenance: the object Node itself put in the slot, captured here when this module loads. Node installs
+ * it on first use of fetch or Request (an env-proxy agent when NODE_USE_ENV_PROXY or --use-env-proxy is on), so it is made to do so now,
+ * before any application code can replace the slot. A slot that already holds something when this module loads, or ever holds anything
+ * else, is not Node's own: nothing is accepted on a class name or a shape.
  */
-function assertDispatcher(target: string, tls: boolean, callerDispatcher: unknown, ownFetch: boolean, loopback: boolean): void {
-  const active = callerDispatcher !== undefined ? callerDispatcher : ownFetch ? undiciGlobal() : undefined;
-  if (active !== undefined) {
-    const kind = classifyDispatcher(active);
-    if (kind === "unknown") throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
-    if (kind === "proxy" && !tls) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
-    if (!tls && kind === "direct" && callerDispatcher !== undefined && !loopback) {
-      let url: URL;
-      try { url = new URL(target.trim()); } catch { throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED"); }
-      if (proxiedByPython(url.hostname, url.port)) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+/** The one probe that has Node install its own default dispatcher while the slot is empty: a fetch of a data URL, which opens no connection. */
+function primeNodeDispatcher(): void {
+  void globalThis.fetch("data:,").catch(() => undefined);
+}
+/** The one place a channel's credentials are constructed: TLS, or plaintext for a channel the decision allowed. */
+export function channelCredentials(kind: "tls" | "plaintext"): grpc.ChannelCredentials {
+  return kind === "tls" ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
+}
+/** Shared by every copy of this package in the process: the first copy to load captures Node's own default, later copies read it. */
+const SHARED_DEFAULT = Symbol.for("traceai.fi-core.node-default-dispatcher");
+const nodeDefault: { value: unknown } = (() => {
+  try {
+    const shared = dataProperty(globalThis, SHARED_DEFAULT) as { value: unknown } | undefined;
+    if (shared !== undefined && typeof shared === "object" && "value" in shared) return shared;
+    const loaded = readSlot();
+    // With Node's environment-proxy switch on, Node installs its env-proxy agent while it starts, so a data slot at this point is that
+    // agent (nothing can show who wrote it, and the switch is the case this transport exists for). Without the switch, a slot that is
+    // already set belongs to the application.
+    let captured: { value: unknown };
+    if (loaded.kind !== "empty") captured = { value: loaded.kind === "data" && nodeEnvProxy() ? loaded.value : undefined };
+    else {
+      primeNodeDispatcher();
+      const slot = readSlot();
+      captured = { value: slot.kind === "data" ? slot.value : undefined };
     }
-  }
-  if (!tls && callerDispatcher === undefined && ownFetch && nodeEnvProxy()) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
+    try { Object.defineProperty(globalThis, SHARED_DEFAULT, { value: Object.freeze(captured), enumerable: false, writable: false, configurable: false }); } catch { /* another copy defined it */ }
+    return captured;
+  } catch { return { value: undefined }; }
+})();
+/**
+ * The dispatcher check for a key-carrying request, run for plaintext and https alike. A caller's `dispatcher` option is refused. For a fetch
+ * the SDK sends itself, the global slot must be empty or hold the very object Node installed (read as an own data property); anything else
+ * (a proxy agent, an Agent, a pool, a Proxy object, a subclass, an accessor, an inherited value) is refused as FI_DISPATCHER_UNKNOWN. A
+ * plaintext request is never proxied, so NODE_USE_ENV_PROXY and --use-env-proxy refuse it.
+ */
+function assertDispatcher(tls: boolean, callerDispatcher: unknown, ownFetch: boolean): void {
+  if (callerDispatcher !== undefined) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
+  if (!ownFetch) return;
+  const slot = readSlot();
+  if (slot.kind === "uninspectable" || (slot.kind === "data" && (nodeDefault.value === undefined || slot.value !== nodeDefault.value))) throw new FiKeyRefusal("FI_DISPATCHER_UNKNOWN");
+  if (!tls && nodeEnvProxy()) throw new FiKeyRefusal("FI_PLAINTEXT_PROXIED");
 }
 
 /** The proxy gRPC reads for `host` from `env`, as grpcio reads it: the first SET of grpc_proxy, https_proxy, http_proxy (lower case only; an empty value counts as set and means none), unless no_grpc_proxy, else no_proxy, names the host. */
@@ -233,13 +226,13 @@ export function guardSend(facts: SendFacts): SendOutcome {
   const present: Record<string, string> = {};
   for (const [name, value] of facts.entries) if (KEY_NAME.test(decoded(name).trim())) present[decoded(name).trim().toLowerCase()] = value;
   const request = { target: facts.target, transport: facts.transport, headers: present, allowInsecureHttp: facts.allowInsecureHttp,
-    credentials: facts.transport === "grpc" ? (facts.secureChannel ? grpc.credentials.createSsl() : grpc.credentials.createInsecure()) : undefined };
+    credentials: facts.transport === "grpc" ? channelCredentials(facts.secureChannel ? "tls" : "plaintext") : undefined };
   const decision = decideFiRequest(request);
   // The dispatcher check runs for every key-carrying request, https included: a dispatcher whose dial can be redirected is unknown and refused,
   // and a plaintext request never goes through a proxy, loopback included. The OTLP HTTP exporter sends with an agent of its own (no dispatcher,
   // no proxy environment), so only a fetch or a request through a caller's dispatcher is checked.
   if (facts.transport === "http" && (facts.fetch === true || facts.dispatcher !== undefined)) {
-    assertDispatcher(facts.target, decision.tls, facts.dispatcher, facts.fetch === true, isLiteralLoopback(facts.target, "http"));
+    assertDispatcher(decision.tls, facts.dispatcher, facts.fetch === true);
   }
   return { keys: true, tls: decision.tls, plaintextDirect: decision.plaintextDirect };
 }
@@ -292,7 +285,8 @@ export function guardOtlpHttpExporter(exporter: unknown, intended: Intended, all
   const original = transport.send.bind(transport);
   transport.send = (data: Uint8Array, timeoutMillis: number) => {
     try {
-      guardSend({ transport: "http", target: parameters.url, entries: headerEntries(parameters.headers()), intended, allowInsecureHttp });
+      // The global dispatcher slot is checked for this send too, though the exporter's own agent does not read it.
+      guardSend({ transport: "http", target: parameters.url, entries: headerEntries(parameters.headers()), intended, allowInsecureHttp, fetch: true });
     } catch (error) {
       diag.error(`OTLP HTTP export not sent: ${describeFailure(error)}`);
       return Promise.resolve({ status: "failure", error });

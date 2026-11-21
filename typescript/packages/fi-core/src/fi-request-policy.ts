@@ -48,6 +48,12 @@ export function hasCompleteKeyPair(headers: unknown): boolean {
   return present("x-api-key") && present("x-secret-key");
 }
 
+/** Whether `headers` carries any key header with a non-empty string value: a lone one counts as key-carrying. */
+function hasAnyKeyHeader(headers: unknown): boolean {
+  if (typeof headers !== "object" || headers === null) return false;
+  return Object.entries(headers).some(([key, value]) => isKeyName(key) && typeof value === "string" && value.trim() !== "");
+}
+
 /** The string-valued entries of a gRPC Metadata object (for secret discovery and the exporter's privacy filter). */
 export function metadataStrings(metadata: unknown): FIHeaders {
   const strings: FIHeaders = {};
@@ -306,8 +312,10 @@ export interface FiDecision {
   headers: FIHeaders | undefined;
   /** gRPC only: the final metadata. */
   metadata?: grpc.Metadata;
-  /** gRPC only: the channel credentials, or undefined for the exporter's own choice. */
+  /** gRPC only: the credentials the caller supplied, kept as they are. */
   credentials?: grpc.ChannelCredentials;
+  /** gRPC only: the credentials the SDK builds (`channelCredentials` in fi-send-guard.ts) when the caller supplied none; undefined for the exporter's own choice. */
+  credentialsKind?: "tls" | "plaintext";
   /** A plaintext request that carries keys to a host that is not literal loopback was allowed by the opt-in. */
   plaintextOptIn: boolean;
   /** The request is plaintext and carries keys, loopback included: the SDK builds its transport with proxies off. */
@@ -344,7 +352,7 @@ export function decideFiRequest(request: FiRequest): FiDecision {
     copyMetadata(request.metadata, metadata);
     for (const [name, value] of Object.entries(headers ?? {})) metadata.set(name.toLowerCase(), value);
   }
-  const keys = metadata ? metadataHasPair(metadata) : hasCompleteKeyPair(headers);
+  const keys = metadata ? metadataHasPair(metadata) : hasAnyKeyHeader(headers);
 
   // A target a second parser reads differently never carries keys.
   if (shapes.some(shape => shape.ambiguous) && (keys || hasCompleteKeyPair(readEnvKeys(false)) || isFiEndpoint(target, transport) || (request.written !== undefined && isFiEndpoint(request.written, transport)))) throw new FiKeyRefusal("FI_HOST_MISMATCH");
@@ -361,16 +369,23 @@ export function decideFiRequest(request: FiRequest): FiDecision {
   // carries keys is built with proxies off, and needs the opt-in unless it is literal loopback.
   const supplied = request.credentials as grpc.ChannelCredentials | undefined;
   const dialedHost = parsed ? comparableHost(parsed.hostname) : "";
-  const done = (credentials: grpc.ChannelCredentials | undefined, tls: boolean, plaintextOptIn = false): FiDecision => ({ fiBound, keys, tls, dialedHost, headers, metadata, credentials, plaintextOptIn, plaintextDirect: keys && !tls });
-  if (isFiEndpoint(target, transport)) return done(grpc.credentials.createSsl(), true);
+  const done = (credentials: grpc.ChannelCredentials | undefined, credentialsKind: "tls" | "plaintext" | undefined, tls: boolean, plaintextOptIn = false): FiDecision => ({ fiBound, keys, tls, dialedHost, headers, metadata, credentials, credentialsKind, plaintextOptIn, plaintextDirect: keys && !tls });
+  if (isFiEndpoint(target, transport)) {
+    // A Future AGI host is reached over TLS only: a plaintext channel asked for is refused, not upgraded.
+    const asked = request.credentials as grpc.ChannelCredentials | undefined;
+    const scheme = /^([\w]{1,8}):\/\//.exec(target.trim())?.[1]?.toLowerCase();
+    const insecureAsked = (process.env.OTEL_EXPORTER_OTLP_TRACES_INSECURE ?? process.env.OTEL_EXPORTER_OTLP_INSECURE)?.toLowerCase() === "true";
+    if (keys && (asked !== undefined ? !asked._isSecure() : scheme === "http" || (scheme !== "https" && insecureAsked))) throw new FiKeyRefusal("FI_PLAINTEXT_FI_HOST");
+    return done(undefined, "tls", true);
+  }
   const loopback = isLiteralLoopback(target, transport);
   const insecureEnv = (process.env.OTEL_EXPORTER_OTLP_TRACES_INSECURE ?? process.env.OTEL_EXPORTER_OTLP_INSECURE)?.toLowerCase() === "true";
   const scheme = /^([\w]{1,8}):\/\//.exec(target.trim())?.[1]?.toLowerCase();
   const plaintext = supplied !== undefined ? !supplied._isSecure() : scheme === "https" ? false : scheme === "http" || insecureEnv || loopback;
-  if (!keys) return done(supplied ?? (plaintext && loopback ? grpc.credentials.createInsecure() : undefined), !plaintext);
+  if (!keys) return done(supplied, supplied === undefined && plaintext && loopback ? "plaintext" : undefined, !plaintext);
   if (plaintext) {
     const optIn = plaintextRule(target, transport, request.allowInsecureHttp, request.dispatcher);
-    return done(supplied ?? grpc.credentials.createInsecure(), false, optIn);
+    return done(supplied, supplied === undefined ? "plaintext" : undefined, false, optIn);
   }
-  return done(supplied ?? grpc.credentials.createSsl(), true);
+  return done(supplied, supplied === undefined ? "tls" : undefined, true);
 }
