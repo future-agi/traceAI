@@ -40,7 +40,6 @@ from fi_instrumentation.fi_types import (
 from google.cloud import aiplatform_v1 as v1
 from google.cloud import aiplatform_v1beta1 as v1beta1
 from google.cloud.aiplatform_v1.types.prediction_service import (
-    GenerateContentRequest,
     PredictRequest,
     PredictResponse,
 )
@@ -138,7 +137,7 @@ class _Wrapper:
         span.set_attribute(GEN_AI_SPAN_KIND, LLM)
 
         if isinstance(request, proto.Message) and not isinstance(
-            request, v1.PredictRequest
+            request, (v1.PredictRequest, v1beta1.PredictRequest)
         ):
             try:
                 data = request.__class__.to_dict(request)
@@ -165,7 +164,7 @@ class _Wrapper:
                 # Instrumentation must not replace the SDK result or export a raw fallback.
                 logger.debug("Could not extract Vertex request attributes")
         try:
-            if isinstance(request, v1.PredictRequest):
+            if isinstance(request, (v1.PredictRequest, v1beta1.PredictRequest)):
                 _update_predict_request(request, span, self._config)
             else:
                 _update_span(request, span)
@@ -431,7 +430,7 @@ def _(resp: GenerateContentResponse, span: Span) -> None:
 
 
 def _update_predict_request(
-    req: PredictRequest, span: Span, config: TraceConfig
+    req: Union[PredictRequest, v1beta1.PredictRequest], span: Span, config: TraceConfig
 ) -> None:
     """Record only the typed prompts recognized by the legacy prediction API."""
     if req.endpoint:
@@ -442,7 +441,8 @@ def _update_predict_request(
     for idx, instance in enumerate(req.instances):
         if not isinstance(instance, Mapping):
             continue
-        prompt = instance.get("prompt")
+        # Text generation and embedding models use content instead of prompt.
+        prompt = instance.get("prompt" if "prompt" in instance else "content")
         if not isinstance(prompt, str) or not prompt:
             continue
         prefix = f"{GEN_AI_INPUT_MESSAGES}.{idx}"
