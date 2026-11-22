@@ -617,7 +617,11 @@ def test_a_missing_traced_iterator_is_skipped_with_a_warning(provider, monkeypat
     with caplog.at_level("WARNING", logger="traceai_promptflow"):
         instrumentor.instrument(tracer_provider=provider)  # must not raise
     try:
-        assert any("TracedIterator" in r.getMessage() for r in caplog.records if r.levelname == "WARNING")
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert warnings == [
+            "traceai-promptflow: promptflow.tracing._trace.TracedIterator is missing in this Prompt flow version; "
+            "streams are traced without ending their span on close or when dropped"
+        ]
 
         @trace
         def f():
