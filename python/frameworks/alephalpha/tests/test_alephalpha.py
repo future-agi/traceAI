@@ -532,3 +532,95 @@ def test_dependency_declaration():
 
     assert any(dep.startswith("aleph-alpha-client") for dep in AlephAlphaInstrumentor().instrumentation_dependencies())
     assert __version__
+
+
+# --- partial output on failure, and every choice ------------------------------------------------
+def multi_completion_body(texts=("Tokyo", "Kyoto"), finishes=("maximum_tokens", "end_of_text")):
+    body = completion_body()
+    body["completions"] = [
+        {"completion": t, "finish_reason": f} for t, f in zip(texts, finishes)
+    ]
+    return body
+
+
+def test_every_choice_text_and_finish_reason_is_recorded(spans, stub, client):
+    stub.reply(multi_completion_body())
+    client.complete(complete_request(n=2), model="m")
+    a = attrs(one(spans))
+    assert a["output.value"] == "Tokyo"
+    assert a["gen_ai.output.messages.0.message.content"] == "Tokyo"
+    assert a["gen_ai.output.messages.1.message.content"] == "Kyoto"
+    assert list(a["gen_ai.response.finish_reasons"]) == ["maximum_tokens", "end_of_text"]
+
+
+def test_single_choice_has_no_per_choice_attributes(spans, stub, client):
+    stub.reply(completion_body("Tokyo"))
+    client.complete(complete_request(), model="m")
+    assert "gen_ai.output.messages.0.message.content" not in attrs(one(spans))
+
+
+def test_every_choice_text_is_hidden_with_outputs(instrument, stub, client):
+    spans = instrument(config=TraceConfig(hide_outputs=True))
+    stub.reply(multi_completion_body())
+    client.complete(complete_request(n=2), model="m")
+    text = blob(one(spans))
+    assert "Tokyo" not in text and "Kyoto" not in text
+
+
+@pytestmark_stream
+def test_streamed_choices_are_recorded_per_index(spans, stub, aclient):
+    stub.reply(sse(
+        {"type": "stream_chunk", "index": 0, "completion": "To"},
+        {"type": "stream_chunk", "index": 1, "completion": "Ky"},
+        {"type": "stream_chunk", "index": 0, "completion": "kyo"},
+        {"type": "stream_chunk", "index": 1, "completion": "oto"},
+        {"type": "stream_summary", "index": 0, "model_version": "m", "finish_reason": "maximum_tokens"},
+        {"type": "stream_summary", "index": 1, "model_version": "m", "finish_reason": "end_of_text"},
+        {"type": "completion_summary", "num_tokens_prompt_total": 6, "num_tokens_generated": 4},
+    ))
+
+    async def go(c):
+        return [i async for i in c.complete_with_streaming(complete_request(n=2), model="m")]
+
+    run(go, aclient)
+    a = attrs(one(spans))
+    assert a["output.value"] == "Tokyo"
+    assert a["gen_ai.output.messages.0.message.content"] == "Tokyo"
+    assert a["gen_ai.output.messages.1.message.content"] == "Kyoto"
+
+
+@pytestmark_stream
+def test_stream_midway_error_keeps_the_partial_output(spans, stub, aclient):
+    stub.reply(Reply(raw=b'data: {"type": "stream_chunk", "index": 0, "completion": "Tok"}\n\n'
+                         b'data: {"type": "stream_chunk", "index": 0, "completion": "yo"}\n\n'
+                         b'GARBAGE SECRETDETAIL\n\n', content_type="text/event-stream"))
+
+    async def go(c):
+        async for _ in c.complete_with_streaming(complete_request(), model="m"):
+            pass
+
+    with pytest.raises(ValueError):
+        run(go, aclient)
+    span = one(spans)
+    a = attrs(span)
+    assert span.status.status_code == StatusCode.ERROR
+    assert a["error.type"] == "ValueError"
+    assert a["output.value"] == "Tokyo"
+    assert "SECRETDETAIL" not in blob(span)
+
+
+@pytestmark_stream
+def test_stream_midway_error_partial_output_is_hidden_with_outputs(instrument, stub, aclient):
+    spans = instrument(config=TraceConfig(hide_outputs=True))
+    stub.reply(Reply(raw=b'data: {"type": "stream_chunk", "index": 0, "completion": "Tok"}\n\nGARBAGE\n\n',
+                     content_type="text/event-stream"))
+
+    async def go(c):
+        async for _ in c.complete_with_streaming(complete_request(), model="m"):
+            pass
+
+    with pytest.raises(ValueError):
+        run(go, aclient)
+    span = one(spans)
+    assert span.status.status_code == StatusCode.ERROR
+    assert "Tok" not in blob(span)
