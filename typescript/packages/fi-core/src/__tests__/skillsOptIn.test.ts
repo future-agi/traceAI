@@ -124,8 +124,14 @@ describe("with opt-in, privacy is never weaker than dev", () => {
     expect(projectAttributes({ "error.type": "Timeout", "gen_ai.agent.name": "router" }, 1, undefined, true).attributes).toEqual({ "error.type": "Timeout" });
     expect((await standalone({ "error.type": "Timeout", "gen_ai.agent.name": "router" }, { limit: 1, runtime: true })).native).toEqual({ "error.type": "Timeout" });
     // Dev's dropped-content marker (family 0) keeps its slot ahead of runtime keys.
-    expect(projectAttributes({ "gen_ai.agent.name": "router", "input.value": "hello" }, 2, undefined, true).attributes)
-      .toEqual({ "gen_ai.agent.name": "router", "traceai.capture.dropped_content_count": 1 });
+    expect(projectAttributes({ "gen_ai.agent.name": "router", "input.value": "hello" }, 1, undefined, true).attributes)
+      .toEqual({ "traceai.capture.dropped_content_count": 1 });
+    // With a slot beside the marker, the runtime key wins over ordinary content.
+    const two = projectAttributes({ "gen_ai.agent.name": "router", "input.value": "hello", "output.value": "bye" }, 2, undefined, true).attributes;
+    expect(two["gen_ai.agent.name"]).toBe("router");
+    expect(two).toHaveProperty(["traceai.capture.dropped_content_count"]);
+    expect(two).not.toHaveProperty(["input.value"]);
+    expect(two).not.toHaveProperty(["output.value"]);
   });
 
   test("the onStart identity rewrite is the committed write only on an opted-in span", async () => {
