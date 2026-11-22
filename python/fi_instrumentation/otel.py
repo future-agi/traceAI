@@ -232,7 +232,7 @@ def register(
         span_limits (SpanLimits): Caps on attributes/events/links per span.
         skills_processor (bool): Opt in to installing fi.telemetry's runtime
             attribute processor when the optional Future AGI SDK is available.
-            Defaults to False; never replaces the exporter or sets service.name.
+            Defaults to False; it leaves the exporter and service.name unchanged.
 
     The returned provider is discoverable through get_registered_tracer_providers()
     even when it is not global. That registry does not keep providers alive.
