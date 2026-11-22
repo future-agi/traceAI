@@ -624,3 +624,70 @@ def test_stream_midway_error_partial_output_is_hidden_with_outputs(instrument, s
     span = one(spans)
     assert span.status.status_code == StatusCode.ERROR
     assert "Tok" not in blob(span)
+
+
+# --- output.value is choice 0's text only -------------------------------------------------------
+def test_empty_choice_zero_never_takes_another_choice_text(spans, stub, client):
+    stub.reply(multi_completion_body(texts=("", "Kyoto")))
+    client.complete(complete_request(n=2), model="m")
+    a = attrs(one(spans))
+    assert "output.value" not in a
+    assert a["gen_ai.output.messages.1.message.content"] == "Kyoto"
+    assert "gen_ai.output.messages.0.message.content" not in a
+
+
+def test_several_choices_record_choice_zero_per_index_when_the_others_are_empty(spans, stub, client):
+    stub.reply(multi_completion_body(texts=("Tokyo", "")))
+    client.complete(complete_request(n=2), model="m")
+    a = attrs(one(spans))
+    assert a["output.value"] == "Tokyo"
+    assert a["gen_ai.output.messages.0.message.content"] == "Tokyo"
+    assert "gen_ai.output.messages.1.message.content" not in a
+
+
+@pytest.mark.parametrize("config", [
+    TraceConfig(hide_outputs=True),
+    TraceConfig(hide_output_text=True),
+    TraceConfig(hide_output_messages=True),
+])
+def test_empty_choice_zero_other_choice_text_is_hidden(instrument, stub, client, config):
+    spans = instrument(config=config)
+    stub.reply(multi_completion_body(texts=("", "TOPSECRET-OUT")))
+    client.complete(complete_request(n=2), model="m")
+    span = one(spans)
+    assert "TOPSECRET-OUT" not in blob(span)
+    assert "output.value" not in attrs(span)
+
+
+@pytestmark_stream
+def test_streamed_empty_choice_zero_never_takes_another_choice_text(spans, stub, aclient):
+    stub.reply(sse(
+        {"type": "stream_chunk", "index": 1, "completion": "Ky"},
+        {"type": "stream_chunk", "index": 1, "completion": "oto"},
+        {"type": "stream_summary", "index": 0, "model_version": "m", "finish_reason": "end_of_text"},
+        {"type": "stream_summary", "index": 1, "model_version": "m", "finish_reason": "maximum_tokens"},
+        {"type": "completion_summary", "num_tokens_prompt_total": 6, "num_tokens_generated": 2},
+    ))
+
+    async def go(c):
+        return [i async for i in c.complete_with_streaming(complete_request(n=2), model="m")]
+
+    run(go, aclient)
+    a = attrs(one(spans))
+    assert "output.value" not in a
+    assert a["gen_ai.output.messages.1.message.content"] == "Kyoto"
+
+
+@pytestmark_stream
+def test_streamed_empty_choice_zero_other_choice_text_is_hidden(instrument, stub, aclient):
+    spans = instrument(config=TraceConfig(hide_output_text=True))
+    stub.reply(sse(
+        {"type": "stream_chunk", "index": 1, "completion": "TOPSECRET-OUT"},
+        {"type": "completion_summary", "num_tokens_prompt_total": 6, "num_tokens_generated": 2},
+    ))
+
+    async def go(c):
+        return [i async for i in c.complete_with_streaming(complete_request(n=2), model="m")]
+
+    run(go, aclient)
+    assert "TOPSECRET-OUT" not in blob(one(spans))
