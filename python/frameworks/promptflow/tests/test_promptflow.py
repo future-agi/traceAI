@@ -606,3 +606,24 @@ def test_uninstrument_restores_names_bound_after_instrument(provider, monkeypatc
     for name, original in originals.items():
         assert getattr(_trace, name) is original
         assert getattr(late, name) is original, f"{name} still bound to the instrumented replacement"
+
+
+def test_a_missing_traced_iterator_is_skipped_with_a_warning(provider, monkeypatch, caplog):
+    from promptflow.tracing import _trace, trace
+    from traceai_promptflow import PromptflowInstrumentor
+
+    monkeypatch.delattr(_trace, "TracedIterator")
+    instrumentor = PromptflowInstrumentor()
+    with caplog.at_level("WARNING", logger="traceai_promptflow"):
+        instrumentor.instrument(tracer_provider=provider)  # must not raise
+    try:
+        assert any("TracedIterator" in r.getMessage() for r in caplog.records if r.levelname == "WARNING")
+
+        @trace
+        def f():
+            return 3
+
+        assert f() == 3
+        assert [s.name for s in provider.exporter.get_finished_spans()]  # spans still flow
+    finally:
+        instrumentor.uninstrument()
