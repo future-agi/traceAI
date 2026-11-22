@@ -323,6 +323,7 @@ def _noop(*args: Any, **kwargs: Any) -> None:
     """Prompt template text and variables are not exported."""
 
 
+@_safe
 def _watch_stream(stream: Any) -> None:
     """Let the stream's span reach the items a failing stream has yielded so far (weakly, so a dropped
     stream still ends its span at once)."""
@@ -331,6 +332,7 @@ def _watch_stream(stream: Any) -> None:
         span._self_stream = weakref.ref(stream)
 
 
+@_safe
 def _keep_received_items(span: Any) -> None:
     """A stream that fails mid-way records what it yielded before the failure, as on exhaustion."""
     ref = getattr(span, "_self_stream", None)
