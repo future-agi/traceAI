@@ -8,11 +8,14 @@ for (const dir of ['dist/src', 'dist/esm', 'dist/esnext']) {
 // cannot go missing from the ESM entry points.
 const runtimeExports = Object.keys(require('../dist/src/privacy-runtime.js'));
 if (!runtimeExports.length || !runtimeExports.every(name => /^[A-Za-z_$][\w$]*$/.test(name))) throw new Error('postbuild: unexpected privacy-runtime exports');
+const metadataExports = Object.keys(require('../dist/src/runtime-metadata.js'));
+if (!metadataExports.length || !metadataExports.every(name => /^[A-Za-z_$][\w$]*$/.test(name))) throw new Error('postbuild: unexpected runtime-metadata exports');
 for (const dir of ['dist/esm', 'dist/esnext']) {
   fs.writeFileSync(`${dir}/package.json`, '{"type":"module"}\n');
   // Internal admission evidence must have one identity across require/import,
   // like the privacy runtime's existing typed session bindings.
-  fs.writeFileSync(`${dir}/runtime-metadata.js`, 'export { admittedRuntime, validRuntimeValue, isRuntimeKey, runtimeProcessorInstances } from "../src/runtime-metadata.js";\n');
+  // Every export, including span marks and the standalone-start flag, shares one instance.
+  fs.writeFileSync(`${dir}/runtime-metadata.js`, `export { ${metadataExports.join(', ')} } from "../src/runtime-metadata.js";\n`);
   // Keep a single implementation across module formats, and avoid Node's JSON
   // import-attribute requirement. Browser bundlers can still inline this leaf.
   for (const name of ['privacy', 'privacy-runtime']) {

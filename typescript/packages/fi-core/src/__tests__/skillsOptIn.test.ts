@@ -15,6 +15,7 @@ import { AGENT_VIEW, FILL_IDENTITY } from "../trace/trace-config/agentIdentity";
 import { maskAttributes } from "../trace/trace-config/maskingRules";
 import { redactPiiInString } from "../trace/trace-config/piiRedaction";
 import { generateTraceConfig } from "../trace/trace-config/traceConfig";
+import type { TraceConfigOptions } from "../trace/trace-config/types";
 
 const CARRIER = Symbol.for("futureagi.runtime.span_attributes.v1");
 const SOURCES = Symbol.for("futureagi.runtime.context-agent.sources.v1");
@@ -32,7 +33,7 @@ const app = (seen: Attributes[] = []): SpanProcessor & { seen: Attributes[] } =>
 
 /** One standalone FITracer span on a plain SDK provider; optionally opted in. */
 async function standalone(attributes: Attributes, options: { limit?: number; runtime?: boolean; before?: SpanProcessor[];
-  write?: (span: any) => void; traceConfig?: Record<string, unknown> } = {}) {
+  write?: (span: any) => void; traceConfig?: TraceConfigOptions } = {}) {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({
     ...(options.limit ? { spanLimits: { attributeCountLimit: options.limit } } : {}),
