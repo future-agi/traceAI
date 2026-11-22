@@ -67,7 +67,7 @@ class AnnotationsWithGoogleAdkE2ETest {
         for (String p : testCp.split(java.util.regex.Pattern.quote(File.pathSeparator)))
             if (p.contains("traceai-java-annotations")) mine.add(p);
         assertTrue(mine.size() > 1, "the annotations module is on the test class path: " + testCp);
-        String cp = String.join(File.pathSeparator, mine) + File.pathSeparator + module.resolve("test-classes") + File.pathSeparator + Files.readString(classpath).trim();
+        String cp = String.join(File.pathSeparator, mine) + File.pathSeparator + module.resolve("test-classes") + File.pathSeparator + module.resolve("classes") + File.pathSeparator + Files.readString(classpath).trim();
         Path output = Files.createTempFile(Path.of("target"), "annotations-adk-e2e-", ".log");
         List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-javaagent:" + agent,
             "-cp", cp, "ai.traceai.apptest.AnnotatedAdkApp", mode, "http://127.0.0.1:" + server.getAddress().getPort(), prompt, "subscribe", scenario));
