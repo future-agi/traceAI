@@ -179,6 +179,40 @@ describe("with opt-in, privacy is never weaker than dev", () => {
     } finally { await provider.shutdown(); }
   });
 
+  // Finding 7 (supplied path): a caller-supplied processor masks with the provider's policy too.
+  test.each([
+    ["hideInputs", { hideInputs: true }, "gen_ai.agent.description", "short private plan"],
+    ["piiRedaction", { piiRedaction: true }, "gen_ai.agent.name", "jane@example.com"],
+  ] as const)("a supplied runtime processor adopts the provider policy (%s)", async (_label, traceConfig, key, raw) => {
+    const expected = maskAttributes({ config: generateTraceConfig(traceConfig), attributes: { [key]: raw } })[key];
+    expect(expected).not.toBe(raw);
+    const parent = ROOT_CONTEXT.setValue(CARRIER, { v: 1, attrs: { [key]: raw }, reset_skills: false });
+    for (const runtimeAttributes of [undefined, true, false]) {
+      const seen = app();
+      const exporter = new InMemorySpanExporter();
+      const provider = register({ projectName: "opt-in", setGlobalTracerProvider: false, runtimeAttributes, traceConfig,
+        spanProcessors: [new FutureAGIRuntimeAttributesSpanProcessor(), seen, new SimpleSpanProcessor(exporter)] });
+      try {
+        provider.getTracer("opt-in").startSpan("s", {}, parent).end();
+        expect(seen.seen[0][key]).toBe(expected);
+        expect(exporter.getFinishedSpans()[0].attributes[key]).toBe(expected);
+      } finally { await provider.shutdown(); }
+    }
+  });
+
+  test("adopting a provider policy never loosens an explicitly configured processor", async () => {
+    const raw = "short private plan";
+    const expected = maskAttributes({ config: generateTraceConfig({ hideInputs: true }), attributes: { "gen_ai.agent.description": raw } })["gen_ai.agent.description"];
+    const parent = ROOT_CONTEXT.setValue(CARRIER, { v: 1, attrs: { "gen_ai.agent.description": raw }, reset_skills: false });
+    const seen = app();
+    const provider = register({ projectName: "opt-in", setGlobalTracerProvider: false, traceConfig: { hideInputs: false },
+      spanProcessors: [new FutureAGIRuntimeAttributesSpanProcessor({ traceConfig: { hideInputs: true } }), seen] });
+    try {
+      provider.getTracer("opt-in").startSpan("s", {}, parent).end();
+      expect(seen.seen[0]["gen_ai.agent.description"]).toBe(expected);
+    } finally { await provider.shutdown(); }
+  });
+
   test("an unmasked carrier name still reaches the SDK observer", async () => {
     const attrs = { "gen_ai.agent.name": "planner" };
     const observer = jest.fn();

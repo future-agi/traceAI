@@ -37,7 +37,7 @@ import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { runtimeProcessorInstances } from "./runtime-metadata";
+import { ADOPT_PROVIDER_POLICY, runtimeProcessorInstances } from "./runtime-metadata";
 import { FutureAGIRuntimeAttributesSpanProcessor } from "./trace/runtimeAttributesProcessor";
 
 const privacyDestinations = new WeakSet<SpanExporter>();
@@ -603,6 +603,9 @@ class FITracerProvider extends BasicTracerProvider {
     // Opt-in only. Omitted means no runtime processor, exactly as before;
     // a caller-supplied runtime processor is itself an explicit opt-in.
     const suppliedRuntime = config.spanProcessors?.find(processor => runtimeProcessorInstances.has(processor));
+    // A supplied processor masks with this provider's policy too (stricter wins),
+    // whether it is adopted ahead of the registry or left inside it.
+    if (suppliedRuntime) (suppliedRuntime as FutureAGIRuntimeAttributesSpanProcessor)[ADOPT_PROVIDER_POLICY](config.traceConfig);
     const runtimeProcessor = config.runtimeAttributes === false ? undefined
       : config.runtimeAttributes === true
         ? suppliedRuntime ?? new FutureAGIRuntimeAttributesSpanProcessor({ traceConfig: config.traceConfig })

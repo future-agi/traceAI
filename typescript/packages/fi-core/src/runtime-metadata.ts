@@ -35,6 +35,9 @@ export const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
 
 // Constructor identity only. Membership grants no receipt or span provenance.
 export const runtimeProcessorInstances = new WeakSet<object>();
+// A provider binds its own export policy to a runtime processor it receives;
+// the stricter setting wins, so an explicitly configured processor never loosens.
+export const ADOPT_PROVIDER_POLICY = Symbol("traceai.fi.runtime-processor.adopt-provider-policy");
 
 // Opt-in is per provider: only a provider with runtimeAttributes: true, or one
 // given the runtime processor explicitly, has a processor that marks its spans

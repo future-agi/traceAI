@@ -1,6 +1,6 @@
 import type { AttributeValue, Attributes, Context } from "@opentelemetry/api";
 import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { runtimeProcessorInstances, runtimeSpans } from "../runtime-metadata";
+import { ADOPT_PROVIDER_POLICY, runtimeProcessorInstances, runtimeSpans } from "../runtime-metadata";
 import { runtimeAttributesEnabled } from "./runtimeAttributesEnabled";
 import { rememberAutoSpanSink } from "../auto-span-delivery";
 import { maskAttributes } from "./trace-config/maskingRules";
@@ -76,6 +76,16 @@ function normalizeRuntimeAttributes(input: unknown): { attributes: Attributes; c
   return { attributes: result, cacheable };
 }
 
+/** Per-setting strictest of two policies: any hide/redaction switch on, the smaller image cap. */
+function strictest(a: TraceConfig, b: TraceConfig): TraceConfig {
+  const merged: Record<string, boolean | number> = {};
+  for (const key of Object.keys(a) as (keyof TraceConfig)[]) {
+    const x = a[key], y = b[key];
+    merged[key] = typeof x === "number" && typeof y === "number" ? Math.min(x, y) : Boolean(x) || Boolean(y);
+  }
+  return merged as TraceConfig;
+}
+
 export interface FutureAGIRuntimeAttributesSpanProcessorOptions {
   /** The provider's export privacy policy. Defaults to the FI_* environment, as FITracer does. */
   traceConfig?: TraceConfigOptions;
@@ -89,15 +99,21 @@ export interface FutureAGIRuntimeAttributesSpanProcessorOptions {
  * No SDK dependency, I/O, resource mutation, span retention or end-of-span work.
  */
 export class FutureAGIRuntimeAttributesSpanProcessor implements SpanProcessor {
-  private readonly config: TraceConfig;
+  private config: TraceConfig;
   // Masked results per frozen snapshot; never holds a span or a mutable source.
-  private readonly cache = new WeakMap<object, { raw: Attributes; masked: Attributes }>();
+  private cache = new WeakMap<object, { raw: Attributes; masked: Attributes }>();
 
   constructor(options: FutureAGIRuntimeAttributesSpanProcessorOptions = {}) {
     this.config = generateTraceConfig(options.traceConfig);
     // An onStart observer is not an export destination for auto instrumentation.
     rememberAutoSpanSink(this);
     runtimeProcessorInstances.add(this);
+  }
+
+  /** @internal Called by a provider that receives this processor in `spanProcessors`. */
+  [ADOPT_PROVIDER_POLICY](options?: TraceConfigOptions): void {
+    this.config = strictest(this.config, generateTraceConfig(options));
+    this.cache = new WeakMap();
   }
 
   private stamped(source: unknown): { raw: Attributes; masked: Attributes } {
