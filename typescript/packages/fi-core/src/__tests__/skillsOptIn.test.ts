@@ -123,7 +123,9 @@ describe("with opt-in, privacy is never weaker than dev", () => {
     expect(protectedFamily("gen_ai.agent.name", true)).toBeGreaterThan(protectedFamily("traceai.capture.layer")!);
     expect(projectAttributes({ "error.type": "Timeout", "gen_ai.agent.name": "router" }, 1, undefined, true).attributes).toEqual({ "error.type": "Timeout" });
     expect((await standalone({ "error.type": "Timeout", "gen_ai.agent.name": "router" }, { limit: 1, runtime: true })).native).toEqual({ "error.type": "Timeout" });
-    expect(projectAttributes({ "gen_ai.agent.name": "router", "input.value": "hello" }, 1, undefined, true).attributes).toEqual({ "gen_ai.agent.name": "router" });
+    // Dev's dropped-content marker (family 0) keeps its slot ahead of runtime keys.
+    expect(projectAttributes({ "gen_ai.agent.name": "router", "input.value": "hello" }, 2, undefined, true).attributes)
+      .toEqual({ "gen_ai.agent.name": "router", "traceai.capture.dropped_content_count": 1 });
   });
 
   test("the onStart identity rewrite is the committed write only on an opted-in span", async () => {

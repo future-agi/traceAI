@@ -71,7 +71,10 @@ test("runtime identity is reserved ahead of content only on an opted-in span, an
     expect(projectAttributes(crowded, 128, undefined, true).attributes).toMatchObject(attrs);
     new FITracer({ tracer: provider.getTracer("runtime-test") }).startSpan("skill.load", { attributes: crowded }).end();
     const native = exporter.getFinishedSpans()[0];
-    expect(native.attributes).toMatchObject(attrs);
+    // Projection retains every runtime key; admission already withholds the session id natively after loss.
+    const { "fi.context.session_id": _session, ...retained } = attrs;
+    expect(native.attributes).toMatchObject(retained);
+    expect(native.attributes["fi.context.session_id"]).not.toBe(receipt);
     const exported = privacyFilter().span(native).attributes;
     expect(exported["fi.context.session_id"]).toBe("<redacted>");
     expect(JSON.stringify(exported)).not.toContain(receipt);
