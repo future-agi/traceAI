@@ -37,6 +37,8 @@ import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { ADOPT_PROVIDER_POLICY, runtimeProcessorInstances } from "./runtime-metadata";
+import { FutureAGIRuntimeAttributesSpanProcessor } from "./trace/runtimeAttributesProcessor";
 
 const privacyDestinations = new WeakSet<SpanExporter>();
 /** @internal True only for constructors in this core copy, never based on user properties. */
@@ -549,6 +551,10 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
    * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
    */
   httpsProxy?: string;
+  /** Opt in to stamping skill/context scope attributes before exporter and application
+   * processors (default false: no runtime processor, as before). A runtime processor
+   * passed in `spanProcessors` is also an opt-in unless this is `false`. */
+  runtimeAttributes?: boolean;
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -594,14 +600,33 @@ class FITracerProvider extends BasicTracerProvider {
         ? new DefaultBatchSpanProcessor(exporter)
         : new DefaultSimpleSpanProcessor(exporter);
     }
+    // Opt-in only. Omitted means no runtime processor, exactly as before;
+    // a caller-supplied runtime processor is itself an explicit opt-in.
+    const suppliedRuntime = config.spanProcessors?.find(processor => runtimeProcessorInstances.has(processor));
+    // A supplied processor masks with this provider's policy too (stricter wins),
+    // whether it is adopted ahead of the registry or left inside it.
+    if (suppliedRuntime) (suppliedRuntime as FutureAGIRuntimeAttributesSpanProcessor)[ADOPT_PROVIDER_POLICY](config.traceConfig);
+    const runtimeProcessor = config.runtimeAttributes === false ? undefined
+      : config.runtimeAttributes === true
+        ? suppliedRuntime ?? new FutureAGIRuntimeAttributesSpanProcessor({ traceConfig: config.traceConfig })
+        : suppliedRuntime;
     const processorRegistry = new SpanProcessorRegistry(
-      config.spanProcessors ?? [],
+      runtimeProcessor
+        ? (config.spanProcessors ?? []).filter(processor => !runtimeProcessorInstances.has(processor))
+        : config.spanProcessors ?? [],
       () => defaultProcessor?.disable(),
+      // A user-supplied runtime processor is moved ahead of the registry. It
+      // may already have distributed setters; do not attest early observation.
+      !runtimeProcessor || !config.spanProcessors?.includes(runtimeProcessor),
     );
     // Keep the actual SDK default at the top level for native adapters that borrow
     // its exporter, and for SDK-owned flush/shutdown of its accepted batch queue.
+    // Keep scope stamping separate from the replaceable default destination.
+    // An explicit [] still creates no exporter; legacy processor replacement
+    // cannot remove the runtime processor. Never install via addSpanProcessor.
+    const runtimeProcessors = runtimeProcessor ? [runtimeProcessor] : [];
     super({ resource: applicationResource(config.resource), idGenerator, sampler: config.sampler,
-      spanProcessors: defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry] });
+      spanProcessors: [...runtimeProcessors, ...(defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry])] });
     this.processorRegistry = processorRegistry;
     this.defaultProcessorAttached = config.spanProcessors === undefined;
     this.batch = config.batch ?? false;
@@ -727,6 +752,10 @@ export interface RegisterOptions extends ExportPrivacyOptions {
   sampler?: Sampler;
   /** When provided, use these processors instead of constructing the default exporter. */
   spanProcessors?: SpanProcessor[];
+  /** Opt in to stamping skill/context scope attributes before exporter and application
+   * processors (default false: no runtime processor, as before). A runtime processor
+   * passed in `spanProcessors` is also an opt-in unless this is `false`. */
+  runtimeAttributes?: boolean;
 }
 
 function register(options: RegisterOptions = {}): FITracerProvider {
@@ -835,6 +864,7 @@ if (!projectName) {
     sampler: options.sampler,
     batch: options.batch ?? false,
     spanProcessors: options.spanProcessors,
+    runtimeAttributes: options.runtimeAttributes,
     traceConfig: options.traceConfig,
     resourceAttributes: options.resourceAttributes,
     allowInsecureHttp: options.allowInsecureHttp,

@@ -520,6 +520,24 @@ Brand marks identify integrations, not partnerships or endorsements. A neutral p
 
 [Python attribute definitions](python/fi_instrumentation/fi_types.py) · [TypeScript semantic conventions](typescript/packages/fi-semantic-conventions/src/trace/SemanticConventions.ts) · [OpenAI Go capture contract](go/openai/README.md#what-is-captured)
 
+## Skills and agent contexts
+
+Python exposes skill/context attribute constants and a versioned runtime carrier.
+With a Future AGI SDK version that provides `fi.telemetry`, high-level snapshot
+reads can record **loads** inside active traces. Loaded means verified bytes were
+given to the app, not that a model followed the skill; fetched and linked remain
+separate facts.
+
+`register(skills_processor=True)` optionally installs the SDK's processor early,
+without replacing the exporter. It defaults to `False`; the SDK can also install
+lazily on a load. traceAI does not require that SDK, change the global-provider
+default, or set `service.name`. Name agents explicitly with the SDK's
+`agent_scope(agent=...)`. For standalone traceAI, `using_runtime_attributes`
+provides the carrier only: use a compatible processor or copy attributes manually.
+Java, C#, Go and Ruby remain manual: set attributes on your spans.
+
+[Python scope examples, opt-out controls and propagation limits](docs/python/context-managers.md#skills-and-agent-contexts)
+
 ## Privacy controls
 
 Content capture is enabled by default. Decide what may leave your application **before** you initialize instrumentation.
