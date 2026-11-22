@@ -452,6 +452,7 @@ _CONTENT_HOOKS = (
     "TracedAsyncIterator",
 )
 _SPAN_HOOK = "start_as_current_span"
+_STREAM_PROXIES = ("TracedIterator", "TracedAsyncIterator")
 
 
 def _bound_modules(name: str, original: Any) -> List[Any]:
@@ -484,7 +485,12 @@ class PromptflowInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._set_env = False
             return
         for name in _CONTENT_HOOKS:
-            if not hasattr(base, name):
+            if not hasattr(base, name) and name in _STREAM_PROXIES:
+                logger.warning(
+                    "traceai-promptflow: promptflow.tracing._trace.%s is missing in this Prompt flow version; "
+                    "streams are traced without ending their span on close or when dropped", name,
+                )
+            elif not hasattr(base, name):
                 # Native content stays off our spans regardless: the span drops those attributes and events.
                 logger.warning(
                     "traceai-promptflow: promptflow.tracing._trace.%s is missing in this Prompt flow version; "
