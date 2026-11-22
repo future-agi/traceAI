@@ -132,6 +132,8 @@ Content capture is on by default. Configure `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
 
 `FI_HIDE_ERROR_DETAILS=true` hides error descriptions, exception messages, and stack traces while keeping status and error types. When unset, it follows the input/output value, message, and text hide flags. Explicit `false` overrides the derived value. See the [configuration implementation](fi_instrumentation/instrumentation/config.py) and the [cross-language privacy guide](../README.md#privacy-controls).
 
+With zero-code tracing, the copy of each span sent to Future AGI also passes the shared traceAI privacy catalog, after the settings above. Values under credential-like names (including `pwd`, `pass`, `passphrase`, `passwd`, `passcode` and `pin` as a name or part of one) become `<redacted>`, and so does the value of every credential-named pair in text, in URLs (query, fragment and path) and in JSON text, to the true end of the value. Object and attribute keys go through the same rules, and a value under a name of more than 32 components becomes `<redacted>` whole. Your own exporters receive the original spans. See [Privacy](../docs/python/auto-instrumentation.md#privacy) in the zero-code guide.
+
 ## Use your OpenTelemetry pipeline
 
 Pass your own OpenTelemetry `TracerProvider` to `OpenAIInstrumentor().instrument(tracer_provider=provider)` to use an existing exporter. The `register()` helper configures Future AGI by default. On current source, `register(span_exporter=...)` replaces that destination; older published versions may not include this option.
