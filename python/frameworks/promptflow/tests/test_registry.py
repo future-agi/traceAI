@@ -64,3 +64,20 @@ def test_auto_instrument_activates_promptflow_and_traces_a_function(auto, monkey
     assert [s.name for s in exporter.get_finished_spans()]
     auto.shutdown()
     assert _trace.start_as_current_span is original
+
+
+def test_zero_code_enables_promptflow_on_the_first_import_of_the_tracing_package(auto, monkeypatch):
+    """With promptflow-core / promptflow-tracing only, ``promptflow`` is a namespace package: a hook on its
+    import never fires, so the hook has to sit on a module the install really provides."""
+    import subprocess
+
+    script = (
+        "from opentelemetry.sdk.trace import TracerProvider\n"
+        "from fi_instrumentation.auto import _manager\n"
+        "_manager.auto_instrument(tracer_provider=TracerProvider(), instrumentations=['promptflow'], lazy=True)\n"
+        "assert 'promptflow' not in __import__('sys').modules\n"
+        "import promptflow.tracing\n"
+        "print({s.name: s.status for s in _manager.report()}['promptflow'])\n"
+    )
+    out = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, timeout=120)
+    assert out.stdout.strip().splitlines()[-1] == "instrumented", out.stdout + out.stderr
