@@ -26,6 +26,7 @@ import importlib
 import logging
 import os
 import sys
+import weakref
 from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
 
 import wrapt
@@ -208,6 +209,7 @@ def _handle_span_exception(span: Any, exception: BaseException) -> None:
     stream, which promptflow leaves open."""
     try:
         if span.is_recording():
+            _keep_received_items(span)
             _fail(span, exception)
             if not getattr(span, "__should_end", True):
                 span.end()
@@ -321,6 +323,26 @@ def _noop(*args: Any, **kwargs: Any) -> None:
     """Prompt template text and variables are not exported."""
 
 
+def _watch_stream(stream: Any) -> None:
+    """Let the stream's span reach the items a failing stream has yielded so far (weakly, so a dropped
+    stream still ends its span at once)."""
+    span = stream.__dict__.get("_span")
+    if isinstance(span, _Span):
+        span._self_stream = weakref.ref(stream)
+
+
+def _keep_received_items(span: Any) -> None:
+    """A stream that fails mid-way records what it yielded before the failure, as on exhaustion."""
+    ref = getattr(span, "_self_stream", None)
+    stream = ref() if isinstance(ref, weakref.ref) else None
+    if stream is None:
+        return
+    span.set_attribute(_INCOMPLETE, True)
+    items = getattr(stream, "items", None)
+    if items:
+        _enrich_span_with_output(span, list(items))  # hidden with outputs, like the exhausted stream's
+
+
 def _finish_early(span: Any) -> None:
     try:
         if span.is_recording():
@@ -343,6 +365,10 @@ def _stream_classes(module: Any) -> Dict[str, Any]:
 
 def _traced_iterator(module: Any) -> Any:
     class TracedIterator(module.TracedIterator):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            _watch_stream(self)
+
         def close(self) -> Any:
             try:
                 closer = getattr(self._iterator, "close", None)
@@ -364,6 +390,10 @@ def _traced_iterator(module: Any) -> Any:
 
 def _traced_async_iterator(module: Any) -> Any:
     class TracedAsyncIterator(module.TracedAsyncIterator):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            _watch_stream(self)
+
         async def aclose(self) -> Any:
             try:
                 closer = getattr(self._iterator, "aclose", None)
