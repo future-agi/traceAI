@@ -586,3 +586,23 @@ def test_llm_span_records_request_model_and_parameters(spans, injected_openai):
     assert a["gen_ai.request.temperature"] == 0.2 and a["gen_ai.request.top_p"] == 0.9
     assert a["gen_ai.request.max_tokens"] == 16
     assert list(a["gen_ai.request.stop_sequences"]) == ["END"]
+
+
+# --- review follow-ups ---------------------------------------------------------------------------
+def test_uninstrument_restores_names_bound_after_instrument(provider, monkeypatch):
+    import types
+
+    from promptflow.tracing import _trace
+    from traceai_promptflow import PromptflowInstrumentor
+
+    originals = {n: getattr(_trace, n) for n in ("enrich_prompt_template", "enrich_span_with_input", "TracedIterator")}
+    instrumentor = PromptflowInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    late = types.ModuleType("promptflow.tracing._late_consumer")
+    for name in originals:  # ``from promptflow.tracing._trace import name`` after instrument()
+        setattr(late, name, getattr(_trace, name))
+    monkeypatch.setitem(sys.modules, late.__name__, late)
+    instrumentor.uninstrument()
+    for name, original in originals.items():
+        assert getattr(_trace, name) is original
+        assert getattr(late, name) is original, f"{name} still bound to the instrumented replacement"
