@@ -339,7 +339,8 @@ def _keep_received_items(span: Any) -> None:
     stream = ref() if isinstance(ref, weakref.ref) else None
     if stream is None:
         return
-    span.set_attribute(_INCOMPLETE, True)
+    if not getattr(stream, "_traceai_exhausted", False):  # a stream read to the end is complete
+        span.set_attribute(_INCOMPLETE, True)
     items = getattr(stream, "items", None)
     if items:
         _enrich_span_with_output(span, list(items))  # hidden with outputs, like the exhausted stream's
@@ -365,8 +366,30 @@ def _stream_classes(module: Any) -> Dict[str, Any]:
     return classes
 
 
+def _proxy_base(cls: Any, method: str) -> Any:
+    """The class whose ``method`` Prompt flow's stream proxy calls through ``super()`` to read the
+    next item (its ``IteratorProxy`` / ``AsyncIteratorProxy``), or ``None``."""
+    return next((base for base in cls.__mro__[1:] if method in base.__dict__), None)
+
+
 def _traced_iterator(module: Any) -> Any:
-    class TracedIterator(module.TracedIterator):  # type: ignore[misc]
+    bases: Tuple[Any, ...] = (module.TracedIterator,)
+    proxy = _proxy_base(module.TracedIterator, "__next__")
+    if proxy is not None:
+        class _Exhaustion(proxy):  # type: ignore[misc,valid-type]
+            """Placed between Prompt flow's ``TracedIterator`` and its proxy, so it sees the end of
+            the stream before Prompt flow's own finalization runs."""
+
+            def __next__(self) -> Any:
+                try:
+                    return super().__next__()
+                except StopIteration:
+                    self._traceai_exhausted = True
+                    raise
+
+        bases += (_Exhaustion,)
+
+    class TracedIterator(*bases):  # type: ignore[misc]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             _watch_stream(self)
@@ -391,7 +414,23 @@ def _traced_iterator(module: Any) -> Any:
 
 
 def _traced_async_iterator(module: Any) -> Any:
-    class TracedAsyncIterator(module.TracedAsyncIterator):  # type: ignore[misc]
+    bases: Tuple[Any, ...] = (module.TracedAsyncIterator,)
+    proxy = _proxy_base(module.TracedAsyncIterator, "__anext__")
+    if proxy is not None:
+        class _Exhaustion(proxy):  # type: ignore[misc,valid-type]
+            """Placed between Prompt flow's ``TracedAsyncIterator`` and its proxy, so it sees the end
+            of the stream before Prompt flow's own finalization runs."""
+
+            async def __anext__(self) -> Any:
+                try:
+                    return await super().__anext__()
+                except StopAsyncIteration:
+                    self._traceai_exhausted = True
+                    raise
+
+        bases += (_Exhaustion,)
+
+    class TracedAsyncIterator(*bases):  # type: ignore[misc]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             _watch_stream(self)
