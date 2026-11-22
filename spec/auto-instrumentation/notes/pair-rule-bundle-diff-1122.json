@@ -1,0 +1,1318 @@
+{
+ "base": "d1b3f3a122e7ef8b51f0c11213f9c806696e7864",
+ "base_case_count": 6238,
+ "case_count": 6494,
+ "changed": {
+  "signed-0-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?key=<redacted>&model=keep&key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?key=<redacted>"
+  },
+  "signed-0-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?KEY=<redacted>&model=keep&KEY=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?KEY=<redacted>"
+  },
+  "signed-1-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?api_key=<redacted>&model=keep&api_key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?api_key=<redacted>"
+  },
+  "signed-1-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?API_KEY=<redacted>&model=keep&API_KEY=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?API_KEY=<redacted>"
+  },
+  "signed-1-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%61pi_key=<redacted>&model=keep&%61pi_key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%61pi_key=<redacted>"
+  },
+  "signed-2-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?api-key=<redacted>&model=keep&api-key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?api-key=<redacted>"
+  },
+  "signed-2-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?API-KEY=<redacted>&model=keep&API-KEY=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?API-KEY=<redacted>"
+  },
+  "signed-2-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%61pi-key=<redacted>&model=keep&%61pi-key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%61pi-key=<redacted>"
+  },
+  "signed-3-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?apikey=<redacted>&model=keep&apikey=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?apikey=<redacted>"
+  },
+  "signed-3-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?APIKEY=<redacted>&model=keep&APIKEY=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?APIKEY=<redacted>"
+  },
+  "signed-3-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%61pikey=<redacted>&model=keep&%61pikey=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%61pikey=<redacted>"
+  },
+  "signed-4-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?secret_key=<redacted>&model=keep&secret_key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?secret_key=<redacted>"
+  },
+  "signed-4-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?SECRET_KEY=<redacted>&model=keep&SECRET_KEY=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?SECRET_KEY=<redacted>"
+  },
+  "signed-4-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%73ecret_key=<redacted>&model=keep&%73ecret_key=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%73ecret_key=<redacted>"
+  },
+  "signed-5-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?token=<redacted>&model=keep&token=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?token=<redacted>"
+  },
+  "signed-5-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?TOKEN=<redacted>&model=keep&TOKEN=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?TOKEN=<redacted>"
+  },
+  "signed-6-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?access_token=<redacted>&model=keep&access_token=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?access_token=<redacted>"
+  },
+  "signed-6-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?ACCESS_TOKEN=<redacted>&model=keep&ACCESS_TOKEN=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?ACCESS_TOKEN=<redacted>"
+  },
+  "signed-6-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%61ccess_token=<redacted>&model=keep&%61ccess_token=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%61ccess_token=<redacted>"
+  },
+  "signed-7-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?sig=<redacted>&model=keep&sig=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?sig=<redacted>"
+  },
+  "signed-7-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?SIG=<redacted>&model=keep&SIG=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?SIG=<redacted>"
+  },
+  "signed-8-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?signature=<redacted>&model=keep&signature=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?signature=<redacted>"
+  },
+  "signed-8-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?SIGNATURE=<redacted>&model=keep&SIGNATURE=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?SIGNATURE=<redacted>"
+  },
+  "signed-9-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?x-amz-signature=<redacted>&model=keep&x-amz-signature=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?x-amz-signature=<redacted>"
+  },
+  "signed-9-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?X-AMZ-SIGNATURE=<redacted>&model=keep&X-AMZ-SIGNATURE=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?X-AMZ-SIGNATURE=<redacted>"
+  },
+  "signed-9-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%78-amz-signature=<redacted>&model=keep&%78-amz-signature=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%78-amz-signature=<redacted>"
+  },
+  "signed-10-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?x-amz-credential=<redacted>&model=keep&x-amz-credential=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?x-amz-credential=<redacted>"
+  },
+  "signed-10-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?X-AMZ-CREDENTIAL=<redacted>&model=keep&X-AMZ-CREDENTIAL=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?X-AMZ-CREDENTIAL=<redacted>"
+  },
+  "signed-10-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%78-amz-credential=<redacted>&model=keep&%78-amz-credential=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%78-amz-credential=<redacted>"
+  },
+  "signed-11-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?x-amz-security-token=<redacted>&model=keep&x-amz-security-token=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?x-amz-security-token=<redacted>"
+  },
+  "signed-11-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?X-AMZ-SECURITY-TOKEN=<redacted>&model=keep&X-AMZ-SECURITY-TOKEN=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?X-AMZ-SECURITY-TOKEN=<redacted>"
+  },
+  "signed-11-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%78-amz-security-token=<redacted>&model=keep&%78-amz-security-token=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%78-amz-security-token=<redacted>"
+  },
+  "signed-12-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?x-goog-signature=<redacted>&model=keep&x-goog-signature=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?x-goog-signature=<redacted>"
+  },
+  "signed-12-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?X-GOOG-SIGNATURE=<redacted>&model=keep&X-GOOG-SIGNATURE=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?X-GOOG-SIGNATURE=<redacted>"
+  },
+  "signed-12-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%78-goog-signature=<redacted>&model=keep&%78-goog-signature=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%78-goog-signature=<redacted>"
+  },
+  "signed-13-plain": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?x-goog-credential=<redacted>&model=keep&x-goog-credential=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?x-goog-credential=<redacted>"
+  },
+  "signed-13-upper": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?X-GOOG-CREDENTIAL=<redacted>&model=keep&X-GOOG-CREDENTIAL=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?X-GOOG-CREDENTIAL=<redacted>"
+  },
+  "signed-13-encoded": {
+   "group": "(a) signed-0..13",
+   "base_expected": "see https://example.invalid/object?%78-goog-credential=<redacted>&model=keep&%78-goog-credential=<redacted>#anchor next",
+   "expected": "see https://example.invalid/object?%78-goog-credential=<redacted>"
+  },
+  "empty-query-secret": {
+   "group": "(a) empty-query-secret",
+   "base_expected": "https://example.invalid/?token=<redacted>&model=keep",
+   "expected": "https://example.invalid/?token=<redacted>"
+  },
+  "already-redacted-query": {
+   "group": "(a) already-redacted-query",
+   "base_expected": "https://example.invalid/?token=<redacted>&model=keep",
+   "expected": "https://example.invalid/?token=<redacted>"
+  },
+  "literal-question-query-client_secret?tag-request_query": {
+   "group": "(b) literal-question-query-*",
+   "base_expected": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-client_secret?tag-response_body": {
+   "group": "(b) literal-question-query-*",
+   "base_expected": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-client_secret?tag-free_text_urls": {
+   "group": "(a) literal-question-query-*-free_text_urls",
+   "base_expected": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-password?foo-request_query": {
+   "group": "(b) literal-question-query-*",
+   "base_expected": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-password?foo-response_body": {
+   "group": "(b) literal-question-query-*",
+   "base_expected": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-password?foo-free_text_urls": {
+   "group": "(a) literal-question-query-*-free_text_urls",
+   "base_expected": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-token?filter-request_query": {
+   "group": "(b) literal-question-query-*",
+   "base_expected": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-token?filter-response_body": {
+   "group": "(b) literal-question-query-*",
+   "base_expected": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "literal-question-query-token?filter-free_text_urls": {
+   "group": "(a) literal-question-query-*-free_text_urls",
+   "base_expected": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-absolute-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-absolute-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-0-literal-absolute-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-absolute-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-relative-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-relative-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-0-literal-relative-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see /path?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see /path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-relative-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-absolute-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-absolute-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-0-encoded-absolute-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-absolute-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-relative-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-relative-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-0-encoded-relative-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see /path?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see /path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-relative-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-absolute-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-absolute-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-1-literal-absolute-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-absolute-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-relative-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?password'foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-relative-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "/path?password'foo=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "/path?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-1-literal-relative-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see /path?password'foo=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see /path?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-relative-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?password'foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-absolute-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-absolute-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-1-encoded-absolute-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-absolute-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-relative-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?password%27foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-relative-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "/path?password%27foo=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "/path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-1-encoded-relative-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see /path?password%27foo=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see /path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-relative-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?password%27foo=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-absolute-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-absolute-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-2-literal-absolute-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-absolute-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-relative-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?token'filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-relative-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "/path?token'filter=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "/path?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-2-literal-relative-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see /path?token'filter=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see /path?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-relative-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?token'filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-absolute-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-absolute-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-2-encoded-absolute-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-absolute-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-relative-query": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?token%27filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-relative-response": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": {
+    "url": "/path?token%27filter=<redacted>&model=keep#fragment?token=ordinary"
+   },
+   "expected": {
+    "url": "/path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+   }
+  },
+  "apostrophe-name-2-encoded-relative-text": {
+   "group": "(a) apostrophe-name-*",
+   "base_expected": "see /path?token%27filter=<redacted>&model=keep#fragment?token=ordinary next",
+   "expected": "see /path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-relative-attribute": {
+   "group": "(b) apostrophe-name-*",
+   "base_expected": "/path?token%27filter=<redacted>&model=keep#fragment?token=ordinary",
+   "expected": "/path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-value-0-text": {
+   "group": "(a) apostrophe-value-*",
+   "base_expected": "see https://example.invalid/?token=<redacted>&model=keep#anchor next",
+   "expected": "see https://example.invalid/?token=<redacted>"
+  },
+  "apostrophe-value-1-text": {
+   "group": "(a) apostrophe-value-*",
+   "base_expected": "see https://example.invalid/?token=<redacted>&model=keep#anchor next",
+   "expected": "see https://example.invalid/?token=<redacted>"
+  },
+  "apostrophe-value-2-text": {
+   "group": "(a) apostrophe-value-*",
+   "base_expected": "see https://example.invalid/?token=<redacted>&model=keep#anchor next",
+   "expected": "see https://example.invalid/?token=<redacted>"
+  },
+  "apostrophe-value-3-text": {
+   "group": "(a) apostrophe-value-*",
+   "base_expected": "see https://example.invalid/?token=<redacted>&model=keep#anchor next",
+   "expected": "see https://example.invalid/?token=<redacted>"
+  },
+  "apostrophe-enclosing-quotes-query": {
+   "group": "(a) apostrophe-enclosing-quotes-*",
+   "base_expected": "'https://example.invalid/?token=<redacted>'",
+   "expected": "'https://example.invalid/?token=<redacted>"
+  },
+  "apostrophe-enclosing-quotes-response": {
+   "group": "(a) apostrophe-enclosing-quotes-*",
+   "base_expected": {
+    "url": "'https://example.invalid/?token=<redacted>'"
+   },
+   "expected": {
+    "url": "'https://example.invalid/?token=<redacted>"
+   }
+  },
+  "apostrophe-enclosing-quotes-text": {
+   "group": "(a) apostrophe-enclosing-quotes-*",
+   "base_expected": "see 'https://example.invalid/?token=<redacted>' next",
+   "expected": "see 'https://example.invalid/?token=<redacted>"
+  },
+  "apostrophe-enclosing-quotes-attribute": {
+   "group": "(a) apostrophe-enclosing-quotes-*",
+   "base_expected": "'https://example.invalid/?token=<redacted>'",
+   "expected": "'https://example.invalid/?token=<redacted>"
+  },
+  "fragment-preserved-0": {
+   "group": "(a) fragment-preserved-0..3",
+   "base_expected": "see https://example.invalid/#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/#fragment?token=<redacted>"
+  },
+  "fragment-preserved-1": {
+   "group": "(a) fragment-preserved-0..3",
+   "base_expected": "see https://example.invalid/?model=keep#fragment?token=ordinary next",
+   "expected": "see https://example.invalid/?model=keep#fragment?token=<redacted>"
+  },
+  "fragment-preserved-2": {
+   "group": "(a) fragment-preserved-0..3",
+   "base_expected": "see #fragment?token=ordinary next",
+   "expected": "see #fragment?token=<redacted>"
+  },
+  "fragment-preserved-3": {
+   "group": "(a) fragment-preserved-0..3",
+   "base_expected": "see /path#fragment?token=ordinary next",
+   "expected": "see /path#fragment?token=<redacted>"
+  },
+  "relative-query-reference": {
+   "group": "(a) relative-query-reference",
+   "base_expected": "see /path?token?filter=<redacted>#fragment?token=ordinary next",
+   "expected": "see /path?token?filter=<redacted>#fragment?token=<redacted>"
+  },
+  "query-value-question-preserved": {
+   "group": "(a) query-value-question-preserved",
+   "base_expected": "https://example.invalid/?model=why?token=ordinary",
+   "expected": "https://example.invalid/?model=why?token=<redacted>"
+  },
+  "multiple-url-fragments": {
+   "group": "(a) multiple-url-fragments",
+   "base_expected": "https://example.invalid/#fragment?token=ordinary then https://example.invalid/?token=<redacted>",
+   "expected": "https://example.invalid/#fragment?token=<redacted> https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment then token=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "https://example.invalid/#fragment then https://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "https://example.invalid/#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep then token=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "https://example.invalid/?model=keep then https://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-https://example.invalid/?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "https://example.invalid/?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "/path#fragment then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "/path#fragment then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-/path#fragment then token=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "/path#fragment then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "/path#fragment then https://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-/path#fragment\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "/path#fragment\nnext\thttps://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep then https://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "?model=keep then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "?model=keep then https://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-?model=keep then token=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "?model=keep then https://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "?model=keep then https://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-attribute_keys": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-flattened_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-indexed_paths": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-free_text_urls": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor",
+   "expected": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-request_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-object-response_body": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": {
+    "message": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   },
+   "expected": {
+    "message": "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+   }
+  },
+  "url-prefixed-prose-?model=keep\nnext\ttoken=SYNTHETIC_PRIVATE_20261030-array": {
+   "group": "(a) url-prefixed-prose-*",
+   "base_expected": [
+    "?model=keep\nnext\thttps://example.invalid/?token=<redacted>&model=keep#anchor"
+   ],
+   "expected": [
+    "?model=keep\nnext\thttps://example.invalid/?token=<redacted>"
+   ]
+  },
+  "url-query-trailing-prose-token=SYNTHETIC_PRIVATE_20261030 trailing proseresponse_body": {
+   "group": "(a) url-query-trailing-prose-*",
+   "base_expected": "https://example.invalid/?token=<redacted> trailing prose",
+   "expected": "https://example.invalid/?token=<redacted>"
+  },
+  "url-query-trailing-prose-token=SYNTHETIC_PRIVATE_20261030 trailing proseattribute_keys": {
+   "group": "(a) url-query-trailing-prose-*",
+   "base_expected": "https://example.invalid/?token=<redacted> trailing prose",
+   "expected": "https://example.invalid/?token=<redacted>"
+  },
+  "url-query-trailing-prose-token=SYNTHETIC_PRIVATE_20261030 then https://example.invalid/?model=keep#anchorresponse_body": {
+   "group": "(a) url-query-trailing-prose-*",
+   "base_expected": "https://example.invalid/?token=<redacted> then https://example.invalid/?model=keep#anchor",
+   "expected": "https://example.invalid/?token=<redacted> https://example.invalid/?model=keep#anchor"
+  },
+  "url-query-trailing-prose-token=SYNTHETIC_PRIVATE_20261030 then https://example.invalid/?model=keep#anchorattribute_keys": {
+   "group": "(a) url-query-trailing-prose-*",
+   "base_expected": "https://example.invalid/?token=<redacted> then https://example.invalid/?model=keep#anchor",
+   "expected": "https://example.invalid/?token=<redacted> https://example.invalid/?model=keep#anchor"
+  },
+  "mime-query-media-and-credentials-text": {
+   "group": "(a) mime-query-media-and-credentials-text",
+   "base_expected": "see https://example.invalid/?mime_type=audio%2Fpcm&content=<omitted: 8 base64 chars>&api_key=<redacted>&model=keep#anchor next",
+   "expected": "see https://example.invalid/?mime_type=audio%2Fpcm&content=<omitted: 8 base64 chars>&api_key=<redacted>"
+  }
+ },
+ "added": [
+  "pair-rule-url-fragment-after-query-query",
+  "pair-rule-url-fragment-after-query-response",
+  "pair-rule-url-fragment-after-query-text",
+  "pair-rule-url-fragment-after-query-attribute",
+  "pair-rule-url-second-question-query",
+  "pair-rule-url-second-question-response",
+  "pair-rule-url-second-question-text",
+  "pair-rule-url-second-question-attribute",
+  "pair-rule-url-placeholder-continues-query",
+  "pair-rule-url-placeholder-continues-response",
+  "pair-rule-url-placeholder-continues-text",
+  "pair-rule-url-placeholder-continues-attribute",
+  "pair-rule-url-shape-continues-query",
+  "pair-rule-url-shape-continues-response",
+  "pair-rule-url-shape-continues-text",
+  "pair-rule-url-shape-continues-attribute",
+  "pair-rule-prose-fragment-after-query-response_body",
+  "pair-rule-prose-fragment-after-query-attribute_keys",
+  "pair-rule-prose-fragment-after-query-flattened_paths",
+  "pair-rule-prose-fragment-after-query-indexed_paths",
+  "pair-rule-prose-fragment-after-query-free_text_urls",
+  "pair-rule-prose-fragment-after-query-object-request_body",
+  "pair-rule-prose-fragment-after-query-object-response_body",
+  "pair-rule-prose-fragment-after-query-array",
+  "pair-rule-prose-second-question-response_body",
+  "pair-rule-prose-second-question-attribute_keys",
+  "pair-rule-prose-second-question-flattened_paths",
+  "pair-rule-prose-second-question-indexed_paths",
+  "pair-rule-prose-second-question-free_text_urls",
+  "pair-rule-prose-second-question-object-request_body",
+  "pair-rule-prose-second-question-object-response_body",
+  "pair-rule-prose-second-question-array",
+  "pair-rule-prose-placeholder-continues-response_body",
+  "pair-rule-prose-placeholder-continues-attribute_keys",
+  "pair-rule-prose-placeholder-continues-flattened_paths",
+  "pair-rule-prose-placeholder-continues-indexed_paths",
+  "pair-rule-prose-placeholder-continues-free_text_urls",
+  "pair-rule-prose-placeholder-continues-object-request_body",
+  "pair-rule-prose-placeholder-continues-object-response_body",
+  "pair-rule-prose-placeholder-continues-array",
+  "pair-rule-prose-shape-continues-response_body",
+  "pair-rule-prose-shape-continues-attribute_keys",
+  "pair-rule-prose-shape-continues-flattened_paths",
+  "pair-rule-prose-shape-continues-indexed_paths",
+  "pair-rule-prose-shape-continues-free_text_urls",
+  "pair-rule-prose-shape-continues-object-request_body",
+  "pair-rule-prose-shape-continues-object-response_body",
+  "pair-rule-prose-shape-continues-array",
+  "pair-rule-prose-name-after-question-in-word-response_body",
+  "pair-rule-prose-name-after-question-in-word-attribute_keys",
+  "pair-rule-prose-name-after-question-in-word-flattened_paths",
+  "pair-rule-prose-name-after-question-in-word-indexed_paths",
+  "pair-rule-prose-name-after-question-in-word-free_text_urls",
+  "pair-rule-prose-name-after-question-in-word-object-request_body",
+  "pair-rule-prose-name-after-question-in-word-object-response_body",
+  "pair-rule-prose-name-after-question-in-word-array",
+  "pair-rule-prose-json-string-then-text-response_body",
+  "pair-rule-prose-json-string-then-text-attribute_keys",
+  "pair-rule-prose-json-string-then-text-flattened_paths",
+  "pair-rule-prose-json-string-then-text-indexed_paths",
+  "pair-rule-prose-json-string-then-text-free_text_urls",
+  "pair-rule-prose-json-string-then-text-object-request_body",
+  "pair-rule-prose-json-string-then-text-object-response_body",
+  "pair-rule-prose-json-string-then-text-array",
+  "pair-rule-prose-json-escaped-quote-response_body",
+  "pair-rule-prose-json-escaped-quote-attribute_keys",
+  "pair-rule-prose-json-escaped-quote-flattened_paths",
+  "pair-rule-prose-json-escaped-quote-indexed_paths",
+  "pair-rule-prose-json-escaped-quote-free_text_urls",
+  "pair-rule-prose-json-escaped-quote-object-request_body",
+  "pair-rule-prose-json-escaped-quote-object-response_body",
+  "pair-rule-prose-json-escaped-quote-array",
+  "pair-rule-prose-json-entity-quote-inside-response_body",
+  "pair-rule-prose-json-entity-quote-inside-attribute_keys",
+  "pair-rule-prose-json-entity-quote-inside-flattened_paths",
+  "pair-rule-prose-json-entity-quote-inside-indexed_paths",
+  "pair-rule-prose-json-entity-quote-inside-free_text_urls",
+  "pair-rule-prose-json-entity-quote-inside-object-request_body",
+  "pair-rule-prose-json-entity-quote-inside-object-response_body",
+  "pair-rule-prose-json-entity-quote-inside-array",
+  "pair-rule-prose-json-entity-quote-delimited-response_body",
+  "pair-rule-prose-json-entity-quote-delimited-attribute_keys",
+  "pair-rule-prose-json-entity-quote-delimited-flattened_paths",
+  "pair-rule-prose-json-entity-quote-delimited-indexed_paths",
+  "pair-rule-prose-json-entity-quote-delimited-free_text_urls",
+  "pair-rule-prose-json-entity-quote-delimited-object-request_body",
+  "pair-rule-prose-json-entity-quote-delimited-object-response_body",
+  "pair-rule-prose-json-entity-quote-delimited-array",
+  "pair-rule-prose-json-word-then-words-response_body",
+  "pair-rule-prose-json-word-then-words-attribute_keys",
+  "pair-rule-prose-json-word-then-words-flattened_paths",
+  "pair-rule-prose-json-word-then-words-indexed_paths",
+  "pair-rule-prose-json-word-then-words-free_text_urls",
+  "pair-rule-prose-json-word-then-words-object-request_body",
+  "pair-rule-prose-json-word-then-words-object-response_body",
+  "pair-rule-prose-json-word-then-words-array",
+  "pair-rule-prose-json-number-comma-response_body",
+  "pair-rule-prose-json-number-comma-attribute_keys",
+  "pair-rule-prose-json-number-comma-flattened_paths",
+  "pair-rule-prose-json-number-comma-indexed_paths",
+  "pair-rule-prose-json-number-comma-free_text_urls",
+  "pair-rule-prose-json-number-comma-object-request_body",
+  "pair-rule-prose-json-number-comma-object-response_body",
+  "pair-rule-prose-json-number-comma-array",
+  "pair-rule-prose-json-number-brace-response_body",
+  "pair-rule-prose-json-number-brace-attribute_keys",
+  "pair-rule-prose-json-number-brace-flattened_paths",
+  "pair-rule-prose-json-number-brace-indexed_paths",
+  "pair-rule-prose-json-number-brace-free_text_urls",
+  "pair-rule-prose-json-number-brace-object-request_body",
+  "pair-rule-prose-json-number-brace-object-response_body",
+  "pair-rule-prose-json-number-brace-array",
+  "pair-rule-prose-json-number-bracket-response_body",
+  "pair-rule-prose-json-number-bracket-attribute_keys",
+  "pair-rule-prose-json-number-bracket-flattened_paths",
+  "pair-rule-prose-json-number-bracket-indexed_paths",
+  "pair-rule-prose-json-number-bracket-free_text_urls",
+  "pair-rule-prose-json-number-bracket-object-request_body",
+  "pair-rule-prose-json-number-bracket-object-response_body",
+  "pair-rule-prose-json-number-bracket-array",
+  "pair-rule-prose-json-number-end-response_body",
+  "pair-rule-prose-json-number-end-attribute_keys",
+  "pair-rule-prose-json-number-end-flattened_paths",
+  "pair-rule-prose-json-number-end-indexed_paths",
+  "pair-rule-prose-json-number-end-free_text_urls",
+  "pair-rule-prose-json-number-end-object-request_body",
+  "pair-rule-prose-json-number-end-object-response_body",
+  "pair-rule-prose-json-number-end-array",
+  "pair-rule-prose-json-number-word-response_body",
+  "pair-rule-prose-json-number-word-attribute_keys",
+  "pair-rule-prose-json-number-word-flattened_paths",
+  "pair-rule-prose-json-number-word-indexed_paths",
+  "pair-rule-prose-json-number-word-free_text_urls",
+  "pair-rule-prose-json-number-word-object-request_body",
+  "pair-rule-prose-json-number-word-object-response_body",
+  "pair-rule-prose-json-number-word-array",
+  "pair-rule-prose-json-true-comma-response_body",
+  "pair-rule-prose-json-true-comma-attribute_keys",
+  "pair-rule-prose-json-true-comma-flattened_paths",
+  "pair-rule-prose-json-true-comma-indexed_paths",
+  "pair-rule-prose-json-true-comma-free_text_urls",
+  "pair-rule-prose-json-true-comma-object-request_body",
+  "pair-rule-prose-json-true-comma-object-response_body",
+  "pair-rule-prose-json-true-comma-array",
+  "pair-rule-prose-json-true-brace-response_body",
+  "pair-rule-prose-json-true-brace-attribute_keys",
+  "pair-rule-prose-json-true-brace-flattened_paths",
+  "pair-rule-prose-json-true-brace-indexed_paths",
+  "pair-rule-prose-json-true-brace-free_text_urls",
+  "pair-rule-prose-json-true-brace-object-request_body",
+  "pair-rule-prose-json-true-brace-object-response_body",
+  "pair-rule-prose-json-true-brace-array",
+  "pair-rule-prose-json-true-bracket-response_body",
+  "pair-rule-prose-json-true-bracket-attribute_keys",
+  "pair-rule-prose-json-true-bracket-flattened_paths",
+  "pair-rule-prose-json-true-bracket-indexed_paths",
+  "pair-rule-prose-json-true-bracket-free_text_urls",
+  "pair-rule-prose-json-true-bracket-object-request_body",
+  "pair-rule-prose-json-true-bracket-object-response_body",
+  "pair-rule-prose-json-true-bracket-array",
+  "pair-rule-prose-json-true-end-response_body",
+  "pair-rule-prose-json-true-end-attribute_keys",
+  "pair-rule-prose-json-true-end-flattened_paths",
+  "pair-rule-prose-json-true-end-indexed_paths",
+  "pair-rule-prose-json-true-end-free_text_urls",
+  "pair-rule-prose-json-true-end-object-request_body",
+  "pair-rule-prose-json-true-end-object-response_body",
+  "pair-rule-prose-json-true-end-array",
+  "pair-rule-prose-json-true-word-response_body",
+  "pair-rule-prose-json-true-word-attribute_keys",
+  "pair-rule-prose-json-true-word-flattened_paths",
+  "pair-rule-prose-json-true-word-indexed_paths",
+  "pair-rule-prose-json-true-word-free_text_urls",
+  "pair-rule-prose-json-true-word-object-request_body",
+  "pair-rule-prose-json-true-word-object-response_body",
+  "pair-rule-prose-json-true-word-array",
+  "pair-rule-prose-json-false-comma-response_body",
+  "pair-rule-prose-json-false-comma-attribute_keys",
+  "pair-rule-prose-json-false-comma-flattened_paths",
+  "pair-rule-prose-json-false-comma-indexed_paths",
+  "pair-rule-prose-json-false-comma-free_text_urls",
+  "pair-rule-prose-json-false-comma-object-request_body",
+  "pair-rule-prose-json-false-comma-object-response_body",
+  "pair-rule-prose-json-false-comma-array",
+  "pair-rule-prose-json-false-brace-response_body",
+  "pair-rule-prose-json-false-brace-attribute_keys",
+  "pair-rule-prose-json-false-brace-flattened_paths",
+  "pair-rule-prose-json-false-brace-indexed_paths",
+  "pair-rule-prose-json-false-brace-free_text_urls",
+  "pair-rule-prose-json-false-brace-object-request_body",
+  "pair-rule-prose-json-false-brace-object-response_body",
+  "pair-rule-prose-json-false-brace-array",
+  "pair-rule-prose-json-false-bracket-response_body",
+  "pair-rule-prose-json-false-bracket-attribute_keys",
+  "pair-rule-prose-json-false-bracket-flattened_paths",
+  "pair-rule-prose-json-false-bracket-indexed_paths",
+  "pair-rule-prose-json-false-bracket-free_text_urls",
+  "pair-rule-prose-json-false-bracket-object-request_body",
+  "pair-rule-prose-json-false-bracket-object-response_body",
+  "pair-rule-prose-json-false-bracket-array",
+  "pair-rule-prose-json-false-end-response_body",
+  "pair-rule-prose-json-false-end-attribute_keys",
+  "pair-rule-prose-json-false-end-flattened_paths",
+  "pair-rule-prose-json-false-end-indexed_paths",
+  "pair-rule-prose-json-false-end-free_text_urls",
+  "pair-rule-prose-json-false-end-object-request_body",
+  "pair-rule-prose-json-false-end-object-response_body",
+  "pair-rule-prose-json-false-end-array",
+  "pair-rule-prose-json-false-word-response_body",
+  "pair-rule-prose-json-false-word-attribute_keys",
+  "pair-rule-prose-json-false-word-flattened_paths",
+  "pair-rule-prose-json-false-word-indexed_paths",
+  "pair-rule-prose-json-false-word-free_text_urls",
+  "pair-rule-prose-json-false-word-object-request_body",
+  "pair-rule-prose-json-false-word-object-response_body",
+  "pair-rule-prose-json-false-word-array",
+  "pair-rule-prose-json-null-comma-response_body",
+  "pair-rule-prose-json-null-comma-attribute_keys",
+  "pair-rule-prose-json-null-comma-flattened_paths",
+  "pair-rule-prose-json-null-comma-indexed_paths",
+  "pair-rule-prose-json-null-comma-free_text_urls",
+  "pair-rule-prose-json-null-comma-object-request_body",
+  "pair-rule-prose-json-null-comma-object-response_body",
+  "pair-rule-prose-json-null-comma-array",
+  "pair-rule-prose-json-null-brace-response_body",
+  "pair-rule-prose-json-null-brace-attribute_keys",
+  "pair-rule-prose-json-null-brace-flattened_paths",
+  "pair-rule-prose-json-null-brace-indexed_paths",
+  "pair-rule-prose-json-null-brace-free_text_urls",
+  "pair-rule-prose-json-null-brace-object-request_body",
+  "pair-rule-prose-json-null-brace-object-response_body",
+  "pair-rule-prose-json-null-brace-array",
+  "pair-rule-prose-json-null-bracket-response_body",
+  "pair-rule-prose-json-null-bracket-attribute_keys",
+  "pair-rule-prose-json-null-bracket-flattened_paths",
+  "pair-rule-prose-json-null-bracket-indexed_paths",
+  "pair-rule-prose-json-null-bracket-free_text_urls",
+  "pair-rule-prose-json-null-bracket-object-request_body",
+  "pair-rule-prose-json-null-bracket-object-response_body",
+  "pair-rule-prose-json-null-bracket-array",
+  "pair-rule-prose-json-null-end-response_body",
+  "pair-rule-prose-json-null-end-attribute_keys",
+  "pair-rule-prose-json-null-end-flattened_paths",
+  "pair-rule-prose-json-null-end-indexed_paths",
+  "pair-rule-prose-json-null-end-free_text_urls",
+  "pair-rule-prose-json-null-end-object-request_body",
+  "pair-rule-prose-json-null-end-object-response_body",
+  "pair-rule-prose-json-null-end-array",
+  "pair-rule-prose-json-null-word-response_body",
+  "pair-rule-prose-json-null-word-attribute_keys",
+  "pair-rule-prose-json-null-word-flattened_paths",
+  "pair-rule-prose-json-null-word-indexed_paths",
+  "pair-rule-prose-json-null-word-free_text_urls",
+  "pair-rule-prose-json-null-word-object-request_body",
+  "pair-rule-prose-json-null-word-object-response_body",
+  "pair-rule-prose-json-null-word-array"
+ ]
+}
