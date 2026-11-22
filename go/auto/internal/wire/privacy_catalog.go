@@ -9,10 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 //go:embed privacy.json
@@ -30,7 +33,8 @@ type privacyCatalog struct {
 		Contextual []struct {
 			Regex string `json:"path_regex"`
 		} `json:"contextual_exclusions"`
-		Shapes []struct{ Regex, Flags string } `json:"value_shapes"`
+		Shapes     []struct{ Regex, Flags string } `json:"value_shapes"`
+		Vocabulary struct{ Words []string }
 	}
 	SignedURL struct{ Parameters []string } `json:"signed_url"`
 	Media     struct {
@@ -109,13 +113,23 @@ type compiledPrivacy struct {
 	exclusions []nameExclusion
 	contextual []*regexp.Regexp
 	shapes     []*regexp.Regexp
-	magic      [][]magicTest
-	signed     map[string]bool
-	alphabet   [256]bool
-	metrics    map[string]bool
-	counts     map[string]bool
-	decimals   map[string]bool
-	decimal    *regexp.Regexp
+	// wordShapes are the value shapes as read at a --name's value start: anchored there, with no leading word boundary.
+	wordShapes []*regexp.Regexp
+	// shapeBounds says, per shape, whether it starts and whether it ends with \b. RE2's \b is ASCII only; the reference's word
+	// boundary (Python 3 re, Unicode) is checked on each match (shapeRuns).
+	shapeBounds [][2]bool
+	// shapeDollar says whether a shape ends at "$" as one alternative (the private key block runs to its END line or to the end
+	// of the text). Python's $ also holds before a final newline; RE2's (no m flag) holds only at the end.
+	shapeDollar []bool
+	// words are the vocabulary words: a credential name when one is the whole name or one of its segments.
+	words    map[string]bool
+	magic    [][]magicTest
+	signed   map[string]bool
+	alphabet [256]bool
+	metrics  map[string]bool
+	counts   map[string]bool
+	decimals map[string]bool
+	decimal  *regexp.Regexp
 }
 
 var privacyRules = loadPrivacyCatalog()
@@ -135,14 +149,16 @@ func loadPrivacyCatalog() *compiledPrivacy {
 		patterns[pattern.ID] = pattern.Contains
 	}
 	for _, exclusion := range p.Credentials.Exclusions {
-		e := nameExclusion{regex: regexp.MustCompile(exclusion.Regex)}
+		// Java's Pattern semantics: '.' matches no line terminator (LF, CR, U+0085, U+2028, U+2029).
+		java := strings.ReplaceAll(exclusion.Regex, ".", `[^\n\r\x{85}\x{2028}\x{2029}]`)
+		e := nameExclusion{regex: regexp.MustCompile("^(?:" + java + ")$")}
 		for _, id := range exclusion.Unless {
 			e.guards = append(e.guards, patterns[id])
 		}
 		p.exclusions = append(p.exclusions, e)
 	}
 	for _, exclusion := range p.Credentials.Contextual {
-		p.contextual = append(p.contextual, regexp.MustCompile(exclusion.Regex))
+		p.contextual = append(p.contextual, regexp.MustCompile("^(?:"+exclusion.Regex+")$"))
 	}
 	for _, shape := range p.Credentials.Shapes {
 		flags := ""
@@ -155,7 +171,16 @@ func loadPrivacyCatalog() *compiledPrivacy {
 		if flags != "" {
 			flags = "(?" + flags + ")"
 		}
-		p.shapes = append(p.shapes, regexp.MustCompile(flags+shape.Regex))
+		pattern := shapePattern(shape.Regex, strings.ContainsRune(shape.Flags, 'i'))
+		p.shapes = append(p.shapes, regexp.MustCompile(flags+pattern))
+		p.shapeBounds = append(p.shapeBounds, [2]bool{strings.HasPrefix(shape.Regex, `\b`),
+			strings.HasSuffix(shape.Regex, `\b`) && !strings.HasSuffix(shape.Regex, `\\b`)})
+		p.shapeDollar = append(p.shapeDollar, strings.Contains(shape.Regex, "|$)"))
+		p.wordShapes = append(p.wordShapes, regexp.MustCompile(flags+"^(?:"+strings.TrimPrefix(pattern, `\b`)+")"))
+	}
+	p.words = map[string]bool{}
+	for _, word := range p.Credentials.Vocabulary.Words {
+		p.words[word] = true
 	}
 	p.signed = map[string]bool{}
 	for _, name := range p.SignedURL.Parameters {
@@ -302,10 +327,74 @@ func (p *compiledPrivacy) excluded(s string) bool {
 // keys, access key IDs, JWTs, authorization values, private-key PEM) in text,
 // whatever key the text sits under. The replacement marker matches no shape.
 func redactValueShapes(s string) string {
-	for _, shape := range privacyRules.shapes {
-		s = shape.ReplaceAllLiteralString(s, CredentialRedacted)
+	for k := range privacyRules.shapes {
+		runs := shapeRuns(k, s)
+		if len(runs) == 0 {
+			continue
+		}
+		var out strings.Builder
+		last := 0
+		for _, run := range runs {
+			out.WriteString(s[last:run[0]])
+			out.WriteString(CredentialRedacted)
+			last = run[1]
+		}
+		out.WriteString(s[last:])
+		s = out.String()
 	}
 	return s
+}
+
+// pyWord is a word character of Python 3's re in Unicode mode (\w): a letter, a number or '_'.
+func pyWord(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
+}
+
+// pyBoundary is Python's \b at byte offset x of s: a word character on exactly one side.
+func pyBoundary(s string, x int) bool {
+	before, after := false, false
+	if x > 0 {
+		r, _ := utf8.DecodeLastRuneInString(s[:x])
+		before = pyWord(r)
+	}
+	if x < len(s) {
+		r, _ := utf8.DecodeRuneInString(s[x:])
+		after = pyWord(r)
+	}
+	return before != after
+}
+
+// shapeRuns gives the byte spans of value shape k in s, left to right and not overlapping, as Python's re.finditer reads them. RE2
+// finds each candidate (its ASCII \b holds wherever Python's does, so no Python match is skipped); a candidate whose leading or
+// trailing \b does not hold as Python reads it is dropped and the search goes on from the next character. The catalog shapes
+// that end with \b have one length per start, so no shorter match at the same start needs to be tried.
+func shapeRuns(k int, s string) [][2]int {
+	shape, bounds := privacyRules.shapes[k], privacyRules.shapeBounds[k]
+	var runs [][2]int
+	for pos := 0; pos <= len(s); {
+		loc := shape.FindStringIndex(s[pos:])
+		if loc == nil {
+			break
+		}
+		start, end := pos+loc[0], pos+loc[1]
+		if privacyRules.shapeDollar[k] && end == len(s) && end > start && s[end-1] == '\n' && !strings.HasSuffix(s[:end], "-----") {
+			// A lazy run that reached the end: Python's $ held one character earlier, before the final newline.
+			end--
+		}
+		if (!bounds[0] || pyBoundary(s, start)) && (!bounds[1] || pyBoundary(s, end)) {
+			runs = append(runs, [2]int{start, end})
+			if end > start {
+				pos = end
+				continue
+			}
+		}
+		if start >= len(s) {
+			break
+		}
+		_, size := utf8.DecodeRuneInString(s[start:])
+		pos = start + size
+	}
+	return runs
 }
 func (p *compiledPrivacy) pattern(s string) bool {
 	for _, pattern := range p.Credentials.Patterns {
@@ -319,34 +408,57 @@ func (p *compiledPrivacy) pattern(s string) bool {
 // CredentialAttributeKey is the ONE name predicate for headers, JSON fields,
 // query names and native/flattened/indexed attributes. Exclusions are local, not
 // subtree exemptions, and a credential ancestor always retains its meaning.
+// A name of more than limits.max_depth components is a credential name here
+// (fail closed); the export walk exports its whole value as the placeholder.
 func CredentialAttributeKey(name string) bool {
-	p := privacyRules
-	var parts []string
-	rawParts := pathParts(name)
-	if len(rawParts) > p.Limits.Depth {
+	if len(pathParts(name)) > privacyRules.Limits.Depth {
 		return true
-	} // Fail closed on over-deep flattened paths too.
-	for _, part := range rawParts {
-		if !numericPart(part) {
-			parts = append(parts, p.normalize(part))
-		}
 	}
+	return credentialNameRule(name)
+}
+
+// credentialName is CredentialAttributeKey inside an export: a name of more
+// than limits.max_depth components raises pathBudgetExceeded.
+func credentialName(name string) bool {
+	pathBudget(name)
+	return credentialNameRule(name)
+}
+
+// credentialNameRule tests the catalog patterns and vocabulary words per path
+// component, then on the whole name; an excluded component is not tested.
+func credentialNameRule(name string) bool {
+	p := privacyRules
 	excluded := false
-	for i, part := range parts {
-		local := p.excluded(part)
+	var context []string
+	for _, part := range pathParts(name) {
+		if numericPart(part) {
+			continue
+		}
+		folded := p.normalize(part)
+		context = append(context, folded)
+		local := p.excluded(folded)
 		for _, e := range p.contextual {
-			local = local || e.MatchString(strings.Join(parts[:i+1], "."))
+			local = local || e.MatchString(strings.Join(context, "."))
 		}
 		if local {
 			excluded = true
-		} else if p.pattern(part) {
+		} else if p.pattern(folded) || vocabulary(part) {
 			return true
 		}
 	}
-	return !excluded && !p.excluded(p.normalize(name)) && p.pattern(p.normalize(name))
+	if excluded {
+		return false
+	}
+	folded := p.normalize(name)
+	return !p.excluded(folded) && (p.pattern(folded) || vocabulary(name))
 }
 func queryCredentialKey(name string) bool {
 	return privacyRules.signed[privacyRules.normalize(name)] || CredentialAttributeKey(name)
+}
+
+// queryName is queryCredentialKey inside an export (see credentialName).
+func queryName(name string) bool {
+	return privacyRules.signed[privacyRules.normalize(name)] || credentialName(name)
 }
 
 func base64Alphabet(s string) bool {
@@ -909,14 +1021,38 @@ func failClosedPartial(s, path string, budget *privacyBudget) string {
 	out.WriteString(s[last:])
 	return out.String()
 }
-func privacyWalk(value any, path string, secrets []string, budget *privacyBudget, depth int, inherited mediaHint, hints privacyHints, framed bool) any {
+
+// privacyMapKey is a map key through the export rules of a string value at a
+// framed site that need no context: a whole data URI or magic-byte media value,
+// then the URL catalog and data URIs, known secrets, value shapes and the pair
+// rule.
+func privacyMapKey(name string, secrets []string, budget *privacyBudget) string {
+	if replacement, ok := mediaString(name, "", mediaHint{}, nil, true); ok {
+		return replacement
+	}
+	return privacyText(name, secrets, true, false, false, budget.mask)
+}
+
+func privacyWalk(value any, path string, secrets []string, budget *privacyBudget, depth int, inherited mediaHint, hints privacyHints, framed bool) (result any) {
 	if depth == 0 {
+		// A name of more than limits.max_depth components (a path, a map key, a
+		// hint name or a pair name in text) exports the whole value as the
+		// placeholder (fail closed).
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if _, ok := recovered.(pathBudgetExceeded); !ok {
+					panic(recovered)
+				}
+				result = CredentialRedacted
+			}
+		}()
 		hints = indexHints(value, path, hints)
 	}
+	pathBudget(path)
 	if !budget.take(0, depth) {
 		panic("traceai privacy structure budget")
 	}
-	if CredentialAttributeKey(path) {
+	if credentialName(path) {
 		return CredentialRedacted
 	}
 	switch x := value.(type) {
@@ -929,7 +1065,14 @@ func privacyWalk(value any, path string, secrets []string, budget *privacyBudget
 			if !budget.take(len(key), depth) {
 				panic("traceai privacy text budget")
 			}
-			out[key] = privacyWalk(value, joinPath(path, key), secrets, budget, depth+1, inherited, hints, true)
+			clean := privacyWalk(value, joinPath(path, key), secrets, budget, depth+1, inherited, hints, true)
+			// Keys go through the export text rules. Two keys that are one after
+			// scrubbing keep one key, whose value is the placeholder.
+			name := privacyMapKey(key, secrets, budget)
+			if _, collision := out[name]; collision {
+				clean = CredentialRedacted
+			}
+			out[name] = clean
 		}
 		return out
 	case []string:
@@ -978,21 +1121,31 @@ func privacyWalk(value any, path string, secrets []string, budget *privacyBudget
 		}
 		trim := strings.TrimSpace(x)
 		if strings.HasPrefix(trim, "{") || strings.HasPrefix(trim, "[") {
-			var parsed any
-			if json.Unmarshal([]byte(x), &parsed) == nil {
+			if parsed, order, ok := parseStructured(x); ok {
 				context, _ := mediaContext(path, inherited, hints)
 				clean := privacyWalk(parsed, path, secrets, budget, depth+1, context, hints, true)
-				if dump(parsed) != dump(clean) {
-					x = dump(clean)
+				if !reflect.DeepEqual(parsed, clean) {
+					x = exportJSON(clean, order, func(key string) string { return privacyMapKey(key, secrets, budget) })
 				}
-				return budget.text(x, secrets, framed)
+				// Each leaf string went through the pair rule on its own; the
+				// re-dumped JSON is not read by it again.
+				_, object := parsed.(map[string]any)
+				_, array := parsed.([]any)
+				return budget.text(x, secrets, framed, object || array)
 			}
 		}
-		text := partialPrivacy(x, secrets, budget, depth+1)
+		// The shared text rule reads the text as it is; JSON string tokens of
+		// unparseable (for example cut) JSON are then decoded and walked on their
+		// own, which catches escaped URLs and media the text rule cannot read.
+		text := privacyText(x, secrets, framed, false, budget.cutText, budget.mask)
+		text = partialPrivacy(text, secrets, budget, depth+1)
 		if budget.degraded && (strings.HasPrefix(trim, "{") || strings.HasPrefix(trim, "[")) {
 			text = failClosedPartial(text, path, budget)
 		}
-		return budget.text(text, secrets, framed)
+		if budget.cutText {
+			text = truncatedPrivacyText(text)
+		}
+		return text
 	case nil:
 		return nil
 	case bool, float64, int, int64, json.Number:
@@ -1004,4 +1157,60 @@ func privacyWalk(value any, path string, secrets []string, budget *privacyBudget
 	default:
 		return fmt.Sprintf("%T", value)
 	}
+}
+
+// shapeSpaces is the reference's whitespace (Python's str.isspace) as the body of an RE2 character class.
+const shapeSpaces = `\t-\r\x{1c}-\x{20}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
+
+// shapeFolds are the characters Python's re.I matches beyond ASCII case for the letters s, i and k.
+const shapeFolds = `\x{17f}\x{130}\x{131}\x{212a}`
+
+// shapePattern reads a catalog value shape as the reference's regular expressions do: \s is str.isspace's whitespace (RE2's \s
+// is ASCII only), and under the i flag the letters s, i and k, and every character class that is not negated, also match long s,
+// dotted capital I, dotless i and the Kelvin sign. Each change only widens what a shape matches, and the result is still RE2.
+func shapePattern(pattern string, ignoreCase bool) string {
+	var out strings.Builder
+	inClass := false
+	for k := 0; k < len(pattern); k++ {
+		c := pattern[k]
+		switch {
+		case c == '\\' && k+1 < len(pattern):
+			k++
+			if pattern[k] == 's' {
+				if inClass {
+					out.WriteString(shapeSpaces)
+				} else {
+					out.WriteString("[" + shapeSpaces + "]")
+				}
+			} else {
+				out.WriteByte(c)
+				out.WriteByte(pattern[k])
+			}
+		case c == '[' && !inClass:
+			inClass = true
+			out.WriteByte(c)
+			if k+1 < len(pattern) && pattern[k+1] == '^' {
+				k++
+				out.WriteByte('^')
+			} else if ignoreCase {
+				// At the start of the class, where no '-' before them can form a range.
+				out.WriteString(shapeFolds)
+			}
+		case c == ']' && inClass:
+			inClass = false
+			out.WriteByte(c)
+		case ignoreCase && !inClass && (c|0x20 == 's' || c|0x20 == 'i' || c|0x20 == 'k'):
+			switch c | 0x20 {
+			case 's':
+				out.WriteString(`[sS\x{17f}]`)
+			case 'i':
+				out.WriteString(`[iI\x{130}\x{131}]`)
+			default:
+				out.WriteString(`[kK\x{212a}]`)
+			}
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
 }

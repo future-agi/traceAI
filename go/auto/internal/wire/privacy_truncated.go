@@ -19,7 +19,7 @@ func truncatedPrivacyText(s string) string {
 			i += n
 			continue
 		}
-		if prefixFold(s[i:], "data:") && (i == 0 || !schemeChar(s[i-1])) {
+		if prefixFold(s[i:], "data:") && !dataBlocked(s, i) {
 			end := i + dataTokenEnd(s[i:])
 			replacement, ok := dataURI(s[i:end])
 			if !ok {

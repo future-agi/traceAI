@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Shared adversarial-input sizes and budget; reuse across SDK ports.
@@ -154,9 +156,11 @@ func truncate(s string) string {
 // Strings built from the pieces cannot trigger any other value shape. Besides
 // random pieces it feeds near-misses of a valid token: one character replaced
 // by a non-run character, a dot removed or added, runs mixing '.', '-' and '_',
-// and a non-ASCII letter next to eyJ (Go's \b is ASCII only).
+// and a non-ASCII letter next to eyJ. The word boundary is the shared reference's (Python 3 re, Unicode: a non-ASCII letter is
+// a word character), not Go's ASCII \b, so the plain regex's candidates are kept only where that boundary holds.
 func TestValueShapesJWTDifferentialAgainstUnboundedReference(t *testing.T) {
-	ref := regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
+	plain := regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
+	ref := unicodeBoundaryRegexp{plain}
 	pieces := []string{"eyJ", "eyJaaaaaaaa", "aaaaaaaa", ".", "-", "_", " ", "x", "\u00e9", "\u00e9eyJ", "eyJ-", "a.", ".a", "..", "eyJ.eyJ-"}
 	rng := rand.New(rand.NewSource(20260721))
 	hits, rounds := 0, 0
@@ -213,4 +217,35 @@ func TestValueShapesJWTDifferentialAgainstUnboundedReference(t *testing.T) {
 	check(big)
 	check("\u00e9eyJ" + strings.Repeat("a", 100000) + "." + strings.Repeat("b", 100000) + "." + strings.Repeat("c", 100000))
 	t.Logf("rounds=%d rounds_with_redaction=%d large_input_bytes=%d", rounds, hits, len(big))
+}
+
+// unicodeBoundaryRegexp replaces the matches of a pattern that starts with \b where Python's Unicode word boundary holds before
+// the match: the character before it is no letter, number or '_'. A dropped candidate is retried from its next character.
+type unicodeBoundaryRegexp struct{ re *regexp.Regexp }
+
+func (u unicodeBoundaryRegexp) ReplaceAllLiteralString(in, with string) string {
+	var out strings.Builder
+	last := 0
+	for pos := 0; pos <= len(in); {
+		loc := u.re.FindStringIndex(in[pos:])
+		if loc == nil {
+			break
+		}
+		start, end := pos+loc[0], pos+loc[1]
+		before := false
+		if start > 0 {
+			r, _ := utf8.DecodeLastRuneInString(in[:start])
+			before = r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
+		}
+		if !before {
+			out.WriteString(in[last:start])
+			out.WriteString(with)
+			last, pos = end, end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(in[start:])
+		pos = start + size
+	}
+	out.WriteString(in[last:])
+	return out.String()
 }
