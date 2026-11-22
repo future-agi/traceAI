@@ -33,7 +33,10 @@ when the response carries it. Tool calls the model makes are recorded on the out
 * Streams end on exhaustion, error or `close()`; an early close is marked
   `writer.stream.incomplete`. This includes leaving a `chat.stream()` helper block early (the
   helper closes the underlying response). A stream that is dropped without being read or closed
-  exports no span: nothing is exported from garbage collection or at interpreter exit.
+  is never ended by this package: no finalizer ends or exports its span. With `register()`'s
+  default batch processor nothing is exported for it. A span processor that tracks open spans
+  (for example `register(batch=False)` or a plain `fi_instrumentation` `TracerProvider()`) ends
+  it at shutdown and marks it `gen_ai.span.leaked`, without the output received so far.
 * Exceptions are re-raised unchanged and recorded as `ERROR` with `error.type` (the class name);
   the message is never exported.
 * Inputs and outputs follow the `TraceConfig` hide settings. Only plain-text conversations are

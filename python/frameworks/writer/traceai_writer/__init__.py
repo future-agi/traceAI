@@ -235,7 +235,8 @@ class _Stream:
     """Proxy for the SDK's Stream / AsyncStream; chunks are forwarded unchanged.
 
     The span ends on exhaustion, error, ``close()`` or leaving the ``with`` block. A stream that is
-    simply dropped never exports its span: no finalizer runs the exporter from garbage collection.
+    simply dropped is never ended here: no finalizer ends or exports its span. A processor that
+    tracks open spans may still end it at shutdown, marked ``gen_ai.span.leaked``.
     """
 
     def __init__(self, source: Any, span: Any, recorder: _Recorder) -> None:
