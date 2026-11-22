@@ -85,6 +85,7 @@ def test_the_row_dependent_tests_carry_the_skip():
 
 
 # --- any release with a promptflow row ------------------------------------------------------------
+@needs_row
 def test_the_registry_row_names_the_package_and_instrumentor():
     row = INSTALLED_ROW
     assert row.package == "traceAI-promptflow"
@@ -96,6 +97,7 @@ def test_the_registry_row_names_the_package_and_instrumentor():
     assert hasattr(traceai_promptflow, row.entry)
 
 
+@needs_row
 def test_promptflow_is_detected_and_planned_when_installed(auto):
     row = INSTALLED_ROW
     status, action, installed = auto._plan(row, auto.AutoConfig(), lazy=True)
@@ -104,6 +106,7 @@ def test_promptflow_is_detected_and_planned_when_installed(auto):
     assert installed == list(row.targets)
 
 
+@needs_row
 def test_the_install_hint_is_given_when_the_traceai_package_is_missing(auto, monkeypatch):
     monkeypatch.setattr(auto, "module_available", lambda dotted: dotted != "traceai_promptflow")
     status, _action, _ = auto._plan(INSTALLED_ROW, auto.AutoConfig(), lazy=True)
@@ -111,6 +114,7 @@ def test_the_install_hint_is_given_when_the_traceai_package_is_missing(auto, mon
     assert "pip install traceAI-promptflow" in status.detail
 
 
+@needs_row
 def test_auto_instrument_activates_promptflow_and_traces_a_function(auto):
     from promptflow.tracing import _trace, trace
 
@@ -133,15 +137,18 @@ def test_auto_instrument_activates_promptflow_and_traces_a_function(auto):
 
 
 # --- only with the row hooked on promptflow.tracing -----------------------------------------------
+@needs_tracing_row
 def test_the_registry_row_hooks_promptflow_tracing():
     assert INSTALLED_ROW.targets == TRACING_TARGETS
 
 
+@needs_tracing_row
 def test_promptflow_tracing_is_detected_on_a_promptflow_core_install(auto):
     _status, _action, installed = auto._plan(INSTALLED_ROW, auto.AutoConfig(), lazy=True)
     assert installed == ["promptflow.tracing"]
 
 
+@needs_tracing_row
 def test_zero_code_enables_promptflow_on_the_first_import_of_the_tracing_package():
     """With promptflow-core / promptflow-tracing only, ``promptflow`` is a namespace package: a hook on its
     import never fires, so the hook has to sit on a module the install really provides."""
