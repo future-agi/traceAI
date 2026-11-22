@@ -82,6 +82,8 @@ class _Recorder:
         self.usage: Dict[str, int] = {}
         self.choices: Dict[int, List[str]] = {}
         self.lengths: Dict[int, int] = {}
+        # Whether the response had a choice other than choice 0, with or without text.
+        self.several = False
         self.tools: List[Dict[str, Any]] = []
         self.result: Any = None
 
@@ -145,13 +147,17 @@ class _Recorder:
         # complete: CompletionResponse, StreamChunk, StreamSummary
         completions = _field(value, "completions")
         if isinstance(completions, (list, tuple)):
+            self.several = self.several or len(completions) > 1
             for position, choice in enumerate(completions):
                 self._add(_text(_field(choice, "completion")), position)
                 self._finish(_field(choice, "finish_reason"))
             return
+        index = _field(value, "index")
+        index = index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else 0
+        if self.operation == "text_completion" and index:
+            self.several = True  # a streamed chunk or summary of a choice other than choice 0
         if _field(value, "completion") is not None:
-            index = _field(value, "index")
-            self._add(_text(_field(value, "completion")), index if isinstance(index, int) and index >= 0 else 0)
+            self._add(_text(_field(value, "completion")), index)
         # chat: ChatResponse, ChatStreamChunk, a streamed ToolCall, or an OpenAI-shaped body
         message = _field(value, "message")
         if message is not None:
@@ -191,8 +197,10 @@ class _Recorder:
                 span.set_attribute(f"{prefix}.function.arguments", slot["args"][:_LIMIT])
         if self.capture_output:
             if self.choices:
-                span.set_attribute(A.OUTPUT_VALUE, "".join(self.choices.get(0) or next(iter(self.choices.values()))))
-                if len(self.choices) > 1:
+                # output.value is choice 0's text only; the other choices are in the per-index content.
+                if self.choices.get(0):
+                    span.set_attribute(A.OUTPUT_VALUE, "".join(self.choices[0]))
+                if self.several:
                     for index, pieces in sorted(self.choices.items()):
                         span.set_attribute(f"{A.GEN_AI_OUTPUT_MESSAGES}.{index}.message.content", "".join(pieces))
             elif self.result is not None:
