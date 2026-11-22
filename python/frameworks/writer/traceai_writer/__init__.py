@@ -269,6 +269,11 @@ class _Stream:
     def _fail(self, exc: BaseException) -> None:
         if not self._ended:
             self._ended = True
+            try:
+                self._span.set_attribute("writer.stream.incomplete", True)
+                self._recorder.apply(self._span)  # what arrived before the failure
+            except Exception:
+                logger.debug("writer stream finalisation failed", exc_info=True)
             _failure(self._span, exc)
 
     def _observe(self, chunk: Any) -> None:
