@@ -40,12 +40,13 @@ public class PrivacyCatalogTests : InitIsolation
     {
         var bundle=JsonNode.Parse(File.ReadAllText(Shipping("privacy-fixtures.json")))!;
         var catalog=JsonNode.Parse(File.ReadAllText(Shipping("privacy.json")))!;
-        // Catalog version 3: token-timing exclusions, credential value shapes and
-        // no contextual logprob exemption at generic sites.
-        Assert.Equal(3,catalog["version"]!.GetValue<int>());
-        Assert.Equal(3,bundle["catalog_version"]!.GetValue<int>());
+        // Catalog version 4: the credential pair rule, the URL fragment, second '?' and path pairs, the
+        // vocabulary words, map keys and the name depth budget. Every case runs; there is no SDK-specific
+        // expectation and no skip list.
+        Assert.Equal(4,catalog["version"]!.GetValue<int>());
+        Assert.Equal(4,bundle["catalog_version"]!.GetValue<int>());
         var cases=bundle["cases"]!.AsArray();
-        Assert.True(cases.Count>=6238,$"{cases.Count} cases");
+        Assert.True(cases.Count>=7887,$"{cases.Count} cases");
         var failures=new List<string>();
         foreach(var fixture in cases)
         {
@@ -64,6 +65,37 @@ public class PrivacyCatalogTests : InitIsolation
             catch(Exception error) { failures.Add(fixture["name"]+": "+error.GetType().Name); }
         }
         Assert.True(failures.Count==0,$"{failures.Count}/{cases.Count} failures\n"+string.Join('\n',failures.Take(30)));
+    }
+    /// <summary>Every case input of the phase 1b, 1c, 1d and 1e r2 case files (spec/auto-instrumentation/notes) gives the case's
+    /// expected text byte for byte (objects compared as the reference writes JSON, key order included). A later file's "changed"
+    /// entry supersedes the expectation of the same-named earlier case.</summary>
+    [Fact]
+    public void EveryPairRuleNotesCasePassesByteForByte()
+    {
+        var expected=new Dictionary<string,(JsonNode Input,JsonNode? Expected)>(StringComparer.Ordinal); var order=new List<string>();
+        foreach(string phase in new[] { "1b","1c","1d","1e-r2" })
+        {
+            var file=JsonNode.Parse(File.ReadAllText(Path.Combine(WireFixtureTests.Repo,"spec/auto-instrumentation/notes",$"pair-rule-{phase}-cases-1122.json")))!;
+            foreach(var item in file["new_cases"]!.AsArray())
+            {
+                string name=item!["name"]!.GetValue<string>();
+                var input=new JsonObject { ["site"]=item["site"]!.DeepClone(),["path"]=item["path"]!.DeepClone(),["value"]=item["value"]!.DeepClone() };
+                if(!expected.ContainsKey(name)) order.Add(name);
+                expected[name]=(input,item["expected"]?.DeepClone());
+            }
+            if(file["changed"] is JsonObject changed)
+                foreach(var (name,item) in changed) expected[name]=(item!["input"]!.DeepClone(),item["expected"]?.DeepClone());
+        }
+        Assert.True(order.Count>=1393,$"{order.Count} cases");
+        var failures=new List<string>();
+        foreach(string name in order)
+        {
+            var (input,want)=expected[name];
+            bool framed=input["site"]!.GetValue<string>()!="free_text_urls";
+            JsonNode? actual=Actual(input["value"]!,input["path"]!.GetValue<string>(),null,[],framed);
+            if(PrivacyText.Dumps(actual)!=PrivacyText.Dumps(want)) failures.Add(name+": expected "+PrivacyText.Dumps(want)+" actual "+PrivacyText.Dumps(actual));
+        }
+        Assert.True(failures.Count==0,$"{failures.Count}/{order.Count} failures\n"+string.Join('\n',failures.Take(30)));
     }
     [Theory]
     [InlineData("key")] [InlineData("passwd")] [InlineData("x-vault-token")]
