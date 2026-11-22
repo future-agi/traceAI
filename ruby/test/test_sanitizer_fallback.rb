@@ -415,7 +415,8 @@ class EndToEndTest
       assert_equal %w[credential-key-0 credential-key-1], spans.map(&:name)
       spans.each do |span|
         values = attrs(span.attributes)
-        assert_equal 8, values['gen_ai.usage.<redacted>']
+        # Two keys that are one after scrubbing keep one key with the placeholder as its value (shared spec v4 map keys).
+        assert_equal '<redacted>', values['gen_ai.usage.<redacted>']
         assert_equal 9, values['gen_ai.usage.input_tokens']
         refute_includes span.to_h.to_s, 'wireObserved783421'
         refute_includes span.to_h.to_s, 'fixture-api-12345678'
