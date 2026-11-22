@@ -80,7 +80,7 @@ INTEGRATIONS: Tuple[Integration, ...] = (
     Integration("agentspec", ("pyagentspec",), "traceAI-agentspec", "traceai_agentspec", "AgentSpecInstrumentor"),
     Integration("writer", ("writerai",), "traceAI-writer", "traceai_writer", "WriterInstrumentor"),
     Integration("alephalpha", ("aleph_alpha_client",), "traceAI-alephalpha", "traceai_alephalpha", "AlephAlphaInstrumentor"),
-    Integration("promptflow", ("promptflow",), "traceAI-promptflow", "traceai_promptflow", "PromptflowInstrumentor"),
+    Integration("promptflow", ("promptflow.tracing",), "traceAI-promptflow", "traceai_promptflow", "PromptflowInstrumentor"),
     Integration("portkey", ("portkey_ai",), "traceAI-portkey", "traceai_portkey", "PortkeyInstrumentor", category="gateway"),
     Integration("watsonx", ("ibm_watsonx_ai",), "traceAI-watsonx", "traceai_watsonx", "WatsonxInstrumentor"),
     Integration("replicate", ("replicate",), "traceAI-replicate", "traceai_replicate", "ReplicateInstrumentor"),

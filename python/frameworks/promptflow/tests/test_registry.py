@@ -19,7 +19,7 @@ def auto(monkeypatch):
 def test_the_registry_row_names_the_package_and_instrumentor():
     row = _registry.find("promptflow")
     assert row is not None
-    assert row.targets == ("promptflow",)
+    assert row.targets == ("promptflow.tracing",)
     assert row.package == "traceAI-promptflow"
     assert row.module == "traceai_promptflow"
     assert row.kind == _registry.INSTRUMENTOR
@@ -34,7 +34,7 @@ def test_promptflow_is_detected_and_planned_when_installed(auto):
     status, action, installed = auto._plan(row, auto.AutoConfig(), lazy=True)
     assert status.status == auto.PENDING
     assert action in ("now", "hook")  # "now" once promptflow is imported, else on first import
-    assert installed == ["promptflow"]
+    assert installed == ["promptflow.tracing"]
 
 
 def test_the_install_hint_is_given_when_the_traceai_package_is_missing(auto, monkeypatch):
