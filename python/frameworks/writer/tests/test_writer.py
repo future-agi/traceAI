@@ -243,6 +243,45 @@ def test_stream_error_midway(spans):
     assert "SECRETDETAIL" not in blob(span)
 
 
+def test_stream_error_midway_keeps_what_was_received(instrument):
+    class Boom(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: ' + json.dumps(chunk("Tok")).encode() + b"\n\n"
+            raise httpx.ReadError("connection lost SECRETDETAIL")
+
+    handler = lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Boom())
+
+    def run(spans):
+        with pytest.raises(httpx.ReadError):
+            for _ in make_client(handler).chat.chat(messages=MESSAGES, model="m", stream=True):
+                pass
+        return one(spans)
+
+    span = run(instrument())
+    assert span.status.status_code == StatusCode.ERROR
+    assert attrs(span)["error.type"] == "ReadError"
+    assert attrs(span)["output.value"] == "Tok"
+    assert attrs(span)["gen_ai.response.model"] == "palmyra-x5-served"
+    assert attrs(span)["writer.stream.incomplete"] is True
+    assert "SECRETDETAIL" not in blob(span)
+
+
+def test_stream_error_midway_respects_hidden_outputs(instrument):
+    class Boom(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: ' + json.dumps(chunk("Tok")).encode() + b"\n\n"
+            raise httpx.ReadError("lost")
+
+    handler = lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Boom())
+    spans = instrument(config=TraceConfig(hide_outputs=True))
+    with pytest.raises(httpx.ReadError):
+        for _ in make_client(handler).chat.chat(messages=MESSAGES, model="m", stream=True):
+            pass
+    span = one(spans)
+    assert "Tok" not in blob(span)
+    assert attrs(span)["error.type"] == "ReadError"
+
+
 # --- completions -------------------------------------------------------------------------------
 
 def test_completions_sync_async_and_stream(spans):
