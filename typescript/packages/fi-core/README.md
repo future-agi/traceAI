@@ -492,6 +492,36 @@ and `spanProcessors` selects an explicit SDK policy. Manual SDK owners
 must await `provider.forceFlush()` or `provider.shutdown()` before explicitly
 terminating the process; the auto agent manages its own bounded exit/signal drain.
 
+**Credential pairs in text.** Every exported string and every object key goes through the
+shared credential pair rule, after registered secrets and the catalog's value shapes. When a
+credential name is followed by `=`, `:` or `%3D`, its value is replaced with `<redacted>` (written
+bare, as in `password=<redacted>`) up to the end of the value: the next pair (`, name=`, `; name:`
+or ` name=`), the end of the line for `Cookie`, `Set-Cookie`, `Authorization` and
+`Proxy-Authorization`, or the end of the text. A credential name is a name the catalog's patterns
+match, or one whose whole name or segment is a vocabulary word: `pwd`, `pass`, `passphrase`,
+`passwd`, `passcode` or `pin` (`dbPass`, `user-pin`, `X-Pin`); this holds at every site, including
+headers, query, fragment and URL path pairs, JSON and object keys and attribute keys. The rule
+reads `name=value`, `name: value`, quoted names (`"name": value`, `'name'=value`, `\"name\"` and
+`&quot;name&quot;`), command-line flags (`--name value`, `-name value`, `-Dname=value`) and bracket
+names (`user[password]=` and its percent-encoded form). After a quoted name, a quoted string value
+ends at its closing quote, and a number, `true`, `false` or `null` ends before `,`, `}`, `]` or the
+end of the text; any other value runs to the end of the value. A name the rule cannot read in full
+is treated as a credential name and its value is replaced: a name longer than its 128-character
+window, a name after more than 8 `?` marks, or a name separated from its `=` or `:` by anything but
+up to 8 plain spaces (a tab, a line break, an encoded space such as `%20`, or a JSON escape such as
+`\t`).
+
+In URLs, a credential-named pair is replaced in the query, after the `#`, after a second `?` and in
+a path segment (`/password=…/`, `;password=…`, `%3D`). In a whole URL value the pair rule then reads
+the URL text and skips only the spans the catalog already replaced; in free text a URL is text like
+any other. URL and data URI tokens end at the shared whitespace set (U+0085 and U+001C–U+001F are
+whitespace, U+FEFF is not), and in free text a data URI's continuation line belongs to it only when
+its `=` characters are trailing base64 padding. Object keys equal after scrubbing collapse to the
+first key, in its place, with the value `<redacted>`. A path, key or pair name of more than 32
+components (`limits.max_depth`) is not read: the whole exported value becomes `<redacted>`. These
+behaviours are the shared fixtures in `spec/auto-instrumentation/privacy-fixtures.json`, which this
+package's tests run in full with no SDK-specific expectation.
+
 When an applicable `FI_HIDE_*` / `traceConfig` policy replaces a value or JSON
 member with `__REDACTED__`, that fixed marker takes precedence over catalog media
 omission markers, including during recursive JSON/array scrubbing and re-export.

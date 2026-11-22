@@ -211,7 +211,7 @@ test.each([65536, 131072])("R9 shared admission accounting still admits two long
   const clean = privacyFilter().admissionAttributes({ "exception.type": "Error", "exception.message": value, "exception.stacktrace": value });
   // PENDING I1xF2-PRECEDENCE: F2 scan bound precedes I1 long-prose retention.
   if (repeats === 65536) {
-  expect(clean).toEqual({ "exception.type": "Error", "exception.message": `${prose}password="<redacted>"\nend of message`, "exception.stacktrace": `${prose}password="<redacted>"\nend of message` });
+  expect(clean).toEqual({ "exception.type": "Error", "exception.message": `${prose}password=<redacted>`, "exception.stacktrace": `${prose}password=<redacted>` });
   } else {
     expect(clean).toEqual({ "exception.type": "Error", "exception.message": "[image-redacted]", "exception.stacktrace": "[image-redacted]" });
   }

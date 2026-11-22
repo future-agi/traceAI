@@ -94,7 +94,8 @@ test("I1-CROSS URL syntax is not bare media and original URL secrets precede rew
   stable('401 ' + url + ' {"n":7} retry', '401 ' + url + ' {"n":7} retry');
   stable('401 ' + url + ' iVBORw0KGgoAAAANSUhEUg== retry', '401 ' + url + ' <omitted: 24 base64 chars> retry');
   stable('401 https://abcdef.invalid/?echo=31415926&model=keep retry', '401 https://abcdef.invalid/?echo=<redacted>&model=keep retry', ['31415926']);
-  stable('401 https://abcdef.invalid/?token=private&model=keep retry', '401 https://abcdef.invalid/?token=<redacted>&model=keep retry');
+  // Shared privacy spec v4: in prose a credential pair's value runs to its true end.
+  stable('401 https://abcdef.invalid/?token=private&model=keep retry', '401 https://abcdef.invalid/?token=<redacted>');
   stable('401 prefixhttps://abcdef.invalid/p retry', '401 <redacted> retry', ['prefixhttps://abcdef.invalid/p']);
   stable(JSON.stringify({ url }), JSON.stringify({ url }));
 });

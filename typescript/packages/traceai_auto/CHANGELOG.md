@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- Exports use `@traceai/fi-core`'s shared credential pair rule: the value of a credential-named pair in text (`password=…`, `token: …`, `"secret": …`, `--token …`), in a URL fragment or path segment, or under a vocabulary name such as `pwd` or `pin`, is exported as `<redacted>` to the end of the value. Object keys take the same text rules.
+
 ## [0.4.2] - 2026-11-20
 
 ### Breaking
