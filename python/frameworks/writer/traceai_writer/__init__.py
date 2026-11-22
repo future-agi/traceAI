@@ -214,6 +214,10 @@ class _Response:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._response, name)
 
+    @property
+    def __class__(self) -> Any:  # type: ignore[override]
+        return type(self._response)  # isinstance(proxy, httpx.Response) keeps working
+
     def close(self) -> Any:
         try:
             return self._response.close()
@@ -228,7 +232,11 @@ class _Response:
 
 
 class _Stream:
-    """Proxy for the SDK's Stream / AsyncStream; chunks are forwarded unchanged."""
+    """Proxy for the SDK's Stream / AsyncStream; chunks are forwarded unchanged.
+
+    The span ends on exhaustion, error, ``close()`` or leaving the ``with`` block. A stream that is
+    simply dropped never exports its span: no finalizer runs the exporter from garbage collection.
+    """
 
     def __init__(self, source: Any, span: Any, recorder: _Recorder) -> None:
         self._source, self._span, self._recorder = source, span, recorder
@@ -241,12 +249,9 @@ class _Stream:
     def response(self) -> Any:
         return _Response(self._source.response, self._finish)
 
-    def __del__(self) -> None:
-        # A stream dropped without being read or closed must not leak an open span.
-        try:
-            self._finish(complete=False)
-        except Exception:
-            pass
+    @property
+    def __class__(self) -> Any:  # type: ignore[override]
+        return type(self._source)  # isinstance(proxy, writerai.Stream) keeps working
 
     def _finish(self, complete: bool = True) -> None:
         if self._ended:

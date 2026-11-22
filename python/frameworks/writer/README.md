@@ -32,7 +32,8 @@ when the response carries it. Tool calls the model makes are recorded on the out
   `with_streaming_response` produce one span, not several.
 * Streams end on exhaustion, error or `close()`; an early close is marked
   `writer.stream.incomplete`. This includes leaving a `chat.stream()` helper block early (the
-  helper closes the underlying response) and a stream that is dropped without being closed.
+  helper closes the underlying response). A stream that is dropped without being read or closed
+  exports no span: nothing is exported from garbage collection or at interpreter exit.
 * Exceptions are re-raised unchanged and recorded as `ERROR` with `error.type` (the class name);
   the message is never exported.
 * Inputs and outputs follow the `TraceConfig` hide settings. Only plain-text conversations are
