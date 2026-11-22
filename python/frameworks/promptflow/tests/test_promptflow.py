@@ -627,3 +627,122 @@ def test_a_missing_traced_iterator_is_skipped_with_a_warning(provider, monkeypat
         assert [s.name for s in provider.exporter.get_finished_spans()]  # spans still flow
     finally:
         instrumentor.uninstrument()
+
+
+# --- a stream that fails mid-way --------------------------------------------------------------------
+def test_a_stream_that_fails_mid_way_keeps_the_items_received_so_far(spans):
+    from promptflow.tracing import trace
+
+    failure = ConnectionError(SECRET_ERROR)
+
+    @trace
+    def stream():
+        yield "part-one"
+        yield "part-two"
+        raise failure
+
+    it = stream()
+    assert [next(it), next(it)] == ["part-one", "part-two"]
+    with pytest.raises(ConnectionError) as raised:
+        next(it)
+    assert raised.value is failure  # the app's own exception, unchanged
+    span = by_name(finished(spans), "stream")
+    a = attrs(span)
+    assert span.status.status_code == StatusCode.ERROR and a["error.type"] == "ConnectionError"
+    assert "part-one" in a["output.value"] and "part-two" in a["output.value"]
+    assert a["promptflow.stream.incomplete"] is True
+    assert SECRET_ERROR not in blob(span) and not span.events and not span.status.description
+
+
+def test_an_async_stream_that_fails_mid_way_keeps_the_items_received_so_far(spans):
+    from promptflow.tracing import trace
+
+    @trace
+    async def stream():
+        yield "part-one"
+        raise ConnectionError(SECRET_ERROR)
+
+    async def go():
+        it = stream()
+        assert await it.__anext__() == "part-one"
+        with pytest.raises(ConnectionError, match=SECRET_ERROR):
+            await it.__anext__()
+
+    asyncio.run(go())
+    span = by_name(finished(spans), "stream")
+    a = attrs(span)
+    assert span.status.status_code == StatusCode.ERROR and a["error.type"] == "ConnectionError"
+    assert "part-one" in a["output.value"] and a["promptflow.stream.incomplete"] is True
+    assert SECRET_ERROR not in blob(span)
+
+
+def test_the_items_of_a_failed_stream_are_hidden_with_outputs(instrument):
+    from promptflow.tracing import trace
+
+    spans = instrument(config=TraceConfig(hide_outputs=True))
+
+    @trace
+    def stream():
+        yield "synthetic-output-DO-NOT-EXPORT"
+        raise ConnectionError(SECRET_ERROR)
+
+    it = stream()
+    next(it)
+    with pytest.raises(ConnectionError):
+        next(it)
+    span = by_name(finished(spans), "stream")
+    assert span.status.status_code == StatusCode.ERROR and "output.value" not in attrs(span)
+    assert "synthetic-output-DO-NOT-EXPORT" not in blob(span) and SECRET_ERROR not in blob(span)
+
+
+def _openai_stream_cut_after(contents):
+    import openai
+
+    class CutStream(httpx.SyncByteStream):
+        def __iter__(self):
+            for text in contents:
+                chunk = {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "gpt-served",
+                         "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
+                yield ("data: " + __import__("json").dumps(chunk) + "\n\n").encode()
+            raise httpx.RemoteProtocolError(SECRET_ERROR)
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=CutStream())
+
+    return openai.OpenAI(
+        api_key="synthetic-openai-key-DO-NOT-EXPORT", base_url="http://openai.test/v1", max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+
+def _consume(client, received):
+    stream = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], stream=True)
+    for chunk in stream:
+        received.append(chunk.choices[0].delta.content)
+
+
+def test_an_llm_stream_cut_mid_way_keeps_the_chunks_received_so_far(instrument, injected_openai):
+    from promptflow.tracing import trace
+
+    plain = []
+    with pytest.raises(Exception) as uninstrumented:
+        _consume(_openai_stream_cut_after(["Hel", "lo"]), plain)
+
+    spans = instrument()
+    received = []
+
+    @trace
+    def ask():
+        _consume(_openai_stream_cut_after(["Hel", "lo"]), received)
+
+    with pytest.raises(Exception) as raised:
+        ask()
+    assert received == plain == ["Hel", "lo"]
+    assert type(raised.value) is type(uninstrumented.value) and str(raised.value) == str(uninstrumented.value)
+    llm = [s for s in finished(spans) if attrs(s).get("gen_ai.span.kind") == "LLM"]
+    assert len(llm) == 1
+    a = attrs(llm[0])
+    assert llm[0].status.status_code == StatusCode.ERROR and a["error.type"] == type(raised.value).__name__
+    assert '"Hel"' in a["output.value"] and '"lo"' in a["output.value"]
+    assert a["promptflow.stream.incomplete"] is True
+    assert SECRET_ERROR not in blob(llm[0]) and not llm[0].events
