@@ -750,3 +750,84 @@ def test_an_llm_stream_cut_mid_way_keeps_the_chunks_received_so_far(instrument, 
     assert '"Hel"' in a["output.value"] and '"lo"' in a["output.value"]
     assert a["promptflow.stream.incomplete"] is True
     assert SECRET_ERROR not in blob(llm[0]) and not llm[0].events
+
+
+# --- a stream read to the end whose Prompt flow finalization fails ----------------------------------
+class FinalizationFailure(RuntimeError):
+    pass
+
+
+def _fail_finalization(monkeypatch, failure):
+    from promptflow.tracing import _trace
+
+    def raise_failure(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(_trace, "enrich_span_with_llm_if_needed", raise_failure)
+
+
+def test_an_exhausted_stream_whose_finalization_fails_is_not_incomplete(spans, monkeypatch):
+    from promptflow.tracing import trace
+
+    failure = FinalizationFailure(SECRET_ERROR)
+    _fail_finalization(monkeypatch, failure)
+
+    @trace
+    def stream():
+        yield "part-one"
+        yield "part-two"
+
+    it = stream()
+    assert [next(it), next(it)] == ["part-one", "part-two"]
+    with pytest.raises(FinalizationFailure) as raised:
+        next(it)
+    assert raised.value is failure  # Prompt flow's own exception, unchanged
+    span = by_name(finished(spans), "stream")
+    a = attrs(span)
+    assert "promptflow.stream.incomplete" not in a
+    assert span.status.status_code == StatusCode.ERROR and a["error.type"] == "FinalizationFailure"
+    assert "part-one" in a["output.value"] and "part-two" in a["output.value"]
+    assert SECRET_ERROR not in blob(span)
+
+
+def test_an_exhausted_async_stream_whose_finalization_fails_is_not_incomplete(spans, monkeypatch):
+    from promptflow.tracing import trace
+
+    failure = FinalizationFailure(SECRET_ERROR)
+    _fail_finalization(monkeypatch, failure)
+
+    @trace
+    async def stream():
+        yield "part-one"
+
+    async def go():
+        it = stream()
+        assert await it.__anext__() == "part-one"
+        with pytest.raises(FinalizationFailure) as raised:
+            await it.__anext__()
+        assert raised.value is failure
+
+    asyncio.run(go())
+    span = by_name(finished(spans), "stream")
+    a = attrs(span)
+    assert "promptflow.stream.incomplete" not in a
+    assert span.status.status_code == StatusCode.ERROR and a["error.type"] == "FinalizationFailure"
+    assert "part-one" in a["output.value"]
+    assert SECRET_ERROR not in blob(span)
+
+
+def test_a_stream_that_fails_after_its_last_item_is_still_incomplete(spans):
+    from promptflow.tracing import trace
+
+    @trace
+    def stream():
+        yield "part-one"
+        raise ConnectionError(SECRET_ERROR)
+
+    it = stream()
+    next(it)
+    with pytest.raises(ConnectionError):
+        next(it)
+    span = by_name(finished(spans), "stream")
+    assert attrs(span)["promptflow.stream.incomplete"] is True
+    assert span.status.status_code == StatusCode.ERROR
