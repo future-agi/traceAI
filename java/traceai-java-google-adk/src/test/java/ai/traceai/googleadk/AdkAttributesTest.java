@@ -127,4 +127,23 @@ class AdkAttributesTest {
         String json = AdkAttributes.toJson(Map.of("kind", java.util.concurrent.TimeUnit.SECONDS, "letter", 'q', "id", id));
         assertThat(json).contains("\"SECONDS\"").contains("\"q\"").contains("\"123e4567-e89b-12d3-a456-426614174000\"").doesNotContain("unserializable");
     }
+
+    /** An application's own status object: reading it as text would run its toString. */
+    private static final class AppStatus {
+        int toStringCalls;
+        @Override public String toString() { toStringCalls++; return "error"; }
+    }
+
+    @Test
+    void aToolResultsStatusIsNeverReadAsTextUnlessItIsAStringOrAnEnum() {
+        AppStatus app = new AppStatus();
+        assertThat(AdkAttributes.toolResultFailed(Map.of("status", app))).isFalse();
+        assertThat(app.toStringCalls).as("no application code ran").isZero();
+        assertThat(AdkAttributes.toolResultFailed(Map.of("status", "ERROR"))).isTrue();
+        assertThat(AdkAttributes.toolResultFailed(Map.of("status", java.util.concurrent.TimeUnit.SECONDS))).isFalse();
+        assertThat(AdkAttributes.toolResultFailed(Map.of("status", Thread.State.valueOf("NEW")))).isFalse();
+        assertThat(AdkAttributes.toolResultFailed(Map.of("status", 200))).isFalse();
+        assertThat(AdkAttributes.toolResultFailed(Map.of("error", app))).isTrue();
+        assertThat(app.toStringCalls).isZero();
+    }
 }

@@ -94,7 +94,10 @@ public final class TracedTool extends BaseTool {
 
     @Override
     public Single<Map<String, Object>> runAsync(Map<String, Object> args, ToolContext toolContext) {
+        // Told when the call is made, which is under the span ADK made current for it, and again when the result is subscribed to.
+        AgentLink.wrappedTool(args, this);
         return Single.defer(() -> {
+            AgentLink.wrappedTool(args, this);
             Span span = tracer.startSpan("execute_tool " + name(), FISpanKind.TOOL);
             Single<Map<String, Object>> upstream;
             try (Scope ignored = span.makeCurrent()) {
@@ -115,8 +118,13 @@ public final class TracedTool extends BaseTool {
         try {
             try {
                 String callId = callId(toolContext);
-                SpanAttributes.write(tracer, span, AdkAttributes.tool(name(), description(), delegate.getClass().getSimpleName(),
-                    args == null ? Map.of() : args, result, callId));
+                Map<String, Object> attributes = AdkAttributes.tool(name(), description(), delegate.getClass().getSimpleName(),
+                    args == null ? Map.of() : args, result, callId);
+                // The result of a failed call can carry the error's own text: it follows the same switch as every other error detail.
+                if ((error != null || AdkAttributes.toolResultFailed(result)) && tracer.getConfig().isHideErrorDetails()) {
+                    attributes = AdkAttributes.withoutFailedOutput(attributes);
+                }
+                SpanAttributes.write(tracer, span, attributes);
                 if (error != null) tracer.setError(span, error);
                 else span.setStatus(StatusCode.OK);
             } catch (Throwable tracingFailure) {

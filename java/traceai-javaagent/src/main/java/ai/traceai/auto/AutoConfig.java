@@ -99,6 +99,7 @@ public final class AutoConfig {
         result.putIfAbsent("FI_EVAL_TAGS", "[]"); result.putIfAbsent("FI_METADATA", "{}");
         result.putIfAbsent("FI_PROJECT_TYPE", "observe"); result.putIfAbsent("FI_WIRE_CAPTURE", "true");
         result.putIfAbsent("FI_WIRE_MAX_BODY_BYTES", "4194304"); result.putIfAbsent("FI_AUTO_DEBUG", "false");
+        result.putIfAbsent("FI_GOOGLE_ADK_SKIP_WRAPPED_CALLS", "false");
         result.put("FI_CONFIG_FILE", path);
         AutoConfig built = new AutoConfig(result, credentialValues);
         built.insecureOptIn = "1".equals(environment.get(ai.traceai.KeyTransport.ALLOW_INSECURE_SETTING)) || explicitOptIn(explicit.get(ai.traceai.KeyTransport.ALLOW_INSECURE_SETTING));

@@ -82,8 +82,11 @@ public final class TracedLlm extends BaseLlm {
         if (!span.isRecording()) return;
         try {
             try {
-                SpanAttributes.write(tracer, span, AdkAttributes.llm(request, response));
                 String failure = error != null ? null : AdkAttributes.llmError(response);
+                Map<String, Object> attributes = AdkAttributes.llm(request, response);
+                // A failed call's output can carry the error's own text: it follows the same switch as every other error detail.
+                if ((error != null || failure != null) && tracer.getConfig().isHideErrorDetails()) attributes = AdkAttributes.withoutFailedOutput(attributes);
+                SpanAttributes.write(tracer, span, attributes);
                 if (error != null) tracer.setError(span, error);
                 else if (failure != null) {
                     // The model's own error text follows the same switch as every other error detail.

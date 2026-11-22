@@ -204,6 +204,88 @@ public class TracedAdkTest {
         assertThat(hidden.getAttributes().toString()).doesNotContain("SEED-MODEL-ERROR-TEXT");
     }
 
+    /** A model call that fails: its error text and the output it carries both hold the seed. */
+    private static SpanData failedModelCallWithOutput(TraceConfig config) {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+        try {
+            FITracer tracer = new FITracer(provider.get("adk-test"), config);
+            BaseLlm failing = new BaseLlm("gemini-2.0-flash") {
+                @Override
+                public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
+                    return Flowable.just(LlmResponse.builder().errorMessage("SEED-MODEL-ERROR-TEXT")
+                        .content(Content.builder().role("model").parts(Part.fromText("SEED-FAILED-OUTPUT")).build()).build());
+                }
+
+                @Override
+                public BaseLlmConnection connect(LlmRequest request) { throw new UnsupportedOperationException(); }
+            };
+            LlmRequest request = LlmRequest.builder().model("gemini-2.0-flash")
+                .contents(List.of(Content.fromParts(Part.fromText(PROMPT)))).build();
+            new TracedLlm(failing, tracer).generateContent(request, false).blockingLast();
+            return exporter.getFinishedSpanItems().get(0);
+        } finally {
+            provider.close();
+        }
+    }
+
+    private static boolean hasOutputAttribute(SpanData span) {
+        return span.getAttributes().asMap().keySet().stream()
+            .anyMatch(k -> k.getKey().equals("output.value") || k.getKey().equals("output.mime_type") || k.getKey().startsWith("gen_ai.output."));
+    }
+
+    @Test
+    void aFailedModelCallCarriesItsOutputOnlyWhileErrorDetailsAreShown() {
+        SpanData shown = failedModelCallWithOutput(TraceConfig.builder().build());
+        assertThat(attr(shown, "gen_ai.output.messages.0.message.content")).isEqualTo("SEED-FAILED-OUTPUT");
+        SpanData hidden = failedModelCallWithOutput(TraceConfig.builder().hideErrorDetails(true).build());
+        assertThat(hidden.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+        assertThat(hasOutputAttribute(hidden)).as(hidden.getAttributes().toString()).isFalse();
+        assertThat(hidden.getAttributes().toString()).doesNotContain("SEED-FAILED-OUTPUT").doesNotContain("SEED-MODEL-ERROR-TEXT");
+    }
+
+    @Test
+    void aSuccessfulModelCallKeepsItsOutputWhileErrorDetailsAreHidden() throws Exception {
+        List<SpanData> spans = run(TraceConfig.builder().hideErrorDetails(true).build());
+        SpanData second = spans.stream().filter(s -> "LLM".equals(attr(s, "gen_ai.span.kind"))).toList().get(1);
+        assertThat(attr(second, "gen_ai.output.messages.0.message.content")).isEqualTo(ANSWER);
+    }
+
+    /** A tool call that fails the way ADK's FunctionTool reports it: a result with an "error" entry. */
+    private static SpanData toolSpanForResult(TraceConfig config, Map<String, Object> result) {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+        try {
+            FITracer tracer = new FITracer(provider.get("adk-test"), config);
+            var tool = new com.google.adk.tools.BaseTool("boom", "returns " + "a result") {
+                @Override
+                public io.reactivex.rxjava3.core.Single<Map<String, Object>> runAsync(Map<String, Object> args, com.google.adk.tools.ToolContext ctx) {
+                    return io.reactivex.rxjava3.core.Single.just(result);
+                }
+            };
+            new TracedTool(tool, tracer).runAsync(Map.of("a", "b"), null).blockingGet();
+            return exporter.getFinishedSpanItems().get(0);
+        } finally {
+            provider.close();
+        }
+    }
+
+    @Test
+    void aFailedToolResultIsRecordedOnlyWhileErrorDetailsAreShown() {
+        Map<String, Object> failed = Map.of("status", "error", "error", "SEED-TOOL-ERROR-TEXT");
+        assertThat(attr(toolSpanForResult(TraceConfig.builder().build(), failed), "gen_ai.tool.call.result")).contains("SEED-TOOL-ERROR-TEXT");
+        SpanData hidden = toolSpanForResult(TraceConfig.builder().hideErrorDetails(true).build(), failed);
+        assertThat(attr(hidden, "gen_ai.tool.call.result")).isNull();
+        assertThat(hidden.getAttributes().toString()).doesNotContain("SEED-TOOL-ERROR-TEXT");
+        assertThat(attr(hidden, "gen_ai.tool.name")).isEqualTo("boom");
+    }
+
+    @Test
+    void aSuccessfulToolResultIsKeptWhileErrorDetailsAreHidden() {
+        SpanData span = toolSpanForResult(TraceConfig.builder().hideErrorDetails(true).build(), Map.of("forecast", "SEED-OK-RESULT"));
+        assertThat(attr(span, "gen_ai.tool.call.result")).contains("SEED-OK-RESULT");
+    }
+
     private static List<SpanData> run(TraceConfig config) throws Exception {
         InMemorySpanExporter exporter = InMemorySpanExporter.create();
         SdkTracerProvider provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
