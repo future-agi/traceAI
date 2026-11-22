@@ -16,8 +16,12 @@ PromptflowInstrumentor().instrument(tracer_provider=register(project_name="my-pr
 # then run flows or call @trace functions as usual
 ```
 
-With `fi-instrumentation-otel` auto-instrumentation the `promptflow` integration is enabled whenever
-`promptflow` is installed.
+With `fi-instrumentation-otel` auto-instrumentation the `promptflow` integration is enabled when
+`promptflow.tracing` is imported (a `promptflow-core` / `promptflow-tracing` install is enough).
+
+LLM spans come from Prompt flow's own OpenAI integration, which Prompt flow switches on with
+`start_trace()` (or `promptflow.tracing._integrations._openai_injector.inject_openai_api()`). Without
+it, only your `@trace` functions, nodes and flow runs are spans; calls to the OpenAI SDK are not.
 
 Prompt flow ships with tracing off (`PF_DISABLE_TRACING` defaults to `true`). `instrument()` turns
 it on unless the variable is already set, and `uninstrument()` puts it back. Setting

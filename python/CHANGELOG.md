@@ -1,6 +1,7 @@
 ## [Unreleased]
 
 ### Changed
+- Zero-code tracing turns on the `promptflow` integration when `promptflow.tracing` is first imported, so an application that installs `promptflow-core` or `promptflow-tracing` without the full `promptflow` package is traced.
 - Credential value shapes are scanned in time linear in the text, and a token is replaced whole whatever its length.
 
 ## [1.5.2] - 2026-11-20
