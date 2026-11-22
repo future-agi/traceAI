@@ -194,18 +194,26 @@ both controls.
 ### Low-level carrier, without the SDK
 
 ```python
+from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation.runtime_attributes import (
     RUNTIME_ATTRIBUTES_CONTEXT_KEY,
     using_runtime_attributes,
 )
 from opentelemetry.context import get_value
 
-# tracer comes from your existing provider. No SDK import is needed here.
+# provider is your existing tracer provider. No SDK import is needed here.
+# FITracer applies TraceConfig masking (FI_HIDE_INPUTS, FI_PII_REDACTION, ...)
+# to every attribute written through its spans, including copied carrier values.
+tracer = FITracer(provider.get_tracer(__name__), config=TraceConfig())
 with using_runtime_attributes({"gen_ai.agent.name": "refund-agent"}):
     with tracer.start_as_current_span("request") as span:
         # Explicit copying for a provider without a compatible processor.
         span.set_attributes(get_value(RUNTIME_ATTRIBUTES_CONTEXT_KEY)["attrs"])
 ```
+
+Copy carrier values only through an `FITracer` span, as above. A plain
+OpenTelemetry tracer's span does not apply `TraceConfig`, so hidden inputs or PII
+in the carrier would be written unmasked.
 
 The helper attaches an immutable carrier under the **literal** OTel Context key
 `futureagi.runtime.span_attributes.v1`, with shape

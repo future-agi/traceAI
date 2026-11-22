@@ -13,7 +13,7 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
-  import { WATCH_NAME } from "./agentIdentity";
+  import { startingStandalone } from "../../runtime-metadata";
   import { activeFIContext, runInFIContext } from "./activeContext";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext, getSession } from "../contextAttributes";
@@ -236,13 +236,14 @@ import {
         try { return { ...link, attributes: privacyFilter(this.config).admissionAttributes(link.attributes) }; }
         catch { return { ...link, attributes: {} }; }
       });
-      const span = tracer.startSpan(
-        name,
-        links != null
-          ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
-          : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
-        this.autoDestination ? context : context?.setValue(WATCH_NAME, true),
-      );
+      const spanOptions = links != null
+        ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
+        : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes };
+      // The caller's own Context object reaches the sampler and processors.
+      // A standalone start is signalled synchronously, never through Context.
+      const span = this.autoDestination
+        ? tracer.startSpan(name, spanOptions, context)
+        : startingStandalone(() => tracer.startSpan(name, spanOptions, context));
       // Only spans made here export session and user grouping keys as set.
       try { rememberFITracerSpan(span.spanContext()); }
       catch { /* Without the mark the span keeps the stricter credential name rule. */ }

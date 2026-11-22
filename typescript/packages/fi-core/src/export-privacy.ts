@@ -6,6 +6,7 @@ import { REDACTED_VALUE } from "./trace/trace-config/constants";
 import { stripStackTrace } from "./trace/trace-config/errorDetails";
 import { maskAttributes, redactValue } from "./trace/trace-config/maskingRules";
 import { capBase64Images } from "./trace/trace-config/imageCap";
+import { redactPiiInString } from "./trace/trace-config/piiRedaction";
 import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-config/structuredRedaction";
 import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
@@ -461,13 +462,27 @@ function sameAttribute(a: unknown, b: unknown): boolean {
   return a === b;
 }
 /** @internal Call only with the complete, already-sanitized pre-SDK view. */
-export function rememberMediaAdmission(span: object, complete: Attributes): void {
+/** `evidence.runtime` holds only values the SDK wrote through FISpan's privileged
+ * identity calls; `evidence.siblings` is the complete pre-projection map. A value
+ * that equals any credential-named, non-grouping sibling never gains runtime
+ * evidence, so retaining one key cannot export a dropped credential's value. */
+export function rememberMediaAdmission(span: object, complete: Attributes,
+  evidence: { runtime?: ReadonlyMap<string, unknown>; siblings?: Attributes } = {}): void {
   try {
     const current = data(span, "attributes");
     if (!current || types.isProxy(current)) return;
     const hints = indexPrivacyHints(entries(complete)), proven = new Map<string, unknown>(), runtime = new Map<string, unknown>();
+    const written = evidence.runtime, credentialValues = new Set<string>();
+    if (written?.size) for (const [key, value] of entries(evidence.siblings ?? complete)) {
+      if (identityKey(key) || !isCredentialName(key)) continue;
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === "string" || typeof item === "number") credentialValues.add(String(item));
+      }
+    }
+    const shared = (value: unknown) => (Array.isArray(value) ? value : [value]).some(item => credentialValues.has(String(item)));
     for (const [key, original] of entries(complete)) {
-      const typed = validRuntimeValue(key, original), textMime = completeNonMediaMime(key, hints);
+      const typed = !!written?.has(key) && sameAttribute(written.get(key), original) && validRuntimeValue(key, original) && !shared(original);
+      const textMime = completeNonMediaMime(key, hints);
       if (!typed && !textMime) continue;
       const actual = data(current, key);
       if (typed && sameAttribute(original, actual)) {
@@ -495,7 +510,10 @@ export function exportedAgentIdentity(span: object, privacy: Pick<ReturnType<typ
   const hasName = typeof data(raw, AGENT_NAME) === "string", hasId = typeof data(raw, AGENT_ID) === "string";
   if (!hasName && !hasId) return {};
   const clean = privacy.span(span as ReadableSpan).attributes;
-  const name = clean[AGENT_NAME], id = clean[AGENT_ID];
+  // A provider can export with stricter PII settings than this wrapper; the
+  // read-back never returns more than the strictest exporter would emit.
+  const strict = (value: unknown) => typeof value === "string" ? redactPiiInString(value) : value;
+  const name = strict(clean[AGENT_NAME]), id = strict(clean[AGENT_ID]);
   return { name: hasName && typeof name === "string" ? name : undefined,
     id: hasId && typeof id === "string" ? id : undefined };
 }

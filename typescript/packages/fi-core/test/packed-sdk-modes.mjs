@@ -13,7 +13,8 @@ for (const key of Object.keys(process.env)) if (/^(FI_|OTEL_)/.test(key)) delete
 process.env.FI_SKILLS_TRACING = "off";
 sdk.configure({skillsTracing: "on"});
 const exporter = new InMemorySpanExporter();
-const provider = core.register({projectName: "local-mode-check", spanProcessors: [new SimpleSpanProcessor(exporter)]});
+// Runtime attribution is opt-in per provider; the SDK modes narrow it from there.
+const provider = core.register({projectName: "local-mode-check", runtimeAttributes: true, spanProcessors: [new SimpleSpanProcessor(exporter)]});
 const tracer = trace.getTracer("mode-check");
 const versions = [1, 2, 3].map(n => `22222222-2222-4222-8222-22222222222${n}`);
 const declare = i => sdk.declareSkill({kind: "skill", resourceId: "11111111-1111-4111-8111-111111111111", versionId: versions[i],

@@ -35,3 +35,19 @@ export const admittedRuntime = new WeakMap<object, Map<string, unknown>>();
 
 // Constructor identity only. Membership grants no receipt or span provenance.
 export const runtimeProcessorInstances = new WeakSet<object>();
+
+// Opt-in is per provider: only a provider with runtimeAttributes: true, or one
+// given the runtime processor explicitly, has a processor that marks its spans
+// while enabled. An unmarked span keeps dev behaviour exactly (no observation,
+// no identity-precedence change, no runtime projection priority).
+export const runtimeSpans = new WeakSet<object>();
+
+// A standalone FITracer start, observed synchronously by the provider's
+// registry during that start. Replaces a parent-context marker so the
+// sampler and processors see the caller's own Context object.
+let standaloneStarts = 0;
+export function startingStandalone<T>(start: () => T): T {
+  standaloneStarts++;
+  try { return start(); } finally { standaloneStarts--; }
+}
+export const inStandaloneStart = () => standaloneStarts > 0;

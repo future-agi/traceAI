@@ -36,13 +36,18 @@ const USAGE_FAMILY = 4;
 // Zero-detail deferral is versioned policy data loaded once by privacy-runtime (the only module that may
 // load privacy.json: its ESM build re-exports the CommonJS build), not a pattern over arbitrary usage keys.
 // String zero and unknown/nonzero details retain their ordinary protected-family treatment.
-export function protectedFamily(key: string): number | undefined {
-  return FAMILY.get(key) ?? (isRuntimeKey(key) ? 1 : key.startsWith("gen_ai.usage.") || key.startsWith("llm.token_count.") ? USAGE_FAMILY : undefined);
+// Runtime scope keys reserve a slot only on a span an opted-in runtime processor
+// marked, and only after every family above: they never displace a dev-protected
+// key such as error.type. Unmarked spans keep the dev order exactly.
+const RUNTIME_FAMILY = PROTECTED_FAMILIES.length;
+export function protectedFamily(key: string, runtime = false): number | undefined {
+  return FAMILY.get(key) ?? (key.startsWith("gen_ai.usage.") || key.startsWith("llm.token_count.") ? USAGE_FAMILY
+    : runtime && isRuntimeKey(key) ? RUNTIME_FAMILY : undefined);
 }
 
 // Retention is not a privacy exemption: only an already-present numeric ratio
 // reserves capacity, and the caller/exporter still applies its full value policy.
-const protectedValue = (key: string, value: unknown) => protectedFamily(key) !== undefined || key === SAMPLING_RATIO && isSamplingRatio(value);
+const protectedValue = (key: string, value: unknown, runtime = false) => protectedFamily(key, runtime) !== undefined || key === SAMPLING_RATIO && isSamplingRatio(value);
 
 const MESSAGE = /^(gen_ai\.(input|output)\.messages|llm\.(input|output)_messages)\.(\d+)\./;
 const INDEXED = /^(gen_ai\.tool\.definitions|gen_ai\.embeddings|embedding\.embeddings|retrieval\.documents|gen_ai\.retrieval\.documents)\.(\d+)\./;
@@ -100,7 +105,7 @@ function companionGroups(groups: Map<string, { group: Group; keys: string[] }>, 
  * `dropped` is every candidate key not emitted, for OTel's separate all-attribute counter.
  * The same candidates and limit select the same attributes whatever the insertion order.
  */
-export function projectAttributes(attributes: Attributes, countLimit: number, operation?: string): { attributes: Attributes; dropped: number } {
+export function projectAttributes(attributes: Attributes, countLimit: number, operation?: string, runtime = false): { attributes: Attributes; dropped: number } {
   const limit = Number.isFinite(countLimit) ? Math.max(0, Math.floor(countLimit)) : 128;
   // An absent OTel attribute is not a protected counter or a dropped candidate.
   // Do not coerce it to a string or confuse actual absence with string zero,
@@ -108,11 +113,11 @@ export function projectAttributes(attributes: Attributes, countLimit: number, op
   const items = Object.entries(attributes).filter(([, value]) => value !== undefined);
   if (items.length > 4096) {
     // Sibling recognition would be cropped: fail closed for content, keep protected fields.
-    const values: Attributes = Object.fromEntries(items.filter(([key, value]) => key !== DROPPED_CONTENT_COUNT && protectedValue(key, value)));
+    const values: Attributes = Object.fromEntries(items.filter(([key, value]) => key !== DROPPED_CONTENT_COUNT && protectedValue(key, value, runtime)));
     const previous = attributes[DROPPED_CONTENT_COUNT];
     // Unclassified keys may carry content (prompt variables, errors): count them all.
-    const content = items.filter(([key, value]) => key !== DROPPED_CONTENT_COUNT && !protectedValue(key, value)).length;
-    return select(values, limit, typeof previous === "number" && Number.isInteger(previous) && previous > 0 ? previous : 0, [], [], content, items.filter(([key]) => key !== DROPPED_CONTENT_COUNT).length);
+    const content = items.filter(([key, value]) => key !== DROPPED_CONTENT_COUNT && !protectedValue(key, value, runtime)).length;
+    return select(values, limit, typeof previous === "number" && Number.isInteger(previous) && previous > 0 ? previous : 0, [], [], content, items.filter(([key]) => key !== DROPPED_CONTENT_COUNT).length, Object.keys(values), runtime);
   }
   // Project only after consulting the COMPLETE sibling set: projection must never
   // turn a recognized payload into an unmarked scalar by evicting its MIME/type companion.
@@ -135,7 +140,7 @@ export function projectAttributes(attributes: Attributes, countLimit: number, op
   const op = operation ?? (typeof values["gen_ai.operation.name"] === "string" ? values["gen_ai.operation.name"] : "");
   const protectedKeys: Attributes = {}, metadata: string[] = [], content = new Map<string, { group: Group; keys: string[] }>();
   for (const key of Object.keys(values)) {
-    if (protectedValue(key, values[key])) { protectedKeys[key] = values[key]; continue; }
+    if (protectedValue(key, values[key], runtime)) { protectedKeys[key] = values[key]; continue; }
     const group = contentGroup(key, op);
     if (!group) { metadata.push(key); continue; }
     const id = `${group[0]}\u0000${group[1]}\u0000${group[2]}`;
@@ -143,13 +148,13 @@ export function projectAttributes(attributes: Attributes, countLimit: number, op
     entry.keys.push(key); content.set(id, entry);
   }
   const groups = companionGroups(content, values).sort((a, b) => compareGroups(a.group, b.group));
-  return select(values, limit, previous, groups, metadata.sort(lexical), groups.reduce((sum, item) => sum + item.keys.length, 0), Object.keys(values).length, Object.keys(protectedKeys));
+  return select(values, limit, previous, groups, metadata.sort(lexical), groups.reduce((sum, item) => sum + item.keys.length, 0), Object.keys(values).length, Object.keys(protectedKeys), runtime);
 }
 
 /** `candidates` counts candidate keys other than a pre-existing content-count marker. */
 function select(values: Attributes, capacity: number, previous: number, groups: { group: Group; keys: string[] }[], metadata: string[], contentKeys: number, candidates: number,
-  protectedNames: string[] = Object.keys(values)): { attributes: Attributes; dropped: number } {
-  let protectedOrder = protectedNames.map(key => [protectedFamily(key) ?? -1, key] as const).sort((a, b) => a[0] - b[0] || lexical(a[1], b[1])).map(([, key]) => key);
+  protectedNames: string[] = Object.keys(values), runtime = false): { attributes: Attributes; dropped: number } {
+  let protectedOrder = protectedNames.map(key => [protectedFamily(key, runtime) ?? -1, key] as const).sort((a, b) => a[0] - b[0] || lexical(a[1], b[1])).map(([, key]) => key);
   const canonical = groups.find(item => item.group[2] === "output.value" && item.keys.includes("output.value"));
   const choose = (room: number): [string[], number] => {
     const chosen: string[] = [];

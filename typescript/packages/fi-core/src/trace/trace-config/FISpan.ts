@@ -14,6 +14,7 @@ import {
   import { TraceConfig } from "./types";
   import { mask, maskAttributes, redactValue } from "./maskingRules";
   import { redactPiiInString } from "./piiRedaction";
+  import { runtimeSpans } from "../../runtime-metadata";
   import { exportedAgentIdentity, privacyFilter, rememberAuthoredRedactions, rememberMediaAdmission, rememberProjectedAttributeDrops, rememberSpanPrivacyFailure } from "../../export-privacy";
   import { type PrivacyHints, providerResponseBinding } from "../../privacy-runtime";
   import { DROPPED_CONTENT_COUNT, LEGACY_DROPPED_COUNT, PROJECTION_METADATA, projectAttributes } from "../../attribute-projection";
@@ -84,6 +85,9 @@ import {
     // One bounded SDK-authored name, never a host identity. Also witnesses
     // the last eager write: disagreement invalidates, equality alone cannot mark.
     private lastContextName?: string;
+    // Values the SDK wrote through the privileged identity calls below. Only
+    // these can carry runtime export evidence; any ordinary write clears its key.
+    private runtimeWrites = new Map<string, AttributeValue>();
 
     /** @internal Native application context in auto mode; explicit standalone
      * callers keep the wrapper. Instrumentors continue writing through `this`. */
@@ -110,21 +114,27 @@ import {
       return { ...identity, ...this.identityWrites(mark) };
     }
 
-    /** @internal Fill SDK enrichment only; explicit framework setters stay unconditional. */
+    /** @internal Fill SDK enrichment only; explicit framework setters stay unconditional.
+     * A no-op unless this span's provider opted in to runtime attributes. */
     [FILL_IDENTITY](key: string, value: AttributeValue): void {
-      if (this.isEnded) return;
+      if (this.isEnded || !runtimeSpans.has(this.span)) return;
       const {nameWritable, idWritable} = this.identityWrites();
-      if (key === AGENT_NAME ? nameWritable : key === AGENT_ID && idWritable) this.setAttribute(key, value);
+      if (key === AGENT_NAME ? nameWritable : key === AGENT_ID && idWritable) {
+        this.setAttribute(key, value);
+        this.runtimeWrites.set(key, value);
+      }
     }
 
     /** @internal Without pre-host observation, defer even a proven-empty slot:
-     * an already bound host setter could later write the same string. */
+     * an already bound host setter could later write the same string. A no-op
+     * unless this span's provider opted in to runtime attributes. */
     [SET_CONTEXT_NAME](name: string): void {
-      if (this.isEnded || typeof name !== 'string' || name.length > 64 || !this.identityWrites().nameWritable) return;
+      if (this.isEnded || !runtimeSpans.has(this.span) || typeof name !== 'string' || name.length > 64 || !this.identityWrites().nameWritable) return;
       const origin = observedWriter(this.span);
       this.lastContextName = name;
       if (!origin) return;
       this.setAttribute(AGENT_NAME, name);
+      this.runtimeWrites.set(AGENT_NAME, name);
       origin.automatic = true; // Next native slot check validates the committed name.
     }
 
@@ -252,8 +262,10 @@ import {
           // an explicit wrapper write in this call is newer than both. Never
           // infer a writer from string equality. With no readable native slot,
           // only forward identity written by this call, never cached identity.
+          // Only on a span an opted-in runtime processor marked; elsewhere the
+          // caller's pending write wins over an onStart value, as before.
           const pending = { ...this.pendingAttributes };
-          for (const key of [AGENT_NAME, AGENT_ID]) {
+          if (runtimeSpans.has(this.span)) for (const key of [AGENT_NAME, AGENT_ID]) {
             if (!native || !slot || !("value" in slot) || Object.prototype.hasOwnProperty.call(host, key)) delete pending[key];
           }
           clean = this.privacy.admissionAttributes({ ...host, ...pending, ...attributes }, this.span.spanContext());
@@ -262,7 +274,7 @@ import {
         } catch { this.admissionFailed = true; this.admittedKeys.clear(); }
       }
       this.pendingAttributes = clean;
-      const projected = projectAttributes(clean, this.attributeCountLimit);
+      const projected = projectAttributes(clean, this.attributeCountLimit, undefined, runtimeSpans.has(this.span));
       if (slot && "value" in slot && slot.writable && native && "value" in native && native.writable && typeof native.value === "number") {
         // Clear SDK-owned storage so a late canonical field can displace earlier
         // content, instead of being rejected by setAttributes at the host limit.
@@ -296,6 +308,7 @@ import {
         diag.warn(`FISpan.setAttribute called on ended span ID: ${this.span.spanContext().spanId} for key: ${key}`);
         return this;
       }
+      this.runtimeWrites.delete(key);
       this.rememberAuthoredHints({ [key]: value });
       const maskedValue = this.maskAttribute(key, value);
       if (maskedValue != null) {
@@ -309,6 +322,7 @@ import {
         diag.warn(`FISpan.setAttributes called on ended span ID: ${this.span.spanContext().spanId}`);
         return this;
       }
+      for (const key of Object.keys(attributes)) this.runtimeWrites.delete(key);
       this.rememberAuthoredHints(attributes);
       // Auto accounting compares FI's final write with the caller's own view,
       // not with the provider pre-pass below.
@@ -421,7 +435,9 @@ import {
             fallback = { [AGENT_NAME]: this.lastContextName };
           }
           this.admit(fallback);
-          rememberMediaAdmission(this.span, Object.fromEntries([...this.admittedKeys].map(key => [key, this.pendingAttributes[key]])));
+          if (fallback[AGENT_NAME] !== undefined) this.runtimeWrites.set(AGENT_NAME, fallback[AGENT_NAME]!);
+          rememberMediaAdmission(this.span, Object.fromEntries([...this.admittedKeys].map(key => [key, this.pendingAttributes[key]])),
+            { runtime: this.runtimeWrites, siblings: this.pendingAttributes });
         }
       } catch {
         this.admissionFailed = true;
@@ -434,6 +450,7 @@ import {
           this.isEnded = true;
           this.pendingAttributes = {};
           this.lastContextName = undefined;
+          this.runtimeWrites = new Map();
           this.authoredHints = new Map();
           this.admittedKeys.clear();
         }

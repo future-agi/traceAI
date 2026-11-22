@@ -5,9 +5,10 @@ Applications supply verified identities and complete parallel skill lists. The
 SDK's agent_scope helper manages load tracking and list accumulation instead.
 """
 
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 from opentelemetry.context import attach, detach, get_value, set_value
 from opentelemetry.util.types import AttributeValue
@@ -18,6 +19,9 @@ _SKILL_LIST_KEYS = ("fi.skills.version_ids", "fi.skills.ids", "fi.skills.refs")
 _MAX_ATTRIBUTES = 64
 _MAX_STRING_BYTES = 256
 _MAX_SKILLS = 32
+# Keys examined per mapping, as in the TypeScript consumer: a large foreign
+# mapping adds bounded work. Pinned by the shared processor_v1.json vectors.
+_MAX_SCAN = 256
 
 
 def _short_string(value: Any) -> bool:
@@ -33,7 +37,9 @@ def _attributes(mapping: Mapping[str, Any]) -> dict[str, AttributeValue]:
     """Copy only flat OTel values; never stringify arbitrary application objects."""
     attrs: dict[str, AttributeValue] = {}
     truncated = False
-    for key, value in mapping.items():
+    for scanned, (key, value) in enumerate(mapping.items(), 1):
+        if scanned > _MAX_SCAN:
+            break
         if not _short_string(key) or not key.startswith(_RUNTIME_PREFIXES):
             continue
         # Linked is not loaded, and belongs only on context.load, never the carrier.

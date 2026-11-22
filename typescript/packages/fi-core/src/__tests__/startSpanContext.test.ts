@@ -13,7 +13,6 @@ import { isSessionIdentity } from "../privacy-runtime";
 import { getAttributesFromContext, setAttributes, setSession, setUser } from "../trace/contextAttributes";
 import { REDACTED_VALUE } from "../trace/trace-config/constants";
 import { FITracer } from "../trace/trace-config/FITracer";
-import { WATCH_NAME } from "../trace/trace-config/agentIdentity";
 import type { TraceConfigOptions } from "../trace/trace-config/types";
 
 const contextManager = new AsyncLocalStorageContextManager();
@@ -32,20 +31,6 @@ function identityContext(base: Context = ROOT_CONTEXT): Context {
 // Keep the native tracer offline and observable at creation time. The real FI
 // context setters, attribute reader, privacy admission and FISpan remain in use.
 describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) => {
-  // Standalone tracers mark the context they hand to native creation so the
-  // runtime-attributes processor can observe this span's name (agentIdentity).
-  // Auto mode forwards the very same context. Standalone forwards exactly the
-  // caller's entries plus that internal marker: no identity is added or lost.
-  const entries = (c: Context) => (c as unknown as { _currentContext: Map<symbol, unknown> })._currentContext;
-  const forwarded = (base: Context): Context => ({
-    asymmetricMatch(actual: Context) {
-      if (mode !== "standalone") return actual === base;
-      const want = new Map(entries(base)).set(WATCH_NAME, true);
-      const got = entries(actual);
-      return got.size === want.size && [...want].every(([key, value]) => got.get(key) === value);
-    },
-    toAsymmetricMatcher: () => `forwarded ${mode} context`,
-  }) as unknown as Context;
   function fixture(traceConfig: TraceConfigOptions = {}) {
     const nativeSpan = trace.wrapSpanContext({
       traceId: "1".repeat(32),
@@ -91,7 +76,7 @@ describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) 
     expect(startSpan).toHaveBeenCalledTimes(1);
     expect(startSpan).toHaveBeenCalledWith("child", {
       attributes: { "session.id": "session-demo", "user.id": "user-demo" },
-    }, forwarded(ctx));
+    }, ctx);
     expect(trace.getSpan(startSpan.mock.calls[0][2]!)).toBe(parent);
     expect(isSessionIdentity(span.spanContext(), "session-demo")).toBe(true);
     span.end();
@@ -106,7 +91,7 @@ describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) 
     });
     expect(startSpan).toHaveBeenCalledWith("control", {
       attributes: { "session.id": "session-demo", "user.id": "user-demo" },
-    }, forwarded(ctx));
+    }, ctx);
   });
 
   it("lets caller attributes win without binding an overridden session or mutating inputs", () => {
@@ -129,7 +114,7 @@ describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) 
     expect(startSpan).toHaveBeenCalledWith("override", {
       ...options,
       attributes: { "context.only": true, ...attributes },
-    }, forwarded(ctx));
+    }, ctx);
     expect(getAttributesFromContext(ctx)).toEqual(before);
     expect(options.attributes).toBe(attributes);
     expect(isSessionIdentity(span.spanContext(), "session-demo")).toBe(false);
@@ -143,7 +128,7 @@ describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) 
     const span = tracer.startSpan("omit", {
       attributes: { "session.id": undefined, "user.id": undefined },
     }, ctx);
-    expect(startSpan).toHaveBeenCalledWith("omit", { attributes: {} }, forwarded(ctx));
+    expect(startSpan).toHaveBeenCalledWith("omit", { attributes: {} }, ctx);
     expect(isSessionIdentity(span.spanContext(), "session-demo")).toBe(false);
     span.end();
   });
@@ -157,7 +142,7 @@ describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) 
     });
     expect(startSpan).toHaveBeenCalledWith("root", {
       attributes: { label: "root span" },
-    }, forwarded(ROOT_CONTEXT));
+    }, ROOT_CONTEXT);
   });
 
   it("applies privacy before native creation and does not bind a changed session", () => {
@@ -173,7 +158,7 @@ describe.each(["standalone", "auto"] as const)("startSpan context (%s)", (mode) 
         "user.id": "<EMAIL_ADDRESS>",
         "input.value": REDACTED_VALUE,
       },
-    }, forwarded(ctx));
+    }, ctx);
     expect(isSessionIdentity(span.spanContext(), "person@example.com")).toBe(false);
     expect(isSessionIdentity(span.spanContext(), "<EMAIL_ADDRESS>")).toBe(false);
     span.end();

@@ -4,6 +4,7 @@ import { SemanticConventions, SKILL_LOAD_SPAN_NAME, CONTEXT_LOAD_SPAN_NAME } fro
 import { isProjectionMetadata, projectAttributes, protectedFamily } from "../attribute-projection";
 import { privacyFilter } from "../export-privacy";
 import { FITracer } from "../trace/trace-config/FITracer";
+import { FutureAGIRuntimeAttributesSpanProcessor } from "../trace/runtimeAttributesProcessor";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const version = "22222222-2222-4222-8222-222222222222";
@@ -54,22 +55,28 @@ test.each([false, true])("runtime identity survives admission and detached expor
   } finally { await provider.shutdown(); }
 });
 
-test("runtime identity is reserved ahead of content and is not arbitrary-base64 data after projection loss", async () => {
+// Opt-in only: an unmarked span keeps dev's order. Priority reserves a slot on an
+// opted-in span; caller-written values still get dev's export rules after loss.
+test("runtime identity is reserved ahead of content only on an opted-in span, and priority certifies nothing", async () => {
   const exporter = new InMemorySpanExporter();
-  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const provider = new BasicTracerProvider({ spanProcessors: [new FutureAGIRuntimeAttributesSpanProcessor(), new SimpleSpanProcessor(exporter)] });
   try {
     const crowded: Attributes = { ...attrs };
     for (let i = 0; i < 150; i++) crowded[`gen_ai.input.messages.${i}.content`] = `message ${i}`;
     for (const key of Object.keys(attrs)) {
-      expect(protectedFamily(key)).toBe(1);
+      expect(protectedFamily(key)).toBeUndefined();
+      expect(protectedFamily(key, true)).toBeGreaterThan(protectedFamily("traceai.capture.layer")!);
       expect(isProjectionMetadata(key)).toBe(false); // priority alone confers no privacy exemption
     }
-    expect(projectAttributes(crowded, 128).attributes).toMatchObject(attrs);
+    expect(projectAttributes(crowded, 128, undefined, true).attributes).toMatchObject(attrs);
     new FITracer({ tracer: provider.getTracer("runtime-test") }).startSpan("skill.load", { attributes: crowded }).end();
-    const exported = privacyFilter().span(exporter.getFinishedSpans()[0]);
-    expect(exported.attributes).toMatchObject(exportedAttrs);
+    const native = exporter.getFinishedSpans()[0];
+    expect(native.attributes).toMatchObject(attrs);
+    const exported = privacyFilter().span(native).attributes;
+    expect(exported["fi.context.session_id"]).toBe("<redacted>");
+    expect(JSON.stringify(exported)).not.toContain(receipt);
     expect(isProjectionMetadata("fi.skill.contents")).toBe(false);
-    expect(protectedFamily("fi.context.secret")).toBeUndefined();
+    expect(protectedFamily("fi.context.secret", true)).toBeUndefined();
   } finally { await provider.shutdown(); }
 });
 
@@ -134,7 +141,8 @@ test.each(["fi.skill.mime_type", "fi.modality"])("explicit %s takes precedence o
 
 test("retaining malformed runtime keys does not certify their values after projection", async () => {
   const exporter = new InMemorySpanExporter();
-  const provider = new BasicTracerProvider({ spanLimits: { attributeCountLimit: 12 }, spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  // Opted in, so the runtime keys are retained by projection; retention still certifies nothing.
+  const provider = new BasicTracerProvider({ spanLimits: { attributeCountLimit: 12 }, spanProcessors: [new FutureAGIRuntimeAttributesSpanProcessor(), new SimpleSpanProcessor(exporter)] });
   const encoded = "AQID".repeat(11);
   try {
     const attributes = { ...Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`input.part.${i}`, "notes"])),
@@ -144,10 +152,10 @@ test("retaining malformed runtime keys does not certify their values after proje
     new FITracer({ tracer: provider.getTracer("projection") }).startSpan("skill.load", { attributes }).end();
     const raw = exporter.getFinishedSpans()[0];
     expect(raw.attributes["fi.skill.version"]).toBe(encoded);
+    expect(raw.attributes["fi.context.name"]).toBe("support-agent");
     expect(raw.droppedAttributesCount).toBeGreaterThan(0);
     const first = privacyFilter().span(raw);
     for (const view of [first, privacyFilter().span(first)]) {
-      expect(view.attributes["fi.context.name"]).toBe("support-agent");
       expect(JSON.stringify(view)).not.toContain(encoded);
     }
   } finally { await provider.shutdown(); }

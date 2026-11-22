@@ -551,7 +551,9 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
    * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
    */
   httpsProxy?: string;
-  /** Stamp skill/context scope attributes before exporter processors (default true). */
+  /** Opt in to stamping skill/context scope attributes before exporter and application
+   * processors (default false: no runtime processor, as before). A runtime processor
+   * passed in `spanProcessors` is also an opt-in unless this is `false`. */
   runtimeAttributes?: boolean;
 }
 
@@ -598,9 +600,13 @@ class FITracerProvider extends BasicTracerProvider {
         ? new DefaultBatchSpanProcessor(exporter)
         : new DefaultSimpleSpanProcessor(exporter);
     }
+    // Opt-in only. Omitted means no runtime processor, exactly as before;
+    // a caller-supplied runtime processor is itself an explicit opt-in.
+    const suppliedRuntime = config.spanProcessors?.find(processor => runtimeProcessorInstances.has(processor));
     const runtimeProcessor = config.runtimeAttributes === false ? undefined
-      : config.spanProcessors?.find(processor => runtimeProcessorInstances.has(processor))
-        ?? new FutureAGIRuntimeAttributesSpanProcessor();
+      : config.runtimeAttributes === true
+        ? suppliedRuntime ?? new FutureAGIRuntimeAttributesSpanProcessor({ traceConfig: config.traceConfig })
+        : suppliedRuntime;
     const processorRegistry = new SpanProcessorRegistry(
       runtimeProcessor
         ? (config.spanProcessors ?? []).filter(processor => !runtimeProcessorInstances.has(processor))
@@ -743,7 +749,9 @@ export interface RegisterOptions extends ExportPrivacyOptions {
   sampler?: Sampler;
   /** When provided, use these processors instead of constructing the default exporter. */
   spanProcessors?: SpanProcessor[];
-  /** Stamp skill/context scope attributes before exporter processors (default true). */
+  /** Opt in to stamping skill/context scope attributes before exporter and application
+   * processors (default false: no runtime processor, as before). A runtime processor
+   * passed in `spanProcessors` is also an opt-in unless this is `false`. */
   runtimeAttributes?: boolean;
 }
 

@@ -47,13 +47,26 @@ test("bounds added attributes, UTF-8 strings and array copies", async () => {
   const attrs: Attributes = { "fi.context.linked_skill_version_ids": ids, "fi.skills.version_ids": ids, "fi.context.name": "é".repeat(129), "fi.skills.count": NaN };
   for (let i = 0; i < 80; i++) attrs[`fi.context.custom_${i}`] = i;
   const result = await stamped({ v: 1, attrs, reset_skills: false });
+  // As in Python: 62 copied keys, then the derived count and truncation flag.
   expect(Object.keys(result)).toHaveLength(64);
   expect(result["fi.context.name"]).toBeUndefined();
   expect(result["fi.context.linked_skill_version_ids"]).toBeUndefined();
-  expect(result["fi.skills.count"]).toBeUndefined();
+  expect(result["fi.skills.count"]).toBe(32);
+  expect(result["fi.skills.truncated"]).toBe(true);
   expect(result["fi.skills.version_ids"]).toEqual(ids.slice(0, 32));
   expect(result["fi.skills.version_ids"]).not.toBe(ids);
   expect(ids).toHaveLength(40);
+});
+
+// Finding 12 / parity: keys past the scan cap are not examined (Python mirrors it).
+test("keys past the 256-key scan cap are ignored", async () => {
+  const attrs: Record<string, unknown> = {};
+  for (let i = 0; i < 300; i++) attrs[`x.k${i}`] = i;
+  attrs["fi.context.name"] = "late";
+  expect(await stamped({ v: 1, attrs, reset_skills: false })).toEqual({});
+  const early: Record<string, unknown> = { "fi.context.name": "early" };
+  for (let i = 0; i < 300; i++) early[`x.k${i}`] = i;
+  expect(await stamped({ v: 1, attrs: early, reset_skills: false })).toEqual({ "fi.context.name": "early" });
 });
 
 test.each(["off", "load_only"])("%s performs no registry work", async mode => {

@@ -4,7 +4,8 @@ import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { rememberAutoSpanSink } from "./auto-span-delivery";
-import { observeBeforeHost, WATCH_NAME } from "./trace/trace-config/agentIdentity";
+import { observeBeforeHost } from "./trace/trace-config/agentIdentity";
+import { inStandaloneStart, runtimeSpans } from "./runtime-metadata";
 import { runtimeAttributesEnabled } from "./trace/runtimeAttributesEnabled";
 
 // Compatibility defaults stay real SDK processors at the top level, so native
@@ -52,9 +53,10 @@ export class SpanProcessorRegistry implements SpanProcessor {
   onStart(span: Span, parentContext: Context): void {
     if (this.shutdownPromise) return;
     try {
-      // A configured SDK may enrich a plain native span too. Without its mode
-      // reader, only a standalone FI start requests environment-based fallback.
-      if (this.beforeUserHooks && runtimeAttributesEnabled(parentContext.getValue(WATCH_NAME) === true)) observeBeforeHost(span);
+      // Only on a span this provider's opted-in runtime processor marked. A
+      // configured SDK may then observe a plain native span too; without its
+      // mode reader, only a standalone FI start uses the environment fallback.
+      if (this.beforeUserHooks && runtimeSpans.has(span) && runtimeAttributesEnabled(inStandaloneStart())) observeBeforeHost(span);
     } catch { /* Optional observation cannot skip host onStart. */ }
     for (const processor of this.processors) {
       try {

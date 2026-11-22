@@ -10,6 +10,8 @@ Use **`@traceai/fi-core`** when you want to configure the provider, create custo
 
 A raw `fi.context.session_id` on a JavaScript span is not a verified Hub session receipt. Explicit attributes, including attributes forwarded by an instrumentor, remain subject to credential redaction at the FI export boundary. The TypeScript consumption client does not currently produce verified Hub session receipts. This does not change the separate typed `session.id` tracing API.
 
+Skill and context scope attributes are opt-in. Pass `runtimeAttributes: true` to `register()` (or to the provider), or put a `FutureAGIRuntimeAttributesSpanProcessor` in your own `spanProcessors`. Without either, no runtime processor is installed and spans, contexts and exports are unchanged. `FI_SKILLS_TRACING=off` or `load_only` turns stamping off on a provider that opted in.
+
 ## Overview
 
 `@traceai/fi-core` provides a comprehensive tracing solution built on OpenTelemetry that's specifically designed for AI applications. It offers custom span exporters, evaluation tags, and seamless integration with the TraceAI platform for observability and performance monitoring.

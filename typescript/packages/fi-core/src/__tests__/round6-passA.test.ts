@@ -145,12 +145,9 @@ test("R-C07", async () => {
     new FITracerProvider({ endpoint: "http://127.0.0.1:1", headers: {}, batch: true })]) {
     const processors = (provider as any)._activeSpanProcessor._spanProcessors;
     // Explicit batch routes remain bounded through the dev registry.
-    expect(processors).toHaveLength(3);
-    expect(processors[0]).toBeInstanceOf(require("../trace/runtimeAttributesProcessor").FutureAGIRuntimeAttributesSpanProcessor);
-    expect(processors[1]).toBeInstanceOf(require("@opentelemetry/sdk-trace-base").BatchSpanProcessor);
-    expect(processors[2]).toBeInstanceOf(require("../spanProcessorRegistry").SpanProcessorRegistry);
-    expect(Number.isFinite(processors[1]._maxQueueSize) && processors[1]._maxQueueSize > 0).toBe(true);
-    expect(Number.isFinite(processors[1]._maxExportBatchSize) && processors[1]._maxExportBatchSize > 0).toBe(true);
+    expect(processors[0]).toBeInstanceOf(require("@opentelemetry/sdk-trace-base").BatchSpanProcessor);
+    expect(Number.isFinite(processors[0]._maxQueueSize) && processors[0]._maxQueueSize > 0).toBe(true);
+    expect(Number.isFinite(processors[0]._maxExportBatchSize) && processors[0]._maxExportBatchSize > 0).toBe(true);
     await provider.shutdown();
   }
 });

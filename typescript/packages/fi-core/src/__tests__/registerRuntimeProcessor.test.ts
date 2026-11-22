@@ -16,7 +16,9 @@ beforeEach(() => {
 afterEach(() => { jest.restoreAllMocks(); process.env = { ...env }; });
 
 /** Cloud-only suite: the receiver is real loopback HTTP, not a mocked exporter. */
-test.each([false, true])("register preserves default OTLP delivery and stamps first (batch=%s)", async batch => {
+// Finding 3: runtime attribution is opt-in. Omitted installs nothing (dev behaviour);
+// runtimeAttributes: true stamps ahead of the default exporter.
+test.each([[false, undefined], [true, undefined], [false, true], [true, true]] as const)("register preserves default OTLP delivery; stamps only on opt-in (batch=%s, runtimeAttributes=%s)", async (batch, runtimeAttributes) => {
   const received: any[] = [];
   const server: Server = createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -28,14 +30,20 @@ test.each([false, true])("register preserves default OTLP delivery and stamps fi
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const runtimeStart = jest.spyOn(FutureAGIRuntimeAttributesSpanProcessor.prototype, "onStart");
-  const provider = register({ projectName: "runtime-test", endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, setGlobalTracerProvider: false, batch });
+  const provider = register({ projectName: "runtime-test", endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, setGlobalTracerProvider: false, batch, runtimeAttributes });
   try {
     provider.getTracer("runtime-test").startSpan("request", {}, carrier).end();
     await provider.forceFlush();
-    expect(runtimeStart).toHaveBeenCalledTimes(1);
+    expect(runtimeStart).toHaveBeenCalledTimes(runtimeAttributes ? 1 : 0);
     const spans = received.flatMap(body => body.resourceSpans.flatMap((resource: any) => resource.scopeSpans.flatMap((scope: any) => scope.spans)));
     expect(spans).toHaveLength(1);
     const attrs = Object.fromEntries(spans[0].attributes.map((item: any) => [item.key, item.value]));
+    if (!runtimeAttributes) {
+      expect(attrs["fi.context.name"]).toBeUndefined();
+      expect(attrs["gen_ai.agent.name"]).toBeUndefined();
+      expect(attrs["fi.skills.count"]).toBeUndefined();
+      return;
+    }
     expect(attrs["fi.context.name"]).toEqual({ stringValue: "support" });
     expect(attrs["gen_ai.agent.name"]).toEqual({ stringValue: "refund-agent" });
     expect(Number((attrs["fi.skills.count"] as any).intValue)).toBe(1);
@@ -45,7 +53,8 @@ test.each([false, true])("register preserves default OTLP delivery and stamps fi
   }
 });
 
-test.each([true, false])("constructor processors see stamped attributes before their onStart (enabled=%s)", async enabled => {
+// A dependency-supplied carrier reaches an application onStart only after opt-in.
+test.each([true, false, undefined])("constructor processors see stamped attributes before their onStart (enabled=%s)", async enabled => {
   const exporter = new InMemorySpanExporter();
   const onStart = jest.fn(span => ({ ...span.attributes }));
   const observer: SpanProcessor = { onStart, onEnd: () => {}, forceFlush: async () => {}, shutdown: async () => {} };
@@ -56,6 +65,8 @@ test.each([true, false])("constructor processors see stamped attributes before t
     await provider.forceFlush();
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(onStart.mock.results[0].value["fi.context.name"]).toBe(enabled ? "support" : undefined);
+    expect(onStart.mock.results[0].value["fi.skills.count"]).toBe(enabled ? 1 : undefined);
+    expect(exporter.getFinishedSpans()[0].attributes["fi.skills.count"]).toBe(enabled ? 1 : undefined);
     expect(exporter.getFinishedSpans()).toHaveLength(1);
     expect(processors).toHaveLength(2);
   } finally { await provider.shutdown(); }
@@ -77,12 +88,12 @@ test("an explicitly supplied runtime processor is moved first, not installed twi
   } finally { await provider.shutdown(); }
 });
 
-test("explicit empty processors do not construct a default exporter or replace global provider", async () => {
+test.each([undefined, true])("explicit empty processors do not construct a default exporter or replace global provider (runtimeAttributes=%s)", async runtimeAttributes => {
   const existing = trace.getTracerProvider();
-  const provider = register({ projectName: "runtime-test", setGlobalTracerProvider: false, spanProcessors: [], endpoint: "http://127.0.0.1:1" });
+  const provider = register({ projectName: "runtime-test", setGlobalTracerProvider: false, spanProcessors: [], endpoint: "http://127.0.0.1:1", runtimeAttributes });
   try {
     const span = provider.getTracer("runtime-test").startSpan("request", {}, carrier);
-    expect((span as any).attributes["fi.skills.count"]).toBe(1);
+    expect((span as any).attributes["fi.skills.count"]).toBe(runtimeAttributes ? 1 : undefined);
     span.end();
     await provider.forceFlush();
     expect(trace.getTracerProvider()).toBe(existing);
