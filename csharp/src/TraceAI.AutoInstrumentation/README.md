@@ -10,6 +10,11 @@ behaviors described below. It does not capture every possible AI call.
 One published directory serves both .NET 8 and .NET 10 applications. The
 application needs only its own runtime.
 
+Prompt and response content is recorded by default in ASP.NET Core hosts that use `Microsoft.Extensions.AI` or
+`Microsoft.Agents.AI`, as in every other traceAI language. The libraries' switch that does this puts content on their spans for
+every listener in the application, so other OpenTelemetry listeners and exporters in the app receive it unscrubbed; the agent
+prints one line when it first turns the switch on for a service it keeps (factory and type registrations print it on first resolve). Set `FI_AUTO_CAPTURE_CONTENT=false` to keep content off, or set any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true` (or supply a `TraceConfig` with any of those hides; a supplied `TraceConfig` is used instead of the variables). A blank `FI_*` environment value is read per key, as the table under Configuration lists.
+
 ### Option 1: install the NuGet package
 
 The package is first available on NuGet with the first NuGet release, which waits for
@@ -89,7 +94,7 @@ Azure SDK client, not only AI clients).
 
 The payload is managed code built for `net8.0`, with no native profiler; it runs in
 .NET 8 and .NET 10 processes. Continuous integration runs the tests on macOS and
-Linux. DiagnosticSource majors outside 8–10 fail open with a warning rather than
+Linux. DiagnosticSource majors outside 8–11 fail open with a warning rather than
 creating conflicting Activity types. The hook never upgrades the app's chosen
 DiagnosticSource.
 
@@ -149,8 +154,8 @@ Precedence is **code > environment > file > defaults**. The config file is
 `./futureagi.toml`, or `FI_CONFIG_FILE`/`AutoOptions.ConfigFile`. The supported flat
 TOML subset is double-quoted strings, booleans, numbers and single-line arrays of
 strings. Comments outside strings and table-heading lines are ignored; this is not a
-full TOML parser. Malformed lines are ignored, with one exception: a `hide_*` line
-is always read (see the hide switches below). Keep credentials out of committed files.
+full TOML parser. Malformed lines are ignored, with two exceptions: a `hide_*` line
+and an `auto_capture_content` line are always read (see the hide switches below). Keep credentials out of committed files.
 `FI_API_KEY` and `FI_SECRET_KEY` resolve as one atomic pair: explicit arguments,
 then environment, then file. An incomplete or blank pair is ignored as a whole
 with one warning naming the source and missing half; halves never mix across sources.
@@ -169,7 +174,8 @@ debug = false
 | Environment | Default / meaning |
 | --- | --- |
 | `FI_API_KEY`, `FI_SECRET_KEY` | Complete pair required for the default collector; optional with a supplied exporter or provider. |
-| `FI_BASE_URL` | `https://api.futureagi.com`; OTLP HTTP/protobuf at `/tracer/v1/traces`. |
+| `FI_BASE_URL` | `https://api.futureagi.com`; OTLP HTTP/protobuf at `/tracer/v1/traces`. Future AGI keys go to a Future AGI host only over TLS and to a literal loopback host (`localhost`, `127.0.0.1`, `::1`) in plaintext. |
+| `FI_ALLOW_INSECURE_HTTP` | Unset. `1` (exactly) or `AutoOptions.AllowInsecureHttp` lets the keys go in plaintext to a self-hosted collector that is not a Future AGI host, with one warning naming the setting and the origin; a plaintext request that carries the keys, loopback included, goes direct and never through a proxy (https keeps the normal proxy behaviour). Key-carrying requests do not follow redirects. |
 | `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, working directory name, then `DEFAULT_PROJECT_NAME`. |
 | `FI_PROJECT_TYPE` | `observe`; alternatively `experiment`. |
 | `FI_CONFIG_FILE` | `./futureagi.toml`. |
@@ -180,6 +186,24 @@ debug = false
 | `FI_SAMPLE_RATE` | When set, `ParentBased(TraceIdRatio(rate))`, clamped to 0–1; otherwise standard OTel sampler configuration below. It never changes the application's own sampler. |
 | `FI_AUTO_DEBUG` | `false`; print masked configuration/integration diagnostics at startup. |
 | `OTEL_SDK_DISABLED` | `true` disables the agent entirely, without missing-key warnings. |
+
+A blank (empty or whitespace) environment value counts as not set, so the config file's value or the default applies, except where that
+would be the less cautious reading. What a blank value means for each key:
+
+| Key | A blank value means |
+| --- | --- |
+| `FI_BASE_URL` | The agent does not start, even when the file sets `base_url` or the default would apply: it prints one line that names `FI_BASE_URL` and says traces are off, and the application keeps running untraced. Does not apply when `AutoOptions.BaseUrl`, `Exporter` or `Provider` is supplied. |
+| `FI_CONFIG_FILE` | No config file is read, not even `./futureagi.toml`. When it is unset, `./futureagi.toml` is read. |
+| `FI_WIRE_CAPTURE` | Off, even when the file sets `wire_capture = true`. |
+| `FI_API_KEY`, `FI_SECRET_KEY` | Not set for the environment: the file's pair is used. An incomplete pair is ignored with one warning. |
+| `FI_PROJECT_NAME`, `FI_PROJECT_TYPE`, `FI_PROJECT_VERSION_NAME`, `FI_PROJECT_VERSION_ID` | Not set: the file's value, then the default. |
+| `FI_EVAL_TAGS`, `FI_METADATA` | Not set: the file's value, then the default (`[]`, `{}`). |
+| `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Not set: the file's list, then the default (all integrations, none disabled). |
+| `FI_WIRE_MAX_BODY_BYTES` | Not set: the file's value, then `4194304`. |
+| `FI_SAMPLE_RATE` | Not set: the file's `sample_rate`, otherwise `OTEL_TRACES_SAMPLER` applies. |
+| `FI_AUTO_DEBUG` | Not set: the file's `debug` decides. |
+| `FI_AUTO_CAPTURE_CONTENT` | Not set: the file's `auto_capture_content`, otherwise content is recorded. |
+| `FI_HIDE_*` | Not set: the file's value, otherwise the content is not hidden. |
 
 An explicit `AutoOptions.SampleRate`, `FI_SAMPLE_RATE`, or file `sample_rate`
 keeps parent-based ratio sampling and wins over `OTEL_TRACES_SAMPLER`; existing
@@ -257,7 +281,10 @@ the status code and `error.type` but drop the status description, `error.message
 span, including the provider's error text on HTTP client spans. Agent-created
 wire attributes are masked before Activity creation and attribute projection, even
 with only a supplied provider: its listeners/exporters never receive hidden wire
-content. Detached export sanitization remains a second pass on agent destinations;
+content. The same known secrets as on the Future AGI copy (the FI keys of this
+configuration and the process-wide registry below) are replaced in those wire spans
+for the application's own listeners and exporters too: in attributes, request-context
+values, the span name and the status description. Detached export sanitization remains a second pass on agent destinations;
 host-owned application/library spans keep their original host-export view.
 Invocation parameters obey `FI_HIDE_LLM_INVOCATION_PARAMETERS`. Native library
 `gen_ai.system_instructions` and `gen_ai.tool.call.arguments` obey input/input-text/
@@ -319,7 +346,7 @@ an HttpClient callback. Transport errors read only the BCL's stored exception te
 never a virtual `Message` override. Unrecognized host context layouts are skipped, fail-open.
 **One process-wide known-secret registry** is shared as BCL state across the isolated
 hook and default load contexts. It holds at most 1,024 values of eight or more
-characters, evicting the least recently registered/observed value first. At
+characters, evicting the least recently registered/observed value first; the FI keys and credential values of the configuration are pinned in a separate set that is not bounded and is never evicted, and they never fall back to the LRU, so no number of other registrations removes them. At
 initialization it learns every supplied FI key (including ignored incomplete explicit
 pairs and overridden TOML/environment values) and credential-like environment values
 (names containing KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH). Such an
@@ -328,9 +355,23 @@ the variable, never its value.
 `TraceAIAuto.RegisterSecret(value)` lets an integration register additional values;
 shorter values are ignored. If the registry itself must fail closed (for example an
 overlong registered value), the agent says so once on standard error and exports
-spans with identity and timing but no content for the rest of the process. The export boundary takes one immutable, longest-first
-snapshot per batch and replaces these values in every exported string, including
-unrelated and later spans. There is no per-request secret set, span-start inheritance
+spans with identity and timing but no content for the rest of the process.
+Replacement works on the whole value, then any length cap applies to the replaced text, so a cap never cuts a secret in two:
+the attribute limit, the 500-character status description of a non-JSON error body and the 4,096-character value limits all run
+after replacement. The caps that run before replacement are exactly these: multipart field names and file names are cut at 1,024
+characters and MIME types at 256, and the
+multipart text field cap described next. Known secrets are replaced first and the credential value shapes (`AKIA...`, `Bearer ...`, `sk-...`, JWT) run on
+the result, in the same call; no shape ever runs on text that still holds a known secret, because a shape that matched part of a
+secret would leave the rest of it behind. The one exception is a multipart text field, which is read to 64 KiB before the secrets of
+the request are known: a field cut at that cap also loses the last 4,095 characters it kept, so a secret straddling the cap keeps no part
+of itself (such a field is at most 61,441 characters).
+Values that contain or overlap known secrets, including two secrets that overlap only at their edges, are replaced as one span, so
+no part of any of them remains. The Future AGI copy is replaced at export: the export boundary takes one immutable
+snapshot per batch, at export, and replaces these values in every exported string, including unrelated and later spans, so a
+secret learned after a span was captured is still replaced. For the HTTP model-call spans the agent itself creates, the agent
+keeps the unreplaced values in an agent-side table keyed by the Activity (not a custom property, tag or any other member the application can read), and the application's own providers, listeners and
+exporters see the same values replaced once, from the registry as it is when the span ends (a secret learned after that is
+not known to them). There is no per-request secret set, span-start inheritance
 or ancestor credential propagation. Registry values never appear in diagnostics.
 
 The HttpClient observer always collects credentials, before sampling, model-span
@@ -359,13 +400,13 @@ The fully merged resource includes `OTEL_RESOURCE_ATTRIBUTES`, detected attribut
 and all project fields, with the same hide and credential rules. Project routing is
 separate (`project_name`); it never replaces detected `service.name`,
 `service.version` or `service.instance.id`, or synthesizes application identity from
-the instrumentation's version. All supplied FI values are refreshed before export,
-so ordinary LRU churn cannot evict ignored/overridden FI credentials.
+the instrumentation's version. All supplied FI values are pinned before export,
+so LRU churn cannot evict ignored/overridden FI credentials.
 
 Attribute projection follows the shared A7 contract, independent of insertion order.
 Wire candidates are projected before Activity creation; forwarded Activities are
 sanitized and mapped on a detached snapshot before the SDK's bounded serializer
-(Activity itself has no bounded tag container on DiagnosticSource 8–10). Reserve
+(Activity itself has no bounded tag container on DiagnosticSource 8–11). Reserve
 identity, outcome, provider/model/operation, all known usage, timing, provenance and
 degradation fields, including one dropped-content marker when necessary. Timing is
 the exact keys `gen_ai.response.latency`, `gen_ai.response.time_to_first_chunk`,
@@ -400,24 +441,24 @@ body limit), eight encoding layers, 128 distinct values per discovery and 4,096
 characters per value. Registry capacity is 1,024; discovery/value-budget failures
 fail closed, while capacity overflow uses LRU eviction. A snapshot failure discards
 all content but retains identity, flags and timing. Snapshot shells use the tested
-DiagnosticSource 8–10 private content fields to preserve IDs without invoking
+DiagnosticSource 8–11 private content fields to preserve IDs without invoking
 ActivitySource constructors or application listeners. These and the other private
 runtime and OpenTelemetry members the agent uses are resolved once; at start the
 agent prints one warning naming any that are missing. An unrecognized layout omits
 telemetry rather than reverting to the unsafe shared Activity. These privacy rules
 apply to the agent's exporter, not an application's separately configured exporters.
-The agent does not enable libraries' sensitive-content diagnostics automatically.
+In ASP.NET Core hosts the agent turns the libraries' sensitive-content diagnostics on by default, so prompt and response content is recorded like in every other traceAI language (see Web hosts below). `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, keeps that capture off, as does a supplied `TraceConfig` with any of those hides (a supplied `TraceConfig` is used instead of the variables).
 
 ## Library layer and transactions
 
 | Integration name | Sources / behavior |
 | --- | --- |
 | `openai` | `OpenAI.*`; enables `OpenAI.Experimental.EnableOpenTelemetry`. |
-| `extensions_ai` | `Experimental.Microsoft.Extensions.AI*`, `Microsoft.Extensions.AI*`; the app must use `OpenTelemetryChatClient`/`UseOpenTelemetry()`. |
+| `extensions_ai` | `Experimental.Microsoft.Extensions.AI*`, `Microsoft.Extensions.AI*`. ASP.NET Core hosts: registered `IChatClient` and `IEmbeddingGenerator<,>` services are wrapped automatically (see [Web hosts](#web-hosts-chat-clients-and-agents-without-code)). Other apps: use `OpenTelemetryChatClient`/`UseOpenTelemetry()`. |
 | `semantic_kernel` | `Microsoft.SemanticKernel*`; enables `Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics`, not the sensitive-content switch. |
 | `azure_inference` | `Azure.AI.Inference*`; enables `Azure.Experimental.EnableActivitySource`. |
 | `azure_openai` | `Azure.AI.OpenAI*`; modern clients also emit `OpenAI.*` (enable `openai` too). |
-| `agents` | `Experimental.Microsoft.Agents.AI*`, `Microsoft.Agents.AI*`; the framework must opt in to its OpenTelemetry wrapper. |
+| `agents` | `Experimental.Microsoft.Agents.AI*`, `Microsoft.Agents.AI*`. ASP.NET Core hosts: registered `AIAgent` services are wrapped automatically. Other apps: use the framework's OpenTelemetry wrapper. |
 | `aspnetcore` | The exact `Microsoft.AspNetCore` source (not other framework sources under it); incoming SERVER activities, preserving remote parents. A request span is sent only when an AI span of the same trace was captured, so health checks, static files and other plain routes are not sent. |
 | `wire` | `HttpHandlerDiagnosticListener` request, response and exception events. |
 
@@ -446,6 +487,24 @@ Sources/defaults were checked against these upstream references:
 - [Azure AI Inference diagnostics](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/ai/Azure.AI.Inference/README.md)
 - [Microsoft framework source defaults](https://github.com/microsoft/opentelemetry-distro-dotnet/blob/main/docs/azure-monitor-getting-started.md)
 - [Agent framework telemetry wrapper](https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/OpenTelemetryAgent.cs)
+
+## Web hosts: chat clients and agents without code
+
+`Microsoft.Extensions.AI` and `Microsoft.Agents.AI` emit spans only through their own OpenTelemetry wrappers
+(`OpenTelemetryChatClient`, `OpenTelemetryEmbeddingGenerator<,>`, `OpenTelemetryAgent`), which an application adds with
+`UseOpenTelemetry()`. In an ASP.NET Core host the startup hook adds the companion assembly
+`TraceAI.AutoInstrumentation.HostingStartup` to `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` (appended to any existing value, never
+replacing it). Just before the host builds its container, that assembly wraps every registered `IChatClient`,
+`IEmbeddingGenerator<,>` and `AIAgent` in the library's own wrapper, so the application needs no tracing code.
+
+- A registration whose instance already carries the wrapper (the application called `UseOpenTelemetry()`) is left as it is, so each call produces one span.
+- It is off when the agent is not running (`OTEL_SDK_DISABLED`, missing credentials) and per kind when `extensions_ai` or `agents` is disabled (`FI_DISABLED_INSTRUMENTATIONS`, or left out of `FI_INSTRUMENTATIONS`).
+- Prompt and response content is recorded by default, like in every other traceAI language. The libraries' sensitive-content switch (`EnableSensitiveData`) puts content on the span for every listener the application has, not only this agent, so an application's other listeners or exporters on `Experimental.Microsoft.Extensions.AI` and `Experimental.Microsoft.Agents.AI` receive the content too, unscrubbed. When the agent first turns the switch on for a service it keeps it prints one line saying so (factory and type registrations print it on first resolve). Set `FI_AUTO_CAPTURE_CONTENT=false` (or `0`, `no`, `off`) to leave it off. The startup never switches it on against the standard `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` when it is set to anything but `true` (`false`, `False`, `0`). Setting any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` to `true` keeps it off too, and a `TraceConfig` supplied to the agent is used instead of the hide variables. The agent's own privacy rules (the hide settings and known-secret scrubbing) still apply to what it exports.
+- The integration status reads `instrumented` with `auto (web host)` once a registered service was wrapped by this startup, and `manual` otherwise, including when the application's own `UseOpenTelemetry()` wrapper is the one tracing.
+- Registrations of open generic types and keyed services are left as registered. An instance the application registers stays the application's to dispose. A type registration (`AddSingleton<IChatClient, MyChat>()`, `AddScoped<AIAgent, MyAgent>()`) becomes a factory with the same lifetime: it builds `MyChat` with `ActivatorUtilities` constructor rules (mark the intended constructor with `[ActivatorUtilitiesConstructor]`), wraps it, and returns a small object the container owns. When the container (or scope) is disposed that object releases the wrapper and `MyChat` exactly once: `DisposeAsync` when `MyChat` is `IAsyncDisposable` and the container is disposed asynchronously, otherwise `Dispose`. This is done by the hook itself because the library's agent wrapper (`OpenTelemetryAgent`) does not dispose the agent it wraps. No descriptor is added and no keyed service is used, so it works on any DI container; your own registrations of `MyChat` are neither used nor changed and `MyChat` does not become resolvable. The container no longer validates that constructor at build time; an unsatisfiable constructor fails when the service is first resolved. A factory registration (`AddSingleton<AIAgent>(sp => new MyAgent(...))`) takes the same path. An `IAsyncDisposable`-only implementation disposed synchronously is released by blocking on `DisposeAsync` (run on the thread pool, so it never captures a synchronization context). A host without dynamic code support leaves these registrations untraced. If the hook cannot build its ownership object for a registration, that registration is built as registered and is not traced (`FI_AUTO_DEBUG=true` prints a `left a registration untraced` line).
+- The startup adds the assembly to `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES` in the process environment, so child processes the application starts inherit it. An ASP.NET Core child process that runs without the hook cannot find the assembly and logs a hosting-startup load error; start such children with the variable removed.
+- Not covered: applications that are not ASP.NET Core hosts, clients built directly (`new ChatClientBuilder(...).Build()`) and keyed registrations. They call `UseOpenTelemetry()` as before.
+- The agent loads next to `System.Diagnostics.DiagnosticSource` 8 through 11 (`Microsoft.Extensions.AI` 11 ships version 11).
 
 ## Wire behavior and coverage limits
 
@@ -840,7 +899,7 @@ invented as zero; absent optional additions use provider-schema defaults.
   JSON element boundaries. Use `AutoOptions.EvalTags` or a JSON-encoded
   `FI_EVAL_TAGS` environment string when boundaries matter. This is not fixed here.
 - **2026-10-30 — Runtime layout/stream identity:** privacy snapshots and standard
-  HTTP stream taps depend on the verified DiagnosticSource 8–10 and
+  HTTP stream taps depend on the verified DiagnosticSource 8–11 and
   SocketsHttpHandler managed layouts. Changed layouts fail open for the application
   and fail closed for export; coverage can be lost. NativeAOT/trimmed/single-file
   deployments and unsupported runtimes are not certified. Framework stream concrete

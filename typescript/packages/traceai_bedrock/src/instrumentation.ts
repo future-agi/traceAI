@@ -42,7 +42,7 @@ import {
 const MODULE_NAME = "@aws-sdk/client-bedrock-runtime";
 const AGENT_RUNTIME_MODULE_NAME = "@aws-sdk/client-bedrock-agent-runtime";
 const INSTRUMENTATION_NAME = "@traceai/bedrock";
-const INSTRUMENTATION_VERSION = "0.2.0"; // x-release-please-version
+const INSTRUMENTATION_VERSION = "0.2.1"; // x-release-please-version
 
 /**
  * AWS SDK module interface for proper typing
@@ -541,7 +541,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
       args,
       span,
       (response: ConverseResponse) => {
-        extractConverseResponseAttributes({ span, response });
+        extractConverseResponseAttributes({ span, response, traceConfig: this.traceConfig });
         span.setStatus({ code: SpanStatusCode.OK });
         span.end();
         return response;

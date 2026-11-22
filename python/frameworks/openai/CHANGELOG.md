@@ -1,3 +1,8 @@
+## [0.1.16] - 2026-11-19
+
+### Changed
+- Labels MiniMax hosts (`api.minimax.io`, `api.minimax.chat`) as provider `minimax` and advertises `_supports_minimax_provider`, which the MiniMax integration checks before deferring.
+
 ## [0.1.15] - 2026-11-12
 
 ### Fixed

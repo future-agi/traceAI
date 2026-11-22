@@ -10,7 +10,7 @@ from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 from wrapt import ObjectProxy
 
-from traceai_fireworks._privacy import _hide_raw_output
+from traceai_fireworks._privacy import _hide_input, _hide_raw_output, _response_side
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -50,7 +50,8 @@ def _get_stream_output_attributes(
     try:
         attributes[SpanAttributes.OUTPUT_VALUE] = (
             REDACTED_VALUE if _hide_raw_output(config) else safe_json_dumps([
-                c.model_dump() if callable(getattr(c, "model_dump", None)) else {}
+                (_response_side(c.model_dump()) if _hide_input(config) else c.model_dump())
+                if callable(getattr(c, "model_dump", None)) else {}
                 for c in chunks
             ])
         )

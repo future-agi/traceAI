@@ -27,6 +27,13 @@ import java.util.function.Function;
 import static org.assertj.core.api.Assertions.*;
 
 class BedrockConverseStreamTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     @RegisterExtension
     static final OpenTelemetryExtension otel = OpenTelemetryExtension.create();
 
@@ -200,5 +207,76 @@ class BedrockConverseStreamTest {
             assertThat(data.getAttributes().get(AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE))).hasSizeLessThanOrEqualTo(32128);
             assertThat(data.getAttributes().get(AttributeKey.stringKey(SemanticConventions.RAW_OUTPUT))).hasSizeLessThanOrEqualTo(32000);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 7, 12, 24})
+    void aKnownSecretStraddlingTheCharacterCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-BEDROCK-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        var tracing = new BedrockTracing(tracer(false));
+        var span = tracing.start(request());
+        var output = new BedrockStreamOutput(tracing, span);
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text("a".repeat(32000 - inside)).build()).build());
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text(secret + "tail").build()).build());
+        output.capture();
+        span.end();
+        var data = otel.getSpans().get(0);
+        assertThat(data.getAttributes().get(AttributeKey.booleanKey("gen_ai.bedrock.output_truncated"))).isTrue();
+        assertThat(data.getAttributes().toString()).doesNotContain("PFX");
+        assertThat(data.getAttributes().get(AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)))
+            .contains(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+    }
+
+    /**
+     * A character-capped output is 32000 characters, so the messages JSON built from it is over the attribute limit and is not
+     * recorded: what this proves is the capped OUTPUT_VALUE and the raw output, where a longer secret learned after the capture
+     * is trimmed at export.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 40})
+    void aSecretLearnedAfterTheCaptureLeavesNoPrefixInTheCappedOutputValue(int inside) {
+        String late = "PFX-BEDROCK-LATE-" + inside + "-" + "L".repeat(70);
+        var tracing = new BedrockTracing(tracer(false));
+        var span = tracing.start(request());
+        var output = new BedrockStreamOutput(tracing, span);
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text("a".repeat(32000 - inside)).build()).build());
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text(late + "tail").build()).build());
+        output.capture();
+        span.end();
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        var exported = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+        ai.traceai.privacy.SecretReplacingSpanExporter.wrap(exported).export(otel.getSpans());
+        String all = exported.getFinishedSpanItems().get(0).getAttributes().toString();
+        for (int k = 1; k < late.length(); k++) {
+            assertThat(all).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
+        assertThat(all).doesNotContain("PFX-BEDROCK-LATE");
+    }
+
+    /** A value under the cap does reach the messages JSON: a secret learned after the capture is replaced there, and the attribute parses. */
+    @org.junit.jupiter.api.Test
+    void aSecretLearnedAfterTheCaptureIsReplacedInTheMessagesJsonOfAnOutputUnderTheCap() {
+        String late = "PFX-BEDROCK-UNDER-CAP-SECRET-" + "U".repeat(20);
+        var tracing = new BedrockTracing(tracer(false));
+        var span = tracing.start(request());
+        var output = new BedrockStreamOutput(tracing, span);
+        output.accept(ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text("start " + late + " end " + "a".repeat(2_000)).build()).build());
+        output.capture();
+        span.end();
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        var exported = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+        ai.traceai.privacy.SecretReplacingSpanExporter.wrap(exported).export(otel.getSpans());
+        var attributes = exported.getFinishedSpanItems().get(0).getAttributes();
+        String messages = attributes.get(AttributeKey.stringKey(SemanticConventions.LLM_OUTPUT_MESSAGES));
+        assertThat(messages).as("the messages JSON of an output under the cap is recorded").isNotNull();
+        assertThat(messages).doesNotContain("PFX-BEDROCK-UNDER-CAP").contains(ai.traceai.privacy.KnownSecrets.PLACEHOLDER);
+        com.google.gson.JsonParser.parseString(messages);
+        assertThat(attributes.toString()).doesNotContain("PFX-BEDROCK-UNDER-CAP");
     }
 }

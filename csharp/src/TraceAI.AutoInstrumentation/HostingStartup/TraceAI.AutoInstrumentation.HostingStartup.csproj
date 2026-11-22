@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Loaded into the application's default context by ASP.NET Core (ASPNETCORE_HOSTINGSTARTUPASSEMBLIES).
+         It references only the shared framework; Microsoft.Extensions.AI and Microsoft.Agents.AI types are
+         reached by reflection, so it binds to whichever version the application ships. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>TraceAI.AutoInstrumentation.HostingStartup</AssemblyName>
+    <RootNamespace>TraceAI.AutoInstrumentation.HostingStartupSupport</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <InternalsVisibleTo Include="TraceAI.AutoInstrumentation.HostingStartup.Tests" />
+  </ItemGroup>
+</Project>

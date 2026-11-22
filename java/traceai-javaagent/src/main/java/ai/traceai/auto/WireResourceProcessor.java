@@ -13,14 +13,22 @@ import java.util.concurrent.TimeUnit;
 
 /** Only the owned wire provider uses this adapter; application SDK processors are unchanged. */
 final class WireResourceProcessor implements SpanProcessor {
-    private record EndState(Resource resource, boolean omitAttributes) {}
+    private record EndState(Resource resource, boolean omitAttributes, boolean drop) {}
     private static final ThreadLocal<EndState> END_STATE = new ThreadLocal<>();
     private final SpanProcessor delegate;
     WireResourceProcessor(SpanProcessor delegate) { this.delegate = delegate; }
+    /** Ends a span the agent started and decided not to record: it is closed, and no exporter sees it. */
+    static void drop(Span span, long endEpochNanos) {
+        EndState previous = END_STATE.get();
+        try {
+            END_STATE.set(new EndState(null, false, true));
+            span.end(endEpochNanos, TimeUnit.NANOSECONDS);
+        } finally { if (previous == null) END_STATE.remove(); else END_STATE.set(previous); }
+    }
     static void end(Span span, long endEpochNanos, Resource resource, int attributeLimit) {
         EndState previous = END_STATE.get();
         try {
-            END_STATE.set(new EndState(resource, attributeLimit == 0));
+            END_STATE.set(new EndState(resource, attributeLimit == 0, false));
             // SDK onEnd callbacks are synchronous. Snapshot the resource and zero budget
             // before a batch processor queues the immutable view; no cross-thread side table exists.
             span.end(endEpochNanos, TimeUnit.NANOSECONDS);
@@ -32,6 +40,7 @@ final class WireResourceProcessor implements SpanProcessor {
     @Override public void onEnd(ReadableSpan span) {
         EndState state = END_STATE.get();
         if (state == null) { delegate.onEnd(span); return; }
+        if (state.drop()) return;
         SpanData snapshot = new DelegatingSpanData(span.toSpanData()) {
             @Override public Resource getResource() { return state.resource(); }
             // The sampler installs metadata before projection. The SDK cannot remove it;

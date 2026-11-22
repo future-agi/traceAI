@@ -145,7 +145,11 @@ def _finish_invoke(state: _State, span: Any, response: Dict[str, Any]) -> None:
             _set(span, SpanAttributes.OUTPUT_VALUE, payload.binary_note(content_type, length if isinstance(length, int) else None))
             _set(span, SpanAttributes.OUTPUT_MIME_TYPE, "text/plain")
         return
-    data = body.read()
+    try:
+        data = body.read()
+    except BaseException as exc:
+        # The caller's own network read failed; surface exactly what they would have seen.
+        raise _BodyReadError(exc) from exc
     response["Body"] = StreamingBody(io.BytesIO(data), len(data))
     captured = payload.capture_body(data, content_type)
     if captured is None:
@@ -216,28 +220,33 @@ def _wrap_operation(state: _State, operation: str, original: Callable[..., Any])
         except BaseException as exc:
             _fail(span, exc)
             raise
+        read_error = None
         try:
             if operation == "invoke_endpoint_with_response_stream":
                 if _finish_stream(state, span, response):
                     return response
             else:
                 _FINISHERS[operation](state, span, response)
-        except Exception as exc:
+        except _BodyReadError as wrapper:
+            read_error = wrapper.original
+        except Exception:
             logger.debug("sagemaker response capture failed", exc_info=True)
-            if _body_read_failed(exc):
-                _fail(span, exc)
-                raise
+        if read_error is not None:
+            # Raised outside the handler so the caller's exception keeps its own __context__.
+            _fail(span, read_error)
+            raise read_error
         span.end()
         return response
 
     return instrumented
 
 
-def _body_read_failed(exc: Exception) -> bool:
-    """Reading the response body is the caller's own network read; its failure must surface."""
-    from botocore.exceptions import BotoCoreError
+class _BodyReadError(Exception):
+    """Internal carrier for a failed response-body read, so it is re-raised unchanged."""
 
-    return isinstance(exc, (BotoCoreError, OSError))
+    def __init__(self, original: BaseException) -> None:
+        super().__init__()
+        self.original = original
 
 
 def _create_client_wrapper(state: _State) -> Callable[..., Any]:

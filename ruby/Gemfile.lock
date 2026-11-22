@@ -105,8 +105,8 @@ DEPENDENCIES
   httpx
   minitest (~> 5.0)
   openai
-  opentelemetry-exporter-otlp (~> 0.30)
-  opentelemetry-sdk (~> 1.0)
+  opentelemetry-exporter-otlp (~> 0.31, >= 0.31.1)
+  opentelemetry-sdk (~> 1.10)
   rake (~> 13.0)
   ruby-openai
   ruby_llm

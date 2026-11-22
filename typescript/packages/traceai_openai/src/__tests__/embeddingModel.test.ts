@@ -127,7 +127,7 @@ test.each(cases)("hideEmbeddingVectors still hides legacy identity and every vec
     expect(span.attributes["embedding.model_name"]).toBe("__REDACTED__");
     expect(span.attributes[vectorKey]).toBeUndefined();
     expect(Object.keys(span.attributes).filter(key => /^embedding\.embeddings\.\d+\.embedding\.vector$/.test(key))).toEqual([]);
-    expect(span.attributes["raw.output"]).toBe("__REDACTED__");
+    expect(span.attributes["raw.output"]).toBeUndefined();
     expect(JSON.stringify({ attributes: span.attributes, events: span.events, status: span.status, links: span.links })).not.toContain("912345.6");
   }
 });

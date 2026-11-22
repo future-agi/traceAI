@@ -16,7 +16,7 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, generateTraceConfig, safelyJSONStringify } from "@traceai/fi-core";
 import {
   SemanticConventions,
   FISpanKind,
@@ -209,7 +209,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
         [SemanticConventions.LLM_MODEL_NAME]: model,
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(input),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-        [SemanticConventions.RAW_INPUT]: safeJsonStringify(input),
+        ...(this.hiding().any ? {} : { [SemanticConventions.RAW_INPUT]: safeJsonStringify(input) }),
         "google_adk.agent_name": agentName,
         "google_adk.operation": "run",
       },
@@ -370,10 +370,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
         return original.apply(instance, args);
       });
 
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-      });
+      this.setResultValue(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
@@ -415,10 +412,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
         return original.apply(instance, args);
       });
 
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-      });
+      this.setResultValue(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
@@ -486,7 +480,17 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
     // Handle different response formats
     const output = result.output || result.response || result.content || result;
 
-    if (typeof output === "string") {
+    if (this.hiding().input) {
+      // The result object can echo the request. Only response-side text is recorded.
+      const text = responseText(output) ?? responseText(result);
+      if (text !== undefined) {
+        span.setAttribute(SemanticConventions.OUTPUT_VALUE, text);
+        span.setAttribute(
+          SemanticConventions.LLM_OUTPUT_MESSAGES,
+          safelyJSONStringify([{ role: "assistant", content: text }]) ?? "[]"
+        );
+      }
+    } else if (typeof output === "string") {
       span.setAttribute(SemanticConventions.OUTPUT_VALUE, output);
       span.setAttribute(
         SemanticConventions.LLM_OUTPUT_MESSAGES,
@@ -528,7 +532,33 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
       });
     }
 
-    span.setAttribute(SemanticConventions.RAW_OUTPUT, safeJsonStringify(result));
+    if (!this.hiding().any) span.setAttribute(SemanticConventions.RAW_OUTPUT, safeJsonStringify(result));
+  }
+
+  /** Which hide settings are on, read per call so environment switches are honoured. */
+  private hiding(): { input: boolean; any: boolean } {
+    const c = generateTraceConfig(this._traceConfig);
+    const input = Boolean(c.hideInputs || c.hideInputText || c.hideInputMessages || c.hideInputImages);
+    const output = Boolean(c.hideOutputs || c.hideOutputText || c.hideOutputMessages);
+    return { input, any: input || output || Boolean(c.hideEmbeddingVectors) };
+  }
+
+  /** output.value for a tool or runner result: the whole object, or response-side text under an input setting. */
+  private setResultValue(span: Span, result: any): void {
+    if (this.hiding().input) {
+      const text = responseText(result);
+      if (text !== undefined) {
+        span.setAttributes({
+          [SemanticConventions.OUTPUT_VALUE]: text,
+          [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+        });
+      }
+      return;
+    }
+    span.setAttributes({
+      [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
+      [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
+    });
   }
 
   private async *wrapAgentStream(stream: AsyncIterable<any>, span: Span): AsyncIterable<any> {
@@ -548,10 +578,13 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
         yield chunk;
       }
 
+      const hiding = this.hiding();
+      // Chunks can echo the request: under an input setting only streamed text is recorded.
+      const value = fullContent || (hiding.input ? undefined : safeJsonStringify(chunks));
       span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: fullContent || safeJsonStringify(chunks),
+        ...(value !== undefined ? { [SemanticConventions.OUTPUT_VALUE]: value } : {}),
         [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "assistant", content: fullContent }]) ?? "[]",
-        [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(chunks),
+        ...(hiding.any ? {} : { [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(chunks) }),
       });
 
       span.setStatus({ code: SpanStatusCode.OK });
@@ -593,6 +626,28 @@ function safeJsonStringify(obj: unknown): string {
   } catch {
     return String(obj);
   }
+}
+
+const TEXT_KEYS = ["text", "output_text", "outputText", "content", "output", "response", "parts"];
+
+/**
+ * Response-side text from a result: a string, or the text fields of an object/array. Request-side fields
+ * (`request`, `input`, `prompt`, `messages`, arguments, ...) are never read, and user-role entries are skipped.
+ */
+function responseText(value: unknown, depth = 0): string | undefined {
+  if (typeof value === "string") return value || undefined;
+  if (depth > 4 || value === null || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    const parts = value.map((item) => responseText(item, depth + 1)).filter((t): t is string => t !== undefined);
+    return parts.length ? parts.join("") : undefined;
+  }
+  const obj = value as Record<string, unknown>;
+  if (obj.role === "user") return undefined;
+  for (const key of TEXT_KEYS) {
+    const text = responseText(obj[key], depth + 1);
+    if (text !== undefined) return text;
+  }
+  return undefined;
 }
 
 function generateId(): string {

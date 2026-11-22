@@ -1,3 +1,7 @@
+## [0.1.1] - 2026-11-19
+### Changed
+- A content key is masked by key whatever the type of its value (number, boolean or text), including `input.value`, `gen_ai.input.images` and `gen_ai.request.parameters`.
+
 ## [0.1.0] - unreleased
 ### Feature
 - ElevenLabs Agents post-call OpenTelemetry forwarder: HMAC-verified `post_call_transcription_otel`

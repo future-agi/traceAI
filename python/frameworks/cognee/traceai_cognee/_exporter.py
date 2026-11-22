@@ -94,6 +94,19 @@ def project(span, project_name, capture_content, trace_config=None):
             for key in sources:
                 if key in out:
                     value = out[key]
+                    # The alias is a content key of its own: the shared mask runs on it whatever the value type, and a
+                    # masked value replaces the native copies, so no representation keeps the original.
+                    masked = config.mask(dest + '.value', value)
+                    if masked != value or type(masked) is not type(value):
+                        for source in sources:
+                            if source in out:
+                                if masked is None:
+                                    del out[source]
+                                else:
+                                    out[source] = masked
+                        value = masked
+                    if value is None:
+                        break
                     out[dest + '.value'] = value
                     try:
                         mime = 'application/json' if isinstance(json.loads(value), (dict, list)) else 'text/plain'

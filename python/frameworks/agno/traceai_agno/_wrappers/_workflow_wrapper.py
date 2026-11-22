@@ -106,7 +106,16 @@ def _get_input_from_args(arguments: Mapping[str, Any]) -> str:
     return ""
 
 
-def _extract_output(response: Any) -> tuple[str, str]:
+def _hides_input(span: Any) -> bool:
+    """True when any input hide setting is on for the span's tracer."""
+    config = getattr(span, "_self_config", None)
+    return any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images")
+    )
+
+
+def _extract_output(response: Any, span: Any = None) -> tuple[str, str]:
     """Extract output from workflow/step response."""
     if response is None:
         return "", TEXT
@@ -120,6 +129,10 @@ def _extract_output(response: Any) -> tuple[str, str]:
             except Exception:
                 pass
         return str(content), TEXT
+    # Past this point the whole response object is written, and it carries the run input:
+    # it is not recorded while an input hide setting is on.
+    if _hides_input(span):
+        return "", TEXT
     if hasattr(response, "model_dump_json"):
         try:
             return str(response.model_dump_json()), JSON
@@ -226,7 +239,7 @@ def _set_workflow_status(span: Any, response: Any) -> None:
 
 def _set_workflow_stream_output(span: Any, response: Any, instance: Any) -> None:
     if response is not None:
-        output, mime_type = _extract_output(response)
+        output, mime_type = _extract_output(response, span)
         if output:
             span.set_attribute(OUTPUT_VALUE, output)
             span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -299,7 +312,7 @@ class _WorkflowWrapper:
 
             # Set output and workflow ID after restoring caller context.
             _set_workflow_status(span, result)
-            output, mime_type = _extract_output(result)
+            output, mime_type = _extract_output(result, span)
             if output:
                 span.set_attribute(OUTPUT_VALUE, output)
                 span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -470,7 +483,7 @@ class _WorkflowWrapper:
                         context_api.detach(spanned_token)
 
                 _set_workflow_status(span, response)
-                output, mime_type = _extract_output(response)
+                output, mime_type = _extract_output(response, span)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
                     span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -592,7 +605,7 @@ class _WorkflowExecuteWrapper:
     def _apply_run_output_attributes(span: Any, instance: Any, run_output: Any) -> None:
         if run_output is None:
             return
-        output, mime_type = _extract_output(run_output)
+        output, mime_type = _extract_output(run_output, span)
         if output:
             span.set_attribute(OUTPUT_VALUE, output)
             span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -856,7 +869,7 @@ class _StepWrapper:
 
             # Set output and return after restoring caller context.
             _set_step_status(span, result)
-            output, mime_type = _extract_output(result)
+            output, mime_type = _extract_output(result, span)
             if output:
                 span.set_attribute(OUTPUT_VALUE, output)
                 span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -905,7 +918,7 @@ class _StepWrapper:
             _set_step_status(span, final_response)
             # Extract output only from the final response
             if final_response is not None:
-                output, mime_type = _extract_output(final_response)
+                output, mime_type = _extract_output(final_response, span)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
                     span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -995,7 +1008,7 @@ class _StepWrapper:
                     response = await result
 
                 _set_step_status(span, response)
-                output, mime_type = _extract_output(response)
+                output, mime_type = _extract_output(response, span)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
                     span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -1044,7 +1057,7 @@ class _StepWrapper:
             _set_step_status(span, final_response)
             # Extract output only from the final response
             if final_response is not None:
-                output, mime_type = _extract_output(final_response)
+                output, mime_type = _extract_output(final_response, span)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
                     span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -1134,7 +1147,7 @@ class _ParallelWrapper:
 
             # Set output
             _set_step_status(span, result)
-            output, mime_type = _extract_output(result)
+            output, mime_type = _extract_output(result, span)
             if output:
                 span.set_attribute(OUTPUT_VALUE, output)
                 span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
@@ -1273,7 +1286,7 @@ class _ParallelWrapper:
                     response = await result
 
                 _set_step_status(span, response)
-                output, mime_type = _extract_output(response)
+                output, mime_type = _extract_output(response, span)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
                     span.set_attribute(OUTPUT_MIME_TYPE, mime_type)

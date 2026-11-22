@@ -32,6 +32,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ReactiveLifecycleTest {
+
+    /** The process-wide secret registry starts and ends empty, so sizes and replacements do not depend on the tests that ran before. */
+    @org.junit.jupiter.api.BeforeEach
+    @org.junit.jupiter.api.AfterEach
+    void knownSecretsEmptyAround() {
+        ai.traceai.privacy.KnownSecretsTestReset.reset();
+    }
     private static final AttributeKey<Boolean> CANCELLED = AttributeKey.booleanKey("semantic_kernel.cancelled");
     InMemorySpanExporter exporter;
     SdkTracerProvider sdk;
@@ -198,8 +205,54 @@ class ReactiveLifecycleTest {
         var result = traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
         assertThat(result).containsExactly(chunk);
         var span = exporter.getFinishedSpanItems().get(0);
-        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value"))).hasSize(32000);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value"))).hasSize(32000)
+            .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
         assertThat(span.getAttributes().get(AttributeKey.booleanKey("semantic_kernel.output_truncated"))).isTrue();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 8, 15, 30})
+    void aKnownSecretStraddlingTheStreamCapLeavesNoPrefix(int inside) {
+        String secret = "PFX-SK-STREAM-STRADDLE-SECRET";
+        ai.traceai.privacy.KnownSecrets.process().register(secret);
+        ChatCompletionService chat = mock(ChatCompletionService.class);
+        StreamingChatContent<?> first = mock(StreamingChatContent.class);
+        StreamingChatContent<?> second = mock(StreamingChatContent.class);
+        when(first.getContent()).thenReturn("a".repeat(32000 - inside));
+        when(second.getContent()).thenReturn(secret + "tail".repeat(10));
+        when(chat.getStreamingChatMessageContentsAsync(any(ChatHistory.class), isNull(), any()))
+            .thenReturn(Flux.just(first, second));
+        FITracer contentTracer = new FITracer(sdk.get("test"), TraceConfig.builder().build());
+        var traced = new TracedChatCompletionService(chat, "model", "test", contentTracer);
+        traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
+        var span = exporter.getFinishedSpanItems().get(0);
+        assertThat(span.getAttributes().get(AttributeKey.booleanKey("semantic_kernel.output_truncated"))).isTrue();
+        assertThat(span.getAttributes().toString()).doesNotContain("PFX");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("output.value")))
+            .endsWith(ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 2, 40})
+    void aSecretLearnedAfterTheStreamCaptureLeavesNoPrefixInAnyAttribute(int inside) {
+        String late = "PFX-SK-LATE-" + inside + "-" + "L".repeat(70);
+        ChatCompletionService chat = mock(ChatCompletionService.class);
+        StreamingChatContent<?> first = mock(StreamingChatContent.class);
+        StreamingChatContent<?> second = mock(StreamingChatContent.class);
+        when(first.getContent()).thenReturn("a".repeat(32000 - inside));
+        when(second.getContent()).thenReturn(late + "tail".repeat(10));
+        when(chat.getStreamingChatMessageContentsAsync(any(ChatHistory.class), isNull(), any()))
+            .thenReturn(Flux.just(first, second));
+        FITracer contentTracer = new FITracer(sdk.get("test"), TraceConfig.builder().build());
+        var traced = new TracedChatCompletionService(chat, "model", "test", contentTracer);
+        traced.getStreamingChatMessageContentsAsync(new ChatHistory(), null, null).collectList().block();
+        ai.traceai.privacy.KnownSecrets.process().register(late);
+        var out = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+        ai.traceai.privacy.SecretReplacingSpanExporter.wrap(out).export(exporter.getFinishedSpanItems());
+        String all = out.getFinishedSpanItems().get(0).getAttributes().toString();
+        for (int k = 1; k < late.length(); k++) {
+            assertThat(all).doesNotContain(late.substring(0, k) + ai.traceai.privacy.KnownSecrets.TRUNCATION_MARKER);
+        }
     }
 
     @Test void customChatServiceRetainsUsageWithoutCountingSharedMetadataTwice() {

@@ -24,10 +24,9 @@ the member names above it): the name checks at each value read its whole path, s
 than PATH_LIMIT characters or with more than PATH_PARTS components is not checked, and its
 attribute is left out. The checks of a URL query value read the parameter's name as its path, so a
 query name past the same limits is not checked either, and its value becomes ``<redacted>``.
-A text scan reads each run of characters a bounded number of times: two of
-the catalog's value shapes, the provider key and the JWT, would make Python's backtracking engine
-walk a long run back from every start in it, so they are matched in an equivalent form whose
-failed starts never rescan their run. Content that cannot be checked within
+A text scan reads each run of characters a bounded number of times: the catalog's JWT shape would
+make Python's backtracking engine walk a long run back from every start in it, so it is scanned
+by segments in one pass over each run, whatever the length of the token. Content that cannot be checked within
 those limits, or whose type is not plain data, is dropped without being turned into text; a span
 that cannot be checked at all keeps only its identity and timing.
 """
@@ -103,21 +102,66 @@ _CUT = re.compile(
     r"|(?P<data>(?<![A-Za-z0-9+.\-_:])(?i:data:)[^ \t\r\n\v\f\"'<>\\]*(?:[\r\n]+[A-Za-z0-9+/=_\-]+)*)"
     r"|(?P<run>[A-Za-z0-9+/_\-][A-Za-z0-9+/_\-\r\n]*={0,2})")
 _CUT_RUN = 8
-# The token run of the value shapes below: letters, digits, underscores and hyphens.
-_RUN = "[A-Za-z0-9_-]"
-# Catalog value shapes that Python's backtracking engine would retry from every start in a long
-# token run that cannot match: 'eyJ-' repeated makes the JWT shape quadratic in the run. Each is the
-# same language here, matched from the start of its run. A lookahead group is atomic in Python's
-# engine, so the first start in the run is found once, and a start that fails never rescans the run.
-# Every later start in a run reaches the same run end with less of it left, so it can only match
-# where the first one does: one attempt per run finds exactly the match the catalog's expression
-# finds. Group 1 is the part of the run before that start; the match keeps it.
-_BOUNDED_SHAPES = {
-    r"\bsk-[A-Za-z0-9_-]{20,}\b":
-        rf"(?<!{_RUN})(?=({_RUN}*?)\bsk-)\1sk-{_RUN}{{20,}}\b",
-    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b":
-        rf"(?<!{_RUN})(?=({_RUN}*?)\beyJ)\1eyJ(?=({_RUN}{{8,}}))\2\.(?=({_RUN}{{8,}}))\3\.{_RUN}{{8,}}\b",
-}
+# The catalog's jwt shape, which Python's backtracking engine would retry from every start in a long
+# run of 'eyJ-' that cannot match, so it is scanned by _JwtShape; and the run that scan reads.
+_JWT_SHAPE = r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+_JWT_RUN = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+class _JwtShape:
+    """The catalog's jwt shape, found in one pass over each run of ``[A-Za-z0-9_.-]``, with the same
+    matches ``re.sub`` gives it.
+
+    The token classes exclude the dot, so each segment of a run (split at its dots) is taken whole.
+    A match is three consecutive segments: the first holds an ``eyJ`` that starts at a word boundary
+    (the start of the segment after a dot, or after a hyphen; at the start of a run, only when the
+    character before it is not a word character, as ``\\b`` is defined for ``str``) with at least eight
+    characters after it, the other two have at least eight characters. Only the leftmost ``eyJ`` of the
+    first segment can have enough characters after it. A failed triple moves on by one segment and a
+    match by three, so every segment is read a constant number of times and the scan is linear.
+    """
+
+    @staticmethod
+    def _start(segment: str, boundary: bool) -> int:
+        """The index of the leftmost ``eyJ`` of a segment that starts a token, or -1."""
+        at = segment.find("eyJ")
+        while at >= 0:
+            if boundary if at == 0 else segment[at - 1] == "-":
+                return at if len(segment) - at - 3 >= 8 else -1
+            at = segment.find("eyJ", at + 1)
+        return -1
+
+    def sub(self, replacement: str, text: str) -> str:
+        if "eyJ" not in text:
+            return text
+        out: List[str] = []
+        done = 0  # text before this index is already in `out`
+        for run in _JWT_RUN.finditer(text):
+            body = run.group()
+            if "eyJ" not in body:
+                continue
+            at = base = run.start()
+            segments: List[Tuple[int, int]] = []
+            for part in body.split("."):
+                segments.append((at, at + len(part)))
+                at += len(part) + 1
+            before = text[base - 1] if base else ""
+            first_ok = not (before.isalnum() or before == "_")
+            i = 0
+            while i + 2 < len(segments):
+                (a, b), (c, d), (e, f) = segments[i:i + 3]
+                found = -1
+                if d - c >= 8 and f - e >= 8:
+                    found = self._start(text[a:b], first_ok if i == 0 else True)
+                if found < 0:
+                    i += 1
+                    continue
+                out.append(text[done:a + found])
+                out.append(replacement)
+                done = f
+                i += 3
+        out.append(text[done:])
+        return "".join(out)
 # W3C tracestate members, as the OpenTelemetry API accepts them.
 _TRACESTATE_KEY = re.compile(r"[a-z][_0-9a-z\-*/]{0,255}|[a-z0-9][_0-9a-z\-*/]{0,240}@[a-z][_0-9a-z\-*/]{0,13}")
 _TRACESTATE_VALUE = re.compile(r"[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]")
@@ -210,13 +254,11 @@ class _Catalog:
         self._names: Dict[str, bool] = {}
         self._parts: Dict[str, Tuple[bool, bool]] = {}
 
-    def _shape(self, item: Mapping[str, Any]) -> Tuple["re.Pattern[str]", Any]:
+    def _shape(self, item: Mapping[str, Any]) -> Tuple[Any, Any]:
         """One value shape, and what replaces a match of it."""
-        bounded = None if item["flags"] else _BOUNDED_SHAPES.get(item["regex"])
-        if bounded is None:
-            return re.compile(item["regex"], re.I if "i" in item["flags"] else 0), self.redacted
-        redacted = self.redacted
-        return re.compile(bounded), lambda match: match.group(1) + redacted
+        if item["regex"] == _JWT_SHAPE and not item["flags"]:
+            return _JwtShape(), self.redacted
+        return re.compile(item["regex"], re.I if "i" in item["flags"] else 0), self.redacted
 
     # Names -------------------------------------------------------------------------------------
 

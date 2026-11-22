@@ -1,15 +1,15 @@
 package ai.traceai;
 
+import ai.traceai.privacy.KnownSecrets;
+import ai.traceai.privacy.SecretReplacingSpanExporter;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.exporter.logging.LoggingSpanExporter;
 import io.opentelemetry.semconv.ResourceAttributes;
 import org.slf4j.Logger;
@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
@@ -61,6 +62,10 @@ public final class TraceAI {
      * @throws IllegalArgumentException if config is null
      */
     public static void init(TraceConfig config) {
+        initWithEnvironment(config, System.getenv());
+    }
+
+    static void initWithEnvironment(TraceConfig config, Map<String, String> env) {
         if (config == null) {
             throw new IllegalArgumentException("TraceConfig cannot be null");
         }
@@ -71,12 +76,28 @@ public final class TraceAI {
                 return;
             }
 
+            // Keys leave only for an approved target and only as a complete pair; this refuses
+            // before any state is created.
+            KeyTransport.Target exportTarget = null;
+            if (config.isExportEnabled() && config.getBaseUrl() != null && config.getApiKey() != null) {
+                boolean complete = !config.getApiKey().isBlank() && config.getSecretKey() != null && !config.getSecretKey().isBlank();
+                if (complete) {
+                    exportTarget = KeyTransport.check(config.getBaseUrl(), true, env, config.isAllowInsecureHttp());
+                    KeyTransport.checkAmbientHeaders(env, java.util.List.of(config.getApiKey(), config.getSecretKey(),
+                        String.valueOf(env.get("FI_API_KEY")), String.valueOf(env.get("FI_SECRET_KEY"))));
+                } else {
+                    logger.warn("TraceAI export is off: both the API key and the secret key are required");
+                }
+            }
+
             // One hook for all owned-provider lifetimes, not one per reinitialization.
             // Register before allocating resources, since registration can fail during JVM shutdown.
             if (!shutdownHookRegistered) {
                 Runtime.getRuntime().addShutdownHook(new Thread(TraceAI::shutdown, "traceai-shutdown"));
                 shutdownHookRegistered = true;
             }
+
+            registerSecrets(config);
 
             // Build resource with service name
             String serviceName = config.getServiceName() != null
@@ -103,37 +124,25 @@ public final class TraceAI {
                 .setResource(resource);
 
             // Add OTLP exporter if configured
-            if (config.getBaseUrl() != null && config.getApiKey() != null) {
-                String baseUrl = config.getBaseUrl().endsWith("/")
-                    ? config.getBaseUrl().substring(0, config.getBaseUrl().length() - 1)
-                    : config.getBaseUrl();
-                String endpoint = baseUrl + "/tracer/v1/traces";
+            if (exportTarget != null) {
+                // The seam for a wrapper in front of the keyed exporter (for example one that replaces known secrets): whatever wraps it
+                // must be what the batch processor receives, so the replacement runs before the keyed send.
+                var otlpExporter = new KeyedOtlpSpanExporter(exportTarget, config.getApiKey(), config.getSecretKey(),
+                    config.getProjectName() != null ? config.getProjectName() : "");
 
-                var exporterBuilder = OtlpHttpSpanExporter.builder()
-                    .setEndpoint(endpoint)
-                    .addHeader("X-Api-Key", config.getApiKey())
-                    .addHeader("fi-project-name", config.getProjectName() != null ? config.getProjectName() : "")
-                    .setTimeout(Duration.ofSeconds(30));
-
-                if (config.getSecretKey() != null) {
-                    exporterBuilder.addHeader("X-Secret-Key", config.getSecretKey());
-                }
-
-                OtlpHttpSpanExporter otlpExporter = exporterBuilder.build();
-
-                BatchSpanProcessor batchProcessor = BatchSpanProcessor.builder(otlpExporter)
+                BatchSpanProcessor batchProcessor = BatchSpanProcessor.builder(SecretReplacingSpanExporter.wrap(otlpExporter))
                     .setMaxExportBatchSize(config.getBatchSize())
                     .setScheduleDelay(config.getExportIntervalMs(), TimeUnit.MILLISECONDS)
                     .build();
 
                 providerBuilder.addSpanProcessor(batchProcessor);
-                logger.info("TraceAI OTLP HTTP exporter configured for endpoint: {}", endpoint);
+                logger.info("TraceAI OTLP HTTP exporter configured");
             }
 
             // Add console exporter if enabled
             if (config.isEnableConsoleExporter()) {
                 providerBuilder.addSpanProcessor(
-                    SimpleSpanProcessor.create(LoggingSpanExporter.create())
+                    new SnapshotSpanProcessor(SecretReplacingSpanExporter.wrap(LoggingSpanExporter.create()))
                 );
                 logger.info("TraceAI console exporter enabled");
             }
@@ -174,10 +183,21 @@ public final class TraceAI {
                 logger.debug("TraceAI already initialized, skipping");
                 return;
             }
+            registerSecrets(config);
             instance = new FITracer(openTelemetry.getTracer(TRACER_NAME, getVersion()), config);
             initialized = true;
             logger.info("TraceAI initialized with application-owned OpenTelemetry (version {})", getVersion());
         }
+    }
+
+    /**
+     * Teaches the process-wide registry the credentials this configuration carries. Exporters TraceAI
+     * creates replace them at export time; for an application-owned SDK, wrap the application's
+     * exporters with {@link SecretReplacingSpanExporter#wrap(io.opentelemetry.sdk.trace.export.SpanExporter)}.
+     */
+    private static void registerSecrets(TraceConfig config) {
+        KnownSecrets.process().register(config.getApiKey());
+        KnownSecrets.process().register(config.getSecretKey());
     }
 
     /**

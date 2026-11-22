@@ -13,12 +13,13 @@ final class ExportPrivacy {
     @SuppressWarnings({"rawtypes", "unchecked"})
     static Attributes attributes(Attributes source, WirePrivacy privacy, AutoConfig config, boolean event, String operation, boolean contextSession) {
         AttributesBuilder result = Attributes.builder();
-        WireCore.Match match = new WireCore.Match(Map.of("operation", operation), "", "", 0, Map.of(), Map.of());
+        // Only the agent's own wire-call spans carry an operation; an application span follows the shared either-direction rules.
+        WireCore.Match match = contextSession ? new WireCore.Match(Map.of("operation", operation), "", "", 0, Map.of(), Map.of()) : null;
         Map<String, Object> siblings = new LinkedHashMap<>();
         source.forEach((key, value) -> siblings.put(key.getKey(), value));
         WirePrivacy.Scope scope = privacy.scope(siblings, "", WirePrivacy.Scope.EMPTY);
         source.forEach((key, value) -> {
-            if (TraceAIAuto.hidden(key.getKey(), match, config)) return;
+            if (TraceAIAuto.hidden(key.getKey(), value, match, config)) return;
             Object clean = contextSession && WirePrivacy.SESSION_ID.equals(key.getKey()) && value instanceof String session
                 ? privacy.sessionValue(session) : privacy.clean(key.getKey(), value, scope, true);
             // Only inspect materialized sanitizer output, never an application's List implementation.

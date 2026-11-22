@@ -186,7 +186,7 @@ class Capture:
 
     def mask(self, key: str, value: Any) -> Any:
         """``TraceConfig.mask``, as ``FITracer`` applies it to every attribute it sets."""
-        if key in STRUCTURAL_KEYS or isinstance(value, (bool, int, float)):
+        if key in STRUCTURAL_KEYS:
             return value
         return self.config.mask(key, value)
 

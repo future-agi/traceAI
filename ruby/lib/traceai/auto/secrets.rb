@@ -21,9 +21,25 @@ module TraceAI
         # invoke a stringifier/getter on arbitrary application objects. Read the
         # copy as UTF-8 whatever the process locale tagged it (under LANG=C an
         # environment value is US-ASCII), so that it matches exported UTF-8 text.
-        secret = Config.utf8(String.new(value))
+        raw = String.new(value)
+        secret = Config.utf8(raw)
         return false if secret.length < 8
-        secret.freeze
+        # A secret that is a byte slice cutting through a multi-byte character reads as U+FFFD there, which matches less than the
+        # valid text around it: its longest runs of valid characters (at most Config::VALID_RUNS_PER_SECRET) are registered as
+        # secrets of their own, before the secret, so the secret is the newest entry. One call therefore takes at most
+        # VALID_RUNS_PER_SECRET + 1 places, far fewer than CAPACITY, and cannot evict the seeded Future AGI keys or the environment
+        # secrets by itself (the registry is not pinned; many registrations still age out the oldest, as before).
+        Config.valid_runs(raw).each { |run| remember(run.freeze) }
+        remember(secret.freeze)
+        true
+      rescue StandardError
+        # Do not log values, including in exception messages. Future snapshots
+        # fail closed rather than exporting with a partially updated registry.
+        @failed = true
+        false
+      end
+
+      def remember(secret)
         @mutex.synchronize do
           if @values.delete(secret)
             @values[secret] = true # Hash insertion order is the observation LRU.
@@ -33,12 +49,6 @@ module TraceAI
             @snapshot = nil
           end
         end
-        true
-      rescue StandardError
-        # Do not log values, including in exception messages. Future snapshots
-        # fail closed rather than exporting with a partially updated registry.
-        @failed = true
-        false
       end
 
       def seed(config, env = ENV)
@@ -61,6 +71,8 @@ module TraceAI
       end
 
       def inspect = '#<TraceAI::Auto::SecretRegistry>'
+
+      private :remember
     end
 
     SECRET_REGISTRY = SecretRegistry.new

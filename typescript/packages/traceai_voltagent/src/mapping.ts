@@ -74,6 +74,16 @@ const INPUT_EXACT = new Set<string>([
   "input.value",
   "gen_ai.prompts",
   "gen_ai.system_instructions",
+  // Tool and request definitions the model was given (the same keys fi-core and Python mask).
+  "tool.description",
+  "gen_ai.tool.description",
+  "tool.parameters",
+  "gen_ai.tool.parameters",
+  "tool.json_schema",
+  "gen_ai.tool.definitions",
+  "gen_ai.tool.call.arguments",
+  "gen_ai.request.parameters",
+  "gen_ai.agent.description",
 ]);
 /** Message lists sent to the model: hidden by hideInputs or hideInputMessages; text by hideInputText. */
 const INPUT_MESSAGE_KEYS = new Set<string>(["llm.messages", "agent.messages", "agent.messages.ui", "gen_ai.input.messages"]);
@@ -88,6 +98,8 @@ const OUTPUT_EXACT = new Set<string>([
   "planagent.task.response_preview",
   // Each streamed answer chunk an output guardrail sees (guardrail.stream.process event).
   "guardrail.chunk.text",
+  // A tool's result.
+  "gen_ai.tool.call.result",
 ]);
 const OUTPUT_MESSAGE_KEYS = new Set<string>(["gen_ai.output.messages"]);
 const BOTH_EXACT = new Set<string>([
@@ -113,13 +125,66 @@ const BOTH_LAST_SEGMENTS = new Set<string>(["data", "checkpoint", "content"]);
 
 export type ContentSide = "input" | "output" | "both";
 
+/** True when `key` is `entry` or a dotted/indexed child of it (`entry.` + anything), like fi-core maskingRules. */
+function inFamily(set: ReadonlySet<string>, key: string): boolean {
+  if (set.has(key)) return true;
+  for (let dot = key.indexOf("."); dot !== -1; dot = key.indexOf(".", dot + 1)) {
+    if (set.has(key.slice(0, dot))) return true;
+  }
+  return false;
+}
+
 /** Which side of the run a key's value comes from, or undefined when it is not content. */
 export function contentSide(key: string, value: AttributeValue | undefined): ContentSide | undefined {
+  const exact = exactSide(key);
+  if (exact !== undefined) return exact;
+  const family = familySide(key);
+  // A content key is content whatever its value type (arguments.amount=1500, suspension.data.balance=900,
+  // tool_call.function.arguments=true), as in fi-core maskingRules and Python. The one exception is the
+  // explicit list of count keys VoltAgent itself writes (COUNT_KEYS); a count-like name anywhere else
+  // (tool.parameters.count, gen_ai.tool.call.result.length) is a value the application chose.
+  if (isCountKey(key, value)) return undefined;
+  const inferred = inferredSide(key);
+  // A child the name rules place on the other side of its family (a `.content` under an input family) hides under both.
+  if (family !== undefined && inferred !== undefined && inferred !== family) return "both";
+  return family ?? inferred;
+}
+
+/** The count and size keys VoltAgent 2.x writes itself (a number of items, never content). */
+const COUNT_KEYS = new Set<string>([
+  "llm.messages.count",
+  "llm.tools.count",
+  "eval.messages.count",
+  "eval.scorers.count",
+  "eval.tool_calls.count",
+  "eval.tool_results.count",
+  "memory.step.count",
+  "tool.search.selection.count",
+  "workflow.step.retry.count",
+  "agent.summary.length",
+]);
+function isCountKey(key: string, value: AttributeValue | undefined): boolean {
+  if (typeof value !== "number") return false;
+  // A moved usage or cost figure (voltagent.gen_ai.cost.input) is a number the run produced, not content.
+  const bare = key.startsWith("voltagent.") ? key.slice("voltagent.".length) : key;
+  return COUNT_KEYS.has(key) || isPromotedUsageKey(bare);
+}
+
+function exactSide(key: string): ContentSide | undefined {
   if (INPUT_EXACT.has(key) || INPUT_MESSAGE_KEYS.has(key)) return "input";
   if (OUTPUT_EXACT.has(key) || OUTPUT_MESSAGE_KEYS.has(key)) return "output";
   if (BOTH_EXACT.has(key)) return "both";
-  // Counts, flags and sizes are never content.
-  if (typeof value === "number" || typeof value === "boolean") return undefined;
+  return undefined;
+}
+
+function familySide(key: string): ContentSide | undefined {
+  if (inFamily(INPUT_EXACT, key) || inFamily(INPUT_MESSAGE_KEYS, key)) return "input";
+  if (inFamily(OUTPUT_EXACT, key) || inFamily(OUTPUT_MESSAGE_KEYS, key)) return "output";
+  if (inFamily(BOTH_EXACT, key)) return "both";
+  return undefined;
+}
+
+function inferredSide(key: string): ContentSide | undefined {
   const segments = key.split(".");
   // Any dotted segment input/output marks content (middleware.input.original, eval.output, ...).
   const isInput = segments.includes("input");
@@ -180,13 +245,17 @@ export function isSecretKey(key: string): boolean {
 }
 
 function hiddenBySide(side: ContentSide, key: string, policy: ContentPolicy): boolean {
+  // Every child of a message list follows that list's message flag (and the whole-side flag),
+  // whatever its last segment: `.content` and `.data` children are not exempt.
+  if (inFamily(INPUT_MESSAGE_KEYS, key) && (policy.hideInputs || policy.hideInputMessages)) return true;
+  if (inFamily(OUTPUT_MESSAGE_KEYS, key) && (policy.hideOutputs || policy.hideOutputMessages)) return true;
   if (side === "both") return policy.hideInputs || policy.hideOutputs;
   if (side === "input") {
     if (policy.hideInputs) return true;
-    return INPUT_MESSAGE_KEYS.has(key) && policy.hideInputMessages;
+    return inFamily(INPUT_MESSAGE_KEYS, key) && policy.hideInputMessages;
   }
   if (policy.hideOutputs) return true;
-  return OUTPUT_MESSAGE_KEYS.has(key) && policy.hideOutputMessages;
+  return inFamily(OUTPUT_MESSAGE_KEYS, key) && policy.hideOutputMessages;
 }
 
 /**
@@ -207,7 +276,7 @@ export function exportValue(key: string, value: AttributeValue | undefined, opti
   let out: AttributeValue = value;
   if (
     typeof out === "string" &&
-    ((INPUT_MESSAGE_KEYS.has(key) && policy.hideInputText) || (OUTPUT_MESSAGE_KEYS.has(key) && policy.hideOutputText))
+    ((inFamily(INPUT_MESSAGE_KEYS, key) && policy.hideInputText) || (inFamily(OUTPUT_MESSAGE_KEYS, key) && policy.hideOutputText))
   ) {
     const redacted = redactMessageText(out);
     if (redacted === undefined) return undefined;
@@ -474,7 +543,7 @@ export function mapVoltAgentAttributes(source: Attributes, options: MapOptions):
   if (kind === FISpanKind.TOOL) {
     setIfAbsent(out, FIAttributes.GEN_AI_TOOL_NAME, asString(source[VA.TOOL_NAME]));
     setIfAbsent(out, FIAttributes.GEN_AI_TOOL_CALL_ID, asString(source[VA.TOOL_CALL_ID]));
-    setIfAbsent(out, FIAttributes.GEN_AI_TOOL_DESCRIPTION, asString(source[VA.TOOL_DESCRIPTION]));
+    setIfAbsent(out, FIAttributes.GEN_AI_TOOL_DESCRIPTION, asString(exportValue(VA.TOOL_DESCRIPTION, source[VA.TOOL_DESCRIPTION], options)));
   }
 
   // input.value / output.value (the collector's input and output columns), from the values kept

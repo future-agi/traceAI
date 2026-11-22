@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import json
+from itertools import islice
 from importlib import import_module
 from typing import Any, Collection, Optional
 
@@ -67,6 +68,19 @@ def _dump(value: Any, limit: int) -> str:
     return json.dumps(_scrub(value), default=str, sort_keys=True)[:limit]
 
 
+def _dump_documents(documents: Any, limit: int) -> str:
+    """JSON of at most ``_MAX_DOCUMENTS`` documents, serialised only until ``limit`` characters exist."""
+    head = [_scrub(d) for d in islice(documents, _MAX_DOCUMENTS)]
+    out: list[str] = []
+    size = 0
+    for chunk in json.JSONEncoder(default=str, sort_keys=True).iterencode(head):
+        out.append(chunk)
+        size += len(chunk)
+        if size >= limit:
+            break
+    return "".join(out)[:limit]
+
+
 def _simple(value: Any) -> bool:
     return isinstance(value, (str, int, float, bool)) or (
         isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value))
@@ -121,7 +135,7 @@ def _start(tracer: Any, config: TraceConfig, instance: Any, method: str, wrapped
         if isinstance(documents, (list, tuple)):
             attrs["db.vector.upsert.count"] = len(documents)
             if capture:
-                attrs[A.INPUT_VALUE] = _dump(list(documents), _LIMIT)
+                attrs[A.INPUT_VALUE] = _dump_documents(documents, _LIMIT)
                 attrs[A.INPUT_MIME_TYPE] = "application/json"
     if params:
         attrs[A.GEN_AI_REQUEST_PARAMETERS] = json.dumps(params, default=str, sort_keys=True)
@@ -180,7 +194,13 @@ def _wrap(tracer: Any, config: TraceConfig, method: str):
     def wrapper(wrapped, instance, args, kwargs):
         if _INSIDE.get():
             return wrapped(*args, **kwargs)
-        span = _start(tracer, config, instance, method, wrapped, args, kwargs)
+        try:
+            span = _start(tracer, config, instance, method, wrapped, args, kwargs)
+        except Exception:  # never let tracing break the host call
+            span = None
+        if span is None:
+            # Called outside the handler so an SDK error is not chained to the tracing failure.
+            return wrapped(*args, **kwargs)
         token = _INSIDE.set(True)
         try:
             with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):

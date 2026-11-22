@@ -172,7 +172,7 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
 
             // Set individual text attributes for first few texts
             if (i < 5) {
-                span.setAttribute(SemanticConventions.EMBEDDING_INPUT_TEXT + "." + i, truncateIfNeeded(text));
+                tracer.setAttribute(span, SemanticConventions.EMBEDDING_INPUT_TEXT + "." + i, text);
             }
         }
 
@@ -205,14 +205,6 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
         // Just capture metadata
         tracer.setRawOutput(span, new EmbeddingOutputSummary(embeddings.size(),
             firstEmbedding != null && firstEmbedding.getVector() != null ? firstEmbedding.getVector().size() : 0));
-    }
-
-    private String truncateIfNeeded(String value) {
-        int maxLength = 1000;
-        if (value != null && value.length() > maxLength) {
-            return value.substring(0, maxLength - 13) + "...[truncated]";
-        }
-        return value;
     }
 
     /**

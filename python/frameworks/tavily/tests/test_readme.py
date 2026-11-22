@@ -3,10 +3,8 @@
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
 
-import requests
-
+from tavily import TavilyClient
 from traceai_tavily import TavilyInstrumentor
 
 from _tavily_fake import TAVILY_KEY
@@ -29,14 +27,14 @@ def test_readme_snippets_run_end_to_end(monkeypatch):
     snippets = re.findall(r"```python\n(.*?)```", readme, re.S)
     assert len(snippets) == 1
     transport = Transport()
-    original = requests.Session.send
+    real_init = TavilyClient.__init__
 
-    def send(session, request, **kwargs):
-        if urlsplit(request.url).hostname == "api.tavily.com":
-            return transport.sync_send(request, **kwargs)
-        return original(session, request, **kwargs)
+    def init(client, *args, **kwargs):
+        # Tavily is faked on the client's own session; the session an exporter sends with is not touched.
+        real_init(client, *args, **kwargs)
+        monkeypatch.setattr(client.session, "send", transport.sync_send)
 
-    monkeypatch.setattr(requests.Session, "send", send)
+    monkeypatch.setattr(TavilyClient, "__init__", init)
     monkeypatch.setenv("TAVILY_API_KEY", TAVILY_KEY)
     monkeypatch.setenv("FI_API_KEY", "synthetic-fi-api-key")
     monkeypatch.setenv("FI_SECRET_KEY", "synthetic-fi-secret-key")

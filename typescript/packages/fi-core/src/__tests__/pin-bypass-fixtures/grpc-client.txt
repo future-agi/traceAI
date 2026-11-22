@@ -1,0 +1,2 @@
+import * as grpc from "@grpc/grpc-js";
+new grpc.Client("example.invalid:1", grpc.credentials.createInsecure());

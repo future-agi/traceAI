@@ -7,6 +7,14 @@ import type { PrivacyOptions as TraceConfigOptions } from "./export-privacy";
 import { compileOutgoingPolicy, type OutgoingPolicy, type OutgoingPropagationMode } from "./outgoing-policy";
 
 export interface Options {
+  /** Allows FI keys in plaintext to a self-hosted base URL that is not a Future AGI host (FI_ALLOW_INSECURE_HTTP=1 does the same); never through a proxy. */
+  allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for exports and checks that carry FI keys to an https destination (FI_HTTPS_PROXY does the same; this wins). The SDK opens
+   * its own CONNECT tunnel through it, with TLS verified to the destination and, for an https proxy, to the proxy. Credentials in the URL go to the proxy as
+   * Proxy-Authorization (unencrypted with an http:// proxy). A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
   /** Experimental node:http/node:https propagation; off until explicitly selected. */
   propagateOutgoingAdapters?: boolean;
   /** default/all retain mandatory vendor-host, provider-port and redirect vetoes. */
@@ -30,7 +38,7 @@ export interface Config {
   forwardApplicationSpans: boolean;
   propagateOutgoingAdapters: boolean;
   propagateOutgoing: OutgoingPropagationMode;
-  apiKey?: string; secretKey?: string; baseUrl: string; projectName: string;
+  apiKey?: string; secretKey?: string; baseUrl: string; baseUrlSource?: "code" | "environment" | "config file" | "profile" | "default"; projectName: string;
   projectType: "observe" | "experiment"; instrumentations: string[];
   disabledInstrumentations: string[]; wireCapture: boolean; wireMaxBodyBytes: number;
   sampleRate: number;
@@ -191,6 +199,7 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
     propagateOutgoing: outgoing.mode,
     ...pair,
     baseUrl: value("baseUrl", "base_url") ?? profiles.find(p => typeof p.base_url === "string")?.base_url ?? "https://api.futureagi.com",
+    baseUrlSource: options.baseUrl != null ? "code" : env.FI_BASE_URL != null ? "environment" : file.base_url != null ? "config file" : profiles.some(p => typeof p.base_url === "string") ? "profile" : "default",
     projectName: value("projectName", "project_name") ?? env.OTEL_SERVICE_NAME ?? profiles.find(p => typeof p.project === "string")?.project ?? (basename(process.cwd()) || "DEFAULT_PROJECT_NAME"),
     projectType: String(value("projectType", "project_type") ?? "observe").toLowerCase() === "experiment" ? "experiment" : "observe",
     instrumentations: names(value("instrumentations", "instrumentations")), disabledInstrumentations: names(value("disabledInstrumentations", "disabled_instrumentations")),

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2] - 2026-11-19
+
+### Changed
+- The package declares `DEFERS_TO_SHARED_OPENAI`, which the core reads to turn the integration on by default (an older release without it stays off by default, so a call never yields two spans).
+- With `hide_inputs`, `hide_input_messages`, `hide_input_text` or `hide_input_images`, the whole-response `output.value`, including streamed chunks, is built from response-side fields (choices, usage, ids) while any input hide setting is on, so `prompt_text` and `prompt_token_ids` are not recorded.
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-vllm-v0.1.0...traceai-vllm-v0.1.1) (2026-11-05)
 
 

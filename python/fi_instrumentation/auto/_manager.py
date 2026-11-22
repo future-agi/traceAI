@@ -1,5 +1,6 @@
 """Turns on every installed traceAI integration and reports what each one did."""
 
+import ast
 import atexit
 import importlib
 import importlib.machinery
@@ -92,6 +93,61 @@ def module_available(dotted: str) -> bool:
         except (ImportError, ValueError):
             return False
     return spec is not None
+
+
+def _declared_in_source(module: str, name: str, owner: Optional[str] = None) -> bool:
+    """True when ``name`` is assigned the literal True at the top level of ``module``, or of its class ``owner``.
+
+    The package is never imported or executed: a loaded module is asked directly, an unloaded one is located
+    on the path and its source parsed. Only a real assignment statement counts (text in a docstring, a comment
+    or a function body does not). A package without readable source declares nothing.
+    """
+    loaded = sys.modules.get(module)
+    if loaded is not None:
+        holder = getattr(loaded, owner, None) if owner else loaded
+        return getattr(holder, name, None) is True
+    try:
+        spec = importlib.machinery.PathFinder.find_spec(module)
+        origin = getattr(spec, "origin", None)
+        if not origin or not origin.endswith(".py"):
+            return False
+        with open(origin, "rb") as handle:
+            tree = ast.parse(handle.read())
+    except Exception:  # best-effort read: any failure means the marker is not declared
+        return False
+    body: List[Any] = tree.body
+    if owner:
+        classes = [node for node in body if isinstance(node, ast.ClassDef) and node.name == owner]
+        body = classes[0].body if classes else []
+    for node in body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        value = getattr(node, "value", None)
+        if (isinstance(value, ast.Constant) and value.value is True
+                and any(isinstance(target, ast.Name) and target.id == name for target in targets)):
+            return True
+    return False
+
+
+def provider_defers_to_shared_openai(integration: Integration) -> bool:
+    """Whether the installed provider package, and the installed traceai-openai it defers to, support deferral.
+
+    The core turns an OpenAI-compatible provider on by default only then; with any other version mix the
+    provider keeps its previous (off) state, so a call is never traced twice. Without traceai-openai there is
+    no shared instrumentor to defer to and so nothing to double-trace: the provider's marker is enough.
+    """
+    if not _declared_in_source(integration.module, "DEFERS_TO_SHARED_OPENAI"):
+        return False
+    if not module_available("traceai_openai"):
+        return True
+    return all(_declared_in_source("traceai_openai", capability, "OpenAIInstrumentor")
+               for capability in integration.needs_openai)
+
+
+def _effective_default(integration: Integration) -> Tuple[bool, str]:
+    """The default-on state and report note of an integration for the versions installed here."""
+    if integration.shared_openai and integration.default and not provider_defers_to_shared_openai(integration):
+        return False, integration.skew_note
+    return integration.default, integration.note
 
 
 def _enable(integration: Integration, provider: Any, config: Any) -> Tuple[IntegrationStatus, Any]:
@@ -298,6 +354,16 @@ def _cleanup(callback: Any, name: str) -> None:
             logger.debug("traceAI: could not disable %s", name, exc_info=True)
 
 
+def _run_cleanups(cleanups: Dict[str, Any]) -> None:
+    """Undo integrations in the reverse of the order they were installed.
+
+    Providers that wrap the same method each restore the callable they captured, so only the most recent
+    wrapper can safely be removed first.
+    """
+    for name, callback in reversed(list(cleanups.items())):
+        _cleanup(callback, name)
+
+
 def _on_import(integration: Integration) -> None:
     """A hooked library was imported. Plan an integration again if it was not ready at startup."""
     state = _state
@@ -353,16 +419,17 @@ def _plan(integration: Integration, settings: AutoConfig, lazy: bool) -> Tuple[I
     """
     status = IntegrationStatus(integration.name, NOT_INSTALLED, integration.category, integration.package)
     installed = [t for t in integration.targets if module_available(t)]
+    default, note = _effective_default(integration)
     web_off = _state.web_off if integration.category == "web" else ""
     # A library or traceAI package that is not importable yet can still arrive (a later-sorting
     # .pth file, a sys.path change): wait for the library's first import and plan it again then.
     later = (not web_off and integration.kind in (INSTRUMENTOR, SETUP)
-             and settings.is_selected(integration.name, integration.default))
+             and settings.is_selected(integration.name, default))
     if not installed:
         return status, ("hook" if later else None), list(integration.targets)
-    if not settings.is_selected(integration.name, integration.default):
+    if not settings.is_selected(integration.name, default):
         status.status = DISABLED
-        status.detail = integration.note or "disabled by configuration"
+        status.detail = note or "disabled by configuration"
         return status, None, installed
     if web_off:
         status.status, status.detail = DISABLED, web_off
@@ -850,7 +917,14 @@ class _ResourceOverlayProcessor(SpanProcessor):
 
 def _exporter(settings: AutoConfig, kwargs: Mapping[str, Any]) -> Any:
     """The Future AGI exporter for the resolved keys and base URL."""
-    from fi_instrumentation.otel import GRPCSpanExporter, HTTPSpanExporter, Transport, _normalized_endpoint
+    from fi_instrumentation.otel import (
+        GRPCSpanExporter,
+        HTTPSpanExporter,
+        Transport,
+        _normalized_endpoint,
+        _pin_grpc_headers,
+        _pin_http_headers,
+    )
 
     headers = {str(k).lower(): v for k, v in (kwargs.get("headers") or {}).items()}
     # Explicit credential headers win, as they do for register().
@@ -858,11 +932,16 @@ def _exporter(settings: AutoConfig, kwargs: Mapping[str, Any]) -> Any:
         headers.update({"x-api-key": settings.api_key, "x-secret-key": settings.secret_key})
     transport = kwargs.get("transport", Transport.HTTP)
     if transport == Transport.GRPC:
-        return GRPCSpanExporter(headers=headers, timeout=kwargs.get("timeout"))
+        exporter = GRPCSpanExporter(headers=headers, timeout=kwargs.get("timeout"))
+        _pin_grpc_headers(exporter, headers)
+        return exporter
     if transport != Transport.HTTP:
         raise ValueError(f"Invalid transport: {transport}")
     _, endpoint = _normalized_endpoint(settings.base_url)
-    return HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=kwargs.get("timeout"))
+    exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=kwargs.get("timeout"))
+    # The configured base URL is Future AGI, wherever it is hosted.
+    _pin_http_headers(exporter, headers)
+    return exporter
 
 
 def _fi_resource(settings: AutoConfig, project_type: Any, kwargs: Mapping[str, Any]) -> Resource:
@@ -1329,8 +1408,7 @@ def shutdown(timeout_millis: int = 5000) -> None:
             for entry in state.statuses.values():
                 if entry.status in (PENDING, INSTRUMENTED):
                     entry.status, entry.detail = DISABLED, "agent shut down; restart requires a new process"
-        for name, callback in cleanups.items():
-            _cleanup(callback, name)
+        _run_cleanups(cleanups)
         with _lifecycle_lock:
             for overlay in overlays:
                 overlay.shutdown()

@@ -110,8 +110,6 @@ func TestExporterExplicitCredentialsOverrideEnvironment(t *testing.T) {
 	t.Setenv("FI_BASE_URL", sink.URL)
 	t.Setenv("FI_API_KEY", "environment-api")
 	t.Setenv("FI_SECRET_KEY", "environment-secret")
-	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "X-Api-Key=otel-api,X-Secret-Key=otel-secret")
-	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "X-Api-Key=otel-traces-api,X-Secret-Key=otel-traces-secret")
 	if _, err := InitForTest(context.Background(), WithCredentials("explicit-api-key", "explicit-secret-key")); err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +126,32 @@ func TestExporterExplicitCredentialsOverrideEnvironment(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no export")
+	}
+}
+
+// Ambient OTLP headers that carry a Future AGI key name are a configuration the agent refuses: Init fails, value-free.
+func TestInitRefusesAmbientOTLPHeadersCarryingFIKeys(t *testing.T) {
+	for _, variable := range []string{"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"} {
+		t.Run(variable, func(t *testing.T) {
+			_ = Shutdown(context.Background())
+			t.Setenv("FI_BASE_URL", "http://127.0.0.1:1")
+			t.Setenv("FI_API_KEY", "environment-api")
+			t.Setenv("FI_SECRET_KEY", "environment-secret")
+			t.Setenv(variable, "X-Api-Key=otel-api,X-Secret-Key=otel-secret")
+			shutdown, err := InitForTest(context.Background(), WithCredentials("explicit-api-key", "explicit-secret-key"))
+			t.Cleanup(func() { _ = Shutdown(context.Background()) })
+			if !errors.Is(err, errKeyTransport) {
+				t.Fatalf("Init must refuse ambient FI key headers, got %v", err)
+			}
+			if shutdown == nil {
+				t.Fatal("a refused Init still returns a shutdown function")
+			}
+			for _, secret := range []string{"otel-api", "otel-secret", "explicit-api-key", "environment-api"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("error not value-free: %v", err)
+				}
+			}
+		})
 	}
 }
 

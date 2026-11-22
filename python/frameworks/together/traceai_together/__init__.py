@@ -31,17 +31,28 @@ logger.addHandler(logging.NullHandler())
 
 _instruments = ("together >= 1.0.0",)
 
+# (wrapper, ((module, class), ...)) in order of preference.
+_TARGETS = (
+    (_ChatCompletionsWrapper, (("together.resources.chat", "ChatCompletions"),
+                               ("together.resources.chat.completions", "CompletionsResource"))),
+    (_CompletionsWrapper, (("together.resources.completions", "Completions"),
+                           ("together.resources.completions", "CompletionsResource"))),
+    (_EmbeddingsWrapper, (("together.resources.embeddings", "Embeddings"),
+                          ("together.resources.embeddings", "EmbeddingsResource"))),
+    (_AsyncChatCompletionsWrapper, (("together.resources.chat", "AsyncChatCompletions"),
+                                    ("together.resources.chat.completions", "AsyncCompletionsResource"))),
+    (_AsyncCompletionsWrapper, (("together.resources.completions", "AsyncCompletions"),
+                                ("together.resources.completions", "AsyncCompletionsResource"))),
+    (_AsyncEmbeddingsWrapper, (("together.resources.embeddings", "AsyncEmbeddings"),
+                               ("together.resources.embeddings", "AsyncEmbeddingsResource"))),
+)
+
 
 class TogetherInstrumentor(BaseInstrumentor):
     """OpenTelemetry instrumentor for Together AI."""
 
     __slots__ = (
-        "_original_chat_completions_create",
-        "_original_async_chat_completions_create",
-        "_original_completions_create",
-        "_original_async_completions_create",
-        "_original_embeddings_create",
-        "_original_async_embeddings_create",
+        "_patched",
         "_original_protect",
         "_tracer",
     )
@@ -62,105 +73,24 @@ class TogetherInstrumentor(BaseInstrumentor):
             config=config,
         )
 
-        # Import together client
-        together_module = import_module("together")
-
-        # Wrap Together client methods
-        # Together uses a structure like:
-        # - together.Together (sync client)
-        # - together.AsyncTogether (async client)
-        # Each has: chat.completions.create, completions.create, embeddings.create
-
-        # Sync client - chat.completions.create
-        try:
-            if hasattr(together_module, "Together"):
-                together_client = together_module.Together
-
-                # The Together client uses nested resources
-                # We need to wrap the create methods on the resource classes
-
-                # Wrap chat.completions.create
-                if hasattr(together_client, "chat"):
-                    # Together SDK uses resources.chat.ChatCompletions
-                    try:
-                        from together.resources.chat import ChatCompletions
-                        self._original_chat_completions_create = ChatCompletions.create
-                        wrap_function_wrapper(
-                            module="together.resources.chat",
-                            name="ChatCompletions.create",
-                            wrapper=_ChatCompletionsWrapper(tracer=self._tracer),
-                        )
-                    except (ImportError, AttributeError) as e:
-                        logger.debug(f"Could not wrap chat.completions.create: {e}")
-
-                # Wrap completions.create
+        # Each resource class has moved between SDK releases: the 1.x layout (ChatCompletions, Completions,
+        # Embeddings) and the 3.x layout (CompletionsResource, EmbeddingsResource). The first class that
+        # exists in the installed SDK is wrapped.
+        self._patched = []
+        for wrapper, candidates in _TARGETS:
+            for module_name, class_name in candidates:
                 try:
-                    from together.resources.completions import Completions
-                    self._original_completions_create = Completions.create
-                    wrap_function_wrapper(
-                        module="together.resources.completions",
-                        name="Completions.create",
-                        wrapper=_CompletionsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap completions.create: {e}")
-
-                # Wrap embeddings.create
+                    target = getattr(import_module(module_name), class_name)
+                    original = target.__dict__["create"]
+                except (ImportError, AttributeError, KeyError):
+                    continue
                 try:
-                    from together.resources.embeddings import Embeddings
-                    self._original_embeddings_create = Embeddings.create
-                    wrap_function_wrapper(
-                        module="together.resources.embeddings",
-                        name="Embeddings.create",
-                        wrapper=_EmbeddingsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap embeddings.create: {e}")
-
-        except Exception as e:
-            logger.exception(f"Error wrapping sync Together client: {e}")
-
-        # Async client
-        try:
-            if hasattr(together_module, "AsyncTogether"):
-                # Wrap async chat.completions.create
-                try:
-                    from together.resources.chat import AsyncChatCompletions
-                    self._original_async_chat_completions_create = AsyncChatCompletions.create
-                    wrap_function_wrapper(
-                        module="together.resources.chat",
-                        name="AsyncChatCompletions.create",
-                        wrapper=_AsyncChatCompletionsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap async chat.completions.create: {e}")
-
-                # Wrap async completions.create
-                try:
-                    from together.resources.completions import AsyncCompletions
-                    self._original_async_completions_create = AsyncCompletions.create
-                    wrap_function_wrapper(
-                        module="together.resources.completions",
-                        name="AsyncCompletions.create",
-                        wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap async completions.create: {e}")
-
-                # Wrap async embeddings.create
-                try:
-                    from together.resources.embeddings import AsyncEmbeddings
-                    self._original_async_embeddings_create = AsyncEmbeddings.create
-                    wrap_function_wrapper(
-                        module="together.resources.embeddings",
-                        name="AsyncEmbeddings.create",
-                        wrapper=_AsyncEmbeddingsWrapper(tracer=self._tracer),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.debug(f"Could not wrap async embeddings.create: {e}")
-
-        except Exception as e:
-            logger.exception(f"Error wrapping async Together client: {e}")
+                    wrap_function_wrapper(module=module_name, name=f"{class_name}.create", wrapper=wrapper(tracer=self._tracer))
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"Could not wrap {module_name}.{class_name}.create: {e}")
+                    continue
+                self._patched.append((target, original))
+                break
 
         # Wrap Protect if available
         if Protect is not None:
@@ -175,50 +105,8 @@ class TogetherInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Remove instrumentation from Together AI client."""
-        try:
-            # Restore sync methods
-            try:
-                from together.resources.chat import ChatCompletions
-                if hasattr(self, "_original_chat_completions_create"):
-                    ChatCompletions.create = self._original_chat_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.completions import Completions
-                if hasattr(self, "_original_completions_create"):
-                    Completions.create = self._original_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.embeddings import Embeddings
-                if hasattr(self, "_original_embeddings_create"):
-                    Embeddings.create = self._original_embeddings_create
-            except (ImportError, AttributeError):
-                pass
-
-            # Restore async methods
-            try:
-                from together.resources.chat import AsyncChatCompletions
-                if hasattr(self, "_original_async_chat_completions_create"):
-                    AsyncChatCompletions.create = self._original_async_chat_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.completions import AsyncCompletions
-                if hasattr(self, "_original_async_completions_create"):
-                    AsyncCompletions.create = self._original_async_completions_create
-            except (ImportError, AttributeError):
-                pass
-
-            try:
-                from together.resources.embeddings import AsyncEmbeddings
-                if hasattr(self, "_original_async_embeddings_create"):
-                    AsyncEmbeddings.create = self._original_async_embeddings_create
-            except (ImportError, AttributeError):
-                pass
-
-        except Exception as e:
-            logger.exception(f"Error uninstrumenting Together client: {e}")
+        for target, original in getattr(self, "_patched", []):
+            target.create = original
+        self._patched = []
+        if getattr(self, "_original_protect", None) is not None and Protect is not None:
+            Protect.protect = self._original_protect

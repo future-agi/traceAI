@@ -13,6 +13,12 @@ public partial class PrivacyPolicyTests
         HideLlmInvocationParameters = flag == "parameters",
     };
 
+    // Python returns None (the attribute is dropped, not redacted) for a message key under the
+    // whole-direction flag or the message flag of its direction; the text and image flags redact.
+    private static bool DroppedLikePython(string flag, string key) =>
+        (flag is "inputs" or "input-messages" && key.StartsWith("gen_ai.input.messages", StringComparison.Ordinal)) ||
+        (flag is "outputs" or "output-messages" && key.StartsWith("gen_ai.output.messages", StringComparison.Ordinal));
+
     [Theory]
     [InlineData("inputs", "input.value.nested")]
     [InlineData("inputs", "gen_ai.tool.call.arguments")]
@@ -38,7 +44,7 @@ public partial class PrivacyPolicyTests
         capture.Tracer.Chain("semantic-policy", span => span.SetAttribute(key, Secret));
         Assert.Single(capture.Handler.Payloads);
         Assert.DoesNotContain(Secret, capture.Wire);
-        Assert.Contains(TraceConfig.RedactedValue, capture.Wire);
+        if (!DroppedLikePython(flag, key)) Assert.Contains(TraceConfig.RedactedValue, capture.Wire);
     }
 
     // Literal keys keep this matrix independent of production policy lists.
@@ -77,7 +83,9 @@ public partial class PrivacyPolicyTests
         using var capture = new Capture(config);
         foreach (var key in new[] { root, root + ".0.nested" })
         {
-            Assert.Equal(TraceConfig.RedactedValue, config.Mask(key, () => throw new Exception("must not evaluate")));
+            var masked = config.Mask(key, () => throw new Exception("must not evaluate"));
+        if (DroppedLikePython(flag, key)) Assert.Null(masked);
+        else Assert.Equal(TraceConfig.RedactedValue, masked);
             capture.Tracer.Chain("content-family", span => span.SetAttribute(key, Secret));
             if (!mixed)
                 Assert.Equal(Secret, ContentConfig(flag == "inputs" ? "outputs" : "inputs").Mask(key, Secret));
@@ -128,7 +136,9 @@ public partial class PrivacyPolicyTests
     public void FlattenedAndOpaqueContentIsMaskedBeforeEvaluation(string flag, string key)
     {
         var config = ContentConfig(flag);
-        Assert.Equal(TraceConfig.RedactedValue, config.Mask(key, () => throw new Exception("must not evaluate")));
+        var masked = config.Mask(key, () => throw new Exception("must not evaluate"));
+        if (DroppedLikePython(flag, key)) Assert.Null(masked);
+        else Assert.Equal(TraceConfig.RedactedValue, masked);
         using var capture = new Capture(config);
         capture.Tracer.Chain("flattened", span => span.SetAttribute(key, Secret));
         Assert.Single(capture.Handler.Payloads);

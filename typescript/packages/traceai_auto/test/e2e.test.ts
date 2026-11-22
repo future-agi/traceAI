@@ -605,7 +605,7 @@ test("in an application with no OpenTelemetry of its own, two OpenAI SDK calls s
   expect(questions).toHaveLength(2);
   expect(questions).toEqual(expect.arrayContaining([{ first: true, second: false }, { first: false, second: true }]));
 });
-test("in an application with no OpenTelemetry of its own, a plain fetch AI request sent in the same tick as an OpenAI Agents SDK run is not lost, and the run keeps its model span", async () => {
+test("in an application with no OpenTelemetry of its own, a plain fetch AI request sent in the same tick as an OpenAI Agents SDK run is not lost, and the run keeps its model span, when @traceai/auto is loaded before the Agents SDK", async () => {
   // No context manager: the application loads no OpenTelemetry. agents-source-preload.cjs lets
   // the agent load the integration from source and turns on the SDK's own tracing. The
   // application starts one agent run and one plain fetch to the same chat route in the same tick.
@@ -618,8 +618,9 @@ test("in an application with no OpenTelemetry of its own, a plain fetch AI reque
   expect(requests).toBe(2);
   expect(allSpans()).toHaveLength(0);
   requests = 0;
-  // Then with the agent, and the OpenAI Agents integration loaded.
-  const output = await child(app, [...preload, "--import", "@traceai/auto/register"], { ...env, TRACED: "1" });
+  // Then with the agent loaded first (--require runs in the order given): the source resolver, the agent, then the Agents SDK. The SDK's global
+  // dispatcher is installed after the agent has captured Node's own, and the OpenAI Agents integration is loaded from source.
+  const output = await child(app, ["-r", resolve(apps, "agents-source-resolve.cjs"), "--require", "@traceai/auto/register", "-r", resolve(apps, "agents-sdk-tracing.cjs")], { ...env, TRACED: "1", OPENAI_API_KEY: undefined });
   expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ finalOutput: "hello world", plain: "hello world", status: "instrumented" });
   expect(requests).toBe(2);
   // What Future AGI received, shown when one of the two checks below fails.
@@ -632,6 +633,20 @@ test("in an application with no OpenTelemetry of its own, a plain fetch AI reque
   // sent a second time, could not stand in for it.
   const plain = wireSpans().filter(span => JSON.stringify(span).includes("a plain fetch beside the agent run"));
   expect({ got, plainFetchWireSpan: plain.length > 0 }).toEqual({ got, plainFetchWireSpan: true });
+  expect(output.stderr).not.toMatch(/FI_DISPATCHER_UNKNOWN/);
+}, 60000);
+test("in an application with no OpenTelemetry of its own that loaded the OpenAI Agents SDK before @traceai/auto, the key-carrying export is sent through fi-core's own transport and the application is unaffected", async () => {
+  // The same application, with the Agents SDK preload first and the agent after it: the Agents SDK's global dispatcher is in the undici slot
+  // when the agent loads. Key-carrying exports do not read that slot: they succeed, with no collector warning and no key, URL or header in the output.
+  const app = "beside-agents-run-no-otel.cjs", preload = ["-r", resolve(apps, "agents-source-preload.cjs")];
+  const output = await child(app, [...preload, "--import", "@traceai/auto/register"], { FI_INSTRUMENTATIONS: "openai-agents,wire", TRACED: "1" });
+  expect(JSON.parse(output.stdout.trim().split("\n").at(-1)!)).toEqual({ finalOutput: "hello world", plain: "hello world", status: "instrumented" });
+  expect(requests).toBe(2);
+  const kindOf = (span: any) => attrs(span)["gen_ai.span.kind"] ?? attrs(span)["fi.span.kind"];
+  const got = allSpans().map(span => `${span.name} (${attrs(span)["traceai.capture.layer"]}, ${kindOf(span)})`);
+  expect({ got, exported: allSpans().length > 0 }).toEqual({ got, exported: true });
+  expect(output.stderr).not.toMatch(/FI_DISPATCHER_UNKNOWN|Collector export failed|load @traceai\/auto first/);
+  for (const forbidden of [url, "mock-fi-api-key", "mock-fi-secret-key", "x-api-key", "x-secret-key"]) expect(output.stderr).not.toContain(forbidden);
 }, 60000);
 test.each([
   ["an AI call from an integration the agent does not scope", "unscoped", "unscoped model call"],

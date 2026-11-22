@@ -347,6 +347,7 @@ def test_registry_is_consistent():
 @pytest.mark.parametrize("name, target, package, module, entry", [
     ("transformers", "transformers", "traceAI-transformers", "traceai_transformers", "TransformersInstrumentor"),
     ("openrouter", "openrouter", "traceAI-openrouter", "traceai_openrouter", "OpenRouterInstrumentor"),
+    ("elasticsearch", "elasticsearch", "traceAI-elasticsearch", "traceai_elasticsearch", "ElasticsearchInstrumentor"),
     ("marqo", "marqo", "traceAI-marqo", "traceai_marqo", "MarqoInstrumentor"),
     ("watsonx", "ibm_watsonx_ai", "traceAI-watsonx", "traceai_watsonx", "WatsonxInstrumentor"),
 ])
@@ -425,3 +426,15 @@ def test_registry_enables_agentspec_on_the_pyagentspec_import():
     assert (integration.package, integration.module, integration.entry) == (
         "traceAI-agentspec", "traceai_agentspec", "AgentSpecInstrumentor")
     assert integration.default
+
+
+def test_registry_enables_google_generativeai_on_the_legacy_sdk_import():
+    integration = _registry.find("google_generativeai")
+    assert integration is not None
+    assert integration.kind == _registry.INSTRUMENTOR
+    assert integration.targets == ("google.generativeai",)
+    assert (integration.package, integration.module, integration.entry) == (
+        "traceAI-google-generativeai", "traceai_google_generativeai", "GoogleGenerativeAIInstrumentor")
+    assert integration.default
+    # The new SDK keeps its own integration.
+    assert _registry.find("google_genai").targets == ("google.genai",)

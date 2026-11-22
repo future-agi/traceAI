@@ -133,6 +133,10 @@ def assert_http_export_timeout(monkeypatch):
     longer store `_timeout` on the exporter. Verify behavior, not its layout.
     """
     timeouts = []
+    # The patched ``Session.send`` below stands in for the collector: the channel is https, since a plain channel that carries
+    # Future AGI keys is refused while a library replaces the routing functions of ``requests``.
+    monkeypatch.setenv("FI_BASE_URL", "https://collector.example")
+    monkeypatch.delenv("FI_TRACES_URL", raising=False)
 
     def send(session, request, **kwargs):
         assert request.method == "POST"
@@ -188,8 +192,10 @@ class TestExporterTuning:
 
     @pytest.mark.parametrize("processor_type", [BatchSpanProcessor, SimpleSpanProcessor])
     @pytest.mark.parametrize("timeout", [7, 42, None])
-    def test_timeout_reaches_http_request(self, processor_type, timeout, clean_exporter_env):
+    def test_timeout_reaches_http_request(self, processor_type, timeout, clean_exporter_env, monkeypatch):
         """Observe transport behavior, not private exporter/client storage layout."""
+        monkeypatch.setenv("FI_BASE_URL", "https://collector.example")
+        monkeypatch.delenv("FI_TRACES_URL", raising=False)
         response = requests.Response()
         response.status_code = 200
         response._content = b""

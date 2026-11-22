@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // everySpanForTest keeps the FI exporter forwarding every span, as it did
@@ -34,6 +36,7 @@ func InitForTest(ctx context.Context, opts ...Option) (func(context.Context) err
 		agent.repeated = sync.Once{}
 	}
 	agent.Unlock()
+	resetModulesForTest()
 	shutdown, err := Init(ctx, opts...)
 	if everySpanForTest.Load() {
 		agent.Lock()
@@ -43,4 +46,30 @@ func InitForTest(ctx context.Context, opts ...Option) (func(context.Context) err
 		agent.Unlock()
 	}
 	return shutdown, err
+}
+
+// resetModulesForTest forgets what dedicated modules registered, so scenarios
+// do not depend on test order, -count or -shuffle.
+func resetModulesForTest() {
+	attached.Range(func(k, _ any) bool { attached.Delete(k); return true })
+	shutdownHooks.Lock()
+	shutdownHooks.fns = nil
+	shutdownHooks.Unlock()
+	agent.Lock()
+	moduleProbe.tried, moduleProbe.seen = false, nil
+	agent.Unlock()
+	moduleState.Store(nil)
+}
+
+// ResetModulesForTest is resetModulesForTest for the external test package.
+func ResetModulesForTest() { resetModulesForTest() }
+
+// RecordSizesForTest is how many events and links the agent holds in the record of a module span, for the external test package.
+func RecordSizesForTest(span trace.Span) (events, links int) {
+	ms, ok := span.(*maskedSpan)
+	if !ok {
+		return -1, -1
+	}
+	ms.reg.update(ms.Span.SpanContext(), func(r *spanRecord) { events, links = len(r.events), len(r.links) })
+	return events, links
 }

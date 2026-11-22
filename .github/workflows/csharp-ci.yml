@@ -114,6 +114,10 @@ jobs:
         run: |
           dotnet test csharp/tests/TraceAI.AutoInstrumentation.Tests/TraceAI.AutoInstrumentation.Tests.csproj \
             --configuration Release --logger 'trx;LogFilePrefix=startup-hook' --results-directory TestResults
+      - name: Test the ASP.NET Core hosting startup (registered chat clients, embeddings and agents)
+        run: |
+          dotnet test csharp/tests/TraceAI.AutoInstrumentation.HostingStartup.Tests/TraceAI.AutoInstrumentation.HostingStartup.Tests.csproj \
+            --configuration Release --logger 'trx;LogFilePrefix=hosting-startup' --results-directory TestResults
       - name: Pack the startup hook
         run: |
           dotnet pack csharp/src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj \

@@ -308,10 +308,13 @@ final class BedrockTracing {
         return text.toString();
     }
 
-    private static void setJson(Span span, String key, JsonElement value) {
+    private void setJson(Span span, String key, JsonElement value) {
         String json = value.toString();
         // Keep attributes valid JSON even when a large tool payload exceeds the limit.
-        span.setAttribute(key, json.length() <= 32000 ? json : "{\"omitted\":true,\"reason\":\"size_limit\"}");
+        String bounded = json.length() <= 32000 ? json : "{\"omitted\":true,\"reason\":\"size_limit\"}";
+        // Apply the hide settings (including the message flags) to the content keys written here.
+        String masked = tracer.getConfig().maskAttribute(key, bounded);
+        if (masked != null) span.setAttribute(key, masked);
     }
 
     /** Use the SDK's public model metadata, not Gson reflection or SDK toString(). */

@@ -10,7 +10,7 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 
 **80 integration families · 5 languages · OpenTelemetry-native · Apache 2.0**
 
-[Zero-code Node.js](#zero-code-tracing-for-nodejs) · [SDK quickstarts](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
+[Zero-code Node.js](#zero-code-tracing-for-nodejs) · [Zero-code, all languages](docs/auto-tracing/README.md) · [SDK quickstarts](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
 
 [![PyPI](https://img.shields.io/pypi/v/fi-instrumentation-otel?label=PyPI&color=555555)](https://pypi.org/project/fi-instrumentation-otel/)
 [![npm](https://img.shields.io/npm/v/%40traceai%2Ffi-core?label=npm&color=555555)](https://www.npmjs.com/package/@traceai/fi-core)
@@ -45,6 +45,18 @@ node --import @traceai/auto/register app.mjs
 Keep your provider credentials configured as usual. Make an AI request, consume the response, then open **Observe → my-ai-app** in [Future AGI](https://app.futureagi.com). OpenAI instrumentation is included; recognized AI calls through global `fetch` are captured too. Optional framework integrations retain their own coverage limits.
 
 **Prompts and responses are captured by default.** Set `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true FI_HIDE_ERROR_DETAILS=true` before startup to hide content. [Setup, supported libraries, privacy and framework recipes →](typescript/packages/traceai_auto/)
+
+### Zero-code tracing in other languages
+
+| Language | Turn it on | Guide |
+| --- | --- | --- |
+| Python | `fi-instrument python app.py` | [docs/auto-tracing/python.md](docs/auto-tracing/python.md) |
+| Java | `java -javaagent:traceai-javaagent-<version>.jar -jar app.jar` | [docs/auto-tracing/java.md](docs/auto-tracing/java.md) |
+| Go | `import _ "github.com/future-agi/traceAI/go/auto"` | [docs/auto-tracing/go.md](docs/auto-tracing/go.md) |
+| .NET | `DOTNET_STARTUP_HOOKS=<path>/TraceAI.AutoInstrumentation.dll` | [docs/auto-tracing/dotnet.md](docs/auto-tracing/dotnet.md) |
+| Ruby | `RUBYOPT="-rtraceai/auto"` | [docs/auto-tracing/ruby.md](docs/auto-tracing/ruby.md) |
+
+All languages: [zero-code tracing overview](docs/auto-tracing/README.md).
 
 ## Quickstart
 
@@ -331,13 +343,14 @@ Hosted and local model inference, embeddings, and reranking.
 | Integration | Python | TypeScript | Java | Go | C# |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | <img src=".github/assets/integrations/bedrock-tile.svg" width="24" height="24" alt=""> Amazon Bedrock | [SDK](python/frameworks/bedrock/ "traceAI-bedrock") | [SDK](typescript/packages/traceai_bedrock/ "@traceai/bedrock") | [SDK](java/traceai-java-bedrock/ "traceai-java-bedrock") | [SDK](go/bedrock/ "github.com/future-agi/traceAI/go/bedrock") | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Amazon SageMaker | [SDK](python/frameworks/sagemaker/ "traceAI-sagemaker") | [SDK](typescript/packages/traceai_sagemaker/ "@traceai/sagemaker") | — | — | — |
 | <img src=".github/assets/integrations/anthropic-tile.svg" width="24" height="24" alt=""> Anthropic | [SDK](python/frameworks/anthropic/ "traceAI-anthropic") | [SDK](typescript/packages/traceai_anthropic/ "@traceai/anthropic") | [SDK](java/traceai-java-anthropic/ "traceai-java-anthropic") | [SDK](go/anthropic/ "github.com/future-agi/traceAI/go/anthropic") | — |
 | <img src=".github/assets/integrations/openai-tile.svg" width="24" height="24" alt=""> Azure OpenAI | — | — | [SDK](java/traceai-java-azure-openai/ "traceai-java-azure-openai") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Cerebras | [SDK](python/frameworks/cerebras/ "traceAI-cerebras") | [SDK](typescript/packages/traceai_cerebras/ "@traceai/cerebras") | — | — | — |
 | <img src=".github/assets/integrations/cohere-tile.svg" width="24" height="24" alt=""> Cohere | [SDK](python/frameworks/cohere/ "traceAI-cohere") | [SDK](typescript/packages/traceai_cohere/ "@traceai/cohere") | [SDK](java/traceai-java-cohere/ "traceai-java-cohere") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> DeepSeek | [SDK](python/frameworks/deepseek/ "traceAI-deepseek") | [SDK](typescript/packages/traceai_deepseek/ "@traceai/deepseek") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Fireworks AI | [SDK](python/frameworks/fireworks/ "traceAI-fireworks") | [SDK](typescript/packages/traceai_fireworks/ "@traceai/fireworks") | — | — | — |
-| <img src=".github/assets/integrations/google-tile.svg" width="24" height="24" alt=""> Google GenAI (Gemini) | [SDK](python/frameworks/google-genai/ "traceAI-google-genai") · [Live](python/frameworks/google-genai-live/ "traceAI-google-genai-live") | [Legacy SDK only](typescript/packages/traceai_google_genai/ "@google/generative-ai compatibility; not @google/genai") | [SDK](java/traceai-java-google-genai/ "traceai-java-google-genai") | [SDK](go/genai/ "github.com/future-agi/traceAI/go/genai") | — |
+| <img src=".github/assets/integrations/google-tile.svg" width="24" height="24" alt=""> Google GenAI (Gemini) | [SDK](python/frameworks/google-genai/ "traceAI-google-genai") · [Live](python/frameworks/google-genai-live/ "traceAI-google-genai-live") · [Legacy SDK](python/frameworks/google-generativeai/ "traceAI-google-generativeai") | [Legacy SDK only](typescript/packages/traceai_google_genai/ "@google/generative-ai compatibility; not @google/genai") | [SDK](java/traceai-java-google-genai/ "traceai-java-google-genai") | [SDK](go/genai/ "github.com/future-agi/traceAI/go/genai") | — |
 | <img src=".github/assets/integrations/groq-tile.svg" width="24" height="24" alt=""> Groq | [SDK](python/frameworks/groq/ "traceAI-groq") | [SDK](typescript/packages/traceai_groq/ "@traceai/groq") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Hugging Face | [SDK](python/frameworks/huggingface/ "traceAI-huggingface") | [SDK](typescript/packages/traceai_huggingface/ "@traceai/huggingface") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> IBM watsonx | [SDK](python/frameworks/watsonx/ "traceAI-watsonx") | — | [SDK](java/traceai-java-watsonx/ "traceai-java-watsonx") | — | — |
@@ -397,7 +410,7 @@ Retrieval pipelines, vector stores, and search backends.
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Chroma | [SDK](python/frameworks/chromadb/ "traceAI-chromadb") | [SDK](typescript/packages/traceai_chromadb/ "@traceai/chromadb") | [SDK](java/traceai-java-chromadb/ "traceai-java-chromadb") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Cognee | [SDK](python/frameworks/cognee/ "traceai-cognee") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Open WebUI | [SDK](python/frameworks/openwebui/ "traceAI-openwebui") | — | — | — | — |
-| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Elasticsearch | — | — | [SDK](java/traceai-java-elasticsearch/ "traceai-java-elasticsearch") | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Elasticsearch | [SDK](python/frameworks/elasticsearch/ "traceAI-elasticsearch") | — | [SDK](java/traceai-java-elasticsearch/ "traceai-java-elasticsearch") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Google Discovery Engine | [SDK](python/frameworks/discoveryengine/ "traceAI-discoveryengine") | — | — | — | — |
 | <img src=".github/assets/integrations/haystack-tile.svg" width="24" height="24" alt=""> Haystack | [SDK](python/frameworks/haystack/ "traceAI-haystack") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> LanceDB | [SDK](python/frameworks/lancedb/ "traceAI-lancedb") | [SDK](typescript/packages/traceai_lancedb/ "@traceai/lancedb") | — | — | — |
@@ -484,7 +497,7 @@ LLM programming, structured output, validation, and evaluation.
 | <img src=".github/assets/integrations/dspy-tile.svg" width="24" height="24" alt=""> DSPy | [SDK](python/frameworks/dspy/ "traceAI-DSPy") | — | — | — | — |
 | <img src=".github/assets/integrations/guardrails-tile.svg" width="24" height="24" alt=""> Guardrails AI | [SDK](python/frameworks/guardrails/ "traceAI-guardrails") | [SDK](typescript/packages/traceai_guardrails/ "@traceai/guardrails") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Instructor | [SDK](python/frameworks/instructor/ "traceAI-instructor") | [SDK](typescript/packages/traceai_instructor/ "@traceai/instructor") | — | — | — |
-| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> TypeSafe | [SDK](python/frameworks/typesafe/ "traceAI-typesafe") | — | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> TypeSafe | [SDK](python/frameworks/typesafe/ "traceAI-typesafe") | [SDK](typescript/packages/traceai_typesafe/ "@traceai/typesafe") | — | — | — |
 
 **Bring existing telemetry:** [OpenInference](https://docs.futureagi.com/docs/integrations/import/openinference) · [OpenLLMetry](https://docs.futureagi.com/docs/integrations/otel/openllmetry)
 

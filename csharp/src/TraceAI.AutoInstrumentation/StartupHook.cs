@@ -30,9 +30,10 @@ internal class StartupHook
                 var directory=Path.GetDirectoryName(path)!;
                 var diagnostics=SharedDiagnostics();
                 var context=new AgentLoadContext(directory,diagnostics);
-                s_initialize=context.LoadFromAssemblyPath(Path.Combine(directory,"TraceAI.AutoInstrumentation.Runtime.dll")).GetType("TraceAI.AutoInstrumentation.TraceAIAuto")!
-                    .GetMethod("Init",BindingFlags.Static|BindingFlags.Public)!;
+                var auto=context.LoadFromAssemblyPath(Path.Combine(directory,"TraceAI.AutoInstrumentation.Runtime.dll")).GetType("TraceAI.AutoInstrumentation.TraceAIAuto")!;
+                s_initialize=auto.GetMethod("Init",BindingFlags.Static|BindingFlags.Public)!;
                 s_initialize.Invoke(null,new object?[] { null });
+                EnableHostingStartup(auto,directory);
             }
             catch(Exception error)
             {
@@ -47,6 +48,30 @@ internal class StartupHook
             }
         }
     }
+    private const string HostingStartupName="TraceAI.AutoInstrumentation.HostingStartup";
+    private const string HostingStartupSettings="TraceAI.AutoInstrumentation.HostingStartup";
+    /// <summary>ASP.NET Core web hosts only: lets the hosting startup wrap the application's registered
+    /// chat clients, embedding generators and agents. Runs after the agent started and only when the agent
+    /// decided to (running, integration enabled). Appends to ASPNETCORE_HOSTINGSTARTUPASSEMBLIES, never replaces it.
+    /// A non-web application never reads the variable. Fail-open.</summary>
+    private static void EnableHostingStartup(Type auto,string directory)
+    {
+        try
+        {
+            var settings=auto.GetMethod("HostingStartupPlan",BindingFlags.Static|BindingFlags.Public)?.Invoke(null,null) as string;
+            var path=Path.Combine(directory,HostingStartupName+".dll");
+            if(string.IsNullOrEmpty(settings) || !File.Exists(path)) return;
+            AppContext.SetData(HostingStartupSettings,settings);
+            // The host loads the assembly by name in the default context; it is not on the application's probing path.
+            AssemblyLoadContext.Default.Resolving+=(context,name)=>name.Name==HostingStartupName?context.LoadFromAssemblyPath(path):null;
+            const string variable="ASPNETCORE_HOSTINGSTARTUPASSEMBLIES";
+            var existing=Environment.GetEnvironmentVariable(variable);
+            var entries=(existing??"").Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
+            if(!entries.Contains(HostingStartupName,StringComparer.OrdinalIgnoreCase))
+                Environment.SetEnvironmentVariable(variable,string.IsNullOrWhiteSpace(existing)?HostingStartupName:existing.TrimEnd(';')+";"+HostingStartupName);
+        }
+        catch { }
+    }
     private static Assembly SharedDiagnostics()
     {
         const string name="System.Diagnostics.DiagnosticSource";
@@ -56,7 +81,7 @@ internal class StartupHook
         // Activity/DiagnosticListener API available since DiagnosticSource 8.
         // Never try to replace a TPA binding or load a second Activity universe.
         var shared=AssemblyLoadContext.Default.LoadFromAssemblyName(new AssemblyName(name));
-        if(shared.GetName().Version!.Major is <8 or >10)
+        if(shared.GetName().Version!.Major is <8 or >11)
             throw new NotSupportedException("Unsupported DiagnosticSource major version");
         return shared;
     }

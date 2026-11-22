@@ -76,7 +76,7 @@ Each integration reports one of these statuses:
 <details>
 <summary>All integrations</summary>
 
-**Automatic** integrations turn on by themselves. **Off by default** integrations wrap the OpenAI SDK, so the `openai` integration already traces the same calls; to use one instead, list the integrations you want in `FI_INSTRUMENTATIONS` and leave `openai` out. **Manual** integrations need the setup call shown in the report.
+**Automatic** integrations turn on by themselves. The `deepseek`, `fireworks`, `xai`, `minimax` and `vllm` integrations wrap the OpenAI SDK too; while `openai` is on it traces those calls, so each call produces one span (an integration turns on by default only when its installed package declares that it defers; with an older package it stays off until you upgrade or list it), and if you list only one of them in `FI_INSTRUMENTATIONS` (leaving `openai` out) that integration traces its own calls. **Manual** integrations need the setup call shown in the report.
 
 | Name | Library | traceAI package | Setup |
 | --- | --- | --- | --- |
@@ -84,6 +84,7 @@ Each integration reports one of these statuses:
 | `openai_realtime` | `openai` (Realtime) | `traceAI-openai-realtime` | Automatic |
 | `anthropic` | `anthropic` | `traceAI-anthropic` | Automatic |
 | `google_genai` | `google-genai` | `traceAI-google-genai` | Automatic |
+| `google_generativeai` | `google-generativeai` (legacy SDK) | `traceAI-google-generativeai` | Automatic |
 | `google_genai_live` | `google-genai` (Live) | `traceAI-google-genai-live` | Automatic |
 | `vertexai` | `vertexai` | `traceAI-vertexai` | Automatic |
 | `bedrock` | `boto3` | `traceAI-bedrock` | Automatic |
@@ -101,14 +102,14 @@ Each integration reports one of these statuses:
 | `writer` | `writerai` | `traceAI-writer` | Automatic |
 | `alephalpha` | `aleph_alpha_client` | `traceAI-alephalpha` | Automatic |
 | `agentspec` | `pyagentspec` | `traceAI-agentspec` | Automatic |
-| `promptflow` | `promptflow` | `traceAI-promptflow` | Automatic |
+| `promptflow` | `promptflow.tracing` | `traceAI-promptflow` | Automatic |
 | `portkey` | `portkey-ai` | `traceAI-portkey` | Automatic |
 | `watsonx` | `ibm_watsonx_ai` | `traceAI-watsonx` | Automatic |
 | `replicate` | `replicate` | `traceAI-replicate` | Automatic |
 | `voyage` | `voyageai` | `traceAI-voyage` | Automatic |
 | `discoveryengine` | `google-cloud-discoveryengine` | `traceAI-discoveryengine` | Automatic |
 | `typesafe` | `typesafe_sdk` | `traceAI-typesafe` | Automatic |
-| `deepseek`, `fireworks`, `xai`, `minimax`, `vllm` | `openai` | `traceAI-deepseek`, `traceAI-fireworks`, `traceAI-xai`, `traceAI-minimax`, `traceAI-vllm` | Off by default |
+| `deepseek`, `fireworks`, `xai`, `minimax`, `vllm` | `openai` | `traceAI-deepseek`, `traceAI-fireworks`, `traceAI-xai`, `traceAI-minimax`, `traceAI-vllm` | Automatic |
 | `langchain` | `langchain-core` | `traceAI-langchain` | Automatic |
 | `langgraph` | `langgraph` | `traceAI-langchain` | Automatic |
 | `llama_index` | `llama-index` | `traceAI-llamaindex` | Automatic |
@@ -149,6 +150,7 @@ Each integration reports one of these statuses:
 | `pinecone` | `pinecone` | `traceAI-pinecone` | Automatic |
 | `qdrant` | `qdrant-client` | `traceAI-qdrant` | Automatic |
 | `weaviate` | `weaviate-client` | `traceAI-weaviate` | Automatic |
+| `elasticsearch` | `elasticsearch` | `traceAI-elasticsearch` | Automatic |
 | `marqo` | `marqo` | `traceAI-marqo` | Automatic |
 | `milvus` | `pymilvus` | `traceAI-milvus` | Automatic |
 | `lancedb` | `lancedb` | `traceAI-lancedb` | Automatic |

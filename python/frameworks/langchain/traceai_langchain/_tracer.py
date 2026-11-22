@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import math
@@ -48,6 +49,8 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from fi_instrumentation.instrumentation._tracers import FITracer
+from langchain_core.documents import Document
+from pydantic import BaseModel as PydanticBaseModel
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.human import HumanMessage
 from langchain_core.tracers import BaseTracer, LangChainTracer
@@ -551,12 +554,22 @@ def _update_span(
         else:
             filtered_data = None
 
+    # A chain whose output carries its request input (a pass-through, an assign) is not
+    # recorded as output.value while an input hide setting is on.
+    value_outputs = outputs
+    if run.run_type == "chain" and _hides_input_content(config) and _echoes_input(run.inputs, outputs):
+        value_outputs = None
+    # A prompt template's output is the formatted prompt: the request content itself.
+    if run.run_type == "prompt" and _hides_input_content(config):
+        value_outputs = None
+        outputs = None
+
     span.set_attributes(
         dict(
             _flatten(
                 chain(
                     _as_span_input(filtered_data),
-                    _as_output(_convert_io(outputs)),
+                    _as_output(_convert_io(value_outputs)),
                     _as_input_images(images),
                     _as_eval_input(eval_input),
                     _prompts(run.inputs),
@@ -572,11 +585,247 @@ def _update_span(
                     _metadata(run),
                     _session_id_from_thread_id(run, captured_context),
                     # Keep the full run input canonical, not the first message's query.
-                    _as_raw_input_output(run, outputs),
+                    _as_raw_input_output(run, value_outputs),
                 )
             )
         )
     )
+
+
+def _hides_input_content(config: Any) -> bool:
+    return isinstance(config, TraceConfig) and any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text", "hide_input_images")
+    )
+
+
+_MIN_ECHO_LENGTH = 4
+_MAX_ECHO_DEPTH = 32
+_MAX_ECHO_NODES = 20000
+
+
+class _Undecidable(Exception):
+    """The comparison cannot be completed (too deep, too large, unreadable): the output is treated as an echo."""
+
+
+def _children(value: Any) -> Any:
+    """The parts of a non-scalar value as (key, part) pairs: mapping items, sequence items (no key), and the
+    fields of model-like objects. None when the value is not a container."""
+    if isinstance(value, Mapping):
+        return [(k if isinstance(k, str) else None, v) for k, v in value.items()]
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [(None, v) for v in value]
+    for method in ("model_dump", "dict"):
+        dump = getattr(value, method, None)
+        if callable(dump):
+            try:
+                dumped = dump()
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(dumped, Mapping):
+                return [(k if isinstance(k, str) else None, v) for k, v in dumped.items()]
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return [(f.name, getattr(value, f.name, None)) for f in dataclasses.fields(value)]
+    parts = [(name, getattr(value, name, None)) for name in ("page_content", "content", "metadata") if hasattr(value, name)]
+    if parts:
+        return parts
+    fields = getattr(value, "__dict__", None)
+    if isinstance(fields, Mapping) and fields:
+        return [(k if isinstance(k, str) else None, v) for k, v in fields.items()]
+    return None
+
+
+def _is_message_like(value: Any) -> bool:
+    """A LangChain message or document. Other objects, even with a ``content`` field, are read whole."""
+    return isinstance(value, (BaseMessage, Document))
+
+
+# Labels a content part carries whatever it says: its kind, ids, tool name, status and media/format labels.
+_PART_KEYS = ("type", "id", "name", "status", "call_id", "tool_use_id", "detail", "media_type", "mime_type",
+              "source_type", "format")
+# Keys of a part whose mapping value describes a media item (``image_url.detail``, ``source.media_type``).
+_PART_HOLDERS = ("image_url", "input_audio", "source", "file")
+
+
+def _part_leaves(part: Any, drop: tuple = _PART_KEYS) -> Any:
+    """A content part without its labels: ``drop`` (``_PART_KEYS`` for a message's own parts) at the part's top
+    level, ``_PART_KEYS`` at the top level of its media holders ``image_url``, ``input_audio``, ``source`` and
+    ``file``, and ``type`` and ``id`` of the content blocks in the part's or a holder's own ``content`` (a list of
+    blocks or a single block, each read as a part, recursively). Nothing else is dropped: any mapping reached
+    through another key, or nested in a holder, is user data and keeps every key (``json.file.name``,
+    ``meta.source.format``, ``json.content[].id``)."""
+    if not isinstance(part, Mapping):
+        return part
+    out = {}
+    for k, v in part.items():
+        if k in drop:
+            continue
+        if k in _PART_HOLDERS and isinstance(v, Mapping):
+            out[k] = {hk: _content_blocks(hv) if hk == "content" else hv for hk, hv in v.items() if hk not in _PART_KEYS}
+        elif k == "content":
+            out[k] = _content_blocks(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _content_blocks(content: Any) -> Any:
+    """The ``content`` of a part or holder: each nested content block (a list of them, or a single one) without its
+    ``type`` and ``id``, read as a part; any other value stays."""
+    if isinstance(content, (list, tuple)):
+        return [_part_leaves(item, ("type", "id")) for item in content]
+    if isinstance(content, Mapping):
+        return _part_leaves(content, ("type", "id"))
+    return content
+
+
+def _message_parts(value: Any) -> list:
+    """What an input message or document says: its ``content`` (a string, or every part of a content list but
+    the parts' ``type`` and ``id``), ``page_content``, and the argument values of its tool calls. Never its type,
+    id, name, example, metadata or other schema fields, which every message carries whatever its text is."""
+    parts: list = []
+    content = getattr(value, "content", None)
+    if isinstance(content, str):
+        parts.append(content)
+    elif isinstance(content, (list, tuple)):
+        parts.extend(_part_leaves(item) for item in content)
+    page_content = getattr(value, "page_content", None)
+    if isinstance(page_content, str):
+        parts.append(page_content)
+    for field in ("tool_calls", "invalid_tool_calls", "tool_call_chunks"):
+        calls = getattr(value, field, None)
+        if isinstance(calls, (list, tuple)):
+            for call in calls:
+                args = call.get("args") if isinstance(call, Mapping) else getattr(call, "args", None)
+                if isinstance(args, str):
+                    # Streamed or malformed calls carry their arguments as (possibly partial) JSON text.
+                    try:
+                        parts.append(json.loads(args))
+                    except ValueError:
+                        parts.append(args)
+                        parts.extend(re.findall(r'"((?:[^"\\]|\\.)*)(?:"|$)', args))
+                elif args is not None:
+                    parts.append(args)
+    return parts
+
+
+def _input_children(value: Any) -> Any:
+    """The parts of an input value the echo comparison looks for: those of a LangChain message or document are its
+    text-bearing fields only, anything else has all its parts (see ``_children``). None when not a container."""
+    if _is_message_like(value):
+        return [(None, part) for part in _message_parts(value)]
+    fields = getattr(type(value), "model_fields", None)
+    if isinstance(value, PydanticBaseModel) and isinstance(fields, Mapping):
+        # Read the fields themselves, so messages and documents inside keep the narrowing (model_dump makes dicts).
+        # Undeclared fields (``extra="allow"``) and computed fields are input too; a computed field that raises
+        # makes the comparison undecidable (an echo).
+        parts = [(n, getattr(value, n, None)) for n in fields]
+        extra = getattr(value, "model_extra", None)
+        if isinstance(extra, Mapping):
+            parts.extend((k if isinstance(k, str) else None, v) for k, v in extra.items())
+        computed = getattr(type(value), "model_computed_fields", None)
+        if isinstance(computed, Mapping):
+            parts.extend((n, getattr(value, n)) for n in computed)
+        return parts
+    return _children(value)
+
+
+def _string_leaves(value: Any, found: list, nodes: list, depth: int = 0, children_of: Callable[[Any], Any] = _children) -> None:
+    """Every string leaf of ``value`` (anything unreadable is a text leaf of its own). Every node visited counts
+    toward the budget, not only the leaves; running out of budget raises _Undecidable."""
+    nodes[0] += 1
+    if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
+        raise _Undecidable
+    if value is None or isinstance(value, (bool, int, float)):
+        return
+    if isinstance(value, str):
+        found.append(value)
+        return
+    children = children_of(value)
+    if children is None:
+        found.append(str(value))
+        return
+    for _, child in children:
+        _string_leaves(child, found, nodes, depth + 1, children_of)
+
+
+def _same(value: Any, target: Any) -> bool:
+    """Equal and of comparable types; a boolean only equals a boolean."""
+    if isinstance(value, bool) or isinstance(target, bool):
+        comparable = type(value) is type(target)
+    else:
+        comparable = type(value) is type(target) or isinstance(value, type(target)) or isinstance(target, type(value))
+    return comparable and value == target
+
+
+def _contains_value(value: Any, target: Any, nodes: list, depth: int = 0) -> bool:
+    """True when ``value`` or any part of it (within the node and depth budget) equals ``target``."""
+    nodes[0] += 1
+    if depth > _MAX_ECHO_DEPTH or nodes[0] > _MAX_ECHO_NODES:
+        raise _Undecidable
+    if _same(value, target):
+        return True
+    children = _children(value)
+    if children is None:
+        return False
+    return any(_contains_value(child, target, nodes, depth + 1) for _, child in children)
+
+
+def _unwrap(value: Any) -> Any:
+    """Strip the single-key ``{"input": x}`` / ``{"output": x}`` wrappers LangChain puts around a non-mapping
+    value, and single-element tuples."""
+    for _ in range(_MAX_ECHO_DEPTH):
+        if isinstance(value, Mapping) and len(value) == 1 and next(iter(value)) in ("input", "output"):
+            value = next(iter(value.values()))
+        elif isinstance(value, tuple) and len(value) == 1:
+            value = value[0]
+        else:
+            return value
+    raise _Undecidable
+
+
+def _echoes_input(inputs: Any, outputs: Any) -> bool:
+    """True when the run's output repeats its input, judged by structure and by string content.
+
+    1. Identity: the output, or any part of it, equals the whole unwrapped input (any type, scalars included).
+    2. Pass-through / assign shape: the output is a mapping holding every top-level key of the input mapping
+       with an equal value.
+    3. String content: an input string of four characters or more (read from the text-bearing fields of input
+       LangChain messages and documents, from every part of anything else) occurs in any string of the output
+       (every field, messages and documents included) or in its JSON rendering, also in the JSON-escaped form.
+    4. Anything that cannot be decided (too deep, too large, unreadable, any error) counts as an echo.
+
+    The input's message type, id, name, metadata and other schema fields are not used as text to look for, a
+    boolean is never matched by an equal number, and nothing is matched by its field name: a node's new message is not an echo of the earlier messages in its state because
+    they share ``type: "ai"`` or ``finish_reason``.
+    """
+    if not inputs or not outputs:
+        return False
+    try:
+        # 1. identity, of the whole output or of any part of it
+        whole = _unwrap(inputs)
+        if _same(_unwrap(outputs), whole):
+            return True
+        empty = whole is None or (isinstance(whole, (str, bytes, Mapping, list, tuple, set, frozenset)) and len(whole) == 0)
+        if not empty and _contains_value(outputs, whole, [0]):
+            return True
+        # 2. pass-through / assign shape
+        if isinstance(inputs, Mapping) and isinstance(outputs, Mapping) and inputs:
+            if all(key in outputs and outputs[key] == value for key, value in inputs.items()):
+                return True
+        # 3. string content
+        in_strings: list = []
+        out_strings: list = []
+        _string_leaves(inputs, in_strings, [0], children_of=_input_children)
+        _string_leaves(outputs, out_strings, [0])
+        text = "\x00".join(out_strings)
+        rendered = safe_json_dumps(outputs)
+        for leaf in in_strings:
+            if len(leaf) >= _MIN_ECHO_LENGTH and (leaf in text or leaf in rendered or safe_json_dumps(leaf)[1:-1] in rendered):
+                return True
+        return False
+    except Exception:  # noqa: BLE001 - when the comparison cannot be made, the output is not recorded
+        return True
 
 
 def _langchain_run_type_to_span_kind(run_type: str) -> FiSpanKindValues:

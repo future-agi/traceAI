@@ -45,7 +45,7 @@ function sdkModule(module: unknown): typeof Anthropic {
 class TestInstrumentation extends AnthropicInstrumentation {
   // Exercise the same callback a cached CommonJS loader entry would invoke.
   loaderUnpatch(module: typeof Anthropic) {
-    this.init().unpatch?.(module);
+    this.init()[0].unpatch?.(module);
   }
 }
 

@@ -11,7 +11,13 @@ module TraceAI
     VERSION = '0.1.0'
     INIT_MUTEX = Mutex.new
     BUNDLER_BOOT_MUTEX = Mutex.new
-    TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester].freeze
+    TARGETS = %w[Net::HTTP Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest Net::BufferedIO HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1 OpenAI::Internal::Transport::PooledNetRequester RubyLLM::Support::Instrumentation].freeze
+    RUBY_LLM_TARGET = 'RubyLLM::Support::Instrumentation'
+    # The RubyLLM events that get a span, and that start a waiting agent.
+    # Supported RubyLLM versions: >= RUBY_LLM_MIN, < RUBY_LLM_BELOW.
+    RUBY_LLM_MIN = '2.0'
+    RUBY_LLM_BELOW = '3'
+    RUBY_LLM_EVENTS = {'chat.ruby_llm' => :chat, 'tool_call.ruby_llm' => :tool}.freeze
     MODEL_KINDS = %w[LLM EMBEDDING RERANKER GUARDRAIL].freeze
     AI_MARKERS = %w[gen_ai.span.kind traceai.capture.layer].freeze
     # Seconds the startup hooks may run after the agent loads (see load_hook).
@@ -169,6 +175,7 @@ module TraceAI
         names.concat(%w[Net::HTTPResponse Net::HTTPResponse::Inflater Net::HTTPGenericRequest]) if transport_enabled?('net_http')
         names << 'OpenAI::Internal::Transport::PooledNetRequester' if @sdk && gem_possible?('openai')
         names.concat(%w[HTTPX::Session HTTPX::StreamResponse HTTPX::Connection::HTTP1]) if (@sdk || transport_enabled?('httpx')) && gem_possible?('httpx')
+        names << RUBY_LLM_TARGET if ruby_llm_wanted? && gem_possible?('ruby_llm')
         names
       end
       def gem_possible?(name)
@@ -220,8 +227,21 @@ module TraceAI
         %i[Bundler OpenTelemetry].each do |name|
           observe_target(Object.const_get(name, false)) if Object.const_defined?(name, false) && !Object.autoload?(name)
         end
+        observe_loaded_ruby_llm
       ensure
         @scanning_targets = false
+      end
+      # RubyLLM's instrumentation module, when RubyLLM is already loaded. Walks
+      # the constants without ever triggering one of its autoloads.
+      def observe_loaded_ruby_llm
+        namespace = Object
+        %i[RubyLLM Support Instrumentation].each do |name|
+          return unless namespace.const_defined?(name, false) && !namespace.autoload?(name)
+          namespace = namespace.const_get(name, false)
+        end
+        observe_target(namespace)
+      rescue NameError, TypeError
+        nil
       end
       def observe_target(klass)
         name = Module.instance_method(:name).bind_call(klass)
@@ -244,6 +264,10 @@ module TraceAI
       end
       def prepend_once(klass, wrapper)
         klass.prepend(wrapper) if klass && !klass.ancestors.include?(wrapper)
+      end
+      def prepend_singleton_once(target, wrapper)
+        singleton = target&.singleton_class
+        singleton.prepend(wrapper) if singleton && !singleton.ancestors.include?(wrapper)
       end
       def after_require
         return if @initializing
@@ -270,6 +294,7 @@ module TraceAI
             prepend_once(target('HTTPX::Session'), LazyHTTPX)
             prepend_once(target('HTTPX::StreamResponse'), LazyHTTPXStream)
             prepend_once(target('OpenAI::Internal::Transport::PooledNetRequester'), LazySDKRequest)
+            prepend_singleton_once(target(RUBY_LLM_TARGET), LazyRubyLLM) if @config.enabled?('ruby_llm')
           end
         end
         sync_hooks
@@ -330,6 +355,48 @@ module TraceAI
         end
         started
       rescue StandardError => e
+        debug(e); false
+      end
+      # RubyLLM integration (see ruby_llm.rb): on for an active agent unless the
+      # disable list names it; an allowlist must name it, or an explicit
+      # auto_instrument call must ask for it.
+      def ruby_llm_wanted?
+        return false unless active?
+        return false if @config.list('disabled_instrumentations').include?('ruby_llm')
+        !!@ruby_llm_forced || @config.enabled?('ruby_llm')
+      end
+      def ruby_llm_installed? = !!@ruby_llm_installed
+      # An installed RubyLLM inside the supported range, for the report.
+      def ruby_llm_supported_gem?
+        Gem::Specification.find_all_by_name('ruby_llm').any? do |spec|
+          spec.version >= Gem::Version.new(RUBY_LLM_MIN) && spec.version < Gem::Version.new(RUBY_LLM_BELOW)
+        end
+      rescue StandardError
+        false
+      end
+      def install_ruby_llm
+        return unless ruby_llm_wanted?
+        instrumentation = target(RUBY_LLM_TARGET)
+        return unless instrumentation
+        require_relative 'ruby_llm'
+        return unless RubyLLMInstrumentor.supported?
+        prepend_singleton_once(instrumentation, RubyLLMHook)
+        # RubyLLM that hands the callers' instrumentation context to its tool
+        # threads and fibers (2.1 and later) carries the current span along.
+        prepend_singleton_once(instrumentation, RubyLLMContextHook) if instrumentation.respond_to?(:capture_context)
+        @ruby_llm_installed = true
+      rescue LoadError, SyntaxError, StandardError => e
+        debug(e)
+      end
+      # The lazy RubyLLM hook asks on every chat or tool event while the agent
+      # waits. A RubyLLM call is an AI call whatever host it reaches, so it
+      # starts the agent, and the event is redispatched to the real hook that
+      # the start installed above the lazy one.
+      def start_on_ruby_llm
+        return false unless lazy_ready? && @config.enabled?('ruby_llm')
+        start({}, :request)
+        active? && ruby_llm_installed?
+      rescue LoadError, SyntaxError, StandardError => e
         debug(e); false
       end
       def init(**arguments) = start(arguments, :explicit)
@@ -486,6 +553,8 @@ module TraceAI
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
+          # Prove the hooks on this SDK now; on an unproven SDK AI spans export metadata only.
+          MediaAdmission.verify!
           # A provider the agent attached to before (a provisional start that
           # an explicit init replaced) keeps its marker processor; never add a
           # second one.
@@ -671,8 +740,9 @@ module TraceAI
         @provisional = false
         return @provider || self unless active?
         @bundle_wait_expired = false
-        names = instrumentations || %w[wire rack]
+        names = instrumentations || %w[wire rack ruby_llm]
         names = names.split(',').map(&:strip) if names.is_a?(String)
+        @ruby_llm_forced = true if names.include?('ruby_llm')
         @enabled_transports |= names.include?('wire') ? %w[net_http httpx] : (names & %w[net_http httpx])
         observe_targets
         install_transports
@@ -785,25 +855,99 @@ module TraceAI
           span.status = result.ok ? OpenTelemetry::Trace::Status.ok : OpenTelemetry::Trace::Status.error(description)
           span.finish(end_timestamp: finished)
         else
-          trace_id = nil
-          if @local_ratio_bound
-            # Match Ruby SDK TraceIdRatioBased on the same ID we export, including
-            # its probability-one special case and unsigned low-64-bit comparison.
-            trace_id = Random.urandom(16)
-            return unless @local_sample_rate == 1.0 || trace_id[8, 8].unpack1('Q>') < @local_ratio_bound
-          else
-            return unless Random.rand < @local_sample_rate
+          enqueue_local(result.name, :client, attributes, projection.dropped, ratio, limit, result.ok, description, started, finished)
+        end
+      rescue StandardError => e
+        debug(e)
+      end
+      # Without an SDK a span is an export record handed to the local processor.
+      # Sampling matches the SDK's ratio rules; every span is a root.
+      def enqueue_local(name, kind, attributes, dropped, ratio, limit, ok, description, started, finished)
+        trace_id = nil
+        if @local_ratio_bound
+          # Match Ruby SDK TraceIdRatioBased on the same ID we export, including
+          # its probability-one special case and unsigned low-64-bit comparison.
+          trace_id = Random.urandom(16)
+          return unless @local_sample_rate == 1.0 || trace_id[8, 8].unpack1('Q>') < @local_ratio_bound
+        else
+          return unless Random.rand < @local_sample_rate
+        end
+        tracestate = ''
+        if ratio
+          attributes = attributes.merge(SamplingRatio::ATTRIBUTE => ratio) if limit.positive?
+          tracestate = "fi=#{SamplingRatio.state_value(ratio)}"
+        end
+        record = ExportRecord.new(name, kind, LocalStatus.new(ok ? 1 : 2, description), "\0".b * 8,
+                                  attributes.size + dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
+                                  attributes, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
+                                  Random.urandom(8), trace_id || Random.urandom(16), 1, tracestate, false)
+        @processor.enqueue(record)
+      end
+      # A span an instrumentor keeps open around a call (the RubyLLM hook). It
+      # carries its identity attributes from the start; with an SDK it is live
+      # and current, so spans made inside the call nest under it. `capture`
+      # marks the call as already reported, so that the wire layer adds no
+      # second span for the HTTP request made inside it. Returns nil when the
+      # agent is not active. Ended exactly once, by finish_span.
+      SpanScope = Struct.new(:name, :kind, :identity, :started, :parent, :span, :token, :finished, :start)
+      def begin_span(name, kind:, identity:, capture: false)
+        return unless active?
+        check_startup_window
+        adopt_host_provider if @own_provider && @provider.equal?(@own_provider)
+        install_server_instrumentation if @sdk && !%w[instrumented failed].include?(@rack_status)
+        parent = request_context
+        scope = SpanScope.new(name, kind, identity, Time.now, parent)
+        context = parent
+        if @sdk
+          start = Privacy.mask(Privacy.scrub_attributes(identity), @config)
+          scope.start = start
+          scope.span = @tracer.start_span(name, with_parent: parent, kind: kind, start_timestamp: scope.started, attributes: start)
+          context = OpenTelemetry::Trace.context_with_span(scope.span, parent_context: parent)
+        end
+        context = context.set_value(@capture_key, true) if capture
+        scope.token = attach_context(context) if @sdk || capture
+        scope
+      rescue StandardError => e
+        debug(e)
+        nil
+      end
+      def finish_span(scope, attributes, ok:, description: nil)
+        return if scope.nil? || scope.finished
+        scope.finished = true
+        finished = Time.now
+        detach_context(scope.token)
+        context_attrs = (@attributes_key && scope.parent.value(@attributes_key)) || {}
+        attributes = context_attrs.merge(attributes)
+        attributes = scope.identity.merge(attributes) unless @sdk
+        attributes = Privacy.mask(Privacy.scrub_attributes(attributes), @config)
+        description = ok ? nil : (Privacy.hide_errors?(@config) ? '__REDACTED__' : Privacy.best_effort_scrub(description.to_s))
+        span = scope.span
+        if span
+          begin
+            if span.recording?
+              # A secret learned while the span was open: what the span carried from its start is replaced again, on
+              # the full values, before the span's own length limit cuts them.
+              again = Privacy.mask(Privacy.scrub_attributes(scope.identity), @config)
+              again = again.reject { |key, value| scope.start[key] == value }
+              span.add_attributes(again) unless again.empty?
+              renamed = Privacy.best_effort_scrub(scope.name)
+              span.name = renamed if renamed != scope.name && span.respond_to?(:name=)
+              projection = AttributeProjection.project(attributes, projection_limit - (span.attributes || {}).size)
+              span.add_attributes(projection.attributes)
+              if projection.dropped.positive? && span.respond_to?(:to_span_data)
+                span.instance_variable_set(:@traceai_projection_dropped, projection.dropped)
+                span.singleton_class.prepend(ProjectedSpan)
+              end
+              span.status = ok ? OpenTelemetry::Trace::Status.ok : OpenTelemetry::Trace::Status.error(description)
+            end
+          ensure
+            span.finish(end_timestamp: finished)
           end
-          tracestate = ''
-          if ratio
-            attributes = attributes.merge(SamplingRatio::ATTRIBUTE => ratio) if limit.positive?
-            tracestate = "fi=#{SamplingRatio.state_value(ratio)}"
-          end
-          record = ExportRecord.new(result.name, :client, LocalStatus.new(result.ok ? 1 : 2, description), "\0".b * 8,
-                                    attributes.size + projection.dropped, 0, 0, (started.to_r * 1_000_000_000).to_i, (finished.to_r * 1_000_000_000).to_i,
-                                    attributes, [], [], @provider.resource, ExportScope.new('traceai-auto', VERSION, {}),
-                                    Random.urandom(8), trace_id || Random.urandom(16), 1, tracestate, false)
-          @processor.enqueue(record)
+        else
+          limit = projection_limit
+          ratio = @local_sample_rate if SamplingRatio.fractional?(@local_sample_rate)
+          projection = AttributeProjection.project(attributes, ratio && limit.positive? ? limit - 1 : limit)
+          enqueue_local(scope.name, scope.kind, projection.attributes, projection.dropped, ratio, limit, ok, description.to_s, scope.started, finished)
         end
       rescue StandardError => e
         debug(e)
@@ -899,6 +1043,7 @@ module TraceAI
         false
       end
       def install_transports
+        install_ruby_llm
         return unless active? && (wire_enabled? || @sdk)
         require_relative 'transports'
         # Disabling wire spans must not disable request-credential discovery for
@@ -955,11 +1100,14 @@ module TraceAI
                   elsif name == 'wire' || name == 'net_http' then 'instrumented'
                   elsif name == 'rack' && @rack_status then @rack_status
                   elsif !installed?(gem) then 'not_installed'
+                  elsif name == 'ruby_llm' then ruby_llm_supported_gem? ? 'instrumented' : 'missing_instrumentor'
                   elsif name == 'httpx' then @httpx_installed ? 'instrumented' : 'pending'
                   else 'missing_instrumentor'
                   end
           integrations[name] = {status: state}
-          integrations[name][:reason] = 'No dedicated Ruby traceAI instrumentor; known protocols use enabled wire transports' if state == 'missing_instrumentor'
+          if state == 'missing_instrumentor'
+            integrations[name][:reason] = name == 'ruby_llm' ? "The installed RubyLLM is outside the supported range (>= #{RUBY_LLM_MIN}, < #{RUBY_LLM_BELOW}); known protocols use enabled wire transports" : 'No dedicated Ruby traceAI instrumentor; known protocols use enabled wire transports'
+          end
         end
         collector = 'not_tested'
         if test_export && active? && @sdk && @exporter && @processor
@@ -1012,6 +1160,15 @@ module TraceAI
     module LazySDKRequest
       def execute(request, ...)
         return execute(request, ...) if Auto.start_on_sdk_request(request)
+        super
+      end
+    end
+    # Waits like the lazy transports: the first RubyLLM chat or tool event starts
+    # the agent, then runs again through the real hook.
+    module LazyRubyLLM
+      def instrument(name, payload = nil, **options, &block)
+        return super unless block && Auto.pending? && RUBY_LLM_EVENTS.key?(name)
+        return instrument(name, payload, **options, &block) if Auto.start_on_ruby_llm
         super
       end
     end
@@ -1149,7 +1306,11 @@ module TraceAI
           if @sdk_records
             # The internal FI serializer uses OTLP status numbers; application
             # SDK exporters expect the SDK API's different OK/UNSET numbering.
-            copy = OpenTelemetry::SDK::Trace::SpanData.new(*copy.to_a)
+            # Build with exactly the members this SDK's SpanData has: older releases lack
+            # parent_span_is_remote, and a member this agent does not know stays nil.
+            known = copy.members
+            sdk_members = OpenTelemetry::SDK::Trace::SpanData.members
+            copy = OpenTelemetry::SDK::Trace::SpanData.new(*sdk_members.map { |member| known.include?(member) ? copy[member] : nil })
             copy.trace_flags = OpenTelemetry::Trace::TraceFlags.from_byte(copy.trace_flags)
             copy.tracestate = OpenTelemetry::Trace::Tracestate.from_string(copy.tracestate)
             copy.links = copy.links.map do |link|

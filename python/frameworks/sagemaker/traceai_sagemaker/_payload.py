@@ -167,7 +167,9 @@ def usage_of(obj: Any) -> Usage:
     if usage.input_tokens is None:
         usage.input_tokens = _first(obj, "prompt_token_count", "inputTextTokenCount")
     if usage.output_tokens is None:
-        usage.output_tokens = _first(obj, "generation_token_count") or _first(_head(obj.get("results")), "tokenCount")
+        usage.output_tokens = _first(obj, "generation_token_count")
+        if usage.output_tokens is None:
+            usage.output_tokens = _first(_head(obj.get("results")), "tokenCount")
     # Hugging Face TGI details.
     details = _dict(obj.get("details"))
     if usage.output_tokens is None:

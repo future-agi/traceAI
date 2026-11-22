@@ -1,0 +1,7 @@
+{
+  "_comment": "Go modules of this repository that are not yet releasable, and what each needs. A module listed here stays out of release-please-config.json and the manifest, so no release PR bumps a module that cannot be tagged (a merged release PR whose tag is refused stays pending and stops every later release PR). Each entry names, per required module of this repository, the last release without the APIs the module uses; the module can be tagged only when each requirement is newer and its go.mod has no replace directive into the working tree. When it can be tagged, delete its entry here and add it to release-please-config.json and the manifest (initial version 0.1.0) in the same change; release_plan.py --check fails until you do.",
+  "go/eino/auto": {
+    "github.com/future-agi/traceAI/go/auto": "0.2.0",
+    "github.com/future-agi/traceAI/go/eino": "0.1.0"
+  }
+}

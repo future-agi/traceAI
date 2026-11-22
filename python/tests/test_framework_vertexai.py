@@ -12,6 +12,7 @@ from collections.abc import AsyncIterable, Iterable
 
 import pytest
 import proto
+from google.cloud.aiplatform_v1 import GenerateContentRequest
 
 from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
@@ -223,8 +224,7 @@ class TestWrapper:
             return "response"
         
         # Create mock proto message
-        mock_request = Mock(spec=proto.Message)
-        mock_request.__class__.to_dict = Mock(return_value={"contents": []})
+        mock_request = GenerateContentRequest(model="synthetic-model")
         
         with patch('traceai_vertexai._wrapper._get_prediction_service_request', return_value=mock_request), \
              patch('traceai_vertexai._wrapper.context_api.get_value', return_value=False), \
@@ -248,8 +248,7 @@ class TestWrapper:
         def mock_function(mock_request):
             raise Exception("Test error")
         
-        mock_request = Mock(spec=proto.Message)
-        mock_request.__class__.to_dict = Mock(return_value={"contents": []})
+        mock_request = GenerateContentRequest(model="synthetic-model")
         
         with patch('traceai_vertexai._wrapper._get_prediction_service_request', return_value=mock_request), \
              patch('traceai_vertexai._wrapper.context_api.get_value', return_value=False), \
@@ -280,8 +279,7 @@ class TestWrapper:
         def mock_function(mock_request):
             return async_result()  # Return coroutine
         
-        mock_request = Mock(spec=proto.Message)
-        mock_request.__class__.to_dict = Mock(return_value={"contents": []})
+        mock_request = GenerateContentRequest(model="synthetic-model")
         
         with patch('traceai_vertexai._wrapper._get_prediction_service_request', return_value=mock_request), \
              patch('traceai_vertexai._wrapper.context_api.get_value', return_value=False), \
@@ -487,7 +485,6 @@ class TestUtilityFunctions:
             "filtered_messages": None,
             "input_images": None,
             "eval_input": "",
-            "query": ""
         }
 
     def test_extract_image_data_with_text(self):
@@ -783,8 +780,7 @@ class TestErrorHandling:
         
         # Should not raise errors
         result = _extract_image_data(malformed_messages)
-        assert isinstance(result, dict)
-        assert "filtered_messages" in result
+        assert result == {}
 
     def test_proxy_with_none_objects(self):
         """Test proxy behavior with None objects."""
@@ -794,6 +790,21 @@ class TestErrorHandling:
         # Test with None callback
         result = _proxy("test", callback=None)
         assert result == "test"
+
+
+class TestInputValueMultiMessage:
+    """Regression: eval_input must keep every message; no query (#151 family)."""
+
+    def test_extract_image_data_joins_all_contents(self):
+        messages = [
+            {"role": "user", "parts": [{"text": "first"}]},
+            {"role": "model", "parts": [{"text": "second"}]},
+            {"role": "user", "parts": [{"text": "third"}]},
+        ]
+        result = _extract_image_data(messages)
+        assert "query" not in result
+        for text in ("first", "second", "third"):
+            assert text in result["eval_input"]
 
 
 if __name__ == "__main__":

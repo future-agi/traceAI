@@ -191,7 +191,9 @@ describe.each(errorPolicies)("provider-stopped stream with %s", (name, config, e
       if (config.hideOutputs) expect(result.exported).not.toContain("partial-answer");
       else {
         expect(result.attributes[S.OUTPUT_VALUE]).toBe("partial-answer");
-        expect(result.wireAttributes[S.RAW_OUTPUT].stringValue).toContain("partial-answer");
+        // The raw response is not recorded while any hide setting is on.
+        if (config.hideInputs) expect(result.wireAttributes[S.RAW_OUTPUT]).toBeUndefined();
+        else expect(result.wireAttributes[S.RAW_OUTPUT].stringValue).toContain("partial-answer");
       }
       if (name === "default") {
         expect(result.span.status.message).toBe(error);
@@ -246,7 +248,7 @@ describe.each([false, true])("structured usage with stream=%s", stream => {
       expectMetrics(result, false);
       if (hideOutputs) {
         expect(result.exported).not.toContain("private-answer");
-        expect(result.attributes[S.RAW_OUTPUT]).toBe("__REDACTED__");
+        expect(result.attributes[S.RAW_OUTPUT]).toBeUndefined();
       } else expect(result.attributes[S.RAW_OUTPUT]).toContain("private-answer");
     });
     it.each(["standard", "x_groq", "split"])("preserves explicit zero %s usage", async source => {

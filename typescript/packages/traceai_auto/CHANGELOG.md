@@ -1,3 +1,32 @@
+## [0.4.2] - 2026-11-20
+
+### Breaking
+- A lone `x-api-key` or `x-secret-key` header (any case, percent-encoded names included) or gRPC metadata entry makes a send key-carrying whatever its value, for HTTP and gRPC alike, and is judged by the same destination rules as a complete pair. A lone key header is not treated as the caller's own header for its own collector.
+- A self-hosted `http://` `FI_BASE_URL` (or `baseUrl`) that sent FI keys in 0.4.1 gets its FI keys refused, so no traces are exported, unless `FI_ALLOW_INSECURE_HTTP=1` or `allowInsecureHttp: true` is set. Literal loopback (`localhost`, `127.0.0.1`, `::1`) keeps working with no setting. A Future AGI host (`futureagi.com`) always needs `https://`; no setting changes that.
+
+### Added
+- `init({ httpsProxy })` and `FI_HTTPS_PROXY` name an SDK-owned https proxy. Exporting behind an https proxy: set `FI_HTTPS_PROXY` (or `httpsProxy` in `init`, which wins over it) to an `http://` or `https://` proxy URL, or start Node with `NODE_USE_ENV_PROXY=1` and set `HTTPS_PROXY` (`https_proxy`, as Node reads it) and `NO_PROXY`, which are read once when the package loads. The SDK opens its own CONNECT tunnel, for https destinations only; the destination's certificate is always verified, and so is the proxy's own for an `https://` proxy. `FI_HTTPS_PROXY` and `httpsProxy` apply whatever `NO_PROXY` says. A proxy URL with any other scheme is refused with `FI_PROXY_UNSUPPORTED`. Credentials in the proxy URL go to the proxy as `Proxy-Authorization` and travel unencrypted to an `http://` proxy. The proxy URL and its credentials are not logged, reported or exported. A send that carries no key goes direct and is not subject to the proxy rules. A plaintext destination is refused with `FI_PLAINTEXT_PROXIED` while a proxy is configured, loopback included. gRPC does not use `FI_HTTPS_PROXY` or `httpsProxy`.
+
+### Changed
+- The Future AGI route sends through the guard in `@traceai/fi-core` 1.4.2: the final URL and headers of every export are judged at the send, an export that cannot be proven direct for a plaintext request is refused with a value-free message, and endpoint logs name the host class only.
+
+### Added
+- `anthropic` also activates when `@anthropic-ai/bedrock-sdk` or `@anthropic-ai/vertex-sdk` is installed.
+
+### Changed
+- Uses `@traceai/fi-core` 1.4.2. `baseUrl` (or `FI_BASE_URL`) is the Future AGI route and gets only the Future AGI headers, sent over TLS to a Future AGI host and in plaintext to loopback only, or to a self-hosted collector when `allowInsecureHttp: true` or `FI_ALLOW_INSECURE_HTTP=1` is set; a collector of your own goes through `init({ provider })` and gets only the headers configured on its exporter.
+- When the base URL comes from a config file or an fi profile, `init()` logs the host it resolved, once and with no other part of the URL. The host logged is the one the exporter dials, resolved by the exporter's own rule; a base URL that is not a full URL resolves to the route `FI_TRACES_URL`, `FI_BASE_URL`, `FI_COLLECTOR_ENDPOINT` or the default selects. Documented in the README.
+- When the Future AGI route refuses the base URL (a plaintext collector without `allowInsecureHttp` / `FI_ALLOW_INSECURE_HTTP=1`, an ambiguous host, an empty host), `init()` warns the refusal, which names the setting to change and no value, in addition to the generic message.
+- `init({ allowInsecureHttp: true })` is passed to the provider as well as the exporter, also when span processors are supplied. A plaintext request that carries FI keys, loopback included, goes direct and not through a proxy; it is refused with `FI_PLAINTEXT_PROXIED` when `NODE_USE_ENV_PROXY=1` was set at process start or an https proxy is configured. A request that carries FI keys does not follow a redirect.
+- Key-carrying sends use `@traceai/fi-core`'s own pinned transport (`undici` 6.29.1): an application's global dispatcher (including one a library such as `@openai/agents` installs), `globalThis.fetch` wrappers, APM wrappers of `fetch`, mocks and polyfills are not used for them and do not see them, and `@traceai/auto` may load before or after any of them. The application's own requests are unaffected: loading the SDK does not change the application's own `fetch`, its global dispatcher or the undici global slot. A send that carries no key goes direct and never reads the proxy setting. TLS verification is always on. A `dispatcher` option on a key-carrying send is refused with `FI_DISPATCHER_UNKNOWN`. Code that runs before the agent loads can still tamper with modules; that is out of scope. Subscribers to undici `diagnostics_channel` events (an APM agent that subscribes to them, for example) can see the request headers of these sends, the keys included.
+- The one-time console warning "Collector export failed" names the refusal code: "Collector export failed: Future AGI keys were not sent (<CODE>). The application will continue." It stays "Collector export failed; the application will continue." when the failure is not a refusal. A refusal's explanatory message goes once per process to the OpenTelemetry diagnostic logger; later refusals log only the code.
+- Reports a clear message when the loaded `@traceai/fi-core` does not provide a compatible Future AGI route.
+
+## [0.4.1] - 2026-11-19
+
+### Changed
+- Depends on `@traceai/fi-core` 1.4.1, which redacts input, output and either-direction content keys and their dotted descendants under `hideInputs` / `hideOutputs`.
+
 ## [0.4.0] - 2026-11-19
 
 ### Added

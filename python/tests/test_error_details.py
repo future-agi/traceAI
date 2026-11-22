@@ -928,7 +928,7 @@ class TestRawAndTemplateKeysFollowHideFlags:
     """hide_inputs also redacts raw.input / the prompt template variables;
     hide_outputs also redacts raw.output (same keys as the TypeScript SDK)."""
 
-    INPUT_KEYS = ["raw.input", "llm.prompt_template.variables", "gen_ai.prompt.template.variables"]
+    INPUT_KEYS = ["llm.prompt_template.variables", "gen_ai.prompt.template.variables"]
 
     @pytest.mark.parametrize("key", INPUT_KEYS)
     def test_hide_inputs_redacts(self, key):
@@ -938,11 +938,10 @@ class TestRawAndTemplateKeysFollowHideFlags:
     def test_hide_outputs_does_not_redact_input_keys(self, key):
         assert TraceConfig(hide_outputs=True).mask(key, SECRET) == SECRET
 
-    def test_hide_outputs_redacts_raw_output(self):
-        assert TraceConfig(hide_outputs=True).mask("raw.output", SECRET) == "__REDACTED__"
-
-    def test_hide_inputs_keeps_raw_output(self):
-        assert TraceConfig(hide_inputs=True).mask("raw.output", SECRET) == SECRET
+    @pytest.mark.parametrize("key", ["raw.input", "raw.output"])
+    @pytest.mark.parametrize("flag", ["hide_inputs", "hide_outputs"])
+    def test_raw_payloads_are_not_recorded_under_either_flag(self, key, flag):
+        assert TraceConfig(**{flag: True}).mask(key, SECRET) is None
 
     @pytest.mark.parametrize("key", ["raw.input", "raw.output", "llm.prompt_template.variables"])
     def test_visible_by_default(self, key):
@@ -957,4 +956,4 @@ class TestRawAndTemplateKeysFollowHideFlags:
         span.end()
         attributes = _only_span(exporter).attributes
         assert SECRET not in str(dict(attributes))
-        assert attributes["raw.input"] == "__REDACTED__"
+        assert "raw.input" not in attributes and "raw.output" not in attributes
