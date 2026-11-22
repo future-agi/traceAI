@@ -410,6 +410,53 @@ class CapturedValueTest {
         assertTrue(shown.endsWith(CapturedValue.CUT), shown);
     }
 
+    /**
+     * A token whose run continues past the whole read window is never matched, so nothing replaced it: what the cut kept of it must
+     * be dropped, not shown. The tokens below start before the cut and run on for much more than the reach plus the margin.
+     */
+    @Test void aJwtThatStartsBeforeTheCutAndRunsFarPastTheReadLeavesNoByte() {
+        String sig = "c".repeat(100);
+        String normalHeader = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        String normalPayload = "eyJzdWIiOiIxMjM0NTY3ODkwIn0";
+        Map<String, String> tokens = new LinkedHashMap<>();
+        tokens.put("a 40 KB header", "eyJ" + "a".repeat(40_000) + "." + normalPayload + "." + sig);
+        tokens.put("a 40 KB payload", normalHeader + "." + "eyJ" + "b".repeat(40_000) + "." + sig);
+        tokens.put("a 40 KB header of mixed run characters", "eyJ" + "aB-_".repeat(10_000) + "." + normalPayload + "." + sig);
+        tokens.put("a header that never meets a dot", "eyJ" + "a".repeat(40_000));
+        int checked = 0;
+        for (Map.Entry<String, String> token : tokens.entrySet()) {
+            for (int budget : new int[] {16, 200, 1000, 4096}) {
+                for (int before : new int[] {0, 1, 3, 40, budget / 2, budget - 4}) {
+                    int lead = Math.max(budget - before, 0);
+                    // The filler ends in a space, so the token starts at a word boundary.
+                    String filler = lead == 0 ? "" : "f ".repeat(lead / 2 + 1).substring(0, lead - 1) + " ";
+                    for (String start : new String[] {"", "Bearer "}) {
+                        String value = filler + start + token.getValue();
+                        String shown = String.valueOf(CapturedValue.of(value, budget));
+                        String label = token.getKey() + ", budget " + budget + ", token starts " + before + " characters before the cut";
+                        assertFalse(shown.contains("eyJ"), label + ": " + shown);
+                        assertFalse(shown.contains("aaaa") || shown.contains("bbbb") || shown.contains("aB-_"), label + ": " + shown);
+                        assertTrue(shown.endsWith(CapturedValue.CUT), label + ": " + shown);
+                        checked++;
+                    }
+                }
+            }
+        }
+        assertTrue(checked >= 192, "" + checked);
+    }
+
+    /** An annotated method argument that holds a 40 KB JWT reaches the span with no byte of it, at the default budget too. */
+    @Test void anArgumentHoldingA40KbJwtLeavesNoByteInTheCapturedValue() {
+        String jwt = "eyJ" + "a".repeat(40_000) + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0." + "c".repeat(100);
+        for (String value : List.of(jwt, "Bearer " + jwt, "{\"token\":\"" + jwt + "\"}", "x".repeat(30_000) + " " + jwt)) {
+            for (long budget : new long[] {70_000, 20_000, 4_096}) {
+                String shown = String.valueOf(CapturedValue.of(value, budget));
+                assertFalse(shown.contains("eyJ"), "budget " + budget + ": " + shown.substring(0, Math.min(shown.length(), 120)));
+                assertFalse(shown.contains("aaaa"), "budget " + budget + ": " + shown.substring(0, Math.min(shown.length(), 120)));
+            }
+        }
+    }
+
     // ---- value shapes scan in linear time on the application thread ------------------------------------------------------------
 
     private static final Map<String, String> REPEATED_STARTS = new LinkedHashMap<>();
@@ -455,8 +502,75 @@ class CapturedValueTest {
         }
     }
 
+    /** The catalog's unbounded JWT pattern, run by the backtracking engine, is the reference for the linear scan. */
+    private static final String JWT_REFERENCE = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}";
+    private static final java.util.regex.Pattern JWT_REFERENCE_PATTERN = java.util.regex.Pattern.compile(JWT_REFERENCE);
+
+    private static String reference(String input) {
+        return JWT_REFERENCE_PATTERN.matcher(input).replaceAll(java.util.regex.Matcher.quoteReplacement("<redacted>"));
+    }
+
+    private static void same(String input) { assertEquals(reference(input), PrivacyCatalog.INSTANCE.scrubValueShapes(input), input.length() > 200 ? "length " + input.length() : input); }
+
+    @Test void theJwtScanMatchesTheReferenceOnJwtLikeTextBrokenAtEveryPosition() {
+        String[] bases = {
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl",
+            "eyJabcdefgh.abcdefgh.abcdefgh",
+            "eyJabcdefgh-_.ab_-cdefgh.a-b_cdefg",
+            "x-eyJabcdefg.abcdefgh.abcdefgh.eyJabcdefgh.abcdefgh.abcdefgh-",
+            "eyJ-eyJ-eyJabcdefgh.eyJabcdefgh.abcdefgh.abcdefgh"};
+        String[] breaks = {" ", "!", ".", "-", "_", "\u00e9", "\u0660", "\u00df", "\ud83d\ude00", "\n", "x", "", "eyJ"};
+        int checked = 0;
+        for (String base : bases) {
+            for (int i = 0; i <= base.length(); i++) {
+                for (String change : breaks) {
+                    if (i < base.length()) { same(base.substring(0, i) + change + base.substring(i + 1)); checked++; } // one character replaced (or removed)
+                    same(base.substring(0, i) + change + base.substring(i)); checked++;                                // one character inserted: a dot added, or a break
+                }
+            }
+            for (int i = 0; i < base.length(); i++) if (base.charAt(i) == '.') { same(base.substring(0, i) + base.substring(i + 1)); checked++; } // a dot removed
+        }
+        assertTrue(checked > 1000, "" + checked);
+    }
+
+    @Test void theJwtScanMatchesTheReferenceOnRunsMixingDotsDashesAndUnderscoresAndNonAsciiLetters() {
+        String[] pieces = {"eyJ", "eyJaaaaaaaa", "eyJaaaaaaaa", "aaaaaaaa", "aaaaaaaa", ".", ".", ".", "-", "_", "-_", ".-", "-.", "_.", "eyJ-", "eyJ_", "eyJ.", "\u00e9", "\u00e9eyJ", "eyJ\u00e9", "\u00c9", "\u4e2d", "\u0660eyJ", " "};
+        java.util.Random random = new java.util.Random(31337);
+        int replaced = 0;
+        for (int round = 0; round < 20_000; round++) {
+            StringBuilder builder = new StringBuilder();
+            for (int n = random.nextInt(24) + 1; n > 0; n--) builder.append(pieces[random.nextInt(pieces.length)]);
+            String input = builder.toString();
+            if (!reference(input).equals(input)) replaced++;
+            same(input);
+        }
+        assertTrue(replaced > 50, "the generator must produce replacements: " + replaced);
+        // A non-ASCII letter next to eyJ: the word boundary is the engine's own on every Java version.
+        for (String input : List.of("\u00e9eyJabcdefgh.abcdefgh.abcdefgh", "eyJabcdefgh.abcdefgh.abcdefgh\u00e9", "\u00c9eyJabcdefgh.abcdefgh.abcdefgh", "-eyJabcdefgh.abcdefgh.abcdefgh", "_eyJabcdefgh.abcdefgh.abcdefgh", "\u0660eyJabcdefgh.abcdefgh.abcdefgh")) same(input);
+    }
+
+    @Test void theJwtScanMatchesTheReferenceOnOneLargeInput() {
+        // About 50,000 characters: the backtracking reference reads every start's run again (quadratic), so this is about as large as it
+        // finishes in a second or two (100,000 characters take it about 6 s).
+        StringBuilder builder = new StringBuilder();
+        java.util.Random random = new java.util.Random(99);
+        String[] pieces = {"eyJ-", "eyJ.eyJ-", "eyJabcdefgh.", "abcdefgh.", "eyJabcdefgh.abcdefgh.abcdefgh", "-", ".", "\u00e9"};
+        builder.append("eyJ-".repeat(LARGE / 4)).append(".").append("eyJ.eyJ-".repeat(LARGE / 16)).append(" ");
+        while (builder.length() < 2 * LARGE) builder.append(pieces[random.nextInt(pieces.length)]);
+        String input = builder.toString();
+        long begin = System.nanoTime();
+        String expected = reference(input);
+        long referenceMs = (System.nanoTime() - begin) / 1_000_000;
+        begin = System.nanoTime();
+        String actual = PrivacyCatalog.INSTANCE.scrubValueShapes(input);
+        System.out.println("TIMING large differential length=" + input.length() + " referenceMs=" + referenceMs + " scanMs=" + (System.nanoTime() - begin) / 1_000_000);
+        assertNotEquals(input, expected);
+        assertEquals(expected, actual);
+    }
+    private static final int LARGE = 25_000;
+
     @Test void theJwtShapeReplacesTheSameTextAsTheCatalogPattern() {
-        java.util.regex.Pattern catalog = java.util.regex.Pattern.compile("\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b");
+        java.util.regex.Pattern catalog = java.util.regex.Pattern.compile(JWT_REFERENCE);
         String[] pieces = {"eyJ", "eyJaaaaaaaa", "aaaaaaaa", ".", ".", "-", "-", " ", "_", "x", "eyJ-"};
         java.util.Random random = new java.util.Random(7);
         PrivacyCatalog catalogUnderTest = PrivacyCatalog.INSTANCE;

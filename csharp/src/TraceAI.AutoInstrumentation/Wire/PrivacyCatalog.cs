@@ -23,10 +23,18 @@ internal static class PrivacyCatalog
     private static readonly Regex[] ContextExclusions=Credentials["contextual_exclusions"]!.AsArray().Select(n=>Rx(n!["path_regex"]!.GetValue<string>())).ToArray();
     // Credential-shaped values are redacted wherever they appear in exported text,
     // independent of names. They never exempt anything.
-    private static readonly Regex[] ValueShapes=Credentials["value_shapes"]!.AsArray().Select(n=>n!["flags"]!.GetValue<string>() switch {
-        ""=>Rx(n["regex"]!.GetValue<string>()),
-        "i"=>new Regex(n["regex"]!.GetValue<string>(),RegexOptions.CultureInvariant|RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(250)),
-        _=>throw new InvalidDataException("Unsupported value shape flags")
+    // The jwt shape is scanned by JwtScan.Replace (exactly equivalent to its catalog regex, in time linear in the text); every other
+    // shape runs as its catalog regex. A jwt regex that differs from the one JwtScan implements runs as a regex.
+    private const string JwtRegex=@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}";
+    private static readonly Func<string,string>[] ValueShapes=Credentials["value_shapes"]!.AsArray().Select<JsonNode?,Func<string,string>>(n=>{
+        string pattern=n!["regex"]!.GetValue<string>(), flags=n["flags"]!.GetValue<string>();
+        if(flags=="" && n["id"]?.GetValue<string>()=="jwt" && pattern==JwtRegex) return JwtScan.Replace;
+        Regex rule=flags switch {
+            ""=>Rx(pattern),
+            "i"=>new Regex(pattern,RegexOptions.CultureInvariant|RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(250)),
+            _=>throw new InvalidDataException("Unsupported value shape flags")
+        };
+        return v=>rule.Replace(v,Redacted);
     }).ToArray();
     private static readonly HashSet<string> Signed=Strings(Catalog["signed_url"]!["parameters"]!).Select(Normalize).ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<char> Alphabet=Media["base64_alphabet"]!.GetValue<string>().ToHashSet();
@@ -233,7 +241,7 @@ internal static class PrivacyCatalog
         value=ReplaceSecrets(value,secrets);
         // Known secrets are replaced first, then the credential value shapes on the result, in this one call. A pass that does not
         // replace known secrets (shapes: false) never runs a shape on text that still holds one.
-        if(shapes) foreach(var shape in ValueShapes) value=shape.Replace(value,Redacted);
+        if(shapes) foreach(var shape in ValueShapes) value=shape(value);
         return value;
     }
     /// <summary>Replaces every occurrence of every known secret (eight or more characters). Occurrences that overlap or contain

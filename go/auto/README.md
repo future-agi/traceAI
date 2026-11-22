@@ -421,7 +421,7 @@ value-length limit scrubbed like any other cut value), while token usage/limits,
 throughput names (`time_to_first_token`, `tokens_per_second`, ...) and key
 identifiers retain the catalog's explicit, component-local exemptions. A `token`
 field inside logprobs is redacted like any other token field. Catalog value
-shapes (long `sk-` keys, AWS access key IDs, JWTs, `Bearer`/`Basic` values and
+shapes (long `sk-` keys, AWS access key IDs, JWTs (a signature ending in `-` is replaced whole), `Bearer`/`Basic` values and
 private-key PEM blocks) are redacted in any text, whatever the key; the
 `Bearer`/`Basic` shape is case-insensitive, so `basic` followed by a word of
 eight or more letters is redacted too. The exact usage counters the catalog

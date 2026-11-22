@@ -211,13 +211,12 @@ def test_a_query_name_past_the_path_limits_keeps_no_value():
 
 # Every value shape in the catalog, read for the work Python's backtracking engine can do on it,
 # with the text that makes it do the most. Each scan must finish well inside SCAN_BOUND seconds; the
-# bounded scans take milliseconds.
-# - provider-api-key, \bsk-[A-Za-z0-9_-]{20,}\b: a start whose run has no word boundary 20 or more
-#   characters on walks that run back; at most seven starts in one run can fail that way.
+# scans take milliseconds.
+# - provider-api-key, \bsk-[A-Za-z0-9_-]{20,}: no trailing boundary, so the run is taken once, greedily,
+#   and nothing walks back.
 # - aws-access-key, \b(?:AKIA|ASIA)[A-Z0-9]{16}\b: a fixed length after the prefix, nothing to walk back.
-# - jwt, \beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b: a start whose run is not
-#   followed by a dot walks the whole run back, and every "eyJ" after a hyphen starts again in the
-#   same run, so the work grows with the square of the run.
+# - jwt, \beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}: every part is unbounded, so the
+#   SDK scans it by dot-separated segments, each read a constant number of times.
 # - authorization-value, \b(?:Bearer|Basic)\s+[A-Za-z0-9+/_=-]{8,}: the spaces after the keyword are
 #   walked back once, for that keyword only.
 # - private-key-pem: a lazy scan to the END line or the end of the text, which always matches, once
@@ -230,8 +229,8 @@ LETTER = "\N{LATIN SMALL LETTER E WITH ACUTE}"
 WORST_CASES = {
     "jwt": ("eyJ-" * 25000, None),
     "jwt-after-a-first-segment": ("eyJabcdefgh." + "eyJ-" * 25000, None),
-    "provider-api-key": ("sk-" * 7 + "a" * 100000 + LETTER, None),
-    "provider-api-key-hyphens": ("sk-" + "-" * 100000, None),
+    "provider-api-key": ("sk-" * 7 + "a" * 100000 + LETTER, "<redacted>" + LETTER),
+    "provider-api-key-hyphens": ("sk-" + "-" * 100000, "<redacted>"),
     "aws-access-key": ("AKIA" * 25000, None),
     "authorization-value": (("Bearer" + " " * 1000 + "!") * 100, None),
     "private-key-pem": ("-----BEGIN PRIVATE KEY-----" + "-----END PRIVATE KEY----x" * 4000, "<redacted>"),

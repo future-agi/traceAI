@@ -257,6 +257,11 @@ const currentCatalogSource = readFileSync(join(__dirname, "..", "privacy.json"),
 // Strip each additive declaration section explicitly; neither belongs to 1.2.0.
 let catalogSource = replaceSection(currentCatalogSource, '    "video": {\n', '    "audio": {\n', "");
 catalogSource = replaceSection(catalogSource, '    "image": {\n', '    "audio": {\n', "");
+// Linear-time credential shapes (sk-, jwt) changed two catalog regexes after this oracle was pinned.
+// Restore the pinned spellings so the BASE hashes still describe the oracle's baseline.
+catalogSource = catalogSource
+  .replace('"\\\\bsk-[A-Za-z0-9_-]{20,}"', '"\\\\bsk-[A-Za-z0-9_-]{20,}\\\\b"')
+  .replace('"\\\\beyJ[A-Za-z0-9_-]{8,}\\\\.[A-Za-z0-9_-]{8,}\\\\.[A-Za-z0-9_-]{8,}"', '"\\\\beyJ[A-Za-z0-9_-]{8,}\\\\.[A-Za-z0-9_-]{8,}\\\\.[A-Za-z0-9_-]{8,}\\\\b"');
 const catalog = JSON.parse(currentCatalogSource);
 const MAX_TEXT: number = catalog.limits.max_text_chars;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -273,6 +278,38 @@ releasedSource = replaceSection(releasedSource, "    image: {", "    audio: {", 
 // The pinned section also replaces the new video branch inside hint().
 releasedSource = replaceSection(releasedSource, "// The third bit is a complete, non-media MIME discriminator.", "const zeroDetailDeferral:", RELEASED_IMAGE_HINTS);
 releasedSource = replaceSection(releasedSource, "    if (declaredImagePayload(path, hints)", "    if (magic(value))", "");
+// Linear-time prose-assignment scan (nextAssignment): restore the single-regex scan the pins describe.
+function restoreAssignmentScan(input: string): string {
+  let out = replaceSection(input, "/**\n * Next `name", "/** Text assignments use the same catalog predicate", "");
+  const swaps: [string, string][] = [
+    ["  for (let match: ReturnType<typeof nextAssignment>, next = 0; (match = nextAssignment(value, next));) {\n    next = match.lastIndex;", "  for (let match: RegExpExecArray | null; (match = assignment.exec(value));) {"],
+    ["const name = match.name;", "const name = match[1];"],
+    ["const start = match.lastIndex;", "const start = assignment.lastIndex;"],
+    ["    next = end;\n", "    assignment.lastIndex = end;\n"],
+    ["function scrubAssignments(value: string, owners: readonly TextOwner[] = []): string {\n", "function scrubAssignments(value: string, owners: readonly TextOwner[] = []): string {\n  const assignment = /\\b([A-Za-z_][A-Za-z0-9_.-]*)([\"']?)\\s*[:=]\\s*/g;\n"],
+  ];
+  for (const [from, to] of swaps) {
+    if (input.split(from).length !== 2) throw new Error("Privacy oracle source boundary drift");
+    out = out.replace(from, () => to);
+  }
+  return out;
+}
+releasedSource = restoreAssignmentScan(releasedSource);
+// Linear-time jwt scan (replaceJwt): restore the plain per-shape regex loop the pins describe.
+function restoreJwtScan(input: string): string {
+  let out = replaceSection(input, "const isRunCode =", "function bareMedia(", "");
+  out = replaceSection(out, "const JWT_SHAPE =", "const valueShapes", "");
+  const swaps: [string, string][] = [
+    ["const valueShapes: (RegExp | ((value: string) => string))[] = catalog.credentials.value_shapes.map(item =>\n  item.id === \"jwt\" && item.regex === JWT_SHAPE && item.flags === \"\" ? replaceJwt : new RegExp(item.regex, item.flags + \"g\"));", "const valueShapes = catalog.credentials.value_shapes.map(item => new RegExp(item.regex, item.flags + \"g\"));"],
+    ["value = typeof shape === \"function\" ? shape(value) : value.replace(shape, replacement);", "value = value.replace(shape, replacement);"],
+  ];
+  for (const [from, to] of swaps) {
+    if (out.split(from).length !== 2) throw new Error("Privacy oracle source boundary drift");
+    out = out.replace(from, () => to);
+  }
+  return out;
+}
+releasedSource = restoreJwtScan(releasedSource);
 if (digest(releasedSource) !== RELEASED_RUNTIME_SHA256) throw new Error("Privacy oracle no longer reconstructs the 1.2.0 runtime");
 let parentSource = replaceSection(releasedSource, "// A warm identity is not proof", "function knownSecretText(", "");
 parentSource = replaceSection(parentSource, "const DISCOVERY_URLS =", "const dataText =", "");

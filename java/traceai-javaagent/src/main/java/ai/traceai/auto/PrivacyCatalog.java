@@ -13,10 +13,16 @@ final class PrivacyCatalog {
         "\\b(?:Negotiate|NTLM)\\s+[A-Za-z0-9+/_=-]{8,}",
         "\\bDigest\\s+" + DIGEST_PARAMETER + "(?:\\s{0,4},\\s{0,4}" + DIGEST_PARAMETER + "){0,31}");
     // Declared before INSTANCE: the constructor reads them.
-    /** The catalog's JWT shape, with the first two segments possessive (the run before a dot is never given back). */
-    private static final String JWT_CATALOG = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b";
-    private static final String JWT_LINEAR = "\\beyJ[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}\\b";
+    /**
+     * The catalog's JWT shape, whose three runs have no upper bound. It is not matched by the regex engine: the classes exclude the dot, so
+     * each run is fixed by where it starts, and {@link #replaceJwts} reads them directly, in time linear in the text. The regex
+     * {@link #JWT_START} only finds a start (the engine's own word boundary before {@code eyJ}).
+     */
+    private static final String JWT_SHARED = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}";
     private static final Pattern JWT_START = Pattern.compile("\\beyJ");
+    /** A catalog shape: {@code jwt} when it is the JWT shape, scanned by {@link #replaceJwts} instead of by the engine. */
+    private record Shape(Pattern pattern, boolean jwt) {}
+    private static boolean runCharacter(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'; }
     static final PrivacyCatalog INSTANCE = new PrivacyCatalog();
     private final List<String> credentialPatterns;
     private final List<Exclusion> exclusions = new ArrayList<>();
@@ -33,15 +39,6 @@ final class PrivacyCatalog {
     private final int prefixBytes, threshold;
     final int maxDepth, maxNodes, maxText;
     private record Exclusion(Pattern regex, List<String> guards) {}
-    /**
-     * A credential value shape. {@code start} is set for a shape whose start can sit inside the run of characters it then reads: a start
-     * that fails has read that whole run, and every later start in the same run would read it again and fail the same way, so the scan
-     * continues after the run and the work stays linear in the text.
-     */
-    private record Shape(Pattern pattern, Pattern start) {
-        Shape(Pattern pattern) { this(pattern, null); }
-    }
-    private static boolean runCharacter(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'; }
     private record MagicTest(int offset, byte[] expected, byte[] mask) {}
     /** image is extra image evidence (image type, modality or MIME): it only widens omission. */
     record Hint(boolean media, boolean audio, boolean image) {
@@ -74,11 +71,11 @@ final class PrivacyCatalog {
             if (!flags.replace("i", "").isEmpty()) throw new IllegalStateException("Unsupported value-shape flags: " + flags);
             String regex = WireCore.str(WireCore.get(rule, "regex"));
             int options = flags.contains("i") ? Pattern.CASE_INSENSITIVE : 0;
-            valueShapes.add(JWT_CATALOG.equals(regex) && options == 0 ? new Shape(Pattern.compile(JWT_LINEAR), JWT_START) : new Shape(Pattern.compile(regex, options)));
+            valueShapes.add(JWT_SHARED.equals(regex) && options == 0 ? new Shape(null, true) : new Shape(Pattern.compile(regex, options), false));
         }
         // Authorization schemes with no name in front of them, besides the catalog's Bearer and Basic: Negotiate and NTLM carry a token, Digest a
         // comma-separated list of name=value parameters.
-        for (String shape : AUTHORIZATION_SHAPES) valueShapes.add(new Shape(Pattern.compile(shape, Pattern.CASE_INSENSITIVE)));
+        for (String shape : AUTHORIZATION_SHAPES) valueShapes.add(new Shape(Pattern.compile(shape, Pattern.CASE_INSENSITIVE), false));
         for (Object container : WireCore.list(WireCore.get(catalog.get("scalar_metrics"), "containers"))) {
             boolean typed = "nonnegative_safe_integer".equals(WireCore.get(container, "value_type"));
             for (Object key : WireCore.list(WireCore.get(container, "keys"))) scalarMetrics.merge((String)key, typed, Boolean::logicalOr);
@@ -284,34 +281,45 @@ final class PrivacyCatalog {
     /** Credential value shapes apply to every exported string after registered secrets, independently of names. */
     String scrubValueShapes(String text) {
         for (Shape shape : valueShapes) {
-            if (shape.start() != null) { text = replaceRunStarts(shape, text); continue; }
+            if (shape.jwt()) { text = replaceJwts(text); continue; }
             Matcher matcher = shape.pattern().matcher(text);
             if (matcher.find()) text = matcher.replaceAll(Matcher.quoteReplacement(replacement));
         }
         return text;
     }
-    /** The replacements {@code replaceAll} would make for the shape, with a failed start skipping the rest of the run it read. */
-    private String replaceRunStarts(Shape shape, String text) {
-        Matcher starts = shape.start().matcher(text);
-        Matcher whole = shape.pattern().matcher(text).useTransparentBounds(true).useAnchoringBounds(false);
+    /**
+     * The replacements {@code replaceAll} makes for the JWT shape. A start is an {@code eyJ} at a word boundary; its three runs are the maximal
+     * runs of {@code [A-Za-z0-9_-]} (the dot is not in the class, so nothing is ever given back), each of at least eight characters after
+     * {@code eyJ}, and the match ends at the end of the third run. Every start inside the same first run reads the same later runs, so when a
+     * start fails the scan continues after its first run; after a match it continues after the match. Each run is read a bounded number of times.
+     */
+    private String replaceJwts(String text) {
+        Matcher starts = JWT_START.matcher(text);
         StringBuilder out = null;
         int copied = 0, from = 0, length = text.length();
         while (from < length && starts.find(from)) {
             int start = starts.start();
-            whole.region(start, length);
-            if (whole.lookingAt()) {
+            int first = runEnd(text, start + 3), second = -1, third = -1;
+            if (first - (start + 3) >= 8 && first < length && text.charAt(first) == '.') {
+                second = runEnd(text, first + 1);
+                if (second - (first + 1) >= 8 && second < length && text.charAt(second) == '.') {
+                    third = runEnd(text, second + 1);
+                    if (third - (second + 1) < 8) third = -1;
+                }
+            }
+            if (third > 0) {
                 if (out == null) out = new StringBuilder(length);
                 out.append(text, copied, start).append(replacement);
-                copied = whole.end();
-                from = Math.max(copied, start + 1);
-            } else {
-                int end = start;
-                while (end < length && runCharacter(text.charAt(end))) end++;
-                from = Math.max(end, start + 1);
-            }
+                copied = third;
+                from = third;
+            } else from = first;
         }
-        if (out == null) return text;
-        return out.append(text, copied, length).toString();
+        return out == null ? text : out.append(text, copied, length).toString();
+    }
+    private static int runEnd(String text, int from) {
+        int end = from, length = text.length();
+        while (end < length && runCharacter(text.charAt(end))) end++;
+        return end;
     }
     /**
      * A declared usage/byte counter (exact complete key) keeps its scalar role, although its spelling

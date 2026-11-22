@@ -142,6 +142,9 @@ final class CapturedValue {
             // past the end of the read and so not match. Fail closed: drop the trailing token that could start one, and the scheme word
             // before it; the text is marked truncated.
             if (reach < value.length() && read.length() - end < SHAPE_REACH) kept = dropShapePrefix(kept);
+            // A run of token characters that holds a JWT start and goes on to the end of the read is not matched when the token is longer than
+            // the read (a header that meets no dot, a payload that meets no second dot): the part before the cut is dropped with the whole run.
+            if (reach < value.length()) kept = dropOpenRun(read, end, kept);
             kept = kept.substring(0, kept.length() - snapshot.trailingPartial(kept));
             // A cut that lands inside a placeholder drops the part of it.
             int open = kept.lastIndexOf('<');
@@ -172,6 +175,27 @@ final class CapturedValue {
                 && (word == scheme.length() || !tokenChar(kept.charAt(word - scheme.length() - 1)))) { end = word - scheme.length(); break; }
         }
         return kept.substring(0, end);
+    }
+
+    private static boolean runChar(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-'; }
+
+    /**
+     * When the read stopped before the end of the value and the run of {@code [A-Za-z0-9_.-]} at the cut goes on to the end of the read,
+     * that run may be the start of a token the read could not complete. If it holds {@code eyJ} at a word boundary the whole run is cut
+     * from {@code kept}, which is then shorter than the budget; more than the token may go, and not less.
+     */
+    private static String dropOpenRun(String read, int end, String kept) {
+        int stop = end;
+        while (stop < read.length() && runChar(read.charAt(stop))) stop++;
+        if (stop != read.length()) return kept;
+        int start = end;
+        while (start > 0 && runChar(read.charAt(start - 1))) start--;
+        for (int at = read.indexOf("eyJ", start); at >= 0; at = read.indexOf("eyJ", at + 1)) {
+            char before = at == 0 ? ' ' : read.charAt(at - 1);
+            boolean word = before >= 'a' && before <= 'z' || before >= 'A' && before <= 'Z' || before >= '0' && before <= '9' || before == '_';
+            if (!word) return kept.substring(0, Math.min(start, kept.length()));
+        }
+        return kept;
     }
 
     /** An accessor that threw. */
