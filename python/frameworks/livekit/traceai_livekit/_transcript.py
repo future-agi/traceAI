@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from wrapt import ObjectProxy
 
 try:
-    from fi_instrumentation import allows_conversation_transcript
+    from fi_instrumentation.instrumentation.transcript import allows_conversation_transcript
 except ImportError:
     def allows_conversation_transcript(config: TraceConfig) -> bool:
         return not (
