@@ -15,7 +15,9 @@ from fi_instrumentation.instrumentation.context_attributes import (
     using_simulator_attributes,
 )
 from fi_instrumentation.instrumentation.helpers import safe_json_dumps
-from fi_instrumentation.instrumentation.transcript import allows_conversation_transcript
+# Relative: a source checkout imported as `python.fi_instrumentation` next to an older
+# installed release must still find this module in the same tree.
+from .instrumentation.transcript import allows_conversation_transcript
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
