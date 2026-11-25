@@ -104,14 +104,25 @@ class _TranscriptOnEnd:
                 value = _transcript(span)
                 # Held to the span's own value-length limit. Too long is omitted, never cut:
                 # a truncated JSON prefix is not a transcript.
-                limits = getattr(span, "_limits", None) or SpanLimits()
-                limit = limits.max_span_attribute_length
+                limit = _value_limit(span)
                 if value is not None and (limit is None or len(value) <= limit):
                     span = _TranscriptRoot(span, value)
         except Exception:
             # An unavailable session/API or failed mask omits the transcript, not the span.
             pass
         self.delegate(span)
+
+
+def _value_limit(span: ReadableSpan) -> Optional[int]:
+    """The span's attribute value-length limit; None means unlimited.
+
+    on_end receives a read-only copy without the span's limits, but its attributes keep
+    the limit the provider applied, including one set in code rather than the environment.
+    """
+    attributes = span.attributes
+    if hasattr(attributes, "max_value_len"):
+        return attributes.max_value_len
+    return SpanLimits().max_span_attribute_length
 
 
 def _exporter_of(processor: Any) -> Any:

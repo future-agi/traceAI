@@ -210,3 +210,15 @@ def test_exporter_lookup_matches_the_integration():
     assert _transcript._exporter_of(SimpleNamespace(span_exporter=exporter)) is exporter
     assert _transcript._exporter_of(SimpleNamespace(_exporter=exporter)) is exporter
     assert _transcript._exporter_of(SimpleNamespace()) is None
+
+
+def test_value_limit_comes_from_the_span_attributes_before_the_environment(monkeypatch):
+    from opentelemetry.attributes import BoundedAttributes
+
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "500")
+    in_code = SimpleNamespace(attributes=BoundedAttributes(max_value_len=10, attributes={"a": "b"}))
+    unlimited = SimpleNamespace(attributes=BoundedAttributes(max_value_len=None, attributes={"a": "b"}))
+    plain = SimpleNamespace(attributes={"a": "b"})
+    assert _transcript._value_limit(in_code) == 10
+    assert _transcript._value_limit(unlimited) is None
+    assert _transcript._value_limit(plain) == 500
