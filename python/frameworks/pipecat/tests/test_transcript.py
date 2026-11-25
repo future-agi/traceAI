@@ -40,6 +40,8 @@ def defaults(monkeypatch):
         monkeypatch.setenv("FI_" + flag.upper(), "false")
     monkeypatch.delitem(sys.modules, "fi_instrumentation.auto._manager", raising=False)
     monkeypatch.setitem(sys.modules, OBSERVER, SimpleNamespace(EvalConversationObserver=Observer))
+    # This process installed the hook, as BaseMappedSpanExporter does.
+    monkeypatch.setenv(_transcript._OWNER, str(os.getpid()))
 
 
 @pytest.fixture
@@ -150,3 +152,58 @@ def test_worker_without_tracing_or_native_observer_is_unchanged(monkeypatch):
     untraced.add_observer.assert_not_called()
     monkeypatch.setitem(sys.modules, OBSERVER, None)
     worker(setup=_transcript.setup_pipeline_task).add_observer.assert_not_called()
+
+
+def test_inherited_setup_file_does_nothing_in_a_process_that_did_not_install_it(monkeypatch, span):
+    monkeypatch.setenv(_transcript._OWNER, str(os.getpid() + 1))
+    w = worker(span)
+    w.add_observer.assert_not_called()
+    assert KEY not in span.attributes
+
+
+def test_installing_marks_this_process_as_the_owner(monkeypatch):
+    monkeypatch.delenv(_transcript._OWNER, raising=False)
+    monkeypatch.delenv("PIPECAT_SETUP_FILES", raising=False)
+    _transcript._install_setup_file()
+    assert os.environ[_transcript._OWNER] == str(os.getpid())
+
+
+class WatchedObserver(Observer):
+    async def on_push_frame(self, data):
+        self.frames = getattr(self, "frames", 0) + 1
+
+
+@pytest.mark.parametrize("rotated", [False, True])
+def test_turns_from_another_root_are_never_written(monkeypatch, span, rotated):
+    monkeypatch.setitem(sys.modules, OBSERVER, SimpleNamespace(EvalConversationObserver=WatchedObserver))
+    provider = TracerProvider()
+    earlier = provider.get_tracer(__name__).start_span("conversation")
+    w = worker(earlier if rotated else span)
+    obs = observer(w)
+    asyncio.run(obs.on_push_frame(object()))
+    w.turn_trace_observer._conversation_span = span
+    asyncio.run(obs.on_push_frame(object()))
+    obs.finish(TURNS)
+    assert obs.frames == 2
+    if rotated:
+        assert KEY not in span.attributes
+    else:
+        assert json.loads(span.attributes[KEY]) == TURNS
+    earlier.end()
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("limit", [10, None])
+def test_transcript_over_the_span_value_limit_is_omitted_not_cut(limit):
+    from opentelemetry.sdk.trace import SpanLimits
+
+    provider = TracerProvider(span_limits=SpanLimits(max_span_attribute_length=limit))
+    root = provider.get_tracer(__name__).start_span("conversation")
+    w = worker(root)
+    observer(w).finish(TURNS)
+    if limit is None:
+        assert json.loads(root.attributes[KEY]) == TURNS
+    else:
+        assert KEY not in root.attributes
+    root.end()
+    provider.shutdown()
