@@ -17,6 +17,7 @@ from typing import Any, List, Optional
 from fi_instrumentation.otel import Transport
 from opentelemetry import trace as trace_api
 
+from ._transcript import _enable_transcripts
 from .exporters import MappedGRPCSpanExporter, MappedHTTPSpanExporter
 
 logger = logging.getLogger(__name__)
@@ -259,7 +260,7 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
         True if at least one exporter was swapped; False otherwise.
     """
     provider = trace_api.get_tracer_provider()
-    swapped_any = False
+    mapped_processors = []
 
     active = getattr(provider, "_active_span_processor", None)
     if not active:
@@ -309,7 +310,7 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
                     elif hasattr(proc, "_exporter"):
                         setattr(proc, "_exporter", new_exporter)
 
-                    swapped_any = True
+                    mapped_processors.append((proc, new_exporter))
                     logger.info("Replaced HTTP exporter with mapped LiveKit HTTP exporter")
 
             elif transport == Transport.GRPC:
@@ -335,7 +336,7 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
                     elif hasattr(proc, "_exporter"):
                         setattr(proc, "_exporter", new_exporter)
 
-                    swapped_any = True
+                    mapped_processors.append((proc, new_exporter))
                     logger.info("Replaced gRPC exporter with mapped LiveKit gRPC exporter")
 
         except ImportError as e:
@@ -345,7 +346,7 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
             logger.warning(f"Failed to replace exporter: {e}")
             continue
 
-    if not swapped_any:
+    if not mapped_processors:
         logger.warning(f"No {transport.value} exporters found to replace")
     
     # On fi-instrumentation-otel 1.1.0 and earlier, `register()` marks its own exporter as a default
@@ -359,6 +360,8 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
     try:
         from livekit.agents.telemetry import set_tracer_provider
         set_tracer_provider(provider)
+        for processor, exporter in mapped_processors:
+            _enable_transcripts(processor, exporter)
         logger.info("Automatically configured LiveKit agents tracer provider")
     except ImportError:
         logger.warning("livekit.agents.telemetry not found. Skipping set_tracer_provider.")
@@ -367,7 +370,7 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
 
     flush_on_job_shutdown(provider)
 
-    return swapped_any
+    return bool(mapped_processors)
 
 
 def enable_http_attribute_mapping() -> bool:

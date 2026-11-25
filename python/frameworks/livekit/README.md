@@ -47,6 +47,12 @@ drops the Future AGI exporter. LiveKit installs its privacy filter once per prov
 ignored. To keep conversation content out of your traces, set `LIVEKIT_TELEMETRY_ALLOW_PII=false` before calling `enable_*`
 (livekit-agents 1.8 and later).
 
+### Conversation turns on the call root
+
+With livekit-agents 1.8.6, `enable_*` includes the primary session’s committed user and assistant turns in `fi.conversation.transcript` on the Future AGI copy of a parentless `job_entrypoint` or `agent_session`. These are LiveKit’s history entries, including interrupted replies, not a guarantee of what was audible. LiveKit PII opt-out, project or session redaction, or any FI input/output content hide flag omits the transcript.
+
+If LiveKit Cloud already started the job root on its own provider, enabling mapping inside the entrypoint is too late for that root. To capture it, run the existing `register()` and `enable_*` setup in the **job process before the job starts**. The integration does not substitute a child or `job_shutdown` for a missing root, or look up a standalone session outside a job.
+
 ### Flushing at the end of a job
 
 On Linux a LiveKit job process ends without running `atexit`, and LiveKit flushes only its own processors, so the spans
