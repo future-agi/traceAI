@@ -15,6 +15,7 @@ from fi_instrumentation.instrumentation.context_attributes import (
     using_simulator_attributes,
 )
 from fi_instrumentation.instrumentation.helpers import safe_json_dumps
+from fi_instrumentation.instrumentation.transcript import allows_conversation_transcript
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
@@ -47,6 +48,7 @@ __all__ = [
     "using_user",
     "using_simulator_attributes",
     # Helpers and config
+    "allows_conversation_transcript",
     "safe_json_dumps",
     "suppress_tracing",
     "TraceConfig",

@@ -46,6 +46,11 @@ from typing import Any, Dict, Mapping, Optional
 
 from fi_instrumentation import TraceConfig
 
+try:
+    from fi_instrumentation import allows_conversation_transcript
+except ImportError:  # Older supported core versions provide only TraceConfig.
+    allows_conversation_transcript = None
+
 INPUT_FLAGS = ("hide_inputs", "hide_input_messages", "hide_input_text")
 OUTPUT_FLAGS = ("hide_outputs", "hide_output_messages", "hide_output_text")
 
@@ -171,7 +176,9 @@ class Capture:
 
     @property
     def everything(self) -> bool:
-        return self.input and self.output
+        if not (self.input and self.output):
+            return False
+        return allows_conversation_transcript is None or allows_conversation_transcript(self.config)
 
     def allows(self, cls_: str) -> bool:
         if cls_ == SAFE:
