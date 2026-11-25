@@ -52,7 +52,6 @@ from .context_attributes import (
     using_simulator_attributes,
 )
 from .helpers import safe_json_dumps
-from .transcript import allows_conversation_transcript
 
 
 __all__ = [
@@ -64,7 +63,6 @@ __all__ = [
     "using_tags",
     "using_user",
     "using_simulator_attributes",
-    "allows_conversation_transcript",
     "safe_json_dumps",
     "suppress_tracing",
     "TraceConfig",

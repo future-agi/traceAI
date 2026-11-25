@@ -1,6 +1,7 @@
 import pytest
 
-from fi_instrumentation import TraceConfig, allows_conversation_transcript
+from fi_instrumentation import TraceConfig
+from fi_instrumentation.instrumentation.transcript import allows_conversation_transcript
 
 
 CONTENT_FLAGS = (
