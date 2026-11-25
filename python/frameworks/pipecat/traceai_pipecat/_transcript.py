@@ -8,7 +8,7 @@ from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import SpanAttributes
 
 try:
-    from fi_instrumentation import allows_conversation_transcript
+    from fi_instrumentation.instrumentation.transcript import allows_conversation_transcript
 except ImportError:  # Older core releases use the same six content switches.
     def allows_conversation_transcript(config):
         return not (

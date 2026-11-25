@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import fi_instrumentation
 import pytest
 from fi_instrumentation import TraceConfig
 from opentelemetry.sdk.trace import TracerProvider
@@ -81,7 +80,8 @@ def test_mapping_appends_loadable_hook_once_and_honors_shared_policy(monkeypatch
     assert existing == previous
     assert Path(path).is_absolute()
     policy = Mock(return_value=False)
-    monkeypatch.setattr(fi_instrumentation, "allows_conversation_transcript", policy, raising=False)
+    shared = SimpleNamespace(allows_conversation_transcript=policy)
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.instrumentation.transcript", shared)
     setup = load_setup(Path(path))
     assert asyncio.run(setup.setup_worker_runner(object())) is None
     w = worker(setup=setup.setup_pipeline_worker)
@@ -99,7 +99,8 @@ def test_ordered_root_transcript_discards_tool_rows_and_extra_fields(span):
 
 @pytest.mark.parametrize("flag", FLAGS)
 def test_older_core_hide_flags_prevent_capture(monkeypatch, flag, span):
-    monkeypatch.delattr(fi_instrumentation, "allows_conversation_transcript", raising=False)
+    # None makes the import fail, as on a core release without the helper.
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.instrumentation.transcript", None)
     monkeypatch.setenv("FI_" + flag.upper(), "true")
     w = worker(span, load_setup(Path(_transcript.__file__)).setup_pipeline_worker)
     w.add_observer.assert_not_called()
