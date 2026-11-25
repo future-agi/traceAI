@@ -1,6 +1,7 @@
 """Call-root transcripts through the real LiveKit filter and FI mapping; no network."""
 
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -160,3 +161,52 @@ def test_ineligible_roots_never_read_history(call, monkeypatch, reason):
     root, = call.received
     assert root.attributes["ordinary"] == "kept" and KEY not in root.attributes
     call.messages.assert_not_called()
+
+
+@pytest.mark.parametrize("flag", FLAGS)
+def test_policy_resolved_by_automatic_instrumentation_is_honored(call, monkeypatch, flag):
+    # init(config=) or futureagi.toml hides content while FI_HIDE_* stays unset.
+    manager = SimpleNamespace(_state=SimpleNamespace(trace_config=TraceConfig(**{flag: True})))
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.auto._manager", manager)
+    provider, _ = call.setup()
+    provider.get_tracer("livekit-agents").start_span("job_entrypoint", attributes=ATTRS).end()
+    call.messages.assert_not_called()
+    root, = call.received
+    assert KEY not in root.attributes and root.attributes["ordinary"] == "kept"
+
+
+def test_every_applicable_policy_masks_each_turn(call, monkeypatch):
+    class Route(TraceConfig):
+        def mask(self, key, value):
+            return f"route({value})"
+
+    manager = SimpleNamespace(_state=SimpleNamespace(trace_config=Route()))
+    monkeypatch.setitem(sys.modules, "fi_instrumentation.auto._manager", manager)
+    provider, _ = call.setup()
+    provider.get_tracer("livekit-agents").start_span("job_entrypoint", attributes=ATTRS).end()
+    root, = call.received
+    assert [row["content"] for row in json.loads(root.attributes[KEY])] == [
+        "route(Hello)", "route(One moment)", "route(Thanks)"]
+
+
+@pytest.mark.parametrize("limit", [10, None])
+def test_transcript_over_the_span_value_limit_is_omitted_not_cut(call, monkeypatch, limit):
+    if limit is None:
+        monkeypatch.delenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", raising=False)
+        monkeypatch.delenv("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", raising=False)
+    else:
+        monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", str(limit))
+    provider, _ = call.setup()
+    provider.get_tracer("livekit-agents").start_span("job_entrypoint", attributes=ATTRS).end()
+    root, = call.received
+    if limit is None:
+        assert json.loads(root.attributes[KEY])[0] == {"role": "user", "content": "Hello"}
+    else:
+        assert KEY not in root.attributes and root.attributes["ordinary"] == "kept"
+
+
+def test_exporter_lookup_matches_the_integration():
+    exporter = object()
+    assert _transcript._exporter_of(SimpleNamespace(span_exporter=exporter)) is exporter
+    assert _transcript._exporter_of(SimpleNamespace(_exporter=exporter)) is exporter
+    assert _transcript._exporter_of(SimpleNamespace()) is None

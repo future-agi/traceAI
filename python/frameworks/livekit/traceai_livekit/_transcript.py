@@ -1,12 +1,13 @@
 """Committed LiveKit turns for the Future AGI export copy of a call root."""
 
 import json
-from typing import Any, Optional
+import sys
+from typing import Any, List, Optional
 
 from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits
 from wrapt import ObjectProxy
 
 try:
@@ -17,6 +18,17 @@ except ImportError:
             config.hide_inputs or config.hide_input_messages or config.hide_input_text
             or config.hide_outputs or config.hide_output_messages or config.hide_output_text
         )
+
+
+def _policies() -> List[TraceConfig]:
+    """Every policy that applies: the environment's, plus the configuration automatic
+    instrumentation resolved (init(config=) or futureagi.toml) when it is active."""
+    policies = [TraceConfig()]
+    manager = sys.modules.get("fi_instrumentation.auto._manager")
+    route = getattr(getattr(manager, "_state", None), "trace_config", None)
+    if route is not None:
+        policies.append(route)
+    return policies
 
 
 def _transcript(span: ReadableSpan) -> Optional[str]:
@@ -40,8 +52,8 @@ def _transcript(span: ReadableSpan) -> Optional[str]:
         if root is None or trace.get_current_span(root).get_span_context() != span.context:
             return None
 
-    config = TraceConfig()  # register()/enable_* use the environment's TraceConfig
-    if not allows_conversation_transcript(config):
+    policies = _policies()
+    if not all(allows_conversation_transcript(policy) for policy in policies):
         return None
     turns = []
     for message in session.history.messages():
@@ -52,8 +64,12 @@ def _transcript(span: ReadableSpan) -> Optional[str]:
         if not text or not text.strip():
             continue
         key = SpanAttributes.INPUT_VALUE if role == "user" else SpanAttributes.OUTPUT_VALUE
-        masked = config.mask(key, text)
-        if not isinstance(masked, str) or not masked.strip():
+        masked = text
+        for policy in policies:
+            masked = policy.mask(key, masked)
+            if not isinstance(masked, str):
+                return None
+        if not masked.strip():
             return None
         turns.append({"role": role, "content": masked})
     return json.dumps(turns, ensure_ascii=False) if turns else None
@@ -83,15 +99,24 @@ class _TranscriptOnEnd:
                 span.parent is None
                 and span.name in ("job_entrypoint", "agent_session")
                 and span.instrumentation_scope.name == "livekit-agents"
-                and self.processor.span_exporter is self.exporter
+                and _exporter_of(self.processor) is self.exporter
             ):
                 value = _transcript(span)
-                if value is not None:
+                # Held to the span's own value-length limit. Too long is omitted, never cut:
+                # a truncated JSON prefix is not a transcript.
+                limits = getattr(span, "_limits", None) or SpanLimits()
+                limit = limits.max_span_attribute_length
+                if value is not None and (limit is None or len(value) <= limit):
                     span = _TranscriptRoot(span, value)
         except Exception:
             # An unavailable session/API or failed mask omits the transcript, not the span.
             pass
         self.delegate(span)
+
+
+def _exporter_of(processor: Any) -> Any:
+    exporter = getattr(processor, "span_exporter", None)
+    return exporter if exporter is not None else getattr(processor, "_exporter", None)
 
 
 def _enable_transcripts(processor: Any, exporter: Any) -> None:
