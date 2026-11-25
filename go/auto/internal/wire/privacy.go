@@ -73,18 +73,52 @@ func (b *privacyBudget) take(bytes, depth int) bool {
 
 // PrivacyAttributeString also handles values whose structural key is provided
 // separately by OpenTelemetry rather than inside a serialized JSON object.
-func PrivacyAttributeString(key, value string, secrets []string) string {
-	return PrivacyValue(value, key, nil, secrets).(string)
+func PrivacyAttributeString(key, value string, secrets []string) (out string) {
+	defer func() {
+		if recover() != nil {
+			out = CredentialRedacted
+		}
+	}()
+	return privacyAttributeString(key, value, secrets)
 }
-func PrivacyAttributeStringWithMasker(key, value string, mask func(string) string) string {
-	return PrivacyValueWithMasker(value, key, nil, mask).(string)
+func privacyAttributeString(key, value string, secrets []string) string {
+	return privacyValue(value, key, nil, secrets).(string)
+}
+func PrivacyAttributeStringWithMasker(key, value string, mask func(string) string) (out string) {
+	defer func() {
+		if recover() != nil {
+			out = CredentialRedacted
+		}
+	}()
+	return privacyAttributeStringWithMasker(key, value, mask)
+}
+func privacyAttributeStringWithMasker(key, value string, mask func(string) string) string {
+	return privacyValueWithMasker(value, key, nil, mask).(string)
 }
 
 // PrivacyString is shared by core attributes, status descriptions and OTel
 // context attributes. Untouched JSON retains its original whitespace.
-func PrivacyString(s string, secrets []string) string {
-	return PrivacyValue(s, "", nil, secrets).(string)
+func PrivacyString(s string, secrets []string) (out string) {
+	defer func() {
+		if recover() != nil {
+			out = CredentialRedacted
+		}
+	}()
+	return privacyString(s, secrets)
 }
+func privacyString(s string, secrets []string) string {
+	return privacyValue(s, "", nil, secrets).(string)
+}
+
+// Unguarded runs the same filters as the exported entry points without their
+// recover, for callers in this module. Where a caller has a fallback of its
+// own, that fallback decides what the span keeps.
+var Unguarded = struct {
+	PrivacyString                    func(s string, secrets []string) string
+	PrivacyAttributeStringWithMasker func(key, value string, mask func(string) string) string
+	PrivacyValueWithMasker           func(value any, path string, siblings map[string]any, mask func(string) string) any
+	PrivacyValueFailClosed           func(value any, path string, siblings map[string]any, mask func(string) string, risk MediaRisk) any
+}{privacyString, privacyAttributeStringWithMasker, privacyValueWithMasker, privacyValueFailClosed}
 
 func jsonSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 func stringEnd(s string, start int) int {
@@ -252,9 +286,9 @@ func scrubResult(r *Result, req Request) {
 	}()
 	// Value masking for agent exports waits until S1; structural privacy applies
 	// here too, without replacing a known prefix of a later-discovered secret.
-	r.Name = PrivacyString(r.Name, secrets)
-	r.Description = PrivacyString(r.Description, secrets)
-	clean := PrivacyValue(r.Attributes, "", nil, secrets).(map[string]any)
+	r.Name = privacyString(r.Name, secrets)
+	r.Description = privacyString(r.Description, secrets)
+	clean := privacyValue(r.Attributes, "", nil, secrets).(map[string]any)
 	for key, value := range clean {
 		if original, ok := r.Attributes[key].([]string); ok {
 			if values, ok := value.([]any); ok {
@@ -294,7 +328,7 @@ func privacyResultFallback(attrs map[string]any, secrets []string) (out map[stri
 			}
 		}
 	}
-	clean := PrivacyValue(retained, "", nil, secrets).(map[string]any)
+	clean := privacyValue(retained, "", nil, secrets).(map[string]any)
 	for key, value := range clean {
 		out[key] = value
 	}

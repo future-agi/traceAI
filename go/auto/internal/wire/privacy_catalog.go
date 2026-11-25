@@ -667,10 +667,26 @@ func ImageHint(name, value string) bool {
 // PrivacyValue sanitizes JSON-compatible typed values on a detached copy. The
 // same walk is used for parsed bodies and native OTel trees. Unknown values are
 // represented by their type without invoking String/MarshalJSON/user code.
-func PrivacyValue(value any, path string, siblings map[string]any, secrets []string) any {
+func PrivacyValue(value any, path string, siblings map[string]any, secrets []string) (out any) {
+	defer func() {
+		if recover() != nil {
+			out = CredentialRedacted
+		}
+	}()
+	return privacyValue(value, path, siblings, secrets)
+}
+func privacyValue(value any, path string, siblings map[string]any, secrets []string) any {
 	return privacyWalk(value, path, secrets, newPrivacyBudget(), 0, mediaHint{}, indexHints(siblings, "", nil), true)
 }
-func PrivacyValueWithMasker(value any, path string, siblings map[string]any, mask func(string) string) any {
+func PrivacyValueWithMasker(value any, path string, siblings map[string]any, mask func(string) string) (out any) {
+	defer func() {
+		if recover() != nil {
+			out = CredentialRedacted
+		}
+	}()
+	return privacyValueWithMasker(value, path, siblings, mask)
+}
+func privacyValueWithMasker(value any, path string, siblings map[string]any, mask func(string) string) any {
 	budget := newPrivacyBudget()
 	budget.mask = mask
 	return privacyWalk(value, path, nil, budget, 0, mediaHint{}, indexHints(siblings, "", nil), true)
@@ -702,7 +718,15 @@ func MediaRiskScope(key string) string { return hintParent(key) }
 // value under a catalog media-capable path is omitted. Truncated strings also
 // omit every 8+ base64 run and data: fragment without reconstructing context;
 // shorter prefixes consistent with catalog magic remain protected too.
-func PrivacyValueFailClosed(value any, path string, siblings map[string]any, mask func(string) string, risk MediaRisk) any {
+func PrivacyValueFailClosed(value any, path string, siblings map[string]any, mask func(string) string, risk MediaRisk) (out any) {
+	defer func() {
+		if recover() != nil {
+			out = CredentialRedacted
+		}
+	}()
+	return privacyValueFailClosed(value, path, siblings, mask, risk)
+}
+func privacyValueFailClosed(value any, path string, siblings map[string]any, mask func(string) string, risk MediaRisk) any {
 	budget := newPrivacyBudget()
 	budget.mask = mask
 	budget.degraded = true

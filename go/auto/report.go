@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strings"
+
+	"github.com/future-agi/traceAI/go/auto/internal/wire"
 )
 
 // IntegrationStatus describes wire coverage separately from manual middleware.
@@ -110,6 +112,81 @@ func makeReport(c Config, wire bool, reason string) AgentReport {
 	return r
 }
 
+// shutdownReport is the report Shutdown stores while it holds the agent lock.
+// A configuration text the privacy filter cannot finish is reported as the
+// placeholder; every other value is reported as makeReport reports it.
+func shutdownReport(c Config) (r AgentReport) {
+	defer func() {
+		if recover() != nil {
+			r = reportWithPlaceholders(c)
+		}
+	}()
+	return makeReport(c, false, "disabled")
+}
+func reportWithPlaceholders(c Config) (r AgentReport) {
+	defer func() {
+		if recover() != nil {
+			r = makeReport(Config{}, false, "disabled")
+		}
+	}()
+	return makeReport(reportableConfig(c), false, "disabled")
+}
+
+// reportableConfig replaces each configuration text that maskReportConfig
+// cannot finish with the placeholder.
+func reportableConfig(c Config) Config {
+	finishes := func(probe Config) (ok bool) {
+		defer func() {
+			if recover() != nil {
+				ok = false
+			}
+		}()
+		probe.APIKey, probe.SecretKey, probe.TraceConfig = c.APIKey, c.SecretKey, c.TraceConfig
+		maskReportConfig(probe)
+		return true
+	}
+	keep := func(text *string, probe Config) {
+		if !finishes(probe) {
+			*text = wire.CredentialRedacted
+		}
+	}
+	keep(&c.ProjectType, Config{ProjectType: c.ProjectType})
+	keep(&c.BaseURL, Config{BaseURL: c.BaseURL})
+	keep(&c.ProjectName, Config{ProjectName: c.ProjectName})
+	keep(&c.ProjectVersionName, Config{ProjectVersionName: c.ProjectVersionName})
+	keep(&c.ProjectVersionID, Config{ProjectVersionID: c.ProjectVersionID})
+	keep(&c.ServiceName, Config{ServiceName: c.ServiceName})
+	keep(&c.ConfigFile, Config{ConfigFile: c.ConfigFile})
+	c.Instrumentations = append([]string(nil), c.Instrumentations...)
+	for i, value := range c.Instrumentations {
+		keep(&c.Instrumentations[i], Config{Instrumentations: []string{value}})
+	}
+	c.DisabledInstrumentations = append([]string(nil), c.DisabledInstrumentations...)
+	for i, value := range c.DisabledInstrumentations {
+		keep(&c.DisabledInstrumentations[i], Config{DisabledInstrumentations: []string{value}})
+	}
+	return c
+}
+
+// reportedConfig is the configuration Report returns: maskReportConfig, with
+// the placeholder for a configuration text the privacy filter cannot finish.
+func reportedConfig(c Config) (out Config) {
+	defer func() {
+		if recover() != nil {
+			out = configWithPlaceholders(c)
+		}
+	}()
+	return maskReportConfig(c)
+}
+func configWithPlaceholders(c Config) (out Config) {
+	defer func() {
+		if recover() != nil {
+			out = maskReportConfig(Config{})
+		}
+	}()
+	return maskReportConfig(reportableConfig(c))
+}
+
 // Report returns resolved configuration with masked secrets and honest coverage.
 func Report() AgentReport {
 	agent.Lock()
@@ -117,7 +194,7 @@ func Report() AgentReport {
 	r := agent.last
 	// A credential may be learned after initialization built agent.last. Never
 	// return that stale diagnostic copy without the current registry's masker.
-	r.Config = maskReportConfig(r.Config)
+	r.Config = reportedConfig(r.Config)
 	r.Integrations = append([]IntegrationStatus(nil), r.Integrations...)
 	for i := range r.Integrations {
 		r.Integrations[i].WireProtocols = append([]string(nil), r.Integrations[i].WireProtocols...)

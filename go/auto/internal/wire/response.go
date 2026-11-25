@@ -128,7 +128,7 @@ func parseResponse(match *Match, p *parsed, b body) {
 		if b.Kind == "json" {
 			// The protocol supplies the media context even for short opaque
 			// payloads; recognition/omission still uses the shared S6 predicate.
-			p.output(dump(PrivacyValue(r, "", map[string]any{"mime_type": "image/*"}, nil)), "application/json")
+			p.output(dump(privacyValue(r, "", map[string]any{"mime_type": "image/*"}, nil)), "application/json")
 			openaiUsage(p, r["usage"])
 		}
 	case "openai.moderations":

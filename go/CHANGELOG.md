@@ -1,5 +1,11 @@
 # Go SDK changelog
 
+## go/auto 0.2.1
+
+### Changed
+
+- Hardened error handling in the privacy filter: the agent does not stop the application because of attribute content.
+
 ## go/auto 0.2.0 (pending release)
 
 Released with the tag `go/auto/v0.2.0`.

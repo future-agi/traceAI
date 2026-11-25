@@ -381,7 +381,7 @@ func (s *agentState) shutdown(ctx context.Context) error {
 				http.DefaultTransport = unwrapTransport(s.transport).(*wireTransport).base
 			}
 			agent.current = nil
-			agent.last = makeReport(s.config, false, "disabled")
+			agent.last = shutdownReport(s.config)
 		}
 		agent.Unlock()
 		// Never invoke user callbacks under sync.Once or the agent lock. OTel's
