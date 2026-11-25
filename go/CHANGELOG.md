@@ -1,11 +1,5 @@
 # Go SDK changelog
 
-## go/auto 0.1.1
-
-### Changed
-
-- Hardened error handling in the auto module's privacy filter: the application keeps running.
-
 ## Unreleased
 
 ### Added
@@ -23,3 +17,9 @@
 - Gemini installation instructions explicitly install the Google Gen AI SDK, so fresh consumers can build the documented usage without missing `go.sum` entries.
 
 No Go release is published by these changes. Each module's release history will be maintained in its own directory when it is released.
+
+## go/auto 0.1.1
+
+### Changed
+
+- Hardened error handling in the auto module's privacy filter: the application keeps running.
