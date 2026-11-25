@@ -120,14 +120,14 @@ func sanitize(v any, c TraceConfig) any {
 // from the proposed configuration even if they have not entered the registry.
 func safeString(s string, c Config) string {
 	secrets := append([]string{c.APIKey, c.SecretKey}, processSecrets.snapshot().values...)
-	return sanitize(wire.PrivacyString(s, secrets), c.TraceConfig).(string)
+	return sanitize(wire.Unguarded.PrivacyString(s, secrets), c.TraceConfig).(string)
 }
 
 // Capture formatting performs only structural privacy. Value replacement waits
 // for S1: replacing a known prefix early could expose a longer secret learned
 // by an inner auth transport or while a span waits in the export queue.
 func captureString(s string, c Config) string {
-	return sanitize(wire.PrivacyString(s, nil), c.TraceConfig).(string)
+	return sanitize(wire.Unguarded.PrivacyString(s, nil), c.TraceConfig).(string)
 }
 func attributes(values map[string]any, c Config) []attribute.KeyValue {
 	kvs := make([]attribute.KeyValue, 0, len(values))

@@ -1,5 +1,11 @@
 # Go SDK changelog
 
+## go/auto 0.1.1
+
+### Changed
+
+- Hardened error handling in the auto module's privacy filter: the application keeps running.
+
 ## Unreleased
 
 ### Added

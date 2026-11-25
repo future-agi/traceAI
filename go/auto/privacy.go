@@ -199,7 +199,7 @@ func (s *spanSanitizer) spend(n, bytes, depth int) {
 }
 func (s *spanSanitizer) text(key, value string) string {
 	s.spend(1, len(value), 0)
-	value = wire.PrivacyAttributeStringWithMasker(key, value, s.secrets.replace)
+	value = wire.Unguarded.PrivacyAttributeStringWithMasker(key, value, s.secrets.replace)
 	return sanitize(value, s.config.TraceConfig).(string)
 }
 
@@ -215,7 +215,7 @@ func (s *spanSanitizer) sessionID(value string) (string, bool) {
 		return s.text("", value), true
 	case s.risk != nil && s.risk.Truncated != nil && s.risk.Truncated(value) && strings.HasPrefix(*s.session, value):
 		s.spend(1, len(value), 0)
-		value = wire.PrivacyValueFailClosed(value, "", nil, s.secrets.replace, *s.risk).(string)
+		value = wire.Unguarded.PrivacyValueFailClosed(value, "", nil, s.secrets.replace, *s.risk).(string)
 		return sanitize(value, s.config.TraceConfig).(string), true
 	}
 	return "", false
@@ -249,9 +249,9 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 	}
 	var clean any
 	if s.risk != nil {
-		clean = wire.PrivacyValueFailClosed(values, "", s.siblings, s.secrets.replace, *s.risk)
+		clean = wire.Unguarded.PrivacyValueFailClosed(values, "", s.siblings, s.secrets.replace, *s.risk)
 	} else {
-		clean = wire.PrivacyValueWithMasker(values, "", s.siblings, s.secrets.replace)
+		clean = wire.Unguarded.PrivacyValueWithMasker(values, "", s.siblings, s.secrets.replace)
 	}
 	// Hide references with the same detached sibling context as the catalog
 	// walk. Per-value hiding cannot associate flattened MIME/type hints with URLs.
