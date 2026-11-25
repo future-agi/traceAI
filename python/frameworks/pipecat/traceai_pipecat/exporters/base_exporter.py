@@ -12,6 +12,8 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from fi_instrumentation.fi_types import MessageAttributes, SpanAttributes
 
+from .._transcript import _install_setup_file
+
 
 def _ensure_json_string(value: Any) -> str:
     """Ensure a value is a valid JSON string."""
@@ -257,6 +259,10 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
 class BaseMappedSpanExporter(SpanExporter):
     """Base class for span exporters that map Pipecat attributes to Future AGI conventions."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        _install_setup_file()
 
     def _convert_attributes(self, attributes):
         """Convert attributes by mapping them to Future AGI conventions."""
