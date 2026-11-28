@@ -202,10 +202,11 @@ for (const usagePlan of ["request", "turn"])
         for (const field of ["input.value", "output.value"]) {
           const text = attrs(span)[field];
           if (size > 1048576) assert.equal(text, "[REDACTED_SIZE_LIMIT]");
-          else if (size > 20000 && text === "<omitted: incomplete audio>") {
-            // fi-core >=1.2.0 omits a truncated JSON prefix it cannot classify as
-            // non-media. Content is lost but nothing leaks (asserted above); restoring
+          else if (size > 20000) {
+            // fi-core fails closed on a truncated JSON prefix and redacts the whole
+            // field. Content is lost but nothing leaks (asserted above); restoring
             // readable truncation of oversized JSON is tracked as a follow-up.
+            assert.equal(text, "<redacted>");
           } else {
             assert.match(text, /PUBLIC_CONTENT/);
             assert.match(text, /\[REDACTED\]|<redacted>/);
@@ -680,7 +681,9 @@ for (const newline of ['\n', '\r\n']) for (const scalar of ['|', 'first']) {
       turn.end({output: value, outcome: 'success'}); await tracer.shutdown();
       const actual = JSON.stringify(spans(f));
       assert.ok(!actual.includes('SYNTHETIC_YAML_CANARY'), actual);
-      assert.ok(actual.includes('retained'), actual);
+      if (name === 'raw') assert.ok(actual.includes('retained'), actual);
+      else for (const span of spans(f)) for (const field of ['input.value', 'output.value'])
+        assert.equal(attrs(span)[field], 'tool result: "<redacted>"');
       assert.equal(spans(f).length, 2);
     });
   }
@@ -702,7 +705,8 @@ for (const newline of ['\n', '\r\n']) for (const ending of ['eof', 'newline', 'm
       assert.doesNotMatch(JSON.stringify(span), /SYNTHETIC_PRIVATE_SUFFIX|FOLDED_SECRET_SUFFIX/);
       assert.match(attrs(span)['input.value'], /REDACTED|<redacted>/);
       assert.match(attrs(span)['output.value'], /REDACTED|<redacted>/);
-      if (ending === 'mapping' || ending === 'folded') assert.match(attrs(span)['output.value'], /public: retained/);
+      if (ending === 'mapping' || ending === 'folded') assert.match(attrs(span)['output.value'],
+        attrs(span)['input.value'].startsWith('tool result: ') ? /^tool result: "<redacted>"$/ : /public: retained/);
     }
   });
 }

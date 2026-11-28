@@ -92,8 +92,12 @@ class PrivacyCatalogTest < Minitest::Test
                 'ordinary' => {'content' => 'AQIDBA=='}}
     assert_equal expected, P.scrub(value)
     assert_equal 'AQIDBA==', value['parts'][0]['content']
-    path = ('ordinary.' * 2_000) + 'content'
+    # A path of up to limits.max_depth components is read; a longer one exports the whole value as the placeholder
+    # (shared spec v4 depth budget), never a Limit.
+    path = ('ordinary.' * (P::CATALOG['limits']['max_depth'] - 1)) + 'content'
     assert_equal 'words', P.scrub('words', [], path)
+    path = ('ordinary.' * 2_000) + 'content'
+    assert_equal P::REDACTED, P.scrub('words', [], path)
   end
 
   def test_s6_atomic_credential_pair_precedence_and_missing_half_warnings

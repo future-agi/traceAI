@@ -427,6 +427,38 @@ private-key PEM blocks) are redacted in any text, whatever the key; the
 eight or more letters is redacted too. The exact usage counters the catalog
 declares as metrics, such as `gen_ai.usage.input_tokens.audio`, keep valid
 numeric values even though their names contain `audio`.
+After known secrets and value shapes, every exported string goes through the
+catalog's credential pair rule. The value of a credential-named `name=value`,
+`name: value`, `name%3Dvalue`, `"name": value` (also `"name"=value`, with the
+name quoted by `"`, `'`, `\"` or `&quot;`), `--name value` or `-password value`
+is replaced with `<redacted>` to the true end of its value: the next pair
+(`,`, `;` or a line break, or a space, followed by another name and separator)
+outside brackets, or the end of the text, and the rest of the line after
+`cookie`, `set-cookie`, `authorization` and `proxy-authorization`. A `<redacted>`
+already in the value does not end it. After a quoted name, a quoted string ends
+at its closing quote and a number, `true`, `false` or `null` before `,`, `}`,
+`]` or the end of the text; any other value runs to its true end. The name is
+read back from the separator over at most 128 characters (130 for a quoted
+name) and up to 8 plain spaces. A longer name, a tab or other whitespace, or
+encoded whitespace (`%20`, `%09`, `%0A`-`%0D`, `%C2%A0`, `\t`, `\n`, `\u00a0`, ...)
+between the name and its separator leaves the name undecided, and its value is
+replaced. A name that ends at a percent escape is decoded once first
+(`user%5Bpassword%5D=`). A `--name` takes its next word; after one line break
+it takes the first word of the next line unless that line starts a pair or
+another flag, and a blank line ends it. In URLs, credential-named pairs after
+`#`, after a second `?` in a query value, and in a path segment
+(`/password=value/`, `%3D` included) are replaced as query pairs are; a name
+after a `?` that holds more than eight `?` is undecided. In a whole URL value
+the pair rule also reads the URL text, skipping only what the catalog replaced
+there. The catalog's vocabulary words (`pwd`, `pass`, `passphrase`, `passwd`,
+`passcode`, `pin`) are credential names as a whole name or as a segment
+(`dbPass`, `db.pwd`, `user-pin`, `X-Pin`) at every site. Map and attribute keys
+go through the same text rules; keys that become equal keep one key whose value
+is `<redacted>`. A path, key or name of more than 32 components (`.`, `[` and
+`]` separate them) makes its whole value `<redacted>`. A JSON string is scrubbed
+leaf by leaf and written back compactly with its members in their original
+order; the pair rule does not read that text again. A base64 line after a data
+URI belongs to it only if its `=` characters are trailing base64 padding.
 Inline base64 media uses `<omitted: N base64 chars>`. Magic-byte media is recognized
 under any key, including short PNG/JPEG/GIF/WAV/WEBP/MP3/Ogg/FLAC/MP4/PDF values;
 only unrecognized base64 in catalog media fields uses the >256-character threshold.
@@ -460,8 +492,8 @@ content/metadata is dropped while span identity, timing and status code survive.
 
 ### Privacy differences from other traceAI SDKs
 
-The agent embeds a byte-identical copy of the shared privacy catalog (version 3)
-and runs its shared fixtures. Four rules differ. The first three are catalog
+The agent embeds a byte-identical copy of the shared privacy catalog (version 4)
+and runs all of its shared fixtures, with no Go-specific expectation. Four rules differ. The first three are catalog
 rules that are not ported yet, and in each Go removes more than the other SDKs.
 In the fourth, by design, Go removes less:
 

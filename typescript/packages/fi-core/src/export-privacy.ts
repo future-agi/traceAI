@@ -15,7 +15,7 @@ import { AGENT_NAME, AGENT_ID } from "./trace/trace-config/agentIdentity";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
-import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialName, mediaReplacement, scrubAttribute, scrubValue, providerResponseBinding, scrubProviderResponse, discoverProviderResponseSecrets, rememberProviderResponse, rememberSessionIdentity, isSessionIdentity, s1MediaPrefixReplacement, MAX_DISCOVERY_BODY_BYTES } from "./privacy-runtime";
+import { longEnoughSecret, completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialName, mediaReplacement, scrubAttribute, scrubValue, providerResponseBinding, scrubProviderResponse, discoverProviderResponseSecrets, rememberProviderResponse, rememberSessionIdentity, isSessionIdentity, s1MediaPrefixReplacement, MAX_DISCOVERY_BODY_BYTES } from "./privacy-runtime";
 
 // Compatibility name for integration tests/packages migrating this round; the agent never reads or propagates it.
 export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credentials");
@@ -524,7 +524,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   for (const secret of configured) registerSecret(secret);
   // FI configuration is independently authoritative even after transport churn
   // evicts its initial seeds. Cache the merged view, not another secret registry.
-  const fixed = configured.filter(value => value.length >= 8);
+  const fixed = configured.filter(value => longEnoughSecret(value));
   let lastRegistry: readonly string[] | undefined, lastSnapshot: readonly string[] = [];
   const snapshot = () => {
     const current = getRegisteredSecrets();

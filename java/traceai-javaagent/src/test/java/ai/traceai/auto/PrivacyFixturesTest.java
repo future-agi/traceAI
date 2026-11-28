@@ -12,32 +12,47 @@ class PrivacyFixturesTest {
             assertArrayEquals(Files.readAllBytes(WireFixturesTest.SPEC.resolve(name)), Objects.requireNonNull(in).readAllBytes(), name);
         }
     }
+    /** Every case of the shared bundle, in order. */
+    static List<Object> cases() throws Exception {
+        try (var in = WirePrivacy.class.getResourceAsStream("privacy-fixtures.json")) {
+            return WireCore.list(WireCore.get(WireCore.parse(new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8)), "cases"));
+        }
+    }
+
+    /** The failures of one shared case: its export against the shared expected value, then the export of that export (idempotency). */
+    static List<String> check(Object fixture) {
+        List<String> failures = new ArrayList<>();
+        String name = (String)WireCore.get(fixture, "name"); var input = WireCore.map(WireCore.get(fixture, "input"));
+        var registry = new KnownSecrets();
+        for (Object secret : WireCore.list(input.get("known_secrets"))) registry.register((String)secret);
+        var privacy = new WirePrivacy(registry.snapshot(), false);
+        var scope = privacy.scope(WireCore.map(input.get("siblings")), "", WirePrivacy.Scope.EMPTY);
+        boolean framed = !"free_text_urls".equals(input.get("site"));
+        Object actual = privacy.clean((String)input.get("path"), input.get("value"), scope, framed);
+        Object expected = WireCore.get(fixture, "expected");
+        if (!WireCore.JSON.toJsonTree(expected).equals(WireCore.JSON.toJsonTree(actual))) failures.add(name + " expected=" + WireCore.dump(expected) + " actual=" + WireCore.dump(actual));
+        Object again = privacy.clean((String)input.get("path"), actual, scope, framed);
+        if (!WireCore.JSON.toJsonTree(actual).equals(WireCore.JSON.toJsonTree(again))) failures.add(name + " is not idempotent: " + WireCore.dump(again));
+        return failures;
+    }
+
+    /** The shared bundle is read as it is: no case is skipped and no case has an expectation of this agent's own. */
     @Test void everySharedPrivacyFixtureAndIdempotency() throws Exception {
-        List<Object> cases; Object bundle;
+        Object bundle;
         try (var in = WirePrivacy.class.getResourceAsStream("privacy-fixtures.json")) {
             bundle = WireCore.parse(new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8));
-            cases = WireCore.list(WireCore.get(bundle, "cases"));
         }
-        // Catalog v3 adds the guarded token-timing exclusion, drops the logprob-token and
-        // access-key-id exemptions, and pins 6,238 cases.
-        assertEquals(3L, WireCore.get(bundle, "catalog_version"));
-        assertTrue(cases.size() >= 6238, "never silently skip fixtures");
-        List<String> failures = new ArrayList<>(); int checks = 0;
+        List<Object> cases = WireCore.list(WireCore.get(bundle, "cases"));
+        assertEquals(4L, WireCore.get(bundle, "catalog_version"));
+        assertTrue(cases.size() >= 7887, "never silently skip fixtures");
+        List<String> failures = new ArrayList<>(); Set<String> failing = new LinkedHashSet<>(); int checks = 0;
         for (Object fixture : cases) {
-            String name = (String)WireCore.get(fixture, "name"); var input = WireCore.map(WireCore.get(fixture, "input"));
-            var registry = new KnownSecrets();
-            for (Object secret : WireCore.list(input.get("known_secrets"))) registry.register((String)secret);
-            var privacy = new WirePrivacy(registry.snapshot(), false);
-            var scope = privacy.scope(WireCore.map(input.get("siblings")), "", WirePrivacy.Scope.EMPTY);
-            boolean framed = !"free_text_urls".equals(input.get("site"));
-            Object actual = privacy.clean((String)input.get("path"), input.get("value"), scope, framed);
-            Object expected = WireCore.get(fixture, "expected");
-            if (!WireCore.JSON.toJsonTree(expected).equals(WireCore.JSON.toJsonTree(actual))) failures.add(name + " expected=" + WireCore.dump(expected) + " actual=" + WireCore.dump(actual));
-            Object again = privacy.clean((String)input.get("path"), actual, scope, framed);
-            if (!WireCore.JSON.toJsonTree(actual).equals(WireCore.JSON.toJsonTree(again))) failures.add(name + " is not idempotent: " + WireCore.dump(again));
+            List<String> found = check(fixture);
+            if (!found.isEmpty()) failing.add((String)WireCore.get(fixture, "name"));
+            failures.addAll(found);
             checks += 2;
         }
-        System.out.println("S6 privacy fixtures: " + cases.size() + "; recognition/idempotency checks: " + checks + "; failures: " + failures.size());
+        System.out.println("S6 privacy fixtures: " + cases.size() + "; recognition/idempotency checks: " + checks + "; failing cases: " + failing.size() + "; failures: " + failures.size());
         assertTrue(failures.isEmpty(), () -> failures.size() + " privacy failures\n" + String.join("\n", failures.subList(0, Math.min(40, failures.size()))));
     }
 }

@@ -45,12 +45,18 @@ test("data URLs are omitted anywhere, including error text and tool arguments", 
   expect(scrubText(text)).toBe("prefix <omitted: 8 base64 chars> suffix");
   expect(scrubAttribute(JSON.stringify({ arguments: JSON.stringify({ url: text }) }))).not.toContain(data);
 });
-test.each(["key", "api_key", "apikey", "token", "access_token", "sig", "signature", "x-amz-signature", "x-amz-credential", "x-amz-security-token", "x-goog-signature", "x-goog-credential", "se", "sp", "sv", "sr", "skoid", "sktid"])("signed URL parameter %s is redacted without removing safe parameters", key => {
-  expect(scrubText(`https://cdn.example/audio?${key}=private&safe=yes`)).toBe(`https://cdn.example/audio?${key}=<redacted>&safe=yes`);
+// Shared privacy spec v4: in prose the credential pair rule reads the URL text, and a credential-named pair's value runs to
+// its true end; a parameter that is a signed-URL name only keeps the parameters after it. A whole URL value keeps them.
+const SIGNED_ONLY = new Set(["se", "sp", "sv", "sr", "skoid", "sktid", "%74oken", "X-Amz-%53ignature"]);
+test.each(["key", "api_key", "apikey", "token", "access_token", "sig", "signature", "x-amz-signature", "x-amz-credential", "x-amz-security-token", "x-goog-signature", "x-goog-credential", "se", "sp", "sv", "sr", "skoid", "sktid"])("signed URL parameter %s is redacted, in prose and as a whole URL value", key => {
+  const url = `https://cdn.example/audio?${key}=private&safe=yes`;
+  expect(scrubText(url)).toBe(`https://cdn.example/audio?${key}=<redacted>${SIGNED_ONLY.has(key) ? "&safe=yes" : ""}`);
+  expect(scrubAttribute(url)).toBe(`https://cdn.example/audio?${key}=<redacted>&safe=yes`);
 });
 test.each(["%74oken", "%61pi_key", "X-Amz-%53ignature", "%61ccess_token"])("percent-encoded signed parameter %s is scrubbed in prose and nested JSON", key => {
   const url = `https://cdn.example/audio?${key}=private-signed-token&safe=yes`;
-  expect(scrubText(url)).toBe(`https://cdn.example/audio?${key}=<redacted>&safe=yes`);
+  expect(scrubText(url)).toBe(`https://cdn.example/audio?${key}=<redacted>${SIGNED_ONLY.has(key) ? "&safe=yes" : ""}`);
+  expect(scrubAttribute(url)).toBe(`https://cdn.example/audio?${key}=<redacted>&safe=yes`);
   expect(scrubAttribute(JSON.stringify({ content: url, arguments: JSON.stringify({ url }) }))).not.toContain("private-signed-token");
   expect(scrubText("https://example.test/?%invalid=safe")).toContain("safe");
 });
@@ -104,11 +110,15 @@ test("R-C1-URL-OWNERSHIP", () => {
   for (const key of ["access_token", "authorization", "cookie", "api_key", "x-amz-signature", "%74oken"]) {
     const suffix = "&safe=%2f+YES&dup=one&dup=two#anchor?token=ordinary";
     const url = `https://example.invalid/path?${key}=${payload}${suffix}`;
-    const expected = `https://example.invalid/path?${key}=<redacted>${suffix}`;
-    check(scrubText(url) === expected, "R-C1-URL-OWNERSHIP");
+    // Shared privacy spec v4: a whole URL value keeps its other parameters and replaces a credential pair after a second
+    // '?' in its fragment; in prose the pair rule reads the URL text and a credential pair's value runs to its true end.
+    const expected = `https://example.invalid/path?${key}=<redacted>&safe=%2f+YES&dup=one&dup=two#anchor?token=<redacted>`;
+    const prose = key === "%74oken" ? expected : `https://example.invalid/path?${key}=<redacted>`;
+    check(scrubText(url) === prose, "R-C1-URL-OWNERSHIP");
     check(scrubAttribute(url) === expected, "R-C1-URL-OWNERSHIP");
-    check(scrubText(expected) === expected, "R-C1-URL-OWNERSHIP");
-    check(scrubText(`see "${url}" after`) === `see "${expected}" after`, "R-C1-URL-OWNERSHIP");
+    check(scrubText(prose) === prose, "R-C1-URL-OWNERSHIP");
+    check(scrubAttribute(expected) === expected, "R-C1-URL-OWNERSHIP");
+    check(scrubText(`see "${url}" after`) === `see "${prose}`, "R-C1-URL-OWNERSHIP");
     check(JSON.parse(scrubAttribute(JSON.stringify({ url }))).url === expected, "R-C1-URL-OWNERSHIP");
   }
 });

@@ -3,6 +3,11 @@
 ### Changed
 - Zero-code tracing turns on the `promptflow` integration when `promptflow.tracing` is first imported, so an application that installs `promptflow-core` or `promptflow-tracing` without the full `promptflow` package is traced.
 - Credential value shapes are scanned in time linear in the text, and a token is replaced whole whatever its length.
+- In the copy the zero-code agent sends to Future AGI, the value of every credential-named pair in text (`name=value`, `name: value`, a quoted name with `:` or `=`, `--name value`, and `-name value` for a whole credential name) is replaced to the true end of the value instead of to the end of its first word, after known keys and credential shapes. A name longer than 128 characters, one separated from its `=` or `:` by whitespace other than up to eight spaces, or one after a `?` that holds more than eight `?`, is treated as a credential name. A URL value is read the same way after its query; each string inside JSON text is read on its own.
+- In URLs sent to Future AGI, credential-named pairs after `#`, after a second `?` and in path segments (`=` or `%3D`) are replaced like query pairs.
+- `pwd`, `pass`, `passphrase`, `passwd`, `passcode` and `pin`, as a whole name or a part of one (`dbPass`, `db.pwd`, `user-pin`), are credential names in the Future AGI copy.
+- Object keys in JSON text and attribute keys go through the same rules as values in the Future AGI copy; when two keys of one object become the same, one key is kept with `<redacted>` as its value.
+- A value under a name of more than 32 components (its path, an object key, a name in its text, or another attribute name of the same object) is sent to Future AGI as `<redacted>`.
 
 ## [1.5.2] - 2026-11-20
 

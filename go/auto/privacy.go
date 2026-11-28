@@ -465,6 +465,15 @@ func (s *spanSanitizer) sessionID(value string) (string, bool) {
 	return "", false
 }
 
+// walk is the catalog walk of one attribute object, in the fail-closed media
+// mode when its MIME/type context may be incomplete.
+func (s *spanSanitizer) walk(values, siblings map[string]any) any {
+	if s.risk != nil {
+		return wire.PrivacyValueFailClosed(values, "", siblings, s.secrets.replace, *s.risk)
+	}
+	return wire.PrivacyValueWithMasker(values, "", siblings, s.secrets.replace)
+}
+
 func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int, _ int) []attribute.KeyValue {
 	s.spend(len(attrs), 0, depth)
 	// One object preserves all sibling hints, including string-array/indexed MIME
@@ -491,11 +500,37 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 		original[key] = kv.Value
 		values[key] = s.native(kv.Value, depth+1)
 	}
-	var clean any
-	if s.risk != nil {
-		clean = wire.PrivacyValueFailClosed(values, "", s.siblings, s.secrets.replace, *s.risk)
-	} else {
-		clean = wire.PrivacyValueWithMasker(values, "", s.siblings, s.secrets.replace)
+	clean := s.walk(values, s.siblings)
+	if clean == wire.CredentialRedacted {
+		// A name of more than the catalog's depth budget makes its exported
+		// value the placeholder. Each attribute is one exported value: walk
+		// them one by one, every attribute still a sibling hint of the others.
+		siblings := make(map[string]any, len(s.siblings)+len(values))
+		for key, value := range s.siblings {
+			siblings[key] = value
+		}
+		for key, value := range values {
+			siblings[key] = value
+		}
+		each := make(map[string]any, len(values))
+		for _, kv := range attrs {
+			key := string(kv.Key)
+			value, ok := values[key]
+			if !ok {
+				continue
+			}
+			one, _ := s.walk(map[string]any{key: value}, siblings).(map[string]any)
+			if one == nil {
+				one = map[string]any{s.text("", key): wire.CredentialRedacted}
+			}
+			for name, value := range one {
+				if _, collision := each[name]; collision {
+					value = wire.CredentialRedacted
+				}
+				each[name] = value
+			}
+		}
+		clean = each
 	}
 	// Hide references with the same detached sibling context as the catalog
 	// walk. Per-value hiding cannot associate flattened MIME/type hints with URLs.
@@ -520,14 +555,17 @@ func (s *spanSanitizer) attrs(attrs []attribute.KeyValue, event bool, depth int,
 			delete(session, key)
 			continue
 		}
-		if value, ok := fields[key]; ok {
+		// The catalog walk scrubs keys as it scrubs text; keys that are one
+		// after scrubbing keep one key (the first one's place).
+		name := s.text("", key)
+		if value, ok := fields[name]; ok {
 			// The host hide-policy marker is not raw base64. Keep that stronger
 			// policy's stable result even if its spelling resembles media magic.
 			if old := original[key]; old.Type() == attribute.STRING && old.AsString() == RedactedValue {
 				value = RedactedValue
 			}
-			out = append(out, attribute.KeyValue{Key: attribute.Key(s.text("", key)), Value: s.typed(value, original[key], depth+1)})
-			delete(fields, key)
+			out = append(out, attribute.KeyValue{Key: attribute.Key(name), Value: s.typed(value, original[key], depth+1)})
+			delete(fields, name)
 		}
 	}
 	return out
@@ -542,14 +580,15 @@ func (s *spanSanitizer) protectedOnly(clean any, attrs []attribute.KeyValue, ori
 	out := map[string]any{}
 	for _, kv := range attrs {
 		key := string(kv.Key)
-		value, present := fields[key]
+		name := s.text("", key)
+		value, present := fields[name]
 		old, kept := original[key]
 		if !present || !kept || protectedAttributePriority(attribute.KeyValue{Key: kv.Key, Value: old}) < 0 {
 			continue
 		}
-		if one, ok := sanitize(map[string]any{key: value}, s.config.TraceConfig).(map[string]any); ok {
-			if value, ok := one[key]; ok {
-				out[key] = value
+		if one, ok := sanitize(map[string]any{name: value}, s.config.TraceConfig).(map[string]any); ok {
+			if value, ok := one[name]; ok {
+				out[name] = value
 			}
 		}
 	}

@@ -38,6 +38,16 @@ EXPORT_SITES = (
 WIRE_ONLY = {}
 
 
+def _reference():
+    """The spec's executable reference recognizer (generate_privacy_fixtures.py, class Reference)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("generate_privacy_fixtures", SPEC / "generate_privacy_fixtures.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Reference(json.loads((SPEC / "privacy.json").read_text(encoding="utf-8")))
+
+
 @pytest.fixture(scope="module")
 def bundle():
     path = SPEC / "privacy-fixtures.json"
@@ -52,7 +62,7 @@ def _same(actual, expected):
 
 def test_every_fixture_site_is_run_or_skipped_by_name(bundle):
     catalog = json.loads((SPEC / "privacy.json").read_text(encoding="utf-8"))
-    assert (bundle["version"], bundle["catalog_version"], catalog["version"]) == (1, 3, 3)
+    assert (bundle["version"], bundle["catalog_version"], catalog["version"]) == (1, 4, 4)
     sites = set(catalog["fixture_sites"])
     # An unknown site fails here instead of being skipped.
     assert {case["input"]["site"] for case in bundle["cases"]} == sites
@@ -167,8 +177,8 @@ def test_a_colon_heavy_url_is_scanned_in_linear_time():
 
 
 # URL query parameter names of many parts. The checks of a query value read its name as a path, so a
-# name past the path limits is not read, and its value is not sent. Each scan must finish inside
-# SCAN_BOUND seconds (below).
+# name past the path limits is not read: a name of more than limits.max_depth components makes the
+# whole value <redacted>. Each scan must finish inside SCAN_BOUND seconds (below).
 LONG_QUERY_NAMES = {"dots": "a." * 100000, "brackets": "a[" * 100000}
 
 
@@ -180,7 +190,7 @@ def test_a_long_query_name_in_text_is_scanned_in_bounded_time(case):
     start = time.monotonic()
     clean = _privacy.scrub("see ?" + name + "=1", "input.value")
     elapsed = time.monotonic() - start
-    assert clean == "see ?" + name + "=<redacted>"
+    assert clean == "<redacted>"
     assert elapsed < SCAN_BOUND, f"{case} took {elapsed:.2f}s"
 
 
@@ -192,21 +202,25 @@ def test_a_long_query_name_in_a_url_attribute_is_scanned_in_bounded_time(case):
     start = time.monotonic()
     copy = _privacy.sanitize_span(_span({"input.value": "a prompt", "url.full": url}))
     elapsed = time.monotonic() - start
-    # The attribute stays; only the value under the name that was not read is left out.
+    # The attribute stays; its value, which holds a name that was not read, is <redacted> whole.
     assert sorted(copy.attributes) == ["input.value", "url.full"]
-    assert copy.attributes["url.full"] == url[:-1] + "<redacted>"
+    assert copy.attributes["input.value"] == "a prompt"
+    assert copy.attributes["url.full"] == "<redacted>"
     assert elapsed < SCAN_BOUND, f"{case} took {elapsed:.2f}s"
 
 
 def test_a_query_name_past_the_path_limits_keeps_no_value():
     from fi_instrumentation.auto import _privacy
 
-    # The limits of a value's path: at most 1,024 characters and fewer than 64 separators.
-    for name, kept in (("a" * 1024, True), ("a" * 1025, False), ("a." * 63, True), ("a." * 64, False),
-                       ("a[" * 63, True), ("a[" * 64, False)):
+    # The limits of a value's path: at most 1,024 characters and fewer than 64 separators. A name of
+    # more than limits.max_depth (32) components makes the whole value <redacted>, and the pair rule
+    # reads a name through its last 128 characters: a longer name is not decided, so its value goes.
+    for name, outcome in (("a" * 128, "kept"), ("a" * 129, "value"), ("a" * 1024, "value"), ("a" * 1025, "value"),
+                          ("a." * 32, "kept"), ("a." * 33, "whole"), ("a." * 63, "whole"), ("a." * 64, "whole"),
+                          ("a[" * 32, "kept"), ("a[" * 33, "whole"), ("a[" * 63, "whole"), ("a[" * 64, "whole")):
         url = "https://example.invalid/search?q=1&" + name + "=1"
-        expected = url if kept else url[:-1] + "<redacted>"
-        assert _privacy.scrub(url, "url.full") == expected, (len(name), kept)
+        expected = {"kept": url, "value": url[:-1] + "<redacted>", "whole": "<redacted>"}[outcome]
+        assert _privacy.scrub(url, "url.full") == expected, (len(name), outcome)
 
 
 # Every value shape in the catalog, read for the work Python's backtracking engine can do on it,
@@ -262,10 +276,14 @@ def test_the_value_shapes_match_the_catalog_expressions_exactly():
     shapes = [re.compile(item["regex"], re.I if "i" in item["flags"] else 0)
               for item in catalog["credentials"]["value_shapes"]]
 
+    reference = _reference()
+
     def expected(text):
         for shape in shapes:
             text = shape.sub("<redacted>", text)
-        return text
+        # Then the pair rule, as the spec's reference reads the text the shapes left (a single-dash
+        # credential flag such as -sk-... takes the next word).
+        return reference.credential_pairs(text)
 
     # Every sequence of up to four pieces, then longer runs: starts after hyphens, several tokens in
     # one run, hyphens and a non-ASCII letter where a word boundary would end a token.
@@ -353,7 +371,7 @@ def test_a_value_a_length_limit_may_have_cut_keeps_no_base64_run():
     assert _privacy.scrub("summarise the attached recording", "input.value") == "summarise the attached recording"
 
 
-def test_a_long_path_is_checked_in_bounded_time_and_drops_only_its_attribute():
+def test_a_long_path_is_checked_in_bounded_time_and_redacts_the_values_beside_it():
     from fi_instrumentation.auto import _privacy
 
     # A long member name above many values, and an attribute name of many components.
@@ -362,7 +380,9 @@ def test_a_long_path_is_checked_in_bounded_time_and_drops_only_its_attribute():
     start = time.monotonic()
     copy = _privacy.sanitize_span(_span({"input.value": "a prompt", "app.payload": payload, deep: "value"}))
     elapsed = time.monotonic() - start
-    assert dict(copy.attributes) == {"input.value": "a prompt"}
+    # The attribute name of more than limits.max_depth components is a hint name of every other value
+    # in the object, so each of them is <redacted> whole, the long member name's attribute with them.
+    assert dict(copy.attributes) == {"input.value": "<redacted>", "app.payload": "<redacted>", deep: "<redacted>"}
     assert elapsed < 1, f"took {elapsed:.2f}s"
 
 

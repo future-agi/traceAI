@@ -10,8 +10,13 @@ test("S6 core walking uses data properties without invoking user getters or conv
 });
 test.each(["depth", "nodes", "text"])("S6 core %s budget is fail-closed, not silently partial", kind => {
   let value: any = kind === "nodes" ? Array(16385).fill(0) : kind === "text" ? "x".repeat(4194305) : "ordinary";
-  if (kind === "depth") for (let i = 0; i < 34; i++) value = [value];
-  expect(() => scrubValue(value)).toThrow(/Privacy (structure|text) budget/);
+  // The name path budget is read before the depth budget, so the depth budget is exhausted here by the starting depth.
+  expect(() => scrubValue(value, [], "", kind === "depth" ? 33 : 0)).toThrow(/Privacy (structure|text) budget/);
+});
+test("S6 core a value nested more than 32 levels exports the placeholder", () => {
+  let value: any = "ordinary";
+  for (let i = 0; i < 34; i++) value = [value];
+  expect(scrubValue(value)).toBe("<redacted>");
 });
 test("S1 keeps JSON primitive scalar recognition through SDK serialization", () => {
   expect(scrubAttribute(JSON.stringify("iVBORw0KGgoAAAANSUhEUg=="))).toBe(JSON.stringify("<omitted: 24 base64 chars>"));

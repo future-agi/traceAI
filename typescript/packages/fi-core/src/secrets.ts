@@ -1,4 +1,4 @@
-import { isCredentialName } from "./privacy-runtime";
+import { longEnoughSecret, isCredentialName } from "./privacy-runtime";
 
 /** Cross-copy protocol: keep this interface stable for embedded and installed agents. */
 interface SecretRegistry {
@@ -16,7 +16,7 @@ function registry(): SecretRegistry {
   let snapshot: readonly string[] | undefined, failed = false;
   const holder: SecretRegistry = Object.freeze({
     register(value: unknown) {
-      if (typeof value !== "string" || value.length < 8 || value === "<redacted>") return;
+      if (typeof value !== "string" || !longEnoughSecret(value) || value === "<redacted>") return;
       const known = lru.delete(value);
       lru.set(value, true);
       if (!known) snapshot = undefined;

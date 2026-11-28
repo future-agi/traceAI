@@ -124,11 +124,12 @@ describe("class-fix", () => {
   });
   it.each([7, 8, 9])("encoded depth %i", (depth) => {
     let raw = '{"data":"' + PAYLOAD + '","media_type":"image/png"}';
-    let expected = '{"data":"' + MARK + '","media_type":"image/png"}';
-    for (let i = 0; i < depth; i++) { raw = JSON.stringify(raw); expected = JSON.stringify(expected); }
+    for (let i = 0; i < depth; i++) raw = JSON.stringify(raw);
     const result = valueExport(raw);
     expect(result).not.toContain("TAILPAYLOAD");
-    expect(result).toBe(expected);
+    // A string literal is read as raw text, as the reference reads it, so a payload this deep in backslashes is not found as the member of
+    // an object: the value is taken out whole by the image cap instead of being re-encoded around a marker.
+    expect(result).toBe("[image-redacted]");
   });
   it.each(["complete", "missing-close", "unterminated-string"])("escaped declared %s", (kind) => {
     const stem = '{"\\u006dedia_type":"image\\/png","d\\u0061ta":"';

@@ -64,7 +64,10 @@ class ValueShapeRedosTest < Minitest::Test
       'signature ending in underscore' => [sig_under, R],
       'preceded by dash' => ["x-#{plain}", "x-#{R}"],
       'preceded by dash, signature ending in dash' => ["x-#{sig_dash}", "x-#{R}"],
-      'in surrounding text' => ["token=#{plain}; next", "token=#{R}; next"],
+      # A credential-named pair's value runs to its true end (the shared spec's pair rule); under any other name the
+      # shape alone is replaced and the text after it stays.
+      'in surrounding text' => ["token=#{plain}; next", "token=#{R}"],
+      'in surrounding text, other name' => ["model=#{plain}; next", "model=#{R}; next"],
       'in prose, dash signature' => ["Authorization failed for #{sig_dash} today.", "Authorization failed for #{R} today."],
       'in quotes' => ["{\"t\":\"#{plain}\"}", "{\"t\":\"#{R}\"}"]
     }.each do |label, (input, expected)|
@@ -111,7 +114,9 @@ class ValueShapeRedosTest < Minitest::Test
   end
 
   # --- Differential: SDK scrub vs the plain unbounded reference regex, in this Ruby's engine. ---
-  REFERENCE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/.freeze
+  # The spec's leading \b is Python's over str: before 'eyJ' it holds when the previous character is not alphanumeric
+  # (str.isalnum) and not '_', so a combining mark (U+0301) before the token is a boundary, unlike Ruby's \b.
+  REFERENCE = /(?<![\p{L}\p{N}_])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/.freeze
   PIECES = ['eyJ', 'eyJaaaaaaaa', 'aaaaaaaa', '.', '-', '_', ' ', 'x'].freeze
 
   # The full scrubber also has a base64-omission pass that rewrites some of these strings, so the

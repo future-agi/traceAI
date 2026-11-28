@@ -1,0 +1,1514 @@
+{
+  "base": "a21a68efb01ea2f8fe918436f905efc82f2f792f",
+  "note": "Phase 1c. changed: the two base cases ruling (a) allows to change, each with its base expectation and the new one. new_cases: every case phase 1c appends, in order, with its expected value.",
+  "changed": {
+    "pair-rule-1b-path-encoded-text": {
+      "input": {
+        "site": "free_text_urls",
+        "path": "",
+        "value": "see https://example.invalid/a/password%3DTAILP/b next"
+      },
+      "base_expected": "see https://example.invalid/a/password%3D<redacted>/b next",
+      "expected": "see https://example.invalid/a/password%3D<redacted>"
+    },
+    "pair-rule-1b-path-encoded-lower-text": {
+      "input": {
+        "site": "free_text_urls",
+        "path": "",
+        "value": "see https://example.invalid/a/api_key%3dTAILP?model=keep next"
+      },
+      "base_expected": "see https://example.invalid/a/api_key%3d<redacted>?model=keep next",
+      "expected": "see https://example.invalid/a/api_key%3d<redacted>"
+    }
+  },
+  "new_cases": [
+    {
+      "name": "pair-rule-1c-gap-bare-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log password\t=TAILV then more",
+      "expected": "log password\t=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log password\t=TAILV then more"
+      },
+      "expected": {
+        "message": "log password\t=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"password\"\t: \"TAILV\" then more",
+      "expected": "log \"password\"\t: \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"password\"\t: \"TAILV\" then more"
+      },
+      "expected": {
+        "message": "log \"password\"\t: \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password\t=TAILV then more",
+      "expected": "log --password\t=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password\t=TAILV then more"
+      },
+      "expected": {
+        "message": "log --password\t=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password\t= TAILV then more",
+      "expected": "log --password\t= <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password\t= TAILV then more"
+      },
+      "expected": {
+        "message": "log --password\t= <redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log cookie\t: a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log cookie\t: <redacted>\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log cookie\t: a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log cookie\t: <redacted>\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"cookie\"\t: a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log \"cookie\"\t: \"<redacted>\"\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"cookie\"\t: a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log \"cookie\"\t: \"<redacted>\"\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-model-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log model\t=keep then more",
+      "expected": "log model\t=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-model-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log model\t=keep then more"
+      },
+      "expected": {
+        "message": "log model\t=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-tab-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"model\"\t: \"keep\" then more",
+      "expected": "log \"model\"\t: \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-tab-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"model\"\t: \"keep\" then more"
+      },
+      "expected": {
+        "message": "log \"model\"\t: \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log password        =TAILV then more",
+      "expected": "log password        =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log password        =TAILV then more"
+      },
+      "expected": {
+        "message": "log password        =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"password\"        : \"TAILV\" then more",
+      "expected": "log \"password\"        : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"password\"        : \"TAILV\" then more"
+      },
+      "expected": {
+        "message": "log \"password\"        : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password        =TAILV then more",
+      "expected": "log --password        =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password        =TAILV then more"
+      },
+      "expected": {
+        "message": "log --password        =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password        = TAILV then more",
+      "expected": "log --password        = <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password        = TAILV then more"
+      },
+      "expected": {
+        "message": "log --password        = <redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log cookie        : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log cookie        : <redacted>\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log cookie        : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log cookie        : <redacted>\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"cookie\"        : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log \"cookie\"        : \"<redacted>\"\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"cookie\"        : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log \"cookie\"        : \"<redacted>\"\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-model-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log model        =keep then more",
+      "expected": "log model        =keep then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-model-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log model        =keep then more"
+      },
+      "expected": {
+        "message": "log model        =keep then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-spaces-8-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"model\"        : \"keep\" then more",
+      "expected": "log \"model\"        : \"keep\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-spaces-8-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"model\"        : \"keep\" then more"
+      },
+      "expected": {
+        "message": "log \"model\"        : \"keep\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log password         =TAILV then more",
+      "expected": "log password         =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log password         =TAILV then more"
+      },
+      "expected": {
+        "message": "log password         =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"password\"         : \"TAILV\" then more",
+      "expected": "log \"password\"         : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"password\"         : \"TAILV\" then more"
+      },
+      "expected": {
+        "message": "log \"password\"         : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password         =TAILV then more",
+      "expected": "log --password         =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password         =TAILV then more"
+      },
+      "expected": {
+        "message": "log --password         =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password         = TAILV then more",
+      "expected": "log --password         = <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password         = TAILV then more"
+      },
+      "expected": {
+        "message": "log --password         = <redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log cookie         : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log cookie         : <redacted>\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log cookie         : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log cookie         : <redacted>\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"cookie\"         : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log \"cookie\"         : \"<redacted>\"\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"cookie\"         : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log \"cookie\"         : \"<redacted>\"\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-model-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log model         =keep then more",
+      "expected": "log model         =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-model-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log model         =keep then more"
+      },
+      "expected": {
+        "message": "log model         =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-spaces-9-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"model\"         : \"keep\" then more",
+      "expected": "log \"model\"         : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-spaces-9-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"model\"         : \"keep\" then more"
+      },
+      "expected": {
+        "message": "log \"model\"         : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log password  \t  =TAILV then more",
+      "expected": "log password  \t  =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log password  \t  =TAILV then more"
+      },
+      "expected": {
+        "message": "log password  \t  =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"password\"  \t  : \"TAILV\" then more",
+      "expected": "log \"password\"  \t  : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"password\"  \t  : \"TAILV\" then more"
+      },
+      "expected": {
+        "message": "log \"password\"  \t  : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password  \t  =TAILV then more",
+      "expected": "log --password  \t  =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password  \t  =TAILV then more"
+      },
+      "expected": {
+        "message": "log --password  \t  =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password  \t  = TAILV then more",
+      "expected": "log --password  \t  = <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password  \t  = TAILV then more"
+      },
+      "expected": {
+        "message": "log --password  \t  = <redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log cookie  \t  : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log cookie  \t  : <redacted>\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log cookie  \t  : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log cookie  \t  : <redacted>\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"cookie\"  \t  : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log \"cookie\"  \t  : \"<redacted>\"\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"cookie\"  \t  : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log \"cookie\"  \t  : \"<redacted>\"\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-model-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log model  \t  =keep then more",
+      "expected": "log model  \t  =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-model-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log model  \t  =keep then more"
+      },
+      "expected": {
+        "message": "log model  \t  =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-mixed-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"model\"  \t  : \"keep\" then more",
+      "expected": "log \"model\"  \t  : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-mixed-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"model\"  \t  : \"keep\" then more"
+      },
+      "expected": {
+        "message": "log \"model\"  \t  : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log password =TAILV then more",
+      "expected": "log password =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-bare-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log password =TAILV then more"
+      },
+      "expected": {
+        "message": "log password =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"password\" : \"TAILV\" then more",
+      "expected": "log \"password\" : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"password\" : \"TAILV\" then more"
+      },
+      "expected": {
+        "message": "log \"password\" : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password =TAILV then more",
+      "expected": "log --password =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password =TAILV then more"
+      },
+      "expected": {
+        "message": "log --password =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log --password = TAILV then more",
+      "expected": "log --password = <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-dashes-spaced-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log --password = TAILV then more"
+      },
+      "expected": {
+        "message": "log --password = <redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log cookie : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log cookie : <redacted>\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-cookie-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log cookie : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log cookie : <redacted>\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"cookie\" : a=1; b=TAILV, c=TAILW\nthen more",
+      "expected": "log \"cookie\" : \"<redacted>\"\nthen more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-cookie-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"cookie\" : a=1; b=TAILV, c=TAILW\nthen more"
+      },
+      "expected": {
+        "message": "log \"cookie\" : \"<redacted>\"\nthen more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-model-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log model =keep then more",
+      "expected": "log model =<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-gap-model-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log model =keep then more"
+      },
+      "expected": {
+        "message": "log model =<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-em-space-prose",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "log \"model\" : \"keep\" then more",
+      "expected": "log \"model\" : \"<redacted>\" then more"
+    },
+    {
+      "name": "pair-rule-1c-gap-quoted-model-em-space-json",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "message": "log \"model\" : \"keep\" then more"
+      },
+      "expected": {
+        "message": "log \"model\" : \"<redacted>\" then more"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-space-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:,x%20TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-space-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:,x%20TAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-space-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:,x%20TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-space-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:,x%20TAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-quote-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:,x%22TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-quote-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:,x%22TAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-quote-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:,x%22TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-quote-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:,x%22TAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-apostrophe-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:,x%27TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-apostrophe-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:,x%27TAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-apostrophe-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:,x%27TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-apostrophe-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:,x%27TAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-lt-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:,x%3CTAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-lt-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:,x%3CTAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-lt-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:,x%3CTAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-lt-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:,x%3CTAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-gt-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:,x%3ETAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-gt-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:,x%3ETAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-gt-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:,x%3ETAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-gt-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:,x%3ETAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-backslash-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:,x%5CTAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-backslash-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:,x%5CTAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-backslash-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:,x%5CTAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-backslash-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:,x%5CTAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-base64-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password=data:text/plain;base64,QUJD%20TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-base64-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password=data:text/plain;base64,QUJD%20TAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-base64-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password=data:text/plain;base64,QUJD%20TAILX",
+      "expected": "https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-base64-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password=data:text/plain;base64,QUJD%20TAILX next",
+      "expected": "see https://example.invalid/?q=password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-colon-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=password:%20data:,x%20TAILX",
+      "expected": "https://example.invalid/?q=password: <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-colon-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=password:%20data:,x%20TAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=password: <redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-colon-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=password:%20data:,x%20TAILX",
+      "expected": "https://example.invalid/?q=password: <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-colon-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=password:%20data:,x%20TAILX next",
+      "expected": "see https://example.invalid/?q=password: <redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-vocabulary-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/?q=pwd=data:,x%20TAILX",
+      "expected": "https://example.invalid/?q=pwd=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-vocabulary-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/?q=pwd=data:,x%20TAILX"
+      },
+      "expected": {
+        "url": "https://example.invalid/?q=pwd=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-data-uri-vocabulary-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/?q=pwd=data:,x%20TAILX",
+      "expected": "https://example.invalid/?q=pwd=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-data-uri-vocabulary-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/?q=pwd=data:,x%20TAILX next",
+      "expected": "see https://example.invalid/?q=pwd=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-equals-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;password=TAILX/next",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-equals-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;password=TAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;password=<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-equals-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;password=TAILX/next",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-equals-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;password=TAILX/next next",
+      "expected": "see https://example.invalid/a=1;password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-encoded-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;password%3DTAILX/next",
+      "expected": "https://example.invalid/a=1;password%3D<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-encoded-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;password%3DTAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;password%3D<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-encoded-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;password%3DTAILX/next",
+      "expected": "https://example.invalid/a=1;password%3D<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-semicolon-encoded-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;password%3DTAILX/next next",
+      "expected": "see https://example.invalid/a=1;password%3D<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-equals-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1,password=TAILX/next",
+      "expected": "https://example.invalid/a=1,password=<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-equals-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1,password=TAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1,password=<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-equals-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1,password=TAILX/next",
+      "expected": "https://example.invalid/a=1,password=<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-equals-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1,password=TAILX/next next",
+      "expected": "see https://example.invalid/a=1,password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-encoded-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1,password%3DTAILX/next",
+      "expected": "https://example.invalid/a=1,password%3D<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-encoded-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1,password%3DTAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1,password%3D<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-encoded-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1,password%3DTAILX/next",
+      "expected": "https://example.invalid/a=1,password%3D<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-comma-encoded-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1,password%3DTAILX/next next",
+      "expected": "see https://example.invalid/a=1,password%3D<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-equals-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1&password=TAILX/next",
+      "expected": "https://example.invalid/a=1&password=<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-equals-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1&password=TAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1&password=<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-equals-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1&password=TAILX/next",
+      "expected": "https://example.invalid/a=1&password=<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-equals-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1&password=TAILX/next next",
+      "expected": "see https://example.invalid/a=1&password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-encoded-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1&password%3DTAILX/next",
+      "expected": "https://example.invalid/a=1&password%3D<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-encoded-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1&password%3DTAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1&password%3D<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-encoded-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1&password%3DTAILX/next",
+      "expected": "https://example.invalid/a=1&password%3D<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-ampersand-encoded-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1&password%3DTAILX/next next",
+      "expected": "see https://example.invalid/a=1&password%3D<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-lower-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a%3d1;api_key%3dTAILX/next",
+      "expected": "https://example.invalid/a%3d1;api_key%3d<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-lower-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a%3d1;api_key%3dTAILX/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a%3d1;api_key%3d<redacted>/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-lower-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a%3d1;api_key%3dTAILX/next",
+      "expected": "https://example.invalid/a%3d1;api_key%3d<redacted>/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-lower-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a%3d1;api_key%3dTAILX/next next",
+      "expected": "see https://example.invalid/a%3d1;api_key%3d<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-several-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;password=TAILX;model=keep,token%3DTAILY&view=keep/next",
+      "expected": "https://example.invalid/a=1;password=<redacted>;model=keep,token%3D<redacted>&view=keep/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-several-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;password=TAILX;model=keep,token%3DTAILY&view=keep/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;password=<redacted>;model=keep,token%3D<redacted>&view=keep/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-several-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;password=TAILX;model=keep,token%3DTAILY&view=keep/next",
+      "expected": "https://example.invalid/a=1;password=<redacted>;model=keep,token%3D<redacted>&view=keep/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-several-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;password=TAILX;model=keep,token%3DTAILY&view=keep/next next",
+      "expected": "see https://example.invalid/a=1;password=<redacted>;model=keep,token%3D<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-every-not-credential-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;model%3Dkeep,view=keep/next",
+      "expected": "https://example.invalid/a=1;model%3Dkeep,view=keep/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-not-credential-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;model%3Dkeep,view=keep/next"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;model%3Dkeep,view=keep/next"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-every-not-credential-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;model%3Dkeep,view=keep/next",
+      "expected": "https://example.invalid/a=1;model%3Dkeep,view=keep/next"
+    },
+    {
+      "name": "pair-rule-1c-path-every-not-credential-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;model%3Dkeep,view=keep/next next",
+      "expected": "see https://example.invalid/a=1;model%3Dkeep,view=keep/next next"
+    },
+    {
+      "name": "pair-rule-1c-path-later-segment-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;password=TAILX/next/secret:TAILY",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next/secret:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-segment-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;password=TAILX/next/secret:TAILY"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;password=<redacted>/next/secret:<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-later-segment-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;password=TAILX/next/secret:TAILY",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next/secret:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-segment-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;password=TAILX/next/secret:TAILY next",
+      "expected": "see https://example.invalid/a=1;password=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-query-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;password=TAILX/next?model=keep,secret=TAILY",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next?model=keep,secret=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-query-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;password=TAILX/next?model=keep,secret=TAILY"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;password=<redacted>/next?model=keep,secret=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-later-query-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;password=TAILX/next?model=keep,secret=TAILY",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next?model=keep,secret=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-query-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;password=TAILX/next?model=keep,secret=TAILY next",
+      "expected": "see https://example.invalid/a=1;password=<redacted>,secret=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-fragment-query",
+      "site": "request_query",
+      "path": "",
+      "value": "https://example.invalid/a=1;password=TAILX/next#view=keep,secret=TAILY",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next#view=keep,secret=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-fragment-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "https://example.invalid/a=1;password=TAILX/next#view=keep,secret=TAILY"
+      },
+      "expected": {
+        "url": "https://example.invalid/a=1;password=<redacted>/next#view=keep,secret=<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-path-later-fragment-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "https://example.invalid/a=1;password=TAILX/next#view=keep,secret=TAILY",
+      "expected": "https://example.invalid/a=1;password=<redacted>/next#view=keep,secret=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-path-later-fragment-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see https://example.invalid/a=1;password=TAILX/next#view=keep,secret=TAILY next",
+      "expected": "see https://example.invalid/a=1;password=<redacted>,secret=<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-port-query",
+      "site": "request_query",
+      "path": "",
+      "value": "http://keycloak.example.invalid:8080/path?x=1",
+      "expected": "http://keycloak.example.invalid:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-port-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "http://keycloak.example.invalid:8080/path?x=1"
+      },
+      "expected": {
+        "url": "http://keycloak.example.invalid:<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-host-port-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "http://keycloak.example.invalid:8080/path?x=1",
+      "expected": "http://keycloak.example.invalid:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-port-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see http://keycloak.example.invalid:8080/path?x=1 next",
+      "expected": "see http://keycloak.example.invalid:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-userinfo-query",
+      "site": "request_query",
+      "path": "",
+      "value": "http://user:TAILU@keycloak.example.invalid:8080/path?x=1",
+      "expected": "http://<redacted>@keycloak.example.invalid:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-userinfo-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "http://user:TAILU@keycloak.example.invalid:8080/path?x=1"
+      },
+      "expected": {
+        "url": "http://<redacted>@keycloak.example.invalid:<redacted>"
+      }
+    },
+    {
+      "name": "pair-rule-1c-host-userinfo-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "http://user:TAILU@keycloak.example.invalid:8080/path?x=1",
+      "expected": "http://<redacted>@keycloak.example.invalid:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-userinfo-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see http://user:TAILU@keycloak.example.invalid:8080/path?x=1 next",
+      "expected": "see http://<redacted>@keycloak.example.invalid:<redacted>"
+    },
+    {
+      "name": "pair-rule-1c-host-control-query",
+      "site": "request_query",
+      "path": "",
+      "value": "http://service.example.invalid:8080/path?x=1",
+      "expected": "http://service.example.invalid:8080/path?x=1"
+    },
+    {
+      "name": "pair-rule-1c-host-control-response",
+      "site": "response_body",
+      "path": "",
+      "value": {
+        "url": "http://service.example.invalid:8080/path?x=1"
+      },
+      "expected": {
+        "url": "http://service.example.invalid:8080/path?x=1"
+      }
+    },
+    {
+      "name": "pair-rule-1c-host-control-attribute",
+      "site": "attribute_keys",
+      "path": "http.url",
+      "value": "http://service.example.invalid:8080/path?x=1",
+      "expected": "http://service.example.invalid:8080/path?x=1"
+    },
+    {
+      "name": "pair-rule-1c-host-control-text",
+      "site": "free_text_urls",
+      "path": "",
+      "value": "see http://service.example.invalid:8080/path?x=1 next",
+      "expected": "see http://service.example.invalid:8080/path?x=1 next"
+    }
+  ]
+}

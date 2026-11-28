@@ -9,25 +9,29 @@ const freeText = (value: string, secrets: readonly string[] = []): string =>
 const secret = "SYNTHETIC_PRIVATE_20261030";
 
 test("R-F1-S6-FRAGMENT-2", () => {
-  const value = "see #fragment?token=ordinary next";
+  // Shared privacy spec v4: a credential-named pair is a pair on every path, a fragment in prose included, and its value
+  // runs to the true end of the value.
+  const value = "see #fragment?token=ordinary next", expected = "see #fragment?token=<redacted>";
   check(wire.scrubValue === core.scrubValue, "R-F1-S6-FRAGMENT-2-SHARED");
-  check(freeText(value) === value, "R-F1-S6-FRAGMENT-2-BYTES");
-  check(wire.scrubText(value) === value, "R-F1-S6-FRAGMENT-2-TEXT");
-  check(freeText(freeText(value)) === value, "R-F1-S6-FRAGMENT-2-IDEMPOTENT");
+  check(freeText(value) === expected, "R-F1-S6-FRAGMENT-2-BYTES");
+  check(wire.scrubText(value) === expected, "R-F1-S6-FRAGMENT-2-TEXT");
+  check(freeText(freeText(value)) === expected, "R-F1-S6-FRAGMENT-2-IDEMPOTENT");
 });
 
 test("R-F1-S6-URL-QUERY-FAMILY", () => {
   // The reviewed url-query-boundaries family, with explicit neighbouring
   // query masking controls rather than only the formerly failing safe string.
+  // Shared privacy spec v4: credential pairs after the '#' and after a second '?' are replaced, and in prose a credential
+  // pair's value runs to its true end (the expectations are the shared reference's output).
   const cases: readonly (readonly [string, string])[] = [
-    ["see https://example.invalid/#fragment?token=ordinary next", "see https://example.invalid/#fragment?token=ordinary next"],
-    ["see https://example.invalid/?model=keep#fragment?token=ordinary next", "see https://example.invalid/?model=keep#fragment?token=ordinary next"],
-    ["see /path#fragment?token=ordinary next", "see /path#fragment?token=ordinary next"],
-    [`see /path?token?filter=${secret}#fragment?token=ordinary next`, "see /path?token?filter=<redacted>#fragment?token=ordinary next"],
-    ["https://example.invalid/?model=why?token=ordinary", "https://example.invalid/?model=why?token=ordinary"],
-    [`https://example.invalid/#fragment?token=ordinary then https://example.invalid/?token=${secret}`, "https://example.invalid/#fragment?token=ordinary then https://example.invalid/?token=<redacted>"],
-    [`see #fragment?token=ordinary then https://example.invalid/path?token=${secret}&access_token=${secret}&model=keep#anchor next`, "see #fragment?token=ordinary then https://example.invalid/path?token=<redacted>&access_token=<redacted>&model=keep#anchor next"],
-    [`see ?token=${secret}&model=keep next`, "see ?token=<redacted>&model=keep next"],
+    ["see https://example.invalid/#fragment?token=ordinary next", "see https://example.invalid/#fragment?token=<redacted>"],
+    ["see https://example.invalid/?model=keep#fragment?token=ordinary next", "see https://example.invalid/?model=keep#fragment?token=<redacted>"],
+    ["see /path#fragment?token=ordinary next", "see /path#fragment?token=<redacted>"],
+    [`see /path?token?filter=${secret}#fragment?token=ordinary next`, "see /path?token?filter=<redacted>#fragment?token=<redacted>"],
+    ["https://example.invalid/?model=why?token=ordinary", "https://example.invalid/?model=why?token=<redacted>"],
+    [`https://example.invalid/#fragment?token=ordinary then https://example.invalid/?token=${secret}`, "https://example.invalid/#fragment?token=<redacted> https://example.invalid/?token=<redacted>"],
+    [`see #fragment?token=ordinary then https://example.invalid/path?token=${secret}&access_token=${secret}&model=keep#anchor next`, "see #fragment?token=<redacted> https://example.invalid/path?token=<redacted>"],
+    [`see ?token=${secret}&model=keep next`, "see ?token=<redacted>"],
   ];
   for (const [value, expected] of cases) {
     const clean = freeText(value);
@@ -37,20 +41,21 @@ test("R-F1-S6-URL-QUERY-FAMILY", () => {
   }
   for (const name of ["client_secret?tag", "password?foo", "token?filter"]) {
     const value = `https://example.invalid/?${name}=${secret}&model=keep#fragment?token=ordinary`;
-    const expected = `https://example.invalid/?${name}=<redacted>&model=keep#fragment?token=ordinary`;
+    const expected = `https://example.invalid/?${name}=<redacted>&model=keep#fragment?token=<redacted>`;
     check(freeText(value) === expected, "R-F1-S6-URL-QUERY-FAMILY-LITERAL-QUESTION");
     check(wire.scrubValue(value) === expected, "R-F1-S6-URL-QUERY-FAMILY-FRAMED");
   }
 });
 
 test("R-F1-S6-APOSTROPHE-AND-ENCODED-QUERY", () => {
+  // Shared privacy spec v4: in prose a credential pair's value runs to its true end (the shared reference's output).
   const cases: readonly (readonly [string, string])[] = [
-    [`see https://example.invalid/?client%2Esecret=${secret}&model=keep next`, "see https://example.invalid/?client%2Esecret=<redacted>&model=keep next"],
-    [`see /path?token'filter=${secret}&model=keep#fragment?token=ordinary next`, "see /path?token'filter=<redacted>&model=keep#fragment?token=ordinary next"],
-    [`'https://example.invalid/?token='${secret}'`, "'https://example.invalid/?token=<redacted>'"],
+    [`see https://example.invalid/?client%2Esecret=${secret}&model=keep next`, "see https://example.invalid/?client%2Esecret=<redacted>"],
+    [`see /path?token'filter=${secret}&model=keep#fragment?token=ordinary next`, "see /path?token'filter=<redacted>&model=keep#fragment?token=<redacted>"],
+    [`'https://example.invalid/?token='${secret}'`, "'https://example.invalid/?token=<redacted>"],
     ["https://example.invalid/?model=author's-model&key_id=public", "https://example.invalid/?model=author's-model&key_id=public"],
-    ["https://example.invalid/?token=&model=keep", "https://example.invalid/?token=<redacted>&model=keep"],
-    ["https://example.invalid/?token=<redacted>&model=keep", "https://example.invalid/?token=<redacted>&model=keep"],
+    ["https://example.invalid/?token=&model=keep", "https://example.invalid/?token=<redacted>"],
+    ["https://example.invalid/?token=<redacted>&model=keep", "https://example.invalid/?token=<redacted>"],
   ];
   for (const [value, expected] of cases) {
     check(freeText(value) === expected, "R-F1-S6-APOSTROPHE-AND-ENCODED-QUERY-BYTES");
@@ -59,16 +64,16 @@ test("R-F1-S6-APOSTROPHE-AND-ENCODED-QUERY", () => {
 });
 
 test("R-F1-S6-FRAGMENT-SECRET-POLICIES", () => {
-  check(freeText(`see #fragment?token=${secret} next`, [secret]) === "see #fragment?token=<redacted> next", "R-F1-S6-FRAGMENT-SECRET-POLICIES-EXACT");
+  check(freeText(`see #fragment?token=${secret} next`, [secret]) === "see #fragment?token=<redacted>", "R-F1-S6-FRAGMENT-SECRET-POLICIES-EXACT");
   const shaped = "sk-" + "SYNTHETIC".repeat(4);
-  check(freeText(`see #fragment?token=${shaped} next`) === "see #fragment?token=<redacted> next", "R-F1-S6-FRAGMENT-SECRET-POLICIES-SHAPE");
+  check(freeText(`see #fragment?token=${shaped} next`) === "see #fragment?token=<redacted>", "R-F1-S6-FRAGMENT-SECRET-POLICIES-SHAPE");
   check(freeText("see #fragment?blob=data:audio/wav;base64,AQIDBA== next") === "see #fragment?blob=<omitted: 8 base64 chars> next", "R-F1-S6-FRAGMENT-SECRET-POLICIES-MEDIA");
   check(wire.scrubValue("#fragment?token=ordinary", [], "token") === "<redacted>", "R-F1-S6-FRAGMENT-SECRET-POLICIES-STRUCTURED");
 });
 
 test("R-F1-S6-FRAGMENT-ASSIGNMENT-BOUNDARY", () => {
   const after = freeText(`see #fragment?token=ordinary next token=${secret}`);
-  check(after.startsWith("see #fragment?token=ordinary next ") && !after.includes(secret) && after.includes("<redacted>"), "R-F1-S6-FRAGMENT-ASSIGNMENT-BOUNDARY-TRAILING");
+  check(after === "see #fragment?token=<redacted> token=<redacted>", "R-F1-S6-FRAGMENT-ASSIGNMENT-BOUNDARY-TRAILING");
   const nonReference = freeText(`label#token=${secret}`);
   check(!nonReference.includes(secret) && nonReference.includes("<redacted>"), "R-F1-S6-FRAGMENT-ASSIGNMENT-BOUNDARY-NONREFERENCE");
   const assigned = freeText(`token=https://example.invalid/#fragment?token=${secret}`);

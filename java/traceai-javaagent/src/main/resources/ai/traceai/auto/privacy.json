@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "scalar_metrics": {
     "version": 6,
     "canonical_decimal": {
@@ -131,6 +131,17 @@
         "example": "Set-Cookie"
       }
     ],
+    "vocabulary": {
+      "words": [
+        "pwd",
+        "pass",
+        "passphrase",
+        "passwd",
+        "passcode",
+        "pin"
+      ],
+      "match": "Besides the patterns, a name is a credential name when one of these words is the whole name or one of its segments, at every site: query, fragment and URL path pairs, JSON and map keys, attribute keys and the credential pair rule. A segment is a maximal run of Unicode letters and decimal digits (categories Lu, Ll, Lt, Lm, Lo and Nd); every other character delimits it (for example '-', '_', '.', '/', '[', ']', ':', '?', '=', '&', ';', ',', '%' and space), and so does the change from a lowercase letter to an uppercase one (dbPass, db.pwd, user-pin, X-Pin). Words compare in lowercase. As for the patterns, the rule is tested per path component and then on the whole name, and an excluded component is not tested. Over-redaction (a name such as pin) fails closed."
+    },
     "exclusions": [
       {
         "id": "tokens",
