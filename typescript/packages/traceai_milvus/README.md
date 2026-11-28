@@ -1,353 +1,108 @@
 # @traceai/milvus
 
-OpenTelemetry instrumentation for [Milvus](https://milvus.io/) vector database client in Node.js/TypeScript applications.
+Trace Milvus gRPC operations with OpenTelemetry, including operation duration, collection names, result counts, and errors.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/milvus
-# or
-pnpm add @traceai/milvus
-# or
-yarn add @traceai/milvus
+npm install @traceai/milvus @zilliz/milvus2-sdk-node
 ```
 
-## Prerequisites
+Configure your application's OpenTelemetry tracer provider and trace exporter before making database calls. See [Future AGI tracing](https://docs.futureagi.com/docs/tracing) for exporter setup.
 
-- Node.js >= 18
-- Milvus SDK (`@zilliz/milvus2-sdk-node` >= 2.0.0)
-- OpenTelemetry SDK configured in your application
+## Instrument a client
 
-## Quick Start
+Instrument the module **before constructing clients**. Milvus saves some methods, including `hybridSearch`, on each instance during construction.
 
 ```typescript
 import { MilvusInstrumentation } from "@traceai/milvus";
-import { MilvusClient } from "@zilliz/milvus2-sdk-node";
-
-// Initialize instrumentation
-const instrumentation = new MilvusInstrumentation({
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
-});
-
-// Enable instrumentation
-instrumentation.enable();
-
-// Manually instrument the Milvus module
-import * as milvusModule from "@zilliz/milvus2-sdk-node";
-instrumentation.manuallyInstrument(milvusModule);
-
-// Now all Milvus operations will be traced
-const client = new MilvusClient({
-  address: "localhost:19530",
-});
-
-// This search will be automatically traced
-const results = await client.search({
-  collection_name: "articles",
-  vector: [0.1, 0.2, 0.3, ...],
-  limit: 10,
-});
-```
-
-## Configuration Options
-
-```typescript
-interface MilvusInstrumentationConfig {
-  // Enable/disable the instrumentation
-  enabled?: boolean;
-
-  // Capture query vectors in span attributes
-  captureQueryVectors?: boolean;
-
-  // Capture result vectors in span attributes
-  captureResultVectors?: boolean;
-}
-
-interface TraceConfigOptions {
-  // Mask sensitive input data
-  maskInputs?: boolean;
-
-  // Mask sensitive output data
-  maskOutputs?: boolean;
-}
-```
-
-## Traced Operations
-
-The instrumentation automatically traces the following Milvus operations:
-
-### Search & Query
-- `search` - Vector similarity search
-- `query` - Scalar query with filters
-- `get` - Get vectors by IDs
-
-### Data Operations
-- `insert` - Insert vectors
-- `upsert` - Upsert vectors
-- `delete` - Delete vectors
-
-### Collection Management
-- `createCollection` - Create new collection
-- `dropCollection` - Drop collection
-- `loadCollection` - Load collection into memory
-- `releaseCollection` - Release collection from memory
-- `describeCollection` - Get collection info
-
-### Index Operations
-- `createIndex` - Create vector index
-- `dropIndex` - Drop index
-
-## Span Attributes
-
-Each traced operation includes relevant attributes:
-
-| Attribute | Description |
-|-----------|-------------|
-| `db.system` | Always "milvus" |
-| `db.operation` | Operation name (e.g., "search", "insert") |
-| `db.collection.name` | Collection name |
-| `db.milvus.top_k` | Number of results requested |
-| `db.milvus.nprobe` | Search parameter |
-| `db.milvus.metric_type` | Distance metric (L2, IP, COSINE) |
-
-## Real-World Use Cases
-
-### 1. High-Performance Image Search
-
-```typescript
-import { MilvusInstrumentation } from "@traceai/milvus";
-import { MilvusClient, DataType } from "@zilliz/milvus2-sdk-node";
+import * as milvus from "@zilliz/milvus2-sdk-node";
 
 const instrumentation = new MilvusInstrumentation();
-instrumentation.enable();
+instrumentation.manuallyInstrument(milvus);
 
-const client = new MilvusClient({ address: "localhost:19530" });
+const client = new milvus.MilvusClient({ address: "localhost:19530" });
 
-// Create collection for image embeddings
-async function setupImageCollection() {
-  await client.createCollection({
-    collection_name: "images",
-    fields: [
-      { name: "id", data_type: DataType.Int64, is_primary_key: true },
-      { name: "embedding", data_type: DataType.FloatVector, dim: 512 },
-      { name: "filename", data_type: DataType.VarChar, max_length: 256 },
-      { name: "category", data_type: DataType.VarChar, max_length: 64 },
-    ],
-    index_params: {
-      field_name: "embedding",
-      index_type: "IVF_FLAT",
-      metric_type: "L2",
-      params: { nlist: 1024 },
-    },
+// Use an existing collection and a vector that matches its dimension.
+async function searchArticles(queryVector: number[]) {
+  return client.search({
+    collection_name: "articles",
+    data: queryVector,
+    limit: 10,
   });
 }
-
-// Search similar images (traced)
-async function findSimilarImages(
-  imageEmbedding: number[],
-  category?: string,
-  limit = 20
-) {
-  const searchParams = {
-    collection_name: "images",
-    vector: imageEmbedding,
-    limit,
-    output_fields: ["filename", "category"],
-    params: { nprobe: 16 },
-  };
-
-  if (category) {
-    searchParams["filter"] = `category == "${category}"`;
-  }
-
-  const results = await client.search(searchParams);
-  return results.results;
-}
 ```
 
-### 2. Real-time Fraud Detection
+The example uses the direct-client API in modern 2.x and 3.x SDKs. You can also register `MilvusInstrumentation` with your OpenTelemetry SDK's `instrumentations` option before loading the Milvus SDK; the manual module call is useful when the module has already been imported.
+
+### Existing clients and saved aliases
+
+If a client was constructed before instrumentation was enabled, instrument that instance as well. Patching the module cannot discover previously created clients or replace aliases they already saved.
 
 ```typescript
-async function detectFraud(transactionVector: number[], threshold = 0.85) {
-  // Search for similar transaction patterns
-  const results = await client.search({
-    collection_name: "fraud_patterns",
-    vector: transactionVector,
-    limit: 5,
-    params: { nprobe: 32 },
-    output_fields: ["pattern_type", "risk_score", "description"],
-  });
-
-  const fraudMatches = results.results.filter(
-    (r) => r.score >= threshold && r.pattern_type === "fraud"
-  );
-
-  return {
-    isFraudulent: fraudMatches.length > 0,
-    confidence: fraudMatches[0]?.score ?? 0,
-    matchedPatterns: fraudMatches,
-  };
-}
+instrumentation.manuallyInstrumentClient(client);
 ```
 
-### 3. Multi-modal Search (Text + Image)
+For the SDK 2.0 manager API, pass the relevant manager instead:
 
 ```typescript
-async function multiModalSearch(
-  textEmbedding: number[],
-  imageEmbedding: number[],
-  weights = { text: 0.6, image: 0.4 }
-) {
-  // Combine embeddings with weights
-  const combinedVector = textEmbedding.map(
-    (val, i) => val * weights.text + imageEmbedding[i] * weights.image
-  );
-
-  const results = await client.search({
-    collection_name: "products",
-    vector: combinedVector,
-    limit: 50,
-    output_fields: ["name", "description", "image_url", "price"],
-    params: { nprobe: 64 },
-  });
-
-  return results.results;
-}
+instrumentation.manuallyInstrumentClient(legacyClient.dataManager);
+instrumentation.manuallyInstrumentClient(legacyClient.collectionManager);
+instrumentation.manuallyInstrumentClient(legacyClient.indexManager);
 ```
 
-### 4. Streaming Data Ingestion
+`legacyClient` is your existing SDK 2.0 client. Only the supported method names listed below are wrapped; manager methods with other names are not traced by this package.
+
+### Enable and disable
 
 ```typescript
-async function ingestEmbeddings(
-  embeddings: { id: number; vector: number[]; metadata: any }[]
-) {
-  const BATCH_SIZE = 1000;
-
-  for (let i = 0; i < embeddings.length; i += BATCH_SIZE) {
-    const batch = embeddings.slice(i, i + BATCH_SIZE);
-
-    // Each upsert is traced separately
-    await client.upsert({
-      collection_name: "documents",
-      data: batch.map((item) => ({
-        id: item.id,
-        embedding: item.vector,
-        metadata: JSON.stringify(item.metadata),
-      })),
-    });
-  }
-}
+instrumentation.disable(); // Restore methods and stop tracing saved wrappers.
+instrumentation.enable();  // Resume tracing previously registered targets.
 ```
 
-### 5. Recommendation with User History
+Repeated setup does not add duplicate wrappers. If multiple instrumentation instances share a target, it stays traced until all owners disable it. The first active owner supplies the tracer and configuration; normally, use one instrumentation instance per application. Calls already in progress finish their spans even if you disable instrumentation while they run.
 
-```typescript
-async function getPersonalizedRecommendations(
-  userId: string,
-  recentItemVectors: number[][],
-  limit = 20
-) {
-  // Average recent item vectors for user preference
-  const userPreference = recentItemVectors[0].map((_, i) =>
-    recentItemVectors.reduce((sum, vec) => sum + vec[i], 0) /
-    recentItemVectors.length
-  );
+## Supported operations
 
-  // Get user's already viewed items
-  const viewedItems = await client.query({
-    collection_name: "user_views",
-    filter: `user_id == "${userId}"`,
-    output_fields: ["item_id"],
-  });
+When present on the target, the package wraps:
 
-  const excludeIds = viewedItems.data.map((v) => v.item_id);
+- Search: `search`, `hybridSearch`, `query`, `get`
+- Data: `insert`, `upsert`, `delete`
+- Collections: `createCollection`, `dropCollection`, `hasCollection`, `describeCollection`
+- Indexes: `createIndex`, `dropIndex`
 
-  // Search for recommendations excluding viewed items
-  const results = await client.search({
-    collection_name: "items",
-    vector: userPreference,
-    limit: limit + excludeIds.length,
-    output_fields: ["name", "category", "thumbnail"],
-    filter:
-      excludeIds.length > 0
-        ? `id not in [${excludeIds.join(",")}]`
-        : undefined,
-  });
+In SDKs where `hybridSearch` is an alias of `search`, both produce a `milvus search` span. SDK-internal calls to other supported operations can produce child operation spans.
 
-  return results.results.slice(0, limit);
-}
-```
+The separate Milvus HTTP client is not instrumented by the module entry point. Use the gRPC `MilvusClient` for this integration. `loadCollection` and `releaseCollection` are also outside this package's operation list.
 
-### 6. Hybrid Search with Scalar Filtering
+## Span attributes
 
-```typescript
-async function hybridProductSearch(
-  queryVector: number[],
-  filters: {
-    minPrice?: number;
-    maxPrice?: number;
-    categories?: string[];
-    inStock?: boolean;
-  }
-) {
-  // Build filter expression
-  const filterParts: string[] = [];
+Each operation creates a `CLIENT` span under the active application span.
 
-  if (filters.minPrice !== undefined) {
-    filterParts.push(`price >= ${filters.minPrice}`);
-  }
-  if (filters.maxPrice !== undefined) {
-    filterParts.push(`price <= ${filters.maxPrice}`);
-  }
-  if (filters.categories?.length) {
-    filterParts.push(
-      `category in [${filters.categories.map((c) => `"${c}"`).join(",")}]`
-    );
-  }
-  if (filters.inStock !== undefined) {
-    filterParts.push(`in_stock == ${filters.inStock}`);
-  }
+| Attribute | Value |
+| --- | --- |
+| `db.system` | `milvus` |
+| `db.operation.name` | Wrapped operation name |
+| `fi.span.kind` | `VECTOR_DB` |
+| `db.collection.name` | `collection_name`, when supplied |
+| `db.vector.query.top_k` | Top-level `limit` or `topk` for search/query |
+| `db.vector.query.dimensions` | First vector's length when `vectors` is supplied |
+| `db.operation.batch_size` | Length of `data` or `fields_data` for insert/upsert |
+| `db.response.returned_rows` | Length of a returned `results` array |
 
-  const results = await client.search({
-    collection_name: "products",
-    vector: queryVector,
-    limit: 100,
-    filter: filterParts.length > 0 ? filterParts.join(" && ") : undefined,
-    output_fields: ["name", "price", "category", "in_stock", "rating"],
-  });
+The package does not record query vectors, result vectors, filters, or result payloads. The existing `captureQueryVectors` and `captureResultVectors` configuration fields are retained for API compatibility but do not enable vector capture. Collection names and exception details can appear in spans.
 
-  return results.results;
-}
-```
+## Milvus native tracing
 
-## Integration with OpenTelemetry
+Milvus SDK 3.0.6's `trace: true` option adds a `grpc-intercept` span and propagates trace context into gRPC metadata. That span ends before the RPC continues, so it does not replace this package's operation-duration and collection attributes.
 
-```typescript
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { MilvusInstrumentation } from "@traceai/milvus";
+Leave native tracing off unless you need propagation into the Milvus service. If you enable it, use the same OpenTelemetry provider: a native propagation span can appear beneath the operation span. Configure only one application trace exporter for your destination to avoid exporting the same spans twice.
 
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: "http://localhost:4318/v1/traces",
-  }),
-  instrumentations: [new MilvusInstrumentation()],
-});
+## Troubleshooting
 
-sdk.start();
-```
-
-## Performance Considerations
-
-- **Batch Operations**: Use `insert` and `upsert` with batches for better throughput
-- **Index Selection**: Choose appropriate index type based on your use case:
-  - `IVF_FLAT`: Good balance of speed and accuracy
-  - `HNSW`: Best for high-recall requirements
-  - `IVF_PQ`: Best for memory-constrained environments
-- **Partition Keys**: Use partitions for multi-tenant scenarios
+- **Search is traced but an existing client's hybrid search is not:** call `manuallyInstrumentClient(client)` or construct the client after module instrumentation.
+- **No spans appear:** configure an OpenTelemetry provider/exporter before making calls, check that instrumentation is enabled, and confirm you are using the gRPC rather than HTTP client.
+- **Tracing continues after disabling one instance:** disable the other instrumentation instances that registered the same target. Already-started operations still complete normally.
 
 ## License
 

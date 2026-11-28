@@ -9,6 +9,7 @@ import {
   SpanKind,
   SpanStatusCode,
   Attributes,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
@@ -29,10 +30,25 @@ type MilvusOperation =
   | "createIndex"
   | "dropIndex";
 
-let _isPatched = false;
+interface MethodPatch {
+  name: string;
+  descriptor?: PropertyDescriptor;
+  original: Function;
+  wrapper: Function;
+}
+
+interface ClientPatch {
+  owners: Set<MilvusInstrumentation>;
+  methods: MethodPatch[];
+}
+
+// A module-wide boolean cannot distinguish SDK copies or instrumentation owners.
+const clientPatches = new WeakMap<object, ClientPatch>();
+const originalMethods = new WeakMap<Function, Function>();
+let activeTargets = 0;
 
 export function isPatched(): boolean {
-  return _isPatched;
+  return activeTargets > 0;
 }
 
 export interface MilvusInstrumentationConfig extends InstrumentationConfig {
@@ -43,7 +59,8 @@ export interface MilvusInstrumentationConfig extends InstrumentationConfig {
 export class MilvusInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private _milvusConfig: MilvusInstrumentationConfig;
+  // Lazily initialized: InstrumentationBase calls enable() from its constructor.
+  private _targets?: Set<object>;
 
   constructor({
     instrumentationConfig,
@@ -54,15 +71,32 @@ export class MilvusInstrumentation extends InstrumentationBase {
   } = {}) {
     super("@traceai/milvus", VERSION, Object.assign({}, instrumentationConfig));
     this._traceConfig = traceConfig;
-    this._milvusConfig = instrumentationConfig || {};
+    this._refreshTracer();
   }
 
-  public override enable(): void {
-    super.enable();
+  private _refreshTracer(): void {
     this.fiTracer = new FITracer({
       tracer: this.tracer,
       traceConfig: this._traceConfig,
     });
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this._refreshTracer();
+  }
+
+  public override enable(): void {
+    this._refreshTracer();
+    super.enable();
+    this._targets?.forEach(target => this._patchClient(target));
+  }
+
+  public override disable(): void {
+    super.disable();
+    // The base class only unpatches modules seen by its loader hooks, not
+    // modules/instances passed to manuallyInstrument().
+    this._targets?.forEach(target => this._unpatchClient(target));
   }
 
   protected init() {
@@ -78,34 +112,56 @@ export class MilvusInstrumentation extends InstrumentationBase {
     this.patch(milvusModule);
   }
 
+  /** Instrument an existing gRPC client, including aliases saved before setup.
+   * For SDK 2.0's manager API, pass dataManager/collectionManager/indexManager.
+   * The separate HTTP client is not supported.
+   */
+  public manuallyInstrumentClient(client: object): void {
+    this._trackTarget(client);
+  }
+
   private patch(moduleExports: any, moduleVersion?: string) {
-    if (_isPatched) {
-      return moduleExports;
-    }
-
-    if (!this.fiTracer) {
-      this.fiTracer = new FITracer({
-        tracer: this.tracer,
-        traceConfig: this._traceConfig,
-      });
-    }
-
-    if (moduleExports.MilvusClient?.prototype) {
-      this._patchClient(moduleExports.MilvusClient.prototype);
-    }
-
-    _isPatched = true;
+    const prototype = moduleExports?.MilvusClient?.prototype;
+    if (prototype) this._trackTarget(prototype);
     return moduleExports;
   }
 
   private unpatch(moduleExports: any, moduleVersion?: string) {
-    _isPatched = false;
+    const prototype = moduleExports?.MilvusClient?.prototype;
+    if (prototype) this._unpatchClient(prototype);
+    return moduleExports;
+  }
+
+  private _trackTarget(target: object): void {
+    (this._targets ??= new Set()).add(target);
+    if (this.isEnabled()) this._patchClient(target);
   }
 
   private _patchClient(prototype: any): void {
-    const instrumentation = this;
+    let patch = clientPatches.get(prototype);
+    if (patch) {
+      if (patch.owners.has(this)) return;
+      if (patch.owners.size === 0) {
+        for (const method of patch.methods) {
+          // Do not overwrite another library's replacement. Saved aliases (or
+          // a foreign wrapper around ours) still use this patch's live owners.
+          if (prototype[method.name] === method.original) {
+            this._installMethod(prototype, method);
+          }
+        }
+        activeTargets++;
+      }
+      patch.owners.add(this);
+      return;
+    }
+
+    patch = { owners: new Set(), methods: [] };
+    const owners = patch.owners;
     const methodsToPatch: { name: string; operation: MilvusOperation }[] = [
       { name: "search", operation: "search" },
+      // Current SDKs assign this.search to an own hybridSearch property. Keep
+      // the existing search span name and do not wrap a wrapped search twice.
+      { name: "hybridSearch", operation: "search" },
       { name: "query", operation: "query" },
       { name: "insert", operation: "insert" },
       { name: "upsert", operation: "upsert" },
@@ -120,11 +176,50 @@ export class MilvusInstrumentation extends InstrumentationBase {
     ];
 
     for (const { name, operation } of methodsToPatch) {
-      if (typeof prototype[name] === "function") {
-        const original = prototype[name];
-        prototype[name] = function (this: any, ...args: any[]) {
-          return instrumentation._wrapMethod(this, original, operation, args);
-        };
+      const original = prototype[name];
+      if (typeof original !== "function") continue;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+      // Avoid invoking setters or trying to replace an immutable SDK method.
+      if (descriptor && (!("value" in descriptor) || !descriptor.writable)) continue;
+      if (!descriptor && !Object.isExtensible(prototype)) continue;
+      const unwrapped = originalMethods.get(original) ?? original;
+      const wrapper = function (this: any, ...args: any[]) {
+        const owner = owners.values().next().value;
+        // Aliases can retain this function after the prototype is restored.
+        // Consult ownership on every call so disable also silences those aliases.
+        return owner
+          ? owner._wrapMethod(this, unwrapped, operation, args)
+          : original.apply(this, args);
+      };
+      originalMethods.set(wrapper, unwrapped);
+      const method = { name, descriptor, original, wrapper };
+      this._installMethod(prototype, method);
+      patch.methods.push(method);
+    }
+    if (patch.methods.length) {
+      patch.owners.add(this);
+      clientPatches.set(prototype, patch);
+      activeTargets++;
+    }
+  }
+
+  private _installMethod(target: any, method: MethodPatch): void {
+    Object.defineProperty(target, method.name, method.descriptor
+      ? { ...method.descriptor, value: method.wrapper }
+      : { configurable: true, enumerable: false, writable: true, value: method.wrapper });
+  }
+
+  private _unpatchClient(target: any): void {
+    const patch = clientPatches.get(target);
+    if (!patch?.owners.delete(this) || patch.owners.size) return;
+    activeTargets--;
+    for (const method of patch.methods) {
+      if (target[method.name] !== method.wrapper) continue;
+      if (method.descriptor) {
+        Object.defineProperty(target, method.name, method.descriptor);
+      } else {
+        // Restore inheritance rather than leaving a shadowing own property.
+        delete target[method.name];
       }
     }
   }
