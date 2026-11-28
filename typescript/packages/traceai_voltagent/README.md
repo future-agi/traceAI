@@ -10,9 +10,20 @@ It plugs into VoltAgent's own `ObservabilityConfig.spanProcessors`. It does not 
 it does not change the span VoltAgent hands to its other processors (VoltOps, local storage,
 websocket): it exports a mapped copy.
 
-Status: alpha. Tested against `@voltagent/core` 2.11.0 (the latest release) with the AI SDK mock
-model, and end to end into a local Future AGI collector with live models: `api.openai.com`
-(`gpt-4.1-nano`) and an OpenAI-compatible endpoint, both through `@ai-sdk/openai`.
+Status: alpha. Tested against `@voltagent/core` 2.11.0 (the latest release as of
+2026-10-31) with AI SDK 6.0.97 and 6.0.320 (the newest compatible 6.x release),
+including a native ESM agent call whose mapped LLM span and token counts are checked on
+the local OTLP HTTP wire. Also tested end to end into
+a local Future AGI collector with live models: `api.openai.com` (`gpt-4.1-nano`) and an
+OpenAI-compatible endpoint, both through `@ai-sdk/openai`.
+
+**AI SDK version compatibility:** VoltAgent 2.11.0 declares `ai: ^6.0.0` as a peer. Do not
+install `ai` 7 alongside this VoltAgent release: its changed prompt API rejects VoltAgent's
+system messages (`Invalid prompt: System messages are not allowed in the prompt or messages
+fields. Use the instructions option instead.`). That failure happens inside VoltAgent before
+this span processor receives a model-call span; this package cannot repair it by changing its
+OpenTelemetry mapping. Use AI SDK 6 until VoltAgent releases AI SDK 7 support. The
+`@voltagent/core` peer range here remains `^2.11.0` and does not cap future 2.x releases.
 
 ## Install
 
