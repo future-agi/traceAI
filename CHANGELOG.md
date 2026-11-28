@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - .NET auto-instrumentation records prompt and response content by default in ASP.NET Core hosts, like every other language. Set `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, to keep it off; a `TraceConfig` supplied to the agent with any of those hides keeps it off too. See [`csharp/src/TraceAI.AutoInstrumentation/CHANGELOG.md`](csharp/src/TraceAI.AutoInstrumentation/CHANGELOG.md).
 
 ### Fixed
-- Ruby `traceai-auto` copies span events and links whether the SDK and API define them as structs or plain objects, and no longer drops a batch for an SDK span-data member it does not know.
+- Ruby `traceai-auto` copies span events and links whether the SDK and API define them as structs or plain objects, and keeps a batch that has an SDK span-data member it does not know.
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
 ### Coming Soon

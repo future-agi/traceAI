@@ -25,4 +25,4 @@ by the release process.
 
 ### Fixed
 - Span events and links are copied whether the SDK and API define them as structs or as plain objects, with the same masking.
-- Forwarding to an application SDK exporter no longer drops a batch when the SDK's span data has a member the agent does not know; that member is left empty.
+- Forwarding to an application SDK exporter keeps a batch when the SDK's span data has a member the agent does not know; that member is left empty.
