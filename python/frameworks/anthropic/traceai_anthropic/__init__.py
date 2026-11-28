@@ -56,7 +56,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         try:
             from fi.evals import Protect
         except ImportError:
-            logger.warning("ai-evaluation is not installed, please install it to trace protect")
+            logger.warning("Optional fi.evals.Protect is unavailable; Protect calls will not be traced.")
             Protect = None
 
         # When the SDK's own spans (anthropic>=1.14) would reach the same provider,
@@ -144,7 +144,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         try:
             from fi.evals import Protect
         except ImportError:
-            logger.warning("ai-evaluation is not installed, please install it to trace protect")
+            logger.warning("Optional fi.evals.Protect is unavailable; Protect calls will not be traced.")
             Protect = None
 
         if Completions is not None and self._original_completions_create is not None:
