@@ -163,7 +163,7 @@ provider = register(project_name="support", project_type=ProjectType.OBSERVE,
                     skills_processor=True)
 tracer = provider.get_tracer(__name__)
 try:
-    # ctx_snapshot is a previously resolved, verified agent-context snapshot.
+    # ctx_snapshot is an already resolved, verified agent-context snapshot.
     with agent_scope(agent="refund-agent", context=ctx_snapshot):
         with tracer.start_as_current_span("request"):
             run_agent()
@@ -174,7 +174,7 @@ finally:
 `skills_processor=True` is an **opt-in** to early installation of the SDK's
 processor, not a new exporter. Without it, the SDK can self-install when a load
 occurs. Both installers share a lock and the `_futureagi_skills_processor` marker.
-`register()` defaults to non-global as before; the SDK discovers it through
+`register()` defaults to non-global; the SDK discovers it through
 `fi_instrumentation.otel.get_registered_tracer_providers()`. That function returns
 an immutable snapshot ordered oldest to newest (most recently registered last).
 The registry uses weak references. Existing provider exit hooks still apply.

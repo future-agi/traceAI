@@ -93,7 +93,11 @@ class HookReleasePlanTests(unittest.TestCase):
         self.assertEqual(manifest['csharp/src/TraceAI.AutoInstrumentation'], hook_property('Version'))
 
     def test_hook_is_not_skipped_by_the_release_config(self):
-        self.assertNotIn('TraceAI.AutoInstrumentation', release_plan.load_config()['skip'])
+        skip = release_plan.load_config()['skip']
+        self.assertNotIn('TraceAI.AutoInstrumentation', skip)
+        # Only an explicit NuGet-scoped review hold may keep the hook out of a release.
+        reason = release_plan.skip_reason(skip, {'ecosystem': 'nuget', 'name': 'TraceAI.AutoInstrumentation'})
+        self.assertIn(reason, (None, 'the C# privacy changes wait for their own review'))
 
     def test_build_workflow_runs_the_shared_installed_package_check_on_the_exact_nupkg(self):
         step = BUILD.split('- name: Check the installed startup hook package', 1)[1].split('      - ', 1)[0]

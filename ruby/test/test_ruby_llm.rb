@@ -344,7 +344,7 @@ class RubyLLMInstrumentorTest < Minitest::Test
     assert status.success?, stderr; assert_equal ":answer\nKEPT from the block\n", stdout
   end
 
-  # fi-security: the instrumentor writes the tool arguments into three attributes of the execute_tool
+  # The instrumentor writes the tool arguments into three attributes of the execute_tool
   # span and the tool result into three more. Every copy follows its own side's hide settings, and
   # the raw copies follow all nine content settings. A new attribute that carries either value must
   # be added to these lists, or the key-set check below fails.

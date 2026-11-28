@@ -117,7 +117,7 @@ def test_the_eval_config_request_answers_every_row(cell, listeners):
 
 def test_the_only_rows_this_package_answers_differently_are_the_ones_the_ruling_lists():
     assert oc.RULED_EXCEPTION == {"s1_at_in_path": "disputed_authority"}
-    assert oc.RULING == "ORACLE-S1-AT-IN-PATH-RULED-EXCEPTION-r1-FISEC.json"
+    assert oc.RULING == "an @ after the authority is refused as disputed_authority"
     hosts = {row["host"] for row in ORACLE["rows"] if row["decision"] == "build" and row["source"] == "tls"}
     assert "s1_at_in_path" in hosts  # the oracle builds these (https), the ruling refuses them: ruled_exception, not a mismatch
     # https rows of every other host still match the oracle: only the ruled host has an exception.

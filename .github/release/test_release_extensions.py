@@ -109,9 +109,13 @@ class ExtensionTests(unittest.TestCase):
 
     def test_both_ruby_gems_are_planned_in_the_ruby_ecosystem_without_holds(self):
         gems = [p for p in release_plan.other_packages() if p['ecosystem'] == 'ruby']
-        planned = release_plan.plan(gems, release_plan.load_config(), offline=True)
+        planned = release_plan.plan(gems, {**release_plan.load_config(), 'skip': {}}, offline=True)
         self.assertEqual([p['name'] for p in planned['ruby']], ['traceai-auto', 'traceai-roast'])
         self.assertEqual(planned['skipped'], [])
+        # The release config holds both gems by their ruby-scoped names, so no other registry is affected.
+        held = release_plan.plan(gems, release_plan.load_config(), offline=True)
+        self.assertEqual(held['ruby'], [])
+        self.assertEqual([p['name'] for p in held['skipped']], ['traceai-auto', 'traceai-roast'])
 
     def test_ruby_registry_versions_use_the_public_versions_api(self):
         for name in ('traceai-auto', 'traceai-roast'):
