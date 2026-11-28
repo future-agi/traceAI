@@ -371,11 +371,37 @@ your own exporters and are never sent to Future AGI.
 
 Content capture is on by default. Before export, every string is checked
 against the shared privacy catalog (`lib/traceai/auto/privacy.json`, a byte copy
-of `spec/auto-instrumentation/privacy.json`, version 3):
+of `spec/auto-instrumentation/privacy.json`, version 4):
 
 - Credential-named keys, headers and URL query parameters are replaced with
-  `<redacted>`. Token counts and timing names such as `max_tokens` or
-  `time_to_first_token` stay visible as metrics.
+  `<redacted>`. A name is credential-named when it holds a catalog pattern
+  (`token`, `secret`, `key`, `auth`, `password`, ...) or when the whole name or
+  one of its segments is a vocabulary word (`pwd`, `pass`, `passphrase`, `passwd`,
+  `passcode`, `pin`), as in `db.pwd`, `user-pin` or `dbPass`. Token counts and
+  timing names such as `max_tokens` or `time_to_first_token` stay visible as
+  metrics.
+- In every exported string, the value of a credential-named pair is replaced up
+  to the true end of the value: `name=value`, `name: value`, `name%3Dvalue`,
+  quoted names (`"name": value` and `"name"=value`, also quoted with `'`, `\"` or
+  `&quot;`), `--name value` and `-name value` flags (also with the value at the
+  start of the next line), and the user information of
+  `scheme://user:password@host`. An unquoted value runs on to the next pair or the
+  end of the text, so the words after it in the same sentence are replaced too; a
+  quoted name's string, number, `true`, `false` or `null` value ends where it
+  ends. A `<redacted>` already in a value is no exception.
+- A pair name that cannot be read with certainty counts as credential-named, and
+  its value is replaced: a name longer than 128 characters, a gap before the
+  separator other than up to 8 spaces (a tab, other whitespace, or encoded
+  whitespace such as `%20` or `\t`), a percent-encoded name that still holds an
+  escape after one decode, and a name after a `?` that holds more than 8 `?`.
+- In URLs, credential-named pairs are replaced in the query, after `#`, after a
+  second `?` and in path segments (`/password=x/`, `/password%3Dx/`); the rest of
+  the URL keeps its text.
+- Object keys go through the same text rules. When two keys are the same after
+  redaction, one key is kept, in the first one's place, with `<redacted>` as its
+  value.
+- A key path or a pair name of more than 32 components makes the whole exported
+  value `<redacted>` (in a span's attributes, that attribute's value).
 - Credential-shaped values are redacted wherever they appear: long provider
   keys, AWS access keys, JWTs, `Bearer` and `Basic` values and private keys.
 - Credentials the process has seen (FI keys, credential-like environment values,

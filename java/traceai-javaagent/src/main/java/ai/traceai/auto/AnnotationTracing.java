@@ -159,7 +159,7 @@ final class AnnotationTracing {
             boolean named = parameters[i].isNamePresent();
             String name = named ? parameters[i].getName() : "arg" + i;
             Object argument = arguments[i];
-            if (named ? CapturedValue.credentialName(name) : !exportedWithoutName(argument)) {
+            if (named ? CredentialPairs.credentialName(name) : !exportedWithoutName(argument)) {
                 if (!named) warnNames();
                 argument = "<redacted>";
             }

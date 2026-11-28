@@ -2038,9 +2038,11 @@ def test_future_agi_copy_applies_the_catalog_to_names_events_and_status(fresh_st
     assert app_exporter.get_finished_spans()[0].name == "GET " + url
     (fi_span,) = fi_exporter.get_finished_spans()
     clean = "https://api.example.invalid/v1/chat?api_key=<redacted>&model=m"
-    assert fi_span.name == "GET " + clean
+    # In prose, the credential pair's value runs to its true end: the rest of the query and the words after it.
+    in_prose = "https://api.example.invalid/v1/chat?api_key=<redacted>"
+    assert fi_span.name == "GET " + in_prose
     assert fi_span.events[0].attributes["url.full"] == clean
-    assert fi_span.status.description == "ValueError: request to " + clean + " failed"
+    assert fi_span.status.description == "ValueError: request to " + in_prose
     assert "PLACEHOLDER-query" not in _future_agi_text(fi_exporter)
 
 

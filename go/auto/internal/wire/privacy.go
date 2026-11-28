@@ -53,13 +53,10 @@ type privacyBudget struct {
 func newPrivacyBudget() *privacyBudget {
 	return &privacyBudget{nodes: privacyRules.Limits.Nodes, bytes: privacyRules.Limits.Text}
 }
-func (b *privacyBudget) text(value string, secrets []string, framed bool) string {
-	value = privacyText(value, secrets, framed, b.cutText)
-	// Mask whole registered secrets before the lexical scan can split them
-	// around punctuation. The scan preserves the resulting redaction markers.
-	if b.mask != nil {
-		value = b.mask(value)
-	}
+func (b *privacyBudget) text(value string, secrets []string, framed, structured bool) string {
+	// Registered secrets are masked whole with the listed known secrets, before
+	// the value shapes and the pair rule can split them around punctuation.
+	value = privacyText(value, secrets, framed, structured, b.cutText, b.mask)
 	if b.cutText {
 		value = truncatedPrivacyText(value)
 	}
@@ -180,11 +177,25 @@ func partialPrivacy(s string, secrets []string, budget *privacyBudget, depth int
 				start++
 			}
 			if CredentialAttributeKey(key) {
-				stop = partialValueEnd(s, start)
-				out.WriteString(s[last:start])
-				out.WriteString(`"<redacted>"`)
-				last = stop
-				i = stop - 1
+				// The pair rule reads a credential member's value to its end by
+				// the quoted-name ruling, over the whole text. It does not decode the
+				// escapes of a name, so the value of a member whose name is written
+				// with an escape is replaced here, whatever the pair rule did.
+				nameEscaped := strings.Contains(s[i:end], "\\")
+				i = end - 1
+				if nameEscaped {
+					if stop := partialValueEnd(s, start); stop > start {
+						if value := s[start:stop]; value != CredentialRedacted && value != dump(CredentialRedacted) {
+							out.WriteString(s[last:start])
+							if value[0] == '"' {
+								out.WriteString(dump(CredentialRedacted))
+							} else {
+								out.WriteString(CredentialRedacted)
+							}
+							last, i = stop, stop-1
+						}
+					}
+				}
 				continue
 			}
 			if start == len(s) || s[start] != '"' {

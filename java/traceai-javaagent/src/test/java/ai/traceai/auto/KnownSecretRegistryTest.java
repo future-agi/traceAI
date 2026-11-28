@@ -224,4 +224,32 @@ class KnownSecretRegistryTest {
         failed.observeBody(new HashMap<String, Object>() { @Override public Set<Entry<String, Object>> entrySet() { throw new IllegalStateException("synthetic registry access failure"); } });
         assertThrows(IllegalStateException.class, () -> failed.snapshot().scrub("public"));
     }
+    @Test void overlappingSecretsOfOneLengthAreReplacedInTheSameOrderWhateverTheRegistrationOrder() {
+        String text = "xTAILVABCDEFGHIJKL";
+        var first = new KnownSecrets(); first.register("VABCDEFG"); first.register("TAILVABC");
+        var second = new KnownSecrets(); second.register("TAILVABC"); second.register("VABCDEFG");
+        assertEquals("x<redacted>DEFGHIJKL", first.snapshot().scrub(text));
+        assertEquals("x<redacted>DEFGHIJKL", second.snapshot().scrub(text));
+    }
+    /** Known secrets are applied one at a time, longest first (one length in a fixed order), before the pair rule, never merged into
+     *  one span: each expectation is the shared reference's export of the text with the two secrets registered, in either order. */
+    @Test void overlappingSecretsNextToACredentialNameAreAppliedOneAtATimeBeforeThePairRule() {
+        String[][] cases = {
+            {"abcTAILV", "TAILVpas", "log abcTAILVpassword=v1 then", "log abc<redacted>sword=v1 then", "log abc<redacted>sword=v1 then"},
+            {"abcTAILV", "TAILVpas", "log TAILVpassword=v1 abcTAILVtoken: v2", "log <redacted>sword=v1 <redacted>token: <redacted>", "log <redacted>sword=v1 <redacted>token: <redacted>"},
+            {"abcdTAILVTAIL", "TAILVTAILVwor", "log abcTAILVpassword=v1 then", "log abcTAILVpassword=<redacted>", "log abcTAILVpassword=<redacted>"},
+            {"abcdTAILVTAIL", "TAILVTAILVwor", "log abcdTAILVTAILVword=v1 then", "log abcd<redacted>d=v1 then", "log abcd<redacted>d=v1 then"},
+            {"abcTAILV", "TAILVpas", "https://h.example/p?abcTAILVpassword=v1&k=1", "https://h.example/p?abc<redacted>sword=<redacted>&k=1", "https://h.example/p?abc<redacted>sword=<redacted>&k=1"},
+            {"abcdTAILVTAIL", "TAILVTAILVwor", "https://h.example/p?abcTAILVpassword=v1&k=1", "https://h.example/p?abcTAILVpassword=<redacted>", "https://h.example/p?abcTAILVpassword=<redacted>&k=1"},
+        };
+        List<String> failures = new ArrayList<>();
+        for (String[] item : cases) for (boolean reversed : List.of(false, true)) for (boolean framed : List.of(false, true)) {
+            var registry = new KnownSecrets();
+            registry.register(reversed ? item[1] : item[0]); registry.register(reversed ? item[0] : item[1]);
+            Object out = new WirePrivacy(registry.snapshot(), false).clean("", item[2], WirePrivacy.Scope.EMPTY, framed);
+            String expected = framed ? item[4] : item[3];
+            if (!expected.equals(out)) failures.add(item[2] + (reversed ? " (reversed)" : "") + (framed ? " framed" : " free text") + " -> " + out + ", the reference: " + expected);
+        }
+        assertTrue(failures.isEmpty(), String.join("\n", failures));
+    }
 }

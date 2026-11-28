@@ -186,7 +186,9 @@ describe("base64 image cap", () => {
       const expected = Object.fromEntries(Object.entries(attributes).map(([key, value]) => {
         if (typeof value !== "string") return [key, value];
         expect(capBase64Images(value, MAX)).toBe(value);
+        // A data URI token runs to the next space (the shared DATA token), a closing bracket after it included.
         return [key, value
+          .split(dataUrl(MAX) + "]").join("<omitted: data URI>")
           .split(dataUrl(MAX)).join("<omitted: 978 base64 chars>")
           .split(base64Of(MAX, PNG_HEAD)).join("<omitted: 1000 base64 chars>")
           .split(base64Of(MAX)).join("<omitted: 1000 base64 chars>")];

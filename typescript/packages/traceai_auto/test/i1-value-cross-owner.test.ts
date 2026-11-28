@@ -94,12 +94,16 @@ test("I1-CROSS URL syntax is not bare media and original URL secrets precede rew
   stable('401 ' + url + ' {"n":7} retry', '401 ' + url + ' {"n":7} retry');
   stable('401 ' + url + ' iVBORw0KGgoAAAANSUhEUg== retry', '401 ' + url + ' <omitted: 24 base64 chars> retry');
   stable('401 https://abcdef.invalid/?echo=31415926&model=keep retry', '401 https://abcdef.invalid/?echo=<redacted>&model=keep retry', ['31415926']);
-  stable('401 https://abcdef.invalid/?token=private&model=keep retry', '401 https://abcdef.invalid/?token=<redacted>&model=keep retry');
+  // Shared privacy spec v4: in prose a credential pair's value runs to its true end.
+  stable('401 https://abcdef.invalid/?token=private&model=keep retry', '401 https://abcdef.invalid/?token=<redacted>');
   stable('401 prefixhttps://abcdef.invalid/p retry', '401 <redacted> retry', ['prefixhttps://abcdef.invalid/p']);
   stable(JSON.stringify({ url }), JSON.stringify({ url }));
 });
 
 test("I1-CROSS shared budgets still bound source matching", () => {
-  expect(() => wire.scrubValue('401 abc[12345678] retry', ['abc[12345678]'], '', 0, false, { nodes: 1, text: 1000, seen: new WeakSet() })).toThrow();
+  // The reference charges a prose string one node (nodes: 1 is enough for '401 abc[12345678] retry'); a JSON object inside the prose is
+  // read by the walk that shares the budget, so that is what a budget of one node still bounds.
+  expect(() => wire.scrubValue('401 abc[12345678] retry', ['abc[12345678]'], '', 0, false, { nodes: 1, text: 1000, seen: new WeakSet() })).not.toThrow();
+  expect(() => wire.scrubValue('401 {"k":"abc[12345678]"} retry', ['abc[12345678]'], '', 0, false, { nodes: 1, text: 1000, seen: new WeakSet() })).toThrow();
   expect(() => wire.scrubValue('{"n":"31415926","n":7}', ['31415926'], '', 0, false, { nodes: 100, text: 2, seen: new WeakSet() })).toThrow();
 });

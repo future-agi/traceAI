@@ -65,6 +65,13 @@ final class WirePrivacy {
         for (String parent : scope.imageParents) if (parent.isEmpty() || canonical.equals(parent) || canonical.startsWith(parent + ".")) return true;
         return false;
     }
+    /** The longest path whose names are read one by one; a longer one is exported as the placeholder. */
+    static final int MAX_PATH = 2048;
+    private static boolean longPath(String key, String name) { return key.length() + 1 + name.length() > MAX_PATH; }
+    private Object tooLong() {
+        if (++nodes > CATALOG.maxNodes) throw new IllegalStateException("Privacy structure budget");
+        return "<redacted>";
+    }
     private Object clean(Object value, String key, int depth, Scope scope, boolean media, boolean audio, boolean framed) {
         if (++nodes > CATALOG.maxNodes || depth > CATALOG.maxDepth) throw new IllegalStateException("Privacy structure budget");
         if (credentialKey(key) || hiddenImage(key, scope)) return "<redacted>";
@@ -80,8 +87,13 @@ final class WirePrivacy {
             if (hideImages && imageObject(values)) return "<redacted>";
             Scope local = scope(values, key, scope); Map<String, Object> result = new LinkedHashMap<>();
             for (var entry : values.entrySet()) {
-                String name = entry.getKey(), child = key.isEmpty() ? name : key + "." + name;
-                result.put(credentialText(CATALOG.text(name, true)), clean(entry.getValue(), child, depth + 1, local, media, audio, true));
+                String name = entry.getKey();
+                // A path longer than MAX_PATH is read as a credential name (fail closed): every name check reads the whole path, so one
+                // very long key above many children would cost its length once per child.
+                Object cleaned = longPath(key, name) ? tooLong() : clean(entry.getValue(), key.isEmpty() ? name : key + "." + name, depth + 1, local, media, audio, true);
+                // Two keys that are one after scrubbing: one key is kept, in the first one's place, and its value is the placeholder.
+                String scrubbed = mapKey(name);
+                result.put(scrubbed, result.containsKey(scrubbed) ? "<redacted>" : cleaned);
             }
             return result;
         }
@@ -90,7 +102,7 @@ final class WirePrivacy {
             if (list.size() > CATALOG.maxNodes - nodes) throw new IllegalStateException("Privacy structure budget");
             if (context.payload() && !list.isEmpty() && list.stream().allMatch(item -> item instanceof Number || item instanceof Boolean)) return CATALOG.otherMedia();
             List<Object> result = new ArrayList<>(); int i = 0;
-            for (Object item : list) result.add(clean(item, key + "." + i++, depth + 1, scope, media, audio, true));
+            for (Object item : list) { result.add(longPath(key, "0") ? tooLong() : clean(item, key + "." + i, depth + 1, scope, media, audio, true)); i++; }
             return result;
         }
         if (value != null && value.getClass().isArray()) {
@@ -133,13 +145,58 @@ final class WirePrivacy {
                 var context = CATALOG.context(key, media, audio, scope.hints);
                 Object scrubbed = clean(json, "", depth + 1, Scope.EMPTY, context.media(), context.audio(), true);
                 String sanitized = WireCore.dump(scrubbed);
-                if (!WireCore.dump(json).equals(sanitized)) text = sanitized;
+                if (!WireCore.dump(json).equals(sanitized)) text = rawLineSeparators(sanitized);
             } else return "<redacted>";
         } else text = fields(embedded(text, depth));
-        return credentialText(CATALOG.text(text, framed));
+        // The pair rule is not run over the re-dumped JSON of a structured string: each leaf string of that JSON has been through it
+        // already, and a second pass can run on across later fields.
+        if (!structured && framed && CATALOG.wholeUrl(text)) return wholeUrl(text);
+        return credentialText(CATALOG.text(text, framed), !structured);
     }
-    /** Registered secrets first (longest first), then the catalog's credential value shapes. */
-    private String credentialText(String text) { return CATALOG.scrubValueShapes(secrets.scrub(text)); }
+    /** A map key goes through the export rules of a string value at a framed site that need no context: a whole data URI or media
+     *  value, then the URL catalog and data URIs, known secrets, value shapes and the pair rule. */
+    private String mapKey(String name) {
+        String media = CATALOG.mediaString(name, "", false, false, Map.of(), true);
+        if (media != null) return media;
+        if (CATALOG.wholeUrl(name)) return wholeUrl(name);
+        return credentialText(CATALOG.text(name, true), true);
+    }
+    /**
+     * A whole URL value at a framed site: the catalog pass records by position each span it replaced; known secrets and value shapes
+     * move those spans (a span one of them overlaps is gone), and the pair rule then runs over the URL text, skipping only the
+     * placeholder spans still recorded. The skip never looks at placeholder text, and an omission span shields nothing.
+     */
+    private String wholeUrl(String text) {
+        PrivacyCatalog.Framed framed = CATALOG.framedUrl(text);
+        if (!secrets.scrub(framed)) return "<redacted>";
+        CATALOG.replaceValueShapes(framed);
+        String value = framed.text.toString();
+        if (!CredentialPairs.active()) return value;
+        int count = 0;
+        for (int[] span : framed.spans) if (span[2] == 0) count++;
+        int[] starts = new int[count], ends = new int[count];
+        int k = 0;
+        for (int[] span : framed.spans) if (span[2] == 0) { starts[k] = span[0]; ends[k++] = span[1]; }
+        return CredentialPairs.redactCredentialPairs(value, starts, ends);
+    }
+    /** The re-written JSON of a structured string spells U+2028 and U+2029 as the characters themselves, as the shared reference writes
+     *  them (the JSON writer escapes them); an escape that a backslash itself escapes is text and is kept. */
+    static String rawLineSeparators(String json) {
+        if (json.indexOf("\\u202") < 0) return json;
+        StringBuilder out = new StringBuilder(json.length());
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '\\' && i + 1 < json.length()) {
+                if (json.startsWith("u2028", i + 1) || json.startsWith("u2029", i + 1)) { out.append(json.charAt(i + 5) == '8' ? '\u2028' : '\u2029'); i += 5; continue; }
+                out.append(c).append(json.charAt(++i));
+                continue;
+            }
+            out.append(c);
+        }
+        return out.toString();
+    }
+    /** Registered secrets first (longest first), then the catalog's credential value shapes, then the credential pair rule. */
+    private String credentialText(String text, boolean pairs) { return pairs ? CredentialPairs.scrub(secrets, text) : CATALOG.scrubValueShapes(secrets.scrub(text)); }
     private static boolean imageKey(String key) {
         String name = PrivacyCatalog.normalize(key);
         return name.contains("image") || IMAGE_FILES.contains(name)
@@ -173,17 +230,22 @@ final class WirePrivacy {
             int colon = i; while (colon < text.length() && Character.isWhitespace(text.charAt(colon))) colon++;
             if (colon == text.length() || text.charAt(colon) != ':') { i = colon; continue; }
             Object decoded = WireCore.parse(text.substring(start, end)); String name = decoded instanceof String s ? s : "";
+            // A credential name spelled as it is read is left to the pair rule, which replaces its value to the end the shared spec
+            // gives it (a string to its closing quote, a JSON scalar, else the true end of the value); a name written with JSON
+            // escapes is not read by the pair rule, and its value is replaced here.
+            boolean credential = credentialKey(name) && !(end - start >= 2 && text.substring(start + 1, end - 1).equals(name));
             int value = colon + 1; while (value < text.length() && Character.isWhitespace(text.charAt(value))) value++;
             if (value == text.length()) break;
             i = value; char first = text.charAt(value); int last = value;
             if (first == '{' || first == '[') {
-                if (credentialKey(name) || hideImages && imageKey(name) || CATALOG.context(name, false, false, Map.of()).payload()) return "<redacted>";
+                if (credential || hideImages && imageKey(name) || CATALOG.context(name, false, false, Map.of()).payload()) return "<redacted>";
                 continue;
             }
             if (first == '"') last = quotedEnd(text, value);
             else while (last < text.length() && ",}]\r\n".indexOf(text.charAt(last)) < 0) last++;
             String replacement = null; Object content = WireCore.parse(text.substring(value, last));
-            if (credentialKey(name) || hideImages && imageKey(name)) replacement = "<redacted>";
+            if (credential || hideImages && imageKey(name)) replacement = "<redacted>";
+            else if (credentialKey(name)) { i = last; continue; }
             else if (hideImages && imageDiscriminator(name, content)) return "<redacted>";
             else if (content instanceof String s) replacement = CATALOG.mediaString(s, name, false, false, Map.of(), true);
             else if (CATALOG.context(name, false, false, Map.of()).payload()) replacement = "<redacted>";

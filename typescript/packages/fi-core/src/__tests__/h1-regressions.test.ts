@@ -86,7 +86,7 @@ test.each([65536, 131072])("H1 performance fast paths preserve long prose and st
     const event = exporter.getFinishedSpans()[0].events[0];
     // PENDING I1xF2-PRECEDENCE: F2 scan bound precedes I1 long-prose retention.
     if (repeats === 65536) {
-      expect(String(event.attributes?.["exception.message"])).toBe(`${prose}password="<redacted>"\nend of message`);
+      expect(String(event.attributes?.["exception.message"])).toBe(`${prose}password=<redacted>`);
     } else {
       expect(String(event.attributes?.["exception.message"])).toBe("[image-redacted]");
     }

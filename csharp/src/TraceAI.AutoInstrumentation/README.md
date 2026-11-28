@@ -311,7 +311,36 @@ and credential echoes (including configured FI keys) are replaced by `<redacted>
 Credential-shaped values are also replaced in every exported string, whatever the
 field is called: bare provider keys (`sk-…`), AWS access key IDs, JWTs, `Bearer` and
 `Basic` authorization values and private-key PEM blocks (the catalog's
-`credentials.value_shapes`). Inline base64 media is replaced by `<omitted: N base64 chars>` before TraceConfig
+`credentials.value_shapes`).
+
+**Credential pairs** (catalog version 4). After known secrets and value shapes,
+every exported string goes through the credential pair rule: the value of every
+credential-named `name=value`, `name: value`, `name%3Dvalue`, `"name": value`,
+`"name"=value`, `--name value` or `-name value` (a full credential name, never a
+short flag such as `-p`) is replaced by `<redacted>` to the true end of the value:
+the next pair boundary outside brackets, or the end of the text; the rest of the
+line for `cookie`, `set-cookie`, `authorization` and `proxy-authorization`. A
+quoted name (`"`, `'`, `\"` or `&quot;`) keeps a quoted string value to its
+closing quote and a JSON number, `true`, `false` or `null` before `,`, `}`, `]` or
+the end; anything else after it is replaced to the true end. A name is undecided,
+and its value replaced, when more than 8 spaces, a tab or any other whitespace, or
+encoded whitespace (`%20`, `%09`, `%0A`, `%0D`, `%C2%A0`, `\t`, `\n`, ...) stands
+between the name and its separator, when it runs past its window of 128 UTF-16
+code units, or when it ends at a percent escape that stays encoded after one
+decoding (a name that ends at a percent escape is decoded once before it is read).
+After a `--name` and one line break the next line is read fresh. The re-dumped
+JSON of a string that holds JSON is not read again; each of its strings went
+through the rule on its own. Credential names include the catalog vocabulary
+(`pwd`, `pass`, `passphrase`, `passwd`, `passcode`, `pin`) as a whole name or a
+segment (`dbPass`, `db.pwd`, `X-Pin`) at every site. In URLs, credential-named
+pairs after `#`, after a second `?` and in a path segment (`/password=x/`,
+`%3D` included) are replaced like query pairs; in a value that is one whole URL
+the pair rule then reads the URL text and skips only the spans the URL rules
+replaced. Map keys go through the same text rules; two keys that become one keep
+the first one's place with `<redacted>` as the value. A name of more than 32
+components (`limits.max_depth`) exports the whole value as `<redacted>`, and so
+does a URL with more than 16,384 query pairs (`limits.max_nodes`). The shared
+fixture bundle (7,887 cases) passes with no SDK-specific expectation. Inline base64 media is replaced by `<omitted: N base64 chars>` before TraceConfig
 masking, including percent-escaped and mixed escaped/plain data-URL payloads
 (without decoding media bytes). Other RFC 2397 data URIs, including percent-encoded
 or literal audio, become `<omitted: data URI>`. Explicit audio payload fields and

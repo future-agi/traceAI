@@ -66,6 +66,7 @@ describe("the functions that mention the key names are exactly the pinned ones",
       "fi-core/fi-request-policy.ts::hasCompleteKeyPair",
       "fi-core/fi-request-policy.ts::readEnvKeys",
       "fi-core/fi-send-guard.ts::keyValues", // reads the FI key values only to refuse them under another header name; sends nothing
+      "fi-core/privacy-runtime.ts::<top level>", // the "provider-api-key" value shape id: a pattern that finds sk- tokens in exported text to replace them; reads no key, sends nothing
       "fi-core/trace/trace-config/piiRedaction.ts::<top level>",
       // traceai_auto: credential sources and the route-factory call; the decision itself is made in fi-core
       "traceai_auto/config.ts::<top level>",
@@ -169,15 +170,26 @@ describe("every site that hands headers or metadata to a transport goes through 
   });
 });
 
+const isWrapperCall = (node: ts.Node) => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "decide";
+const WRAPPER_CALLERS = [
+  "fi-core/otel.ts::FITracerProvider.constructor", "fi-core/otel.ts::GRPCSpanExporter.constructor", "fi-core/otel.ts::HTTPSpanExporter.constructor",
+  "fi-core/otel.ts::OTLPHTTPSpanExporter.constructor", "fi-core/otel.ts::checkCustomEvalConfigExists", "fi-core/otel.ts::checkCustomEvalTemplateExists",
+];
 describe("the decider is called from the pinned sites only", () => {
   test("decideFiRequest is referenced only by its module, by the send guard and by the one wrapper in otel.ts", () => {
     expect(sites(node => ts.isIdentifier(node) && node.text === "decideFiRequest")).toEqual(["fi-core/fi-request-policy.ts::decideFiRequest", "fi-core/fi-send-guard.ts::<top level>", "fi-core/fi-send-guard.ts::guardSend", "fi-core/otel.ts::<top level>", "fi-core/otel.ts::decide"]);
   });
   test("the wrapper is called by every exporter constructor and eval check, and nothing else", () => {
-    expect(sites(node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "decide")).toEqual([
-      "fi-core/otel.ts::FITracerProvider.constructor", "fi-core/otel.ts::GRPCSpanExporter.constructor", "fi-core/otel.ts::HTTPSpanExporter.constructor",
-      "fi-core/otel.ts::OTLPHTTPSpanExporter.constructor", "fi-core/otel.ts::checkCustomEvalConfigExists", "fi-core/otel.ts::checkCustomEvalTemplateExists",
-    ]);
+    expect(sites(isWrapperCall)).toEqual(WRAPPER_CALLERS);
+  });
+  // The guard itself: a call to a function named decide inside the pair rule is a site this list does not hold, so it fails the guard.
+  test("a decide(...) call inside credentialPairs fails the guard", () => {
+    const snippet = ts.createSourceFile("privacy-runtime.ts", "function credentialPairs(text: string) {\n  const decide = (k: number) => k;\n  return decide(text.length);\n}\n", ts.ScriptTarget.Latest, true);
+    const found = new Set<string>();
+    walk(snippet, node => { if (isWrapperCall(node)) found.add(`fi-core/privacy-runtime.ts::${owner(node)}`); });
+    expect([...found]).toEqual(["fi-core/privacy-runtime.ts::credentialPairs"]);
+    expect(WRAPPER_CALLERS).not.toContain("fi-core/privacy-runtime.ts::credentialPairs");
+    expect([...sites(isWrapperCall), ...found].sort()).not.toEqual(WRAPPER_CALLERS);
   });
   test("the route factory reaches the decider only through createSpanExporter, and traceai_auto only through the factory", () => {
     const calls = (name: string) => sites(node => ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name);

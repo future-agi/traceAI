@@ -1,0 +1,2869 @@
+{
+ "base": "3b0746756525b422c3243db4dde258a29b62e567",
+ "note": "Phase 1e r2: every added case with its literal expected value (authored from the rulings of 527cc071 and I1-I5); the changed list is empty.",
+ "changed": {},
+ "new_cases": [
+  {
+   "name": "pair-rule-1e-stop1-nl-word-then-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\nTAILV token: TAILX",
+   "expected": "log --password\n<redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-word-then-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\nTAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log --password\n<redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\ntoken=TAILX",
+   "expected": "log --password\ntoken=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\ntoken=TAILX"
+   },
+   "expected": {
+    "message": "log --password\ntoken=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-word-line-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\nTAILV\ntoken: TAILX",
+   "expected": "log --password\n<redacted>\ntoken: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-word-line-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\nTAILV\ntoken: TAILX"
+   },
+   "expected": {
+    "message": "log --password\n<redacted>\ntoken: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-word-comma-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\nTAILV, secret=TAILY",
+   "expected": "log --password\n<redacted> secret=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-word-comma-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\nTAILV, secret=TAILY"
+   },
+   "expected": {
+    "message": "log --password\n<redacted> secret=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-word-then-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\rTAILV token: TAILX",
+   "expected": "log --password\r<redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-word-then-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\rTAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log --password\r<redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\rtoken=TAILX",
+   "expected": "log --password\rtoken=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\rtoken=TAILX"
+   },
+   "expected": {
+    "message": "log --password\rtoken=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-word-line-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\rTAILV\rtoken: TAILX",
+   "expected": "log --password\r<redacted>\rtoken: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-word-line-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\rTAILV\rtoken: TAILX"
+   },
+   "expected": {
+    "message": "log --password\r<redacted>\rtoken: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-word-comma-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\rTAILV, secret=TAILY",
+   "expected": "log --password\r<redacted> secret=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-word-comma-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\rTAILV, secret=TAILY"
+   },
+   "expected": {
+    "message": "log --password\r<redacted> secret=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-word-then-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordTAILV token: TAILX",
+   "expected": "log --password<redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-word-then-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordTAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log --password<redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordtoken=TAILX",
+   "expected": "log --passwordtoken=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordtoken=TAILX"
+   },
+   "expected": {
+    "message": "log --passwordtoken=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-word-line-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordTAILVtoken: TAILX",
+   "expected": "log --password<redacted>token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-word-line-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordTAILVtoken: TAILX"
+   },
+   "expected": {
+    "message": "log --password<redacted>token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-word-comma-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordTAILV, secret=TAILY",
+   "expected": "log --password<redacted> secret=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-word-comma-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordTAILV, secret=TAILY"
+   },
+   "expected": {
+    "message": "log --password<redacted> secret=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-word-then-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV token: TAILX",
+   "expected": "log --password <redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-word-then-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password token=TAILX",
+   "expected": "log --password token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password token=TAILX"
+   },
+   "expected": {
+    "message": "log --password token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-word-line-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV token: TAILX",
+   "expected": "log --password <redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-word-line-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-word-comma-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV, secret=TAILY",
+   "expected": "log --password <redacted> secret=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-word-comma-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV, secret=TAILY"
+   },
+   "expected": {
+    "message": "log --password <redacted> secret=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\nTAILV then more",
+   "expected": "log --password\n<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\nTAILV then more"
+   },
+   "expected": {
+    "message": "log --password\n<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \n  TAILV then more",
+   "expected": "log --password \n  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \n  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password \n  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password\nTAILV then more",
+   "expected": "log -password\n<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password\nTAILV then more"
+   },
+   "expected": {
+    "message": "log -password\n<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\n\"token\": \"TAILX\" then more",
+   "expected": "log --password\n\"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\n\"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password\n\"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\n--token TAILX then more",
+   "expected": "log --password\n--token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\n--token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password\n--token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model\nkeep then more",
+   "expected": "log --model\nkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nl-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model\nkeep then more"
+   },
+   "expected": {
+    "message": "log --model\nkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\rTAILV then more",
+   "expected": "log --password\r<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\rTAILV then more"
+   },
+   "expected": {
+    "message": "log --password\r<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \r  TAILV then more",
+   "expected": "log --password \r  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \r  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password \r  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password\rTAILV then more",
+   "expected": "log -password\r<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password\rTAILV then more"
+   },
+   "expected": {
+    "message": "log -password\r<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\r\"token\": \"TAILX\" then more",
+   "expected": "log --password\r\"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\r\"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password\r\"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\r--token TAILX then more",
+   "expected": "log --password\r--token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\r--token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password\r--token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model\rkeep then more",
+   "expected": "log --model\rkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-cr-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model\rkeep then more"
+   },
+   "expected": {
+    "message": "log --model\rkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\r\nTAILV then more",
+   "expected": "log --password\r\n<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\r\nTAILV then more"
+   },
+   "expected": {
+    "message": "log --password\r\n<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \r\n  TAILV then more",
+   "expected": "log --password \r\n  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \r\n  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password \r\n  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password\r\nTAILV then more",
+   "expected": "log -password\r\n<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password\r\nTAILV then more"
+   },
+   "expected": {
+    "message": "log -password\r\n<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\r\n\"token\": \"TAILX\" then more",
+   "expected": "log --password\r\n\"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\r\n\"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password\r\n\"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\r\n--token TAILX then more",
+   "expected": "log --password\r\n--token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\r\n--token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password\r\n--token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model\r\nkeep then more",
+   "expected": "log --model\r\nkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-crlf-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model\r\nkeep then more"
+   },
+   "expected": {
+    "message": "log --model\r\nkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordTAILV then more",
+   "expected": "log --password<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordTAILV then more"
+   },
+   "expected": {
+    "message": "log --password<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password   TAILV then more",
+   "expected": "log --password   <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password   TAILV then more"
+   },
+   "expected": {
+    "message": "log --password   <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -passwordTAILV then more",
+   "expected": "log -password<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -passwordTAILV then more"
+   },
+   "expected": {
+    "message": "log -password<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\"token\": \"TAILX\" then more",
+   "expected": "log --password\"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password\"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password--token TAILX then more",
+   "expected": "log --password--token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password--token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password--token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --modelkeep then more",
+   "expected": "log --modelkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-nel-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --modelkeep then more"
+   },
+   "expected": {
+    "message": "log --modelkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password    TAILV then more",
+   "expected": "log --password    <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password    TAILV then more"
+   },
+   "expected": {
+    "message": "log --password    <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password TAILV then more",
+   "expected": "log -password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password TAILV then more"
+   },
+   "expected": {
+    "message": "log -password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \"token\": \"TAILX\" then more",
+   "expected": "log --password \"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password \"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password --token TAILX then more",
+   "expected": "log --password --token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password --token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password --token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model keep then more",
+   "expected": "log --model keep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2028-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model keep then more"
+   },
+   "expected": {
+    "message": "log --model keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password    TAILV then more",
+   "expected": "log --password    <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password    TAILV then more"
+   },
+   "expected": {
+    "message": "log --password    <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password TAILV then more",
+   "expected": "log -password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password TAILV then more"
+   },
+   "expected": {
+    "message": "log -password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \"token\": \"TAILX\" then more",
+   "expected": "log --password \"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password \"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password --token TAILX then more",
+   "expected": "log --password --token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password --token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password --token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model keep then more",
+   "expected": "log --model keep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-u2029-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model keep then more"
+   },
+   "expected": {
+    "message": "log --model keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\fTAILV then more",
+   "expected": "log --password\f<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\fTAILV then more"
+   },
+   "expected": {
+    "message": "log --password\f<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \f  TAILV then more",
+   "expected": "log --password \f  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \f  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password \f  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password\fTAILV then more",
+   "expected": "log -password\f<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password\fTAILV then more"
+   },
+   "expected": {
+    "message": "log -password\f<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\f\"token\": \"TAILX\" then more",
+   "expected": "log --password\f\"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\f\"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password\f\"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\f--token TAILX then more",
+   "expected": "log --password\f--token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\f--token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password\f--token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model\fkeep then more",
+   "expected": "log --model\fkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-ff-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model\fkeep then more"
+   },
+   "expected": {
+    "message": "log --model\fkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-first-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\u000bTAILV then more",
+   "expected": "log --password\u000b<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-first-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\u000bTAILV then more"
+   },
+   "expected": {
+    "message": "log --password\u000b<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-indented-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \u000b  TAILV then more",
+   "expected": "log --password \u000b  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-indented-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \u000b  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password \u000b  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-single-dash-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password\u000bTAILV then more",
+   "expected": "log -password\u000b<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-single-dash-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password\u000bTAILV then more"
+   },
+   "expected": {
+    "message": "log -password\u000b<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-quoted-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\u000b\"token\": \"TAILX\" then more",
+   "expected": "log --password\u000b\"token\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-quoted-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\u000b\"token\": \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log --password\u000b\"token\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-flag-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\u000b--token TAILX then more",
+   "expected": "log --password\u000b--token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-flag-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\u000b--token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password\u000b--token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model\u000bkeep then more",
+   "expected": "log --model\u000bkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-vt-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model\u000bkeep then more"
+   },
+   "expected": {
+    "message": "log --model\u000bkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-nl-nl-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\n\nword then more",
+   "expected": "log --password\n\nword then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-nl-nl-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\n\nword then more"
+   },
+   "expected": {
+    "message": "log --password\n\nword then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-nl-space-nl-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\n \nword then more",
+   "expected": "log --password\n \nword then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-nl-space-nl-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\n \nword then more"
+   },
+   "expected": {
+    "message": "log --password\n \nword then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-crlf-crlf-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\r\n\r\nword then more",
+   "expected": "log --password\r\n\r\nword then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-crlf-crlf-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\r\n\r\nword then more"
+   },
+   "expected": {
+    "message": "log --password\r\n\r\nword then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-nel-nel-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordword then more",
+   "expected": "log --passwordword then more"
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-nel-nel-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordword then more"
+   },
+   "expected": {
+    "message": "log --passwordword then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-then-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\n\ntoken=TAILX",
+   "expected": "log --password\n\ntoken=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-blank-then-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\n\ntoken=TAILX"
+   },
+   "expected": {
+    "message": "log --password\n\ntoken=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-stop1-separator-line-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\n=TAILV then more",
+   "expected": "log --password\n=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-stop1-separator-line-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\n=TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\n=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-space-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password TAILV then more",
+   "expected": "log -password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-space-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password TAILV then more"
+   },
+   "expected": {
+    "message": "log -password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-tab-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password\tTAILV then more",
+   "expected": "log -password\t<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-tab-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password\tTAILV then more"
+   },
+   "expected": {
+    "message": "log -password\t<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-nbsp-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password TAILV then more",
+   "expected": "log -password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-nbsp-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password TAILV then more"
+   },
+   "expected": {
+    "message": "log -password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password=TAILV then more",
+   "expected": "log -password=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password=TAILV then more"
+   },
+   "expected": {
+    "message": "log -password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-encoded-gap-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password%20TAILV then more",
+   "expected": "log -password%20<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-encoded-gap-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password%20TAILV then more"
+   },
+   "expected": {
+    "message": "log -password%20<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-quoted-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password 'TAILV TAILW' then more",
+   "expected": "log -password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-quoted-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password 'TAILV TAILW' then more"
+   },
+   "expected": {
+    "message": "log -password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-vocabulary-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -pin TAILV then more",
+   "expected": "log -pin <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-vocabulary-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -pin TAILV then more"
+   },
+   "expected": {
+    "message": "log -pin <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-compound-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -db_password TAILV then more",
+   "expected": "log -db_password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-compound-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -db_password TAILV then more"
+   },
+   "expected": {
+    "message": "log -db_password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-separator-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password token: TAILX then more",
+   "expected": "log -password <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-separator-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password token: TAILX then more"
+   },
+   "expected": {
+    "message": "log -password <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password TAILV token: TAILX",
+   "expected": "log -password <redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password TAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log -password <redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-second-flag-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -token TAILV -password TAILX then more",
+   "expected": "log -token <redacted> -password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-second-flag-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -token TAILV -password TAILX then more"
+   },
+   "expected": {
+    "message": "log -token <redacted> -password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-second-quoted-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -password TAILV \"token\"=TAILX",
+   "expected": "log -password <redacted> \"token\"=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-second-quoted-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -password TAILV \"token\"=TAILX"
+   },
+   "expected": {
+    "message": "log -password <redacted> \"token\"=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-after-name-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password -token TAILX then more",
+   "expected": "log --password -token <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-after-name-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password -token TAILX then more"
+   },
+   "expected": {
+    "message": "log --password -token <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-short-flag-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -p TAILV then more",
+   "expected": "log -p TAILV then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-short-flag-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -p TAILV then more"
+   },
+   "expected": {
+    "message": "log -p TAILV then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-cluster-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -abc TAILV then more",
+   "expected": "log -abc TAILV then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-cluster-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -abc TAILV then more"
+   },
+   "expected": {
+    "message": "log -abc TAILV then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -model TAILV then more",
+   "expected": "log -model TAILV then more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -model TAILV then more"
+   },
+   "expected": {
+    "message": "log -model TAILV then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-single-dash-no-gap-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log -passwordTAILV then more",
+   "expected": "log -passwordTAILV <redacted> more"
+  },
+  {
+   "name": "pair-rule-1e-single-dash-no-gap-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log -passwordTAILV then more"
+   },
+   "expected": {
+    "message": "log -passwordTAILV <redacted> more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"=TAILV then more",
+   "expected": "log \"password\"=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"=TAILV then more"
+   },
+   "expected": {
+    "message": "log \"password\"=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-equals-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"=TAILV token=TAILX",
+   "expected": "log \"password\"=<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-equals-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"=TAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log \"password\"=<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-equals-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"model\"=keep then more",
+   "expected": "log \"model\"=keep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-equals-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"model\"=keep then more"
+   },
+   "expected": {
+    "message": "log \"model\"=keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%3DTAILV then more",
+   "expected": "log \"password\"%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%3DTAILV then more"
+   },
+   "expected": {
+    "message": "log \"password\"%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%3DTAILV token=TAILX",
+   "expected": "log \"password\"%3D<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%3DTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log \"password\"%3D<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"model\"%3Dkeep then more",
+   "expected": "log \"model\"%3Dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"model\"%3Dkeep then more"
+   },
+   "expected": {
+    "message": "log \"model\"%3Dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-lower-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%3dTAILV then more",
+   "expected": "log \"password\"%3d<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-lower-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%3dTAILV then more"
+   },
+   "expected": {
+    "message": "log \"password\"%3d<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-lower-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%3dTAILV token=TAILX",
+   "expected": "log \"password\"%3d<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-lower-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%3dTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log \"password\"%3d<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-lower-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"model\"%3dkeep then more",
+   "expected": "log \"model\"%3dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-dquote-encoded-lower-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"model\"%3dkeep then more"
+   },
+   "expected": {
+    "message": "log \"model\"%3dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'password'=TAILV then more",
+   "expected": "log 'password'=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'password'=TAILV then more"
+   },
+   "expected": {
+    "message": "log 'password'=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-equals-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'password'=TAILV token=TAILX",
+   "expected": "log 'password'=<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-equals-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'password'=TAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log 'password'=<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-equals-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'model'=keep then more",
+   "expected": "log 'model'=keep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-equals-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'model'=keep then more"
+   },
+   "expected": {
+    "message": "log 'model'=keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'password'%3DTAILV then more",
+   "expected": "log 'password'%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'password'%3DTAILV then more"
+   },
+   "expected": {
+    "message": "log 'password'%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'password'%3DTAILV token=TAILX",
+   "expected": "log 'password'%3D<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'password'%3DTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log 'password'%3D<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'model'%3Dkeep then more",
+   "expected": "log 'model'%3Dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'model'%3Dkeep then more"
+   },
+   "expected": {
+    "message": "log 'model'%3Dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-lower-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'password'%3dTAILV then more",
+   "expected": "log 'password'%3d<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-lower-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'password'%3dTAILV then more"
+   },
+   "expected": {
+    "message": "log 'password'%3d<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-lower-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'password'%3dTAILV token=TAILX",
+   "expected": "log 'password'%3d<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-lower-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'password'%3dTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log 'password'%3d<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-lower-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log 'model'%3dkeep then more",
+   "expected": "log 'model'%3dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-squote-encoded-lower-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log 'model'%3dkeep then more"
+   },
+   "expected": {
+    "message": "log 'model'%3dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"=TAILV then more",
+   "expected": "log \\\"password\\\"=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"=TAILV then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-equals-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"=TAILV token=TAILX",
+   "expected": "log \\\"password\\\"=<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-equals-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"=TAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"=<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-equals-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"model\\\"=keep then more",
+   "expected": "log \\\"model\\\"=keep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-equals-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"model\\\"=keep then more"
+   },
+   "expected": {
+    "message": "log \\\"model\\\"=keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%3DTAILV then more",
+   "expected": "log \\\"password\\\"%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%3DTAILV then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%3DTAILV token=TAILX",
+   "expected": "log \\\"password\\\"%3D<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%3DTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%3D<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"model\\\"%3Dkeep then more",
+   "expected": "log \\\"model\\\"%3Dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"model\\\"%3Dkeep then more"
+   },
+   "expected": {
+    "message": "log \\\"model\\\"%3Dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-lower-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%3dTAILV then more",
+   "expected": "log \\\"password\\\"%3d<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-lower-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%3dTAILV then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%3d<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-lower-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%3dTAILV token=TAILX",
+   "expected": "log \\\"password\\\"%3d<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-lower-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%3dTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%3d<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-lower-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"model\\\"%3dkeep then more",
+   "expected": "log \\\"model\\\"%3dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escquote-encoded-lower-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"model\\\"%3dkeep then more"
+   },
+   "expected": {
+    "message": "log \\\"model\\\"%3dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;password&quot;=TAILV then more",
+   "expected": "log &quot;password&quot;=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;password&quot;=TAILV then more"
+   },
+   "expected": {
+    "message": "log &quot;password&quot;=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-equals-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;password&quot;=TAILV token=TAILX",
+   "expected": "log &quot;password&quot;=<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-equals-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;password&quot;=TAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log &quot;password&quot;=<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-equals-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;model&quot;=keep then more",
+   "expected": "log &quot;model&quot;=keep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-equals-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;model&quot;=keep then more"
+   },
+   "expected": {
+    "message": "log &quot;model&quot;=keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;password&quot;%3DTAILV then more",
+   "expected": "log &quot;password&quot;%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;password&quot;%3DTAILV then more"
+   },
+   "expected": {
+    "message": "log &quot;password&quot;%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;password&quot;%3DTAILV token=TAILX",
+   "expected": "log &quot;password&quot;%3D<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;password&quot;%3DTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log &quot;password&quot;%3D<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;model&quot;%3Dkeep then more",
+   "expected": "log &quot;model&quot;%3Dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;model&quot;%3Dkeep then more"
+   },
+   "expected": {
+    "message": "log &quot;model&quot;%3Dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-lower-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;password&quot;%3dTAILV then more",
+   "expected": "log &quot;password&quot;%3d<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-lower-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;password&quot;%3dTAILV then more"
+   },
+   "expected": {
+    "message": "log &quot;password&quot;%3d<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-lower-second-pair-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;password&quot;%3dTAILV token=TAILX",
+   "expected": "log &quot;password&quot;%3d<redacted> token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-lower-second-pair-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;password&quot;%3dTAILV token=TAILX"
+   },
+   "expected": {
+    "message": "log &quot;password&quot;%3d<redacted> token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-lower-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log &quot;model&quot;%3dkeep then more",
+   "expected": "log &quot;model&quot;%3dkeep then more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-entquote-encoded-lower-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log &quot;model&quot;%3dkeep then more"
+   },
+   "expected": {
+    "message": "log &quot;model&quot;%3dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-space-gap-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\" =TAILV then more",
+   "expected": "log \"password\" =<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-space-gap-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\" =TAILV then more"
+   },
+   "expected": {
+    "message": "log \"password\" =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-tab-gap-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\t=TAILV then more",
+   "expected": "log \"password\"\t=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-tab-gap-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\t=TAILV then more"
+   },
+   "expected": {
+    "message": "log \"password\"\t=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-model-tab-gap-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"model\"\t=keep then more",
+   "expected": "log \"model\"\t=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-model-tab-gap-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"model\"\t=keep then more"
+   },
+   "expected": {
+    "message": "log \"model\"\t=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-quoted-value-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"=\"TAILV\" then more",
+   "expected": "log \"password\"=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-quoted-value-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"=\"TAILV\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-list-header-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"cookie\"=a=1; b=TAILX\nthen more",
+   "expected": "log \"cookie\"=<redacted>\nthen more"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-list-header-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"cookie\"=a=1; b=TAILX\nthen more"
+   },
+   "expected": {
+    "message": "log \"cookie\"=<redacted>\nthen more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escaped-name-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"user%5Bpassword%5D\"=TAILV then more",
+   "expected": "log \"user%5Bpassword%5D\"=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-quoted-eq-escaped-name-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"user%5Bpassword%5D\"=TAILV then more"
+   },
+   "expected": {
+    "message": "log \"user%5Bpassword%5D\"=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-colon-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password token: TAILX",
+   "expected": "log --password <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k1-colon-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password token: TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-dash-equals-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password -api_key= TAILX",
+   "expected": "log --password <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k1-dash-equals-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password -api_key= TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-bracket-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password user[pwd]= TAILX",
+   "expected": "log --password <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k1-bracket-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password user[pwd]= TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-url-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password https://example.invalid/?pwd= TAILX",
+   "expected": "log --password <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k1-url-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password https://example.invalid/?pwd= TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-nbsp-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password token: TAILX",
+   "expected": "log --password <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k1-nbsp-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password token: TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-nbsp-in-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV token: TAILX",
+   "expected": "log --password <redacted> token: <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k1-nbsp-in-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV token: TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted> token: <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k1-non-credential-word-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password a=b then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-k1-non-credential-word-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password a=b then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k2-bracket-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log user%5Bpassword%5D=TAILX then more",
+   "expected": "log user%5Bpassword%5D=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k2-bracket-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log user%5Bpassword%5D=TAILX then more"
+   },
+   "expected": {
+    "message": "log user%5Bpassword%5D=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k2-bracket-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log user%5Bpwd%5D:TAILX then more",
+   "expected": "log user%5Bpwd%5D:<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k2-bracket-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log user%5Bpwd%5D:TAILX then more"
+   },
+   "expected": {
+    "message": "log user%5Bpwd%5D:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k2-bracket-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log user%5Btoken%5D%3DTAILX then more",
+   "expected": "log user%5Btoken%5D%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k2-bracket-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log user%5Btoken%5D%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log user%5Btoken%5D%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k2-double-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log user%255Bpassword%255D=TAILX then more",
+   "expected": "log user%255Bpassword%255D=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k2-double-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log user%255Bpassword%255D=TAILX then more"
+   },
+   "expected": {
+    "message": "log user%255Bpassword%255D=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k2-form-body-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "a=1&user%5Bpassword%5D=TAILX&b=2",
+   "expected": "a=1&user%5Bpassword%5D=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k2-form-body-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "a=1&user%5Bpassword%5D=TAILX&b=2"
+   },
+   "expected": {
+    "message": "a=1&user%5Bpassword%5D=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k2-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log user%5Bmodel%5D=keep then more",
+   "expected": "log user%5Bmodel%5D=keep then more"
+  },
+  {
+   "name": "pair-rule-1e-k2-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log user%5Bmodel%5D=keep then more"
+   },
+   "expected": {
+    "message": "log user%5Bmodel%5D=keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k3-pct20-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password%20TAILV then more",
+   "expected": "log --password%20<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-k3-pct20-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password%20TAILV then more"
+   },
+   "expected": {
+    "message": "log --password%20<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k3-nbsp-escape-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password%C2%A0TAILV then more",
+   "expected": "log --password%C2%A0<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-k3-nbsp-escape-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password%C2%A0TAILV then more"
+   },
+   "expected": {
+    "message": "log --password%C2%A0<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k3-json-u2003-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\\u2003TAILV then more",
+   "expected": "log --password\\u2003<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-k3-json-u2003-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\\u2003TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\\u2003<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k3-next-flag-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password%20--token%20TAILV",
+   "expected": "log --password%20--token%20<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k3-next-flag-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password%20--token%20TAILV"
+   },
+   "expected": {
+    "message": "log --password%20--token%20<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k3-value-shape-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --token%20Bearer TAILVTAILV then more",
+   "expected": "log --token%20<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-k3-value-shape-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --token%20Bearer TAILVTAILV then more"
+   },
+   "expected": {
+    "message": "log --token%20<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k3-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --model%20keep then more",
+   "expected": "log --model%20keep then more"
+  },
+  {
+   "name": "pair-rule-1e-k3-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --model%20keep then more"
+   },
+   "expected": {
+    "message": "log --model%20keep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k4-flag-line-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log data:,x\n--token= TAILX",
+   "expected": "log <omitted: data URI>\n--token= <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k4-flag-line-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log data:,x\n--token= TAILX"
+   },
+   "expected": {
+    "message": "log <omitted: data URI>\n--token= <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k4-dash-line-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log data:,x\n-api_key= TAILX",
+   "expected": "log <omitted: data URI>\n-api_key= <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k4-dash-line-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log data:,x\n-api_key= TAILX"
+   },
+   "expected": {
+    "message": "log <omitted: data URI>\n-api_key= <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k4-pair-line-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log data:text/plain;base64,QUJD\npassword=TAILX",
+   "expected": "log <omitted: 4 base64 chars>\npassword=<redacted>"
+  },
+  {
+   "name": "pair-rule-1e-k4-pair-line-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log data:text/plain;base64,QUJD\npassword=TAILX"
+   },
+   "expected": {
+    "message": "log <omitted: 4 base64 chars>\npassword=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-k4-padding-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log data:text/plain;base64,QUJD\nRA== then more",
+   "expected": "log <omitted: 9 base64 chars> then more"
+  },
+  {
+   "name": "pair-rule-1e-k4-padding-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log data:text/plain;base64,QUJD\nRA== then more"
+   },
+   "expected": {
+    "message": "log <omitted: 9 base64 chars> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-pct0D-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password %0DTAILX then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-i5-pct0D-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password %0DTAILX then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-pct0D0A-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password %0D%0ATAILX then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-i5-pct0D0A-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password %0D%0ATAILX then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-json-n-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \\nTAILX then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-i5-json-n-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \\nTAILX then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-json-b-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password \\bTAILX then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-i5-json-b-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password \\bTAILX then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-spaced-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password %0D TAILX then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-i5-spaced-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password %0D TAILX then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-before-flag-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password %0D --token TAILX",
+   "expected": "log --password <redacted> --token <redacted>"
+  },
+  {
+   "name": "pair-rule-1e-i5-before-flag-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password %0D --token TAILX"
+   },
+   "expected": {
+    "message": "log --password <redacted> --token <redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1e-i5-encoded-space-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password %20TAILX then more",
+   "expected": "log --password %20<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1e-i5-encoded-space-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password %20TAILX then more"
+   },
+   "expected": {
+    "message": "log --password %20<redacted> then more"
+   }
+  }
+ ]
+}

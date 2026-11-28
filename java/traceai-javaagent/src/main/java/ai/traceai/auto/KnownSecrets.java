@@ -28,7 +28,9 @@ final class KnownSecrets {
         return snapshot == null ? compile() : snapshot;
     }
     private synchronized Snapshot compile() {
-        if (cached == null) cached = new Snapshot(values.keySet().stream().sorted(Comparator.comparingInt(String::length).reversed()).map(Secret::new).toList(), unavailable);
+        // Longest first, and secrets of one length in a fixed order (as the shared reference sorts them), so the export of two
+        // overlapping secrets of one length does not depend on the order they were registered in.
+        if (cached == null) cached = new Snapshot(values.keySet().stream().sorted(Comparator.comparingInt(String::length).reversed().thenComparing(Comparator.naturalOrder())).map(Secret::new).toList(), unavailable);
         return cached;
     }
     void seed(AutoConfig config, Map<String, String> environment) {
@@ -51,8 +53,8 @@ final class KnownSecrets {
                 String entry = value.substring(start, i).trim(); start = i + 1;
                 register(entry);
                 if (PrivacyCatalog.leaf(name).endsWith("authorization")) {
-                    int scheme = 0; while (scheme < entry.length() && !Character.isWhitespace(entry.charAt(scheme))) scheme++;
-                    if (scheme < entry.length()) register(entry.substring(scheme).stripLeading());
+                    String token = CredentialPairs.afterFirstWord(entry);
+                    if (token != null) register(token);
                 }
             }
         });
@@ -77,8 +79,8 @@ final class KnownSecrets {
         } else if (value instanceof String text && PrivacyCatalog.INSTANCE.credentialName(path)) {
             register(text);
             if (PrivacyCatalog.leaf(path).endsWith("authorization")) {
-                int scheme = 0; while (scheme < text.length() && !Character.isWhitespace(text.charAt(scheme))) scheme++;
-                if (scheme < text.length()) register(text.substring(scheme).stripLeading());
+                String token = CredentialPairs.afterFirstWord(text);
+                if (token != null) register(token);
             }
         }
     }
@@ -104,6 +106,14 @@ final class KnownSecrets {
             for (Secret secret : secrets) text = secret.replace(text);
             return text;
         }
+        /** Known secrets in a URL value the catalog framed: the spans the catalog recorded move with each replacement (a span a secret
+         *  overlaps is dropped). False when the value is too large to scan, and the whole value becomes the placeholder. */
+        boolean scrub(PrivacyCatalog.Framed framed) {
+            if (unavailable) throw new IllegalStateException("Privacy registry unavailable");
+            if ((long)framed.text.length() * (secrets.size() + 1) > 16 * 1024 * 1024) return false;
+            for (Secret secret : secrets) PrivacyCatalog.INSTANCE.replaceRuns(framed, secret.runs(framed.text.toString()));
+            return true;
+        }
     }
     /** KMP keeps replacement linear even for long, repeated-prefix credentials. */
     private static final class Secret {
@@ -116,6 +126,18 @@ final class KnownSecrets {
                 if (value.charAt(i) == value.charAt(j)) j++;
                 prefix[i] = j;
             }
+        }
+        /** The runs {start, end} that {@link #replace} replaces. */
+        List<int[]> runs(String text) {
+            List<int[]> runs = new ArrayList<>();
+            for (int i = 0, j = 0; i < text.length(); i++) {
+                if (text.startsWith("<redacted>", i)) { j = 0; i += "<redacted>".length() - 1; continue; }
+                while (j > 0 && text.charAt(i) != value.charAt(j)) j = prefix[j - 1];
+                if (text.charAt(i) == value.charAt(j)) j++;
+                if (j != value.length()) continue;
+                runs.add(new int[] {i + 1 - j, i + 1}); j = 0;
+            }
+            return runs;
         }
         String replace(String text) {
             StringBuilder result = null; int copied = 0;

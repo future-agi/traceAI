@@ -1,0 +1,4055 @@
+{
+ "base": "442071ae28850dd4bb205b44fb0fb550cf25f154",
+ "note": "Phase 1d. changed: empty (no existing case may change). new_cases: every case phase 1d appends, in order, with its expected value.",
+ "changed": {},
+ "new_cases": [
+  {
+   "name": "pair-rule-1d-readback-pass-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpass%3DTAILX then more",
+   "expected": "log a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpass%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpass%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpass%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpass%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpass%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpass%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpass%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpass%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpass%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpass%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpass%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pass-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpass%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpass%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpasscode%3DTAILX then more",
+   "expected": "log a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpasscode%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpasscode%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpasscode%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpasscode%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpasscode%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpasscode%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpasscode%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpasscode%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpasscode%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpasscode%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpasscode%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passcode-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpasscode%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpasscode%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpassphrase%3DTAILX then more",
+   "expected": "log a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpassphrase%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpassphrase%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpassphrase%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpassphrase%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpassphrase%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpassphrase%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpassphrase%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpassphrase%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpassphrase%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpassphrase%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpassphrase%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passphrase-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpassphrase%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpassphrase%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpasswd%3DTAILX then more",
+   "expected": "log a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpasswd%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpasswd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpasswd%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpasswd%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpasswd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpasswd%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpasswd%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpasswd%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpasswd%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpasswd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpasswd%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-passwd-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpasswd%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpasswd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpin%3DTAILX then more",
+   "expected": "log a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpin%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpin%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpin%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpin%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpin%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpin%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpin%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpin%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpin%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpin%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpin%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pin-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpin%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpin%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpwd%3DTAILX then more",
+   "expected": "log a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpwd%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpwd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpwd%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpwd%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpwd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpwd%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpwd%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpwd%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpwd%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpwd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpwd%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-pwd-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpwd%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-encoded-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpassword%3DTAILX then more",
+   "expected": "log a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-encoded-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpassword%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpassword%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-password-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?q=a%3Dpassword%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?q=a%3Dpassword%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/?q=a%3Dpassword%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-password-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?q=a%3Dpassword%3DTAILX",
+   "expected": "https://example.invalid/?q=a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?q=a%3Dpassword%3DTAILX next",
+   "expected": "see https://example.invalid/?q=a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-fragment-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#a%3Dpassword%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-fragment-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#a%3Dpassword%3DTAILX"
+   },
+   "expected": {
+    "url": "https://example.invalid/#a%3Dpassword%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-password-fragment-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#a%3Dpassword%3DTAILX",
+   "expected": "https://example.invalid/#a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-password-fragment-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#a%3Dpassword%3DTAILX next",
+   "expected": "see https://example.invalid/#a%3Dpassword%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-lower-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3dpwd%3dTAILX then more",
+   "expected": "log a%3dpwd%3d<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-lower-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3dpwd%3dTAILX then more"
+   },
+   "expected": {
+    "message": "log a%3dpwd%3d<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-before-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpwd=TAILX then more",
+   "expected": "log a%3Dpwd=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-before-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpwd=TAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpwd=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-before-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dpwd:TAILX then more",
+   "expected": "log a%3Dpwd:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-before-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dpwd:TAILX then more"
+   },
+   "expected": {
+    "message": "log a%3Dpwd:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-other-escape-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%41pwd%3DTAILX then more",
+   "expected": "log a%41pwd%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-other-escape-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%41pwd%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log a%41pwd%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-space-escape-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%20pwd=TAILX then more",
+   "expected": "log a%20pwd=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-readback-space-escape-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%20pwd=TAILX then more"
+   },
+   "expected": {
+    "message": "log a%20pwd=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-readback-control-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log a%3Dmodel%3Dkeep then more",
+   "expected": "log a%3Dmodel%3Dkeep then more"
+  },
+  {
+   "name": "pair-rule-1d-readback-control-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log a%3Dmodel%3Dkeep then more"
+   },
+   "expected": {
+    "message": "log a%3Dmodel%3Dkeep then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nbsp-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password =TAILV then more",
+   "expected": "log --password =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nbsp-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nbsp-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password :TAILV then more",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nbsp-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nbsp-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nbsp-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-figure-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password =TAILV then more",
+   "expected": "log --password =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-figure-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-figure-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password :TAILV then more",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-figure-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-figure-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-figure-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-narrow-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password =TAILV then more",
+   "expected": "log --password =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-narrow-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-narrow-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password :TAILV then more",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-narrow-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-narrow-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-narrow-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nel-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password=TAILV then more",
+   "expected": "log --password=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nel-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password=TAILV then more"
+   },
+   "expected": {
+    "message": "log --password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nel-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password:TAILV then more",
+   "expected": "log --password:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nel-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password:TAILV then more"
+   },
+   "expected": {
+    "message": "log --password:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nel-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --passwordTAILV then more",
+   "expected": "log --password<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-none-nel-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --passwordTAILV then more"
+   },
+   "expected": {
+    "message": "log --password<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nbsp-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  =TAILV then more",
+   "expected": "log --password  =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nbsp-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nbsp-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  :TAILV then more",
+   "expected": "log --password  :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nbsp-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nbsp-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  TAILV then more",
+   "expected": "log --password  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nbsp-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-figure-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  =TAILV then more",
+   "expected": "log --password  =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-figure-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-figure-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  :TAILV then more",
+   "expected": "log --password  :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-figure-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-figure-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  TAILV then more",
+   "expected": "log --password  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-figure-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-narrow-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  =TAILV then more",
+   "expected": "log --password  =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-narrow-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-narrow-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  :TAILV then more",
+   "expected": "log --password  :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-narrow-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-narrow-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password  TAILV then more",
+   "expected": "log --password  <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-narrow-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password  TAILV then more"
+   },
+   "expected": {
+    "message": "log --password  <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nel-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password =TAILV then more",
+   "expected": "log --password =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nel-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nel-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password :TAILV then more",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nel-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nel-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password TAILV then more",
+   "expected": "log --password <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-space-nel-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password TAILV then more"
+   },
+   "expected": {
+    "message": "log --password <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nbsp-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t =TAILV then more",
+   "expected": "log --password\t =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nbsp-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nbsp-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t :TAILV then more",
+   "expected": "log --password\t :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nbsp-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nbsp-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t TAILV then more",
+   "expected": "log --password\t <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nbsp-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-figure-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t =TAILV then more",
+   "expected": "log --password\t =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-figure-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-figure-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t :TAILV then more",
+   "expected": "log --password\t :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-figure-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-figure-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t TAILV then more",
+   "expected": "log --password\t <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-figure-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-narrow-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t =TAILV then more",
+   "expected": "log --password\t =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-narrow-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t =TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-narrow-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t :TAILV then more",
+   "expected": "log --password\t :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-narrow-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-narrow-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t TAILV then more",
+   "expected": "log --password\t <redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-narrow-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t <redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nel-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t=TAILV then more",
+   "expected": "log --password\t=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nel-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t=TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nel-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t:TAILV then more",
+   "expected": "log --password\t:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nel-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t:TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nel-bare-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\tTAILV then more",
+   "expected": "log --password\t<redacted> then more"
+  },
+  {
+   "name": "pair-rule-1d-dashes-gap-tab-nel-bare-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\tTAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t<redacted> then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-space-slashes-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password ://TAILV then more",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-space-slashes-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password ://TAILV then more"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-space-plain-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password :TAILV then more",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-space-plain-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password :TAILV then more"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-tab-slashes-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t://TAILV then more",
+   "expected": "log --password\t:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-tab-slashes-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t://TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-tab-plain-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password\t:TAILV then more",
+   "expected": "log --password\t:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-tab-plain-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password\t:TAILV then more"
+   },
+   "expected": {
+    "message": "log --password\t:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-equals-slashes-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --token=://TAILV then more",
+   "expected": "log --token=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-equals-slashes-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --token=://TAILV then more"
+   },
+   "expected": {
+    "message": "log --token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-slashes-end-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log --password ://TAILV",
+   "expected": "log --password :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-dashes-colon-slashes-end-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log --password ://TAILV"
+   },
+   "expected": {
+    "message": "log --password :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%20=TAILX then more",
+   "expected": "log password%20=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%20=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%20=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%20%3DTAILX then more",
+   "expected": "log password%20%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%20%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%20%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%20:TAILX then more",
+   "expected": "log password%20:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%20:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%20:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%20: \"TAILX\" then more",
+   "expected": "log \"password\"%20: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%20: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%20: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%20: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%20: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%20: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%20: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%09=TAILX then more",
+   "expected": "log password%09=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%09=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%09=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%09%3DTAILX then more",
+   "expected": "log password%09%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%09%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%09%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%09:TAILX then more",
+   "expected": "log password%09:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%09:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%09:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%09: \"TAILX\" then more",
+   "expected": "log \"password\"%09: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%09: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%09: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%09: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%09: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-09-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%09: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%09: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0A=TAILX then more",
+   "expected": "log password%0A=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0A=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0A=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0A%3DTAILX then more",
+   "expected": "log password%0A%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0A%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0A%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0A:TAILX then more",
+   "expected": "log password%0A:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0A:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0A:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0A: \"TAILX\" then more",
+   "expected": "log \"password\"%0A: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0A: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0A: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0A: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0A: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0A-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0A: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0A: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0B=TAILX then more",
+   "expected": "log password%0B=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0B=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0B=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0B%3DTAILX then more",
+   "expected": "log password%0B%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0B%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0B%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0B:TAILX then more",
+   "expected": "log password%0B:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0B:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0B:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0B: \"TAILX\" then more",
+   "expected": "log \"password\"%0B: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0B: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0B: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0B: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0B: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0B-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0B: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0B: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0C=TAILX then more",
+   "expected": "log password%0C=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0C=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0C=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0C%3DTAILX then more",
+   "expected": "log password%0C%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0C%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0C%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0C:TAILX then more",
+   "expected": "log password%0C:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0C:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0C:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0C: \"TAILX\" then more",
+   "expected": "log \"password\"%0C: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0C: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0C: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0C: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0C: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0C-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0C: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0C: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0D=TAILX then more",
+   "expected": "log password%0D=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0D=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0D=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0D%3DTAILX then more",
+   "expected": "log password%0D%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0D%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0D%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0D:TAILX then more",
+   "expected": "log password%0D:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0D:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0D:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0D: \"TAILX\" then more",
+   "expected": "log \"password\"%0D: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0D: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0D: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0D: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0D: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0D-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0D: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0D: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%C2%A0=TAILX then more",
+   "expected": "log password%C2%A0=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%C2%A0=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%C2%A0=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%C2%A0%3DTAILX then more",
+   "expected": "log password%C2%A0%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%C2%A0%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%C2%A0%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%C2%A0:TAILX then more",
+   "expected": "log password%C2%A0:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%C2%A0:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%C2%A0:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%C2%A0: \"TAILX\" then more",
+   "expected": "log \"password\"%C2%A0: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%C2%A0: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%C2%A0: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%C2%A0: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%C2%A0: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2A0-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%C2%A0: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%C2%A0: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0a=TAILX then more",
+   "expected": "log password%0a=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0a=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0a=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0a%3DTAILX then more",
+   "expected": "log password%0a%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0a%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0a%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0a:TAILX then more",
+   "expected": "log password%0a:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0a:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0a:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0a: \"TAILX\" then more",
+   "expected": "log \"password\"%0a: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0a: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0a: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0a: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0a: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0a-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0a: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0a: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0b=TAILX then more",
+   "expected": "log password%0b=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0b=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0b=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0b%3DTAILX then more",
+   "expected": "log password%0b%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0b%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0b%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0b:TAILX then more",
+   "expected": "log password%0b:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0b:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0b:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0b: \"TAILX\" then more",
+   "expected": "log \"password\"%0b: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0b: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0b: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0b: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0b: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0b-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0b: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0b: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0c=TAILX then more",
+   "expected": "log password%0c=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0c=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0c=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0c%3DTAILX then more",
+   "expected": "log password%0c%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0c%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0c%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0c:TAILX then more",
+   "expected": "log password%0c:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0c:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0c:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0c: \"TAILX\" then more",
+   "expected": "log \"password\"%0c: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0c: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0c: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0c: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0c: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0c-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0c: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0c: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0d=TAILX then more",
+   "expected": "log password%0d=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0d=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0d=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0d%3DTAILX then more",
+   "expected": "log password%0d%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0d%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%0d%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%0d:TAILX then more",
+   "expected": "log password%0d:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%0d:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%0d:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%0d: \"TAILX\" then more",
+   "expected": "log \"password\"%0d: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%0d: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%0d: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%0d: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%0d: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-0d-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%0d: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%0d: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%c2%a0=TAILX then more",
+   "expected": "log password%c2%a0=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%c2%a0=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%c2%a0=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%c2%a0%3DTAILX then more",
+   "expected": "log password%c2%a0%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%c2%a0%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%c2%a0%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%c2%a0:TAILX then more",
+   "expected": "log password%c2%a0:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%c2%a0:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%c2%a0:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%c2%a0: \"TAILX\" then more",
+   "expected": "log \"password\"%c2%a0: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%c2%a0: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%c2%a0: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%c2%a0: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%c2%a0: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2a0-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%c2%a0: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%c2%a0: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%c2%A0=TAILX then more",
+   "expected": "log password%c2%A0=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%c2%A0=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%c2%A0=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%c2%A0%3DTAILX then more",
+   "expected": "log password%c2%A0%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%c2%A0%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%c2%A0%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%c2%A0:TAILX then more",
+   "expected": "log password%c2%A0:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%c2%A0:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%c2%A0:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%c2%A0: \"TAILX\" then more",
+   "expected": "log \"password\"%c2%A0: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%c2%A0: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%c2%A0: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%c2%A0: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%c2%A0: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-c2A0-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%c2%A0: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%c2%A0: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%C2%a0=TAILX then more",
+   "expected": "log password%C2%a0=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%C2%a0=TAILX then more"
+   },
+   "expected": {
+    "message": "log password%C2%a0=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%C2%a0%3DTAILX then more",
+   "expected": "log password%C2%a0%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%C2%a0%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%C2%a0%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%C2%a0:TAILX then more",
+   "expected": "log password%C2%a0:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%C2%a0:TAILX then more"
+   },
+   "expected": {
+    "message": "log password%C2%a0:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%C2%a0: \"TAILX\" then more",
+   "expected": "log \"password\"%C2%a0: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%C2%a0: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%C2%a0: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%C2%a0: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%C2%a0: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-C2a0-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%C2%a0: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%C2%a0: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\t=TAILX then more",
+   "expected": "log password\\t=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\t=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\t=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\t%3DTAILX then more",
+   "expected": "log password\\t%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\t%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\t%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\t:TAILX then more",
+   "expected": "log password\\t:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\t:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\t:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\t: \"TAILX\" then more",
+   "expected": "log \"password\"\\t: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\t: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\t: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\t: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\t: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\t: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\t: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\n=TAILX then more",
+   "expected": "log password\\n=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\n=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\n=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\n%3DTAILX then more",
+   "expected": "log password\\n%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\n%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\n%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\n:TAILX then more",
+   "expected": "log password\\n:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\n:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\n:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\n: \"TAILX\" then more",
+   "expected": "log \"password\"\\n: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\n: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\n: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\n: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\n: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-n-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\n: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\n: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\r=TAILX then more",
+   "expected": "log password\\r=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\r=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\r=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\r%3DTAILX then more",
+   "expected": "log password\\r%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\r%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\r%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\r:TAILX then more",
+   "expected": "log password\\r:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\r:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\r:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\r: \"TAILX\" then more",
+   "expected": "log \"password\"\\r: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\r: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\r: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\r: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\r: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-r-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\r: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\r: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\f=TAILX then more",
+   "expected": "log password\\f=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\f=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\f=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\f%3DTAILX then more",
+   "expected": "log password\\f%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\f%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\f%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\f:TAILX then more",
+   "expected": "log password\\f:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\f:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\f:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\f: \"TAILX\" then more",
+   "expected": "log \"password\"\\f: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\f: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\f: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\f: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\f: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-f-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\f: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\f: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\b=TAILX then more",
+   "expected": "log password\\b=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\b=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\b=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\b%3DTAILX then more",
+   "expected": "log password\\b%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\b%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\b%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\b:TAILX then more",
+   "expected": "log password\\b:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\b:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\b:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\b: \"TAILX\" then more",
+   "expected": "log \"password\"\\b: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\b: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\b: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\b: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\b: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-b-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\b: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\b: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0020=TAILX then more",
+   "expected": "log password\\u0020=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0020=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0020=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0020%3DTAILX then more",
+   "expected": "log password\\u0020%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0020%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0020%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0020:TAILX then more",
+   "expected": "log password\\u0020:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0020:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0020:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u0020: \"TAILX\" then more",
+   "expected": "log \"password\"\\u0020: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u0020: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u0020: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u0020: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u0020: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0020-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u0020: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u0020: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0009=TAILX then more",
+   "expected": "log password\\u0009=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0009=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0009=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0009%3DTAILX then more",
+   "expected": "log password\\u0009%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0009%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0009%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0009:TAILX then more",
+   "expected": "log password\\u0009:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0009:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0009:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u0009: \"TAILX\" then more",
+   "expected": "log \"password\"\\u0009: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u0009: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u0009: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u0009: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u0009: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0009-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u0009: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u0009: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u00a0=TAILX then more",
+   "expected": "log password\\u00a0=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u00a0=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u00a0=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u00a0%3DTAILX then more",
+   "expected": "log password\\u00a0%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u00a0%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u00a0%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u00a0:TAILX then more",
+   "expected": "log password\\u00a0:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u00a0:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u00a0:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u00a0: \"TAILX\" then more",
+   "expected": "log \"password\"\\u00a0: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u00a0: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u00a0: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u00a0: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u00a0: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00a0-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u00a0: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u00a0: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u00A0=TAILX then more",
+   "expected": "log password\\u00A0=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u00A0=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u00A0=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u00A0%3DTAILX then more",
+   "expected": "log password\\u00A0%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u00A0%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u00A0%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u00A0:TAILX then more",
+   "expected": "log password\\u00A0:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u00A0:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u00A0:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u00A0: \"TAILX\" then more",
+   "expected": "log \"password\"\\u00A0: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u00A0: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u00A0: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u00A0: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u00A0: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u00A0-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u00A0: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u00A0: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u2003=TAILX then more",
+   "expected": "log password\\u2003=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u2003=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u2003=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u2003%3DTAILX then more",
+   "expected": "log password\\u2003%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u2003%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u2003%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u2003:TAILX then more",
+   "expected": "log password\\u2003:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u2003:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u2003:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u2003: \"TAILX\" then more",
+   "expected": "log \"password\"\\u2003: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u2003: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u2003: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u2003: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u2003: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2003-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u2003: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u2003: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u2028=TAILX then more",
+   "expected": "log password\\u2028=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u2028=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u2028=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u2028%3DTAILX then more",
+   "expected": "log password\\u2028%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u2028%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u2028%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u2028:TAILX then more",
+   "expected": "log password\\u2028:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u2028:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u2028:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u2028: \"TAILX\" then more",
+   "expected": "log \"password\"\\u2028: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u2028: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u2028: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u2028: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u2028: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u2028-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u2028: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u2028: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0085=TAILX then more",
+   "expected": "log password\\u0085=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0085=TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0085=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0085%3DTAILX then more",
+   "expected": "log password\\u0085%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0085%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0085%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password\\u0085:TAILX then more",
+   "expected": "log password\\u0085:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password\\u0085:TAILX then more"
+   },
+   "expected": {
+    "message": "log password\\u0085:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"\\u0085: \"TAILX\" then more",
+   "expected": "log \"password\"\\u0085: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"\\u0085: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"\\u0085: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"\\u0085: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"\\u0085: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-u0085-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"\\u0085: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"\\u0085: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password %20=TAILX then more",
+   "expected": "log password %20=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password %20=TAILX then more"
+   },
+   "expected": {
+    "message": "log password %20=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password %20%3DTAILX then more",
+   "expected": "log password %20%3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password %20%3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password %20%3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password %20:TAILX then more",
+   "expected": "log password %20:<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password %20:TAILX then more"
+   },
+   "expected": {
+    "message": "log password %20:<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\" %20: \"TAILX\" then more",
+   "expected": "log \"password\" %20: \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\" %20: \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\" %20: \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\" %20: \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\" %20: \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-space-pct-20-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\" %20: \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\" %20: \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-equals-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%20 =TAILX then more",
+   "expected": "log password%20 =<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-equals-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%20 =TAILX then more"
+   },
+   "expected": {
+    "message": "log password%20 =<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-encoded-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%20 %3DTAILX then more",
+   "expected": "log password%20 %3D<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-encoded-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%20 %3DTAILX then more"
+   },
+   "expected": {
+    "message": "log password%20 %3D<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-colon-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password%20 :TAILX then more",
+   "expected": "log password%20 :<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-colon-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password%20 :TAILX then more"
+   },
+   "expected": {
+    "message": "log password%20 :<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-quoted-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\"%20 : \"TAILX\" then more",
+   "expected": "log \"password\"%20 : \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-quoted-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\"%20 : \"TAILX\" then more"
+   },
+   "expected": {
+    "message": "log \"password\"%20 : \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-escaped-quote-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \\\"password\\\"%20 : \\\"TAILX\\\" then more",
+   "expected": "log \\\"password\\\"%20 : \\\"<redacted>\\\" then more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-space-escaped-quote-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \\\"password\\\"%20 : \\\"TAILX\\\" then more"
+   },
+   "expected": {
+    "message": "log \\\"password\\\"%20 : \\\"<redacted>\\\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-model-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log model%20=keep then more",
+   "expected": "log model%20=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-model-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log model%20=keep then more"
+   },
+   "expected": {
+    "message": "log model%20=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-cookie-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log cookie%20: a=1; b=TAILX, c=TAILY\nthen more",
+   "expected": "log cookie%20: <redacted>\nthen more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-pct-20-cookie-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log cookie%20: a=1; b=TAILX, c=TAILY\nthen more"
+   },
+   "expected": {
+    "message": "log cookie%20: <redacted>\nthen more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-model-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log model\\t=keep then more",
+   "expected": "log model\\t=<redacted>"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-model-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log model\\t=keep then more"
+   },
+   "expected": {
+    "message": "log model\\t=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-cookie-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log cookie\\t: a=1; b=TAILX, c=TAILY\nthen more",
+   "expected": "log cookie\\t: <redacted>\nthen more"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-json-t-cookie-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log cookie\\t: a=1; b=TAILX, c=TAILY\nthen more"
+   },
+   "expected": {
+    "message": "log cookie\\t: <redacted>\nthen more"
+   }
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-serialized-json-prose",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log {\\\"password\\\"\\t: \\\"TAILX\\\", \\\"model\\\": \\\"keep\\\"}",
+   "expected": "log {\\\"password\\\"\\t: \\\"<redacted>\\\", \\\"model\\\": \\\"keep\\\"}"
+  },
+  {
+   "name": "pair-rule-1d-encoded-gap-serialized-json-json",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log {\\\"password\\\"\\t: \\\"TAILX\\\", \\\"model\\\": \\\"keep\\\"}"
+   },
+   "expected": {
+    "message": "log {\\\"password\\\"\\t: \\\"<redacted>\\\", \\\"model\\\": \\\"keep\\\"}"
+   }
+  }
+ ]
+}
