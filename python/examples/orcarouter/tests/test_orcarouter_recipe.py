@@ -12,11 +12,11 @@ import uuid
 import app
 import fi_instrumentation
 import harness
-import httpx
 import openai
 import pytest
 import traceai_openai
 from harness import Receiver
+from openai import _base_client
 from traceai_openai import OpenAIInstrumentor
 
 from _fake_openai import (
@@ -24,11 +24,8 @@ from _fake_openai import (
     FakeOpenAI, completion, error_body, stream_bytes,
 )
 
-# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
-# (future-agi/traceAI#249) use the vendor's name for its documented API host.
-# They also omit gen_ai.request.model on streamed and failed calls, where later
-# versions record the requested model. Accept both so this recipe passes on either version.
-PROVIDER_NAMES = ("openai", "orcarouter")
+# Match the transport used by the installed OpenAI SDK, including its 1.x floor.
+httpx = _base_client.httpx2 if hasattr(_base_client, "httpx2") else _base_client.httpx
 
 RECIPE = Path(__file__).resolve().parents[1]
 VENDOR_KEY = "placeholder-orcarouter-key"
@@ -121,7 +118,7 @@ def exported_span(receiver, provider, project):
     values = attributes(span)
     assert span["name"] == "ChatCompletion"
     assert values["gen_ai.span.kind"] == "LLM"
-    assert values["gen_ai.provider.name"] in PROVIDER_NAMES
+    assert values["gen_ai.provider.name"] == "orcarouter"
     exports = receiver.requests()
     assert len(exports) == 1
     assert exports[0]["path"] == "/tracer/v1/traces"
@@ -227,7 +224,7 @@ def test_usage_absent_is_omitted(monkeypatch):
 
 
 @pytest.mark.parametrize("include_usage", [False, True], ids=["default", "final-usage-chunk"])
-def test_stream_text_model_gap_and_usage(monkeypatch, include_usage):
+def test_stream_text_requested_model_and_usage(monkeypatch, include_usage):
     requests = []
 
     def handler(request):
@@ -251,8 +248,7 @@ def test_stream_text_model_gap_and_usage(monkeypatch, include_usage):
         assert len(requests) == 1
         assert span["status"]["code"] == "STATUS_CODE_OK"
         assert values["output.value"] == ANSWER
-        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
-        assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
+        assert values[MODEL_ATTRIBUTE] == REQUESTED_MODEL
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         actual_usage = {key: value for key, value in values.items() if key.startswith("gen_ai.usage.")}
         assert actual_usage == (USAGE_ATTRIBUTES if include_usage else {})
@@ -281,8 +277,7 @@ def test_stream_without_text_has_no_raw_response_fallback(monkeypatch):
         assert values["output.value"] == ""
         assert marker not in json.dumps(span)
         assert "fixture_metadata" not in json.dumps(span)
-        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
-        assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
+        assert values[MODEL_ATTRIBUTE] == REQUESTED_MODEL
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
 
 
@@ -337,14 +332,13 @@ def test_errors_record_exception_and_requested_model(monkeypatch, status, error_
         assert len(exception_events) == 1
         assert error_class.__name__ in json.dumps(exception_events)
         assert error_body(status)["error"]["message"] in json.dumps(exception_events)
-        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
-        assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
+        assert values[MODEL_ATTRIBUTE] == REQUESTED_MODEL
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         assert VENDOR_KEY not in json.dumps(span)
 
 
 @pytest.mark.parametrize("call", ["stream", "error"])
-def test_hidden_invocation_parameters_leave_no_requested_model(monkeypatch, call):
+def test_hidden_invocation_parameters_preserve_requested_model(monkeypatch, call):
     for hidden in (False, True):
         monkeypatch.setenv("FI_HIDE_LLM_INVOCATION_PARAMETERS", str(hidden).lower())
 
@@ -365,10 +359,9 @@ def test_hidden_invocation_parameters_leave_no_requested_model(monkeypatch, call
                     for _ in client.chat.completions.create(model=REQUESTED_MODEL, messages=MESSAGES, stream=True):
                         pass
             _, values = exported_span(receiver, provider, project)
-            assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
+            assert values[MODEL_ATTRIBUTE] == REQUESTED_MODEL
             if hidden:
                 assert PARAMETERS_ATTRIBUTE not in values
-                # 0.1.10 leaves no model at all; later versions keep it only as the model attribute.
                 others = {key: value for key, value in values.items() if key != MODEL_ATTRIBUTE}
                 assert REQUESTED_MODEL not in json.dumps(others)
             else:
@@ -508,12 +501,12 @@ def test_app_subprocess_with_installed_guard(monkeypatch, tmp_path, stream, env_
         values = attributes(spans[0])
         assert spans[0]["name"] == "ChatCompletion"
         assert values["gen_ai.span.kind"] == "LLM"
-        assert values["gen_ai.provider.name"] in PROVIDER_NAMES
+        # A loopback custom endpoint has no OrcaRouter hostname to infer.
+        assert values["gen_ai.provider.name"] == "openai"
         assert ANSWER in values["output.value"]
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         if stream:
-            # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
-            assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
+            assert values[MODEL_ATTRIBUTE] == REQUESTED_MODEL
             assert not any(key.startswith("gen_ai.usage.") for key in values)
         else:
             assert values[MODEL_ATTRIBUTE] == RESOLVED_MODEL
@@ -694,38 +687,58 @@ def test_readme_contract_and_no_real_keys():
     readme = (RECIPE / "README.md").read_text()
     assert readme.startswith("# OrcaRouter (OpenAI-compatible) with traceAI")
     assert "https://api.orcarouter.ai/v1" in readme
-    assert "provider field says `openai`" in readme
-    for name in ("FI_API_KEY", "FI_SECRET_KEY", app.API_KEY_ENV, app.MODEL_ENV, app.BASE_URL_ENV, "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+    for name in ("FI_API_KEY", "FI_SECRET_KEY", app.API_KEY_ENV, app.MODEL_ENV, app.BASE_URL_ENV,
+                 "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
+                 "FI_HIDE_LLM_INVOCATION_PARAMETERS"):
         assert name in readme
-    assert "| `FI_PROJECT_NAME` | Optional Observe project name; defaults to `orcarouter-example` |" in readme
     assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "orcarouter-example"' in readme
+    assert "gen_ai.provider.name=orcarouter" in readme
     assert "gen_ai.request.model" in readme
     assert "gen_ai.request.parameters" in readme
-    assert "cost lookup" in readme
-    assert "models" in readme and "absent" in readme
-    assert "https://docs.orcarouter.ai/introduction" in readme
-    assert "no trace export" in readme and "https://docs.orcarouter.ai/operations/observability" in readme
+    assert 'stream_options={"include_usage": True}' in readme
+    assert "https://docs.orcarouter.ai/compatibility/openai-sdk" in readme
+    assert "https://docs.orcarouter.ai/advanced/streaming" in readme
     assert "not Future AGI ingest failures" in readme and "funded OrcaRouter wallet" in readme
-    assert "record no model at all on streamed and failed spans" in readme
+    assert "0.1.10" not in readme
     assert "verbose=False" in readme
     assert "TBD" not in readme
-    source_command = """env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \\
-  PYTHONPATH="python/examples/orcarouter/src:python:python/frameworks/openai:python/tests" \\
-  uv run --no-project --python 3.11 \\
-  --with 'openai==3.24.0' --with httpx --with 'wrapt<2' \\
-  --with opentelemetry-api --with opentelemetry-sdk --with opentelemetry-instrumentation \\
-  --with opentelemetry-exporter-otlp-proto-http --with requests --with protobuf \\
-  --with opentelemetry-proto --with pydantic --with jsonschema --with pytest \\
-  pytest python/examples/orcarouter/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs"""
-    assert source_command in readme
-    assert 'PYTHONPATH="python/examples/orcarouter/src:python/tests"' in readme
-    assert "--with 'traceAI-openai==0.1.10' --with 'fi-instrumentation-otel==1.1.0'" in readme
-    assert (RECIPE / "requirements.txt").read_text().splitlines()[1:] == [
-        "openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0",
-    ]
+    pins = [line for line in (RECIPE / "requirements.txt").read_text().splitlines()
+            if line and not line.startswith("#")]
+    assert pins == ["openai==3.24.0", "traceAI-openai==0.1.11", "fi-instrumentation-otel==1.1.0"]
+    for pin in pins:
+        assert f"'{pin}'" in readme
     # Only text sources; a __pycache__ or editor file must not break the check.
     for path in RECIPE.rglob("*"):
         if path.is_file() and "__pycache__" not in path.parts and path.suffix in {".py", ".md", ".txt"}:
             content = path.read_text()
             assert not re.search(r"\b[A-Z]{2,5}-\d{3,}\b", content), path
             assert not re.search(r"sk-[A-Za-z0-9_-]{16,}", content), path
+
+
+def test_readme_application_example(monkeypatch, capsys):
+    readme = (RECIPE / "README.md").read_text()
+    snippet = re.search(r"```python\n(.*?)```", readme, re.DOTALL).group(1)
+    original_init = openai.OpenAI.__init__
+    requests = []
+
+    def handler(request):
+        assert_vendor_request(request)
+        requests.append(request)
+        return httpx.Response(200, json=completion())
+
+    def initialize_client(self, **kwargs):
+        original_init(self, http_client=httpx.Client(transport=httpx.MockTransport(handler)), **kwargs)
+
+    monkeypatch.setattr(openai.OpenAI, "__init__", initialize_client)
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        namespace = {}
+        try:
+            exec(compile(snippet, "README.md", "exec"), namespace)
+            assert capsys.readouterr().out.strip() == ANSWER
+            assert len(requests) == 1
+            _, values = exported_span(receiver, namespace["provider"], "orcarouter-example")
+            assert values[MODEL_ATTRIBUTE] == RESOLVED_MODEL
+        finally:
+            if "provider" in namespace:
+                namespace["provider"].shutdown()
