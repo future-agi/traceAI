@@ -421,11 +421,11 @@ def run_row(oracle, row, listeners, opt_in, caller, unguarded=False):
 # ---- the rows to run and the comparison --------------------------------------------------------------------------------
 
 CALLERS = ("none", "client_with_proxy", "uninspectable_transport")
-# Rows of the oracle that a ruling decides, listed by host so the list is the only place a difference lives. The ruling is
-# ORACLE-S1-AT-IN-PATH-RULED-EXCEPTION-r1-FISEC.json (fi-security): a URL with an ``@`` after its authority is refused as
+# Rows of the oracle that a ruling decides, listed by host so the list is the only place a difference lives. The ruling:
+# a URL with an ``@`` after its authority is refused as
 # ``disputed_authority`` on every row of the host, whatever the oracle row says, and no key reaches any sink. These rows are
 # counted as ``ruled_exception``; every other row must match the oracle (https rows included).
-RULING = "ORACLE-S1-AT-IN-PATH-RULED-EXCEPTION-r1-FISEC.json"
+RULING = "an @ after the authority is refused as disputed_authority"
 RULED_EXCEPTION = {"s1_at_in_path": "disputed_authority"}
 # The NO_PROXY value of a row with a bypass list is not stated by the oracle; ``env_for`` reconstructs it from the host of the
 # row (see ``NO_PROXY_VALUES``). Such rows are counted as ``derived``, apart from the rows whose environment the oracle states.
@@ -487,7 +487,7 @@ def problems(oracle, row, transport, caller, outcome):
     ruled = RULED_EXCEPTION.get(row["host"])
     if ruled:
         if got[:2] != ("refuse", ruled) or outcome["marker_bytes"]:
-            return [f"the ruling {RULING} says refuse {ruled} with no marker byte, answered {got} with {outcome['marker_bytes']} bytes"]
+            return [f"the ruling ({RULING}) says refuse {ruled} with no marker byte, answered {got} with {outcome['marker_bytes']} bytes"]
         return []
     if want[2] == "unchecked":
         want, got = want[:2], got[:2]
