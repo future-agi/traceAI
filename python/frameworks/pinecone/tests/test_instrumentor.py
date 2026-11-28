@@ -37,6 +37,14 @@ def endpoint():
             response = {"code": 3, "message": "invalid query"} if state["error"] else responses[self.path]
             self.wfile.write(json.dumps(response).encode())
 
+        def do_GET(self):
+            requests.append((self.path, None))
+            assert self.path.startswith("/vectors/fetch"), self.path
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"vectors": {"vec1": {"id": "vec1", "values": [0.1, 0.2, 0.3]}}, "namespace": "test-ns"}).encode())
+
         def log_message(self, *args):
             pass
 
