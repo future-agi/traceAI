@@ -7,6 +7,20 @@
 - `TraceAI.Register` also refuses, with `FiKeyRefusedException` (`FI_AMBIENT_KEY_HEADERS`), `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_TRACES_HEADERS` that carries an `x-api-key` or `x-secret-key` header, or a value that contains one of the Future AGI keys it uses. The text is checked as written and with every percent escape resolved, as the exporter resolves it.
 - A request that carries the keys never follows a redirect, and a plaintext one (loopback or opted in) is never sent through a proxy; an https request keeps the normal proxy behaviour. The export client keeps the exporter's timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`, default 10 seconds).
 
+## [1.1.0](https://github.com/future-agi/traceAI/compare/nuget-fi-instrumentation-otel-v1.0.1...nuget-fi-instrumentation-otel-v1.1.0) (2026-11-28)
+
+
+### Features
+
+* **csharp:** one decision for every key-carrying request: TLS to Future AGI, plaintext opt-in, no proxy for plaintext, no redirects, ambient headers ([b1946b3](https://github.com/future-agi/traceAI/commit/b1946b3b4f89b54af6a7c176db2f1b02a789adea))
+* **csharp:** send Future AGI keys only to allowed destinations ([a42d045](https://github.com/future-agi/traceAI/commit/a42d0456321975e3f490058d0313feed595d451b))
+
+
+### Bug Fixes
+
+* **csharp:** no proxy for any plaintext key send, keep the exporter timeout, narrow the known-secret scope ([9673151](https://github.com/future-agi/traceAI/commit/967315165a26bdfc2046d33f3ffea260b8d96032))
+* **csharp:** screen ambient exporter headers on the unescaped text and at Register, refuse hosts whose Host and IdnHost differ, keep registered secrets in the shared state in recency order, exact messages and CHANGELOG ([61e8a7c](https://github.com/future-agi/traceAI/commit/61e8a7cb965061d78b4134e2a98e82aa4f40b39a))
+
 ## [1.0.1](https://github.com/future-agi/traceAI/compare/nuget-fi-instrumentation-otel-v1.0.0...nuget-fi-instrumentation-otel-v1.0.1) (2026-11-05)
 
 

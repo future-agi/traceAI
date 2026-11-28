@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-promptflow-v0.1.0...traceai-promptflow-v0.1.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **promptflow:** a stream read to the end is not marked incomplete when Prompt flow's finalization raises ([80ae3b4](https://github.com/future-agi/traceAI/commit/80ae3b4792f6aafd6f469d1c7b20dee36d9996ea))
+* **promptflow:** trace promptflow-core installs zero-code and keep a failed stream's output ([#790](https://github.com/future-agi/traceAI/issues/790)) ([fc9f101](https://github.com/future-agi/traceAI/commit/fc9f10111291b9e7dd2c4b3b90f3e5e8ef6efc39))
+
 ## [Unreleased]
 
 - `uninstrument()` also restores the Prompt flow names a module bound after `instrument()` (for example `from promptflow.tracing._trace import TracedIterator`), so no Prompt flow module keeps traceAI's replacements.

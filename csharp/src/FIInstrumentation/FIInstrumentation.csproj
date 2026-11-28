@@ -5,7 +5,7 @@
     <RootNamespace>FIInstrumentation</RootNamespace>
     <AssemblyName>FIInstrumentation</AssemblyName>
     <PackageId>fi-instrumentation-otel</PackageId>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <Authors>Future AGI</Authors>
     <Company>Future AGI</Company>
     <Description>OpenTelemetry tracing for .NET AI applications: typed spans, context propagation, privacy controls, and OTLP export to Future AGI.</Description>

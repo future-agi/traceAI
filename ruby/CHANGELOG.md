@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/ruby-traceai-auto-v0.1.0...ruby-traceai-auto-v0.1.1) (2026-11-28)
+
+
+### Features
+
+* **ruby:** export through an HTTPS proxy with CONNECT and full TLS verification ([0649a91](https://github.com/future-agi/traceAI/commit/0649a91a983f3273637be33587f20e29174beed6))
+* **ruby:** key transport: one trailing dot, case-insensitive loopback, one warning under threads, opt-in fixed at construction, one refusal warning ([d85fda1](https://github.com/future-agi/traceAI/commit/d85fda1db494c2df038ef8b794bd9d3040a11dab))
+* **ruby:** one gate for FI key transport: TLS for FI hosts, plaintext opt-in, loopback peer check, redirects refused ([92afb78](https://github.com/future-agi/traceAI/commit/92afb7803a64864b68fda51bfb062b92dc99cf75))
+* **ruby:** one gate for FI key transport: TLS for FI hosts, plaintext opt-in, loopback peer check, redirects refused ([f215769](https://github.com/future-agi/traceAI/commit/f21576987d0829378b7270f5ed75e11bb7c2ede9))
+* **ruby:** RubyLLM chat and tool spans from the instrumentation events, zero-code ([66ab70b](https://github.com/future-agi/traceAI/commit/66ab70b0fe98670bf7a2e9fecc43dbfe66284da0))
+* **ruby:** RubyLLM chat and tool spans, zero-code ([bab165a](https://github.com/future-agi/traceAI/commit/bab165a596340b1261cca158a4e231c416f0b058))
+* **ruby:** send Future AGI keys only over a checked transport ([844abc7](https://github.com/future-agi/traceAI/commit/844abc7b044af3e7946e8527569034cef3ecbeeb))
+
+
+### Bug Fixes
+
+* **privacy:** credential value shapes scan in linear time in every SDK, tokens replaced whole ([607ee0c](https://github.com/future-agi/traceAI/commit/607ee0c7658118db01601772a9d233bec59bbcbc))
+* **privacy:** credential value shapes scan in linear time in every SDK, tokens replaced whole ([5defddd](https://github.com/future-agi/traceAI/commit/5defddd0dd3531d2e76d47c34075c14875ab8c22))
+* **ruby:** an unrunnable media probe fails the suite instead of skipping; CI expects proven hooks on a supported SDK; the warning says content, events and links are not exported ([aeb46b4](https://github.com/future-agi/traceAI/commit/aeb46b424ea80f5f5220ff45b8ff724952852993))
+* **ruby:** bound one span's scrub work, fail closed, keep hide settings and identity past the bound ([df0210d](https://github.com/future-agi/traceAI/commit/df0210d61a549c5cfcfab1eaa510c43db8e6bda5))
+* **ruby:** bound the overlapping-secrets matcher's work per value ([64b8c80](https://github.com/future-agi/traceAI/commit/64b8c80b6c3b978e3ecabc45fb18810f855843a8))
+* **ruby:** declare the OpenTelemetry SDK floor the span snapshot needs (1.10) and an exporter floor that resolves with it ([982795c](https://github.com/future-agi/traceAI/commit/982795cadd33a16806932244640a3d8bf977745f))
+* **ruby:** export with OpenTelemetry SDK 1.3 to 1.9 and verify span hooks at startup ([fdebc1d](https://github.com/future-agi/traceAI/commit/fdebc1d7daa2dc6ed41413561194797684a13092))
+* **ruby:** forward spans from OpenTelemetry SDKs whose span data has no parent_span_is_remote ([e6126e0](https://github.com/future-agi/traceAI/commit/e6126e0d70dfb232a14de3f953e5bcf197676c83))
+* **ruby:** omit media when the SDK span hooks cannot be verified; copy events and links of any shape ([33cd218](https://github.com/future-agi/traceAI/commit/33cd2181d5aad17b8ec3ca155b7ab327372f4d2c))
+* **ruby:** overlapping known secrets are replaced as a whole on every copy ([de3a37a](https://github.com/future-agi/traceAI/commit/de3a37a4214b0a31e626d27a003e521f3d60fa53))
+* **ruby:** secrets that overlap are replaced as a whole through derived variants ([df67fdb](https://github.com/future-agi/traceAI/commit/df67fdb86d5bbb09ec63b98dcca444c251d713bf))
+* **ruby:** span bound follow-ups — media context from original attributes, one normalisation per span, capped secret runs ([0650417](https://github.com/future-agi/traceAI/commit/0650417cf7b96dfa80b7b69fd617080dbed98bac))
+
+## Changelog
+
 All notable changes to `traceai-auto` are documented here. Release notes are added
 by the release process.
 

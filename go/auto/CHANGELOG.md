@@ -14,6 +14,30 @@ Release history of `github.com/future-agi/traceAI/go/auto`. Each version is publ
 - Credential value shapes are scanned in time linear in the text, and a token is replaced whole whatever its length.
 - FI API keys are sent only over a checked transport. Literal loopback (`localhost`, `127.0.0.1`, `::1`) may use plaintext; Future AGI hosts (`futureagi.com` and subdomains, one trailing dot and case ignored) require `https://`, and no setting relaxes that. Any other `http://` `FI_BASE_URL` is refused unless `FI_ALLOW_INSECURE_HTTP` is exactly `1`, which logs one value-free warning per process. Other spellings of loopback (`127.1`, `2130706433`, `127.0.0.1.`) are not literal loopback. A written host that differs from the parsed host, an empty host, or a loopback name that connects to a non-loopback peer, is refused. A request that carries the keys in plaintext is sent directly, never through a proxy; an `https://` request uses the configured proxy (`HTTPS_PROXY`, `NO_PROXY`) through a CONNECT tunnel, with the certificate verified against the written host. A 3xx answer to an export is never followed: the batch is dropped, the export call returns no error, and the agent logs one value-free warning per process (`instrumentation unavailable`). `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_TRACES_HEADERS` that name an `X-Api-Key` or `X-Secret-Key` header (any case, percent-decoded, in any comma-separated pair) or carry a Future AGI key value (`FI_API_KEY`, `FI_SECRET_KEY` or the keys given to `Init`) are refused. `Init` returns a value-free error, and blank-import arming is refused with one warning (`instrumentation unavailable`) and reports the wire integration as failed. The refusal applies only when the agent builds its own Future AGI exporter: not with `WithSpanProcessor`, and not without credentials. A key value is matched as written and percent-decoded, in the whole variable and in each pair on its own, from 8 characters; other headers, including another vendor's key, are left alone. An IPv6 zone literal such as `https://[fe80::1%25en0]:4318` is read as the same host the URL parser reads, once at `Init` and once on every export, and is never loopback. Refusals never print the URL, a peer address or the keys.
 
+## [0.2.1](https://github.com/future-agi/traceAI/compare/go/auto/v0.2.0...go/auto/v0.2.1) (2026-11-28)
+
+
+### Features
+
+* **go/auto:** one decision function for FI key transport: TLS for FI hosts, plaintext opt-in, no proxies, no redirects ([f0ef042](https://github.com/future-agi/traceAI/commit/f0ef042d64c069f4f92082eb35e1ae7c6961c78c))
+* **go:** Eino blank import — wire-equal masking, per-run dedup, bounded activation and shutdown, release gate ([d0e882c](https://github.com/future-agi/traceAI/commit/d0e882cba848a1dd49158362c1448c475b823899))
+* **go:** send Future AGI keys only over a checked transport ([4b65ea3](https://github.com/future-agi/traceAI/commit/4b65ea3f8829cc9ea65558ecdb9efdf4aaa2150d))
+* **go:** trace Eino from one blank import ([9cf127a](https://github.com/future-agi/traceAI/commit/9cf127a64ca98415ba00a87c78191eb0defd364f))
+* **go:** trace Eino from one blank import through the agent's route ([711e8a9](https://github.com/future-agi/traceAI/commit/711e8a9720ffd2ed627b59561f55b5a7da364ae0))
+
+
+### Bug Fixes
+
+* **go/auto:** ambient OTLP headers carrying keys are refused, the dial-guard refusal names no peer, zone literals are read as written, test hooks are race-safe ([1531140](https://github.com/future-agi/traceAI/commit/15311408dd2a1b9c7a8a054a86925d21ef0214e3))
+* **go/auto:** End replays and trims one snapshot; a link is refused after masking; restored event and link attributes are the SDK's first N ([8a875d8](https://github.com/future-agi/traceAI/commit/8a875d8ff9000987ee83e49efcfa251e86f5b4b6))
+* **go/auto:** events and links of the Future AGI copy are the ones the SDK kept; a value over the length limit is replaced whole before the cut; the record is bounded ([94c67e6](https://github.com/future-agi/traceAI/commit/94c67e607c0e7de36804542d9964008d36f349f4))
+* **go/auto:** events, links and status of a module span are kept raw and replaced with the end-time and export-time snapshots; replace, then cap; one stack trace capture ([fa6ebdd](https://github.com/future-agi/traceAI/commit/fa6ebddd9f15ae7b5f05fec8eece81a03e8f7151))
+* **go/auto:** proxies off only for plaintext key sends; https keeps the environment proxy ([85024ba](https://github.com/future-agi/traceAI/commit/85024baff4d330dc6e903f2cb339bfe2892a8077))
+* **go/auto:** retriever content follows the content switches; known secrets are replaced in the application's copy at the end of the span and in Future AGI's at export; RecordError like the SDK ([b7c4328](https://github.com/future-agi/traceAI/commit/b7c4328080f3186db59611d8905910f5d7c46825))
+* **go:** keep the pending Eino module out of the release config; app copy follows the wire rules; lock-free module route; hooks outside the shutdown Once ([d71301b](https://github.com/future-agi/traceAI/commit/d71301bab536ffdaef4f179834eab017e76e8d4a))
+* **privacy:** credential value shapes scan in linear time in every SDK, tokens replaced whole ([607ee0c](https://github.com/future-agi/traceAI/commit/607ee0c7658118db01601772a9d233bec59bbcbc))
+* **privacy:** credential value shapes scan in linear time in every SDK, tokens replaced whole ([5defddd](https://github.com/future-agi/traceAI/commit/5defddd0dd3531d2e76d47c34075c14875ab8c22))
+
 ## [0.2.0] - 2026-11-18
 
 ### Added
