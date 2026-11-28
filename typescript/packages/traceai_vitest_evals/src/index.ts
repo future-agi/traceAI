@@ -6,7 +6,13 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 
-const DEFAULT_ENDPOINT = 'https://api.futureagi.com/tracer/v1/traces';
+// Same rule as @traceai/fi-core: FI_BASE_URL is a base URL, so one trailing slash is dropped and the
+// collector path appended. An explicit endpoint is a full URL and wins over the environment.
+const DEFAULT_BASE_URL = 'https://api.futureagi.com';
+const COLLECTOR_PATH = '/tracer/v1/traces';
+function collectorUrl(endpoint?: string): string {
+  return endpoint ?? `${(process.env.FI_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, '')}${COLLECTOR_PATH}`;
+}
 // Future AGI files every span under its resource's project; a batch without project_name is refused.
 const DEFAULT_PROJECT = 'vitest-evals';
 function projectResource(projectName?: string) {
@@ -18,6 +24,8 @@ const SAFE_KEYS = new Set([
   'gen_ai.system', 'gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.response.model',
   'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'gen_ai.usage.total_tokens',
 ]);
+// The harness's own name for a root span that is renamed after its test.
+const ORIGINAL_NAME = 'vitest.evals.original_name';
 
 type Score = { name?: string; score?: number | null };
 type SourceSpan = {
@@ -28,7 +36,7 @@ type SourceSpan = {
 type SourceTrace = { id?: string; spans: SourceSpan[] };
 type EvalMeta = { scores?: Score[]; avgScore?: number | null; thresholdFailed?: boolean };
 type Run = { traces?: SourceTrace[]; usage?: { provider?: string; model?: string; inputTokens?: number; outputTokens?: number; totalTokens?: number } };
-type TestLike = { name: string; meta(): { eval?: EvalMeta; harness?: { run?: Run } }; result(): { state: string } };
+type TestLike = { name: string; fullName?: string; meta(): { eval?: EvalMeta; harness?: { run?: Run } }; result(): { state: string } };
 type ModuleLike = { children: { allTests(): Iterable<TestLike> } };
 export type ReporterOptions = { exporter?: SpanExporter; endpoint?: string; apiKey?: string; secretKey?: string; projectName?: string };
 
@@ -47,8 +55,10 @@ function times(span: SourceSpan): { start: HrTime; end: HrTime; duration: HrTime
     numeric(span.durationMs) && span.durationMs >= 0 ? start + span.durationMs : start;
   return { start: hrtime(start), end: hrtime(end), duration: hrtime(end - start) };
 }
-function safeAttributes(span: SourceSpan, evalMeta?: EvalMeta, run?: Run): Attributes {
+function safeAttributes(span: SourceSpan, evalMeta?: EvalMeta, run?: Run, originalName?: string): Attributes {
   const attributes: Attributes = { 'vitest.evals.kind': span.kind || 'custom' };
+  // Set only by the reporter for a renamed root; never copied from the harness's own attributes.
+  if (originalName) attributes[ORIGINAL_NAME] = originalName;
   for (const [key, value] of Object.entries(span.attributes || {})) {
     if (SAFE_KEYS.has(key) && (typeof value === 'string' && value.length <= 256 || numeric(value))) attributes[key] = value;
   }
@@ -72,7 +82,7 @@ function safeAttributes(span: SourceSpan, evalMeta?: EvalMeta, run?: Run): Attri
   }
   return attributes;
 }
-function mappedTrace(trace: SourceTrace, resource: ReadableSpan['resource'], evalMeta?: EvalMeta, run?: Run): ReadableSpan[] {
+function mappedTrace(trace: SourceTrace, resource: ReadableSpan['resource'], rootName: string, evalMeta?: EvalMeta, run?: Run): ReadableSpan[] {
   const sourceTraceId = trace.id ?? trace.spans.find(span => hexId(span.traceId, 32))?.traceId;
   const traceId = hexId(sourceTraceId, 32) ? sourceTraceId.toLowerCase() : newId(16);
   const ids = new Map<string, string>();
@@ -85,20 +95,30 @@ function mappedTrace(trace: SourceTrace, resource: ReadableSpan['resource'], eva
     positions.push(id);
     if (span.id && !ids.has(span.id)) ids.set(span.id, id);
   }
+  const parents = trace.spans.map((span, index) => {
+    const parentId = span.parentId && ids.get(span.parentId);
+    return parentId && parentId !== positions[index] ? parentId : undefined;
+  });
+  // Observe lists a trace by its root, so the first span without a parent is named after the test.
+  const rootIndex = parents.findIndex(parentId => !parentId);
   return trace.spans.map((span, index) => {
     const originalId = span.id;
     // Allocation order is stable even for malformed duplicate source ids.
     const spanId = positions[index];
     const context: SpanContext = { traceId, spanId, traceFlags: 1 };
-    const parentId = span.parentId && ids.get(span.parentId);
+    const parentId = parents[index];
+    const sourceName = span.name.slice(0, 256);
+    // A test with no name keeps the harness's own root name.
+    const named = index === rootIndex && rootName !== '';
+    const renamed = named && sourceName !== rootName;
     const { start, end, duration } = times(span);
     return {
-      name: span.name.slice(0, 256), kind: SpanKind.INTERNAL,
+      name: named ? rootName : sourceName, kind: SpanKind.INTERNAL,
       spanContext: () => context,
-      ...(parentId && parentId !== spanId ? { parentSpanContext: { traceId, spanId: parentId, traceFlags: 1 } } : {}),
+      ...(parentId ? { parentSpanContext: { traceId, spanId: parentId, traceFlags: 1 } } : {}),
       startTime: start, endTime: end, duration, ended: true,
       status: { code: span.status === 'error' ? SpanStatusCode.ERROR : SpanStatusCode.OK },
-      attributes: safeAttributes(span, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined),
+      attributes: safeAttributes(span, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined, renamed ? sourceName : undefined),
       events: [], links: [], resource, instrumentationScope: SCOPE,
       droppedAttributesCount: 0, droppedEventsCount: 0, droppedLinksCount: 0,
     };
@@ -111,7 +131,7 @@ export class VitestEvalsReporter {
   constructor(options: ReporterOptions = {}) {
     this.resource = projectResource(options.projectName);
     this.exporter = options.exporter ?? new OTLPTraceExporter({
-      url: options.endpoint ?? DEFAULT_ENDPOINT,
+      url: collectorUrl(options.endpoint),
       headers: {
         'x-api-key': options.apiKey ?? process.env.FI_API_KEY ?? '',
         'x-secret-key': options.secretKey ?? process.env.FI_SECRET_KEY ?? '',
@@ -124,10 +144,17 @@ export class VitestEvalsReporter {
       const { eval: evalMeta, harness } = test.meta();
       if (!evalMeta && !harness) continue;
       if (test.result().state === 'skipped' || test.result().state === 'pending') continue;
+      // Vitest's full name includes the enclosing describe blocks; older or custom test objects may only have a name.
+      const testName = test.fullName || test.name;
       const run = harness?.run;
       const traces = run?.traces?.filter(trace => trace.spans?.length) ?? [];
-      if (!traces.length) traces.push({ spans: [{ name: test.name, kind: 'run', status: test.result().state === 'failed' ? 'error' : 'ok' }] });
-      for (const [index, trace] of traces.entries()) spans.push(...mappedTrace(trace, this.resource, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined));
+      if (!traces.length) traces.push({ spans: [{ name: testName, kind: 'run', status: test.result().state === 'failed' ? 'error' : 'ok' }] });
+      for (const [index, trace] of traces.entries()) {
+        // Several traces from one test are numbered so their roots stay distinguishable.
+        const suffix = traces.length > 1 ? ` (${index + 1}/${traces.length})` : '';
+        const rootName = testName ? testName.slice(0, 256 - suffix.length) + suffix : '';
+        spans.push(...mappedTrace(trace, this.resource, rootName, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined));
+      }
     }
     if (!spans.length) return;
     await new Promise<void>((resolve, reject) => this.exporter.export(spans, result => {
