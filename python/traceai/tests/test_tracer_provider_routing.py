@@ -1,4 +1,4 @@
-"""T1-PY-CORE-001: automatic instrumentors must use TraceAI's provider."""
+"""Automatic instrumentors use the tracer provider TraceAI configures."""
 
 import sys
 import unittest
