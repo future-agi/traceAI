@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import weakref
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
@@ -12,6 +13,10 @@ from fi_instrumentation import REDACTED_VALUE
 from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
+
+from traceai_exa._response import ResponseCapture, cost_attributes
+
+logger = logging.getLogger(__name__)
 
 _SPAN_KIND = "gen_ai.span.kind"
 _INPUT_VALUE = "input.value"
@@ -182,6 +187,7 @@ class _BaseWrapper:
         *,
         contents: bool = False,
         capture_urls: bool = False,
+        capture_outputs: bool = False,
         hide_inputs: bool = False,
         pii: bool = False,
     ) -> None:
@@ -189,6 +195,7 @@ class _BaseWrapper:
         self._span_name = span_name
         self._contents = contents
         self._capture_urls = capture_urls
+        self._capture_outputs = capture_outputs
         self._hide_inputs = hide_inputs
         self._pii = pii
 
@@ -215,6 +222,22 @@ class _BaseWrapper:
             return self._tracer.start_span(self._span_name, attributes=attributes), scrub
         except Exception:  # a tracer failure must never reach the caller
             return None, None
+
+    def _capture(self, scrub: _Scrub | None) -> ResponseCapture | None:
+        if not self._capture_outputs or scrub is None:
+            return None
+        return ResponseCapture(scrub, self._capture_urls and not self._hide_inputs)
+
+    def _record_response(self, span: Span, result: Any, scrub: _Scrub | None) -> None:
+        try:
+            span.set_attributes(cost_attributes(result))
+            capture = self._capture(scrub)
+            if capture is not None:
+                capture.response(result)
+                span.set_attributes(capture.attributes())
+        except Exception:  # noqa: BLE001 - telemetry must not break user calls
+            # Fail open without logging sensitive vendor text or local stack frames.
+            logger.debug("Exa response inspection failed; output omitted")
 
     @staticmethod
     def _finish_ok(span: Span, document_count: Optional[int]) -> None:
@@ -309,6 +332,7 @@ class OperationWrapper(_BaseWrapper):
         except BaseException as error:
             self._finish_error(span, error, scrub)
             raise
+        self._record_response(span, result, scrub)
         self._finish_ok(span, _document_count(result))
         return result
 
@@ -335,6 +359,7 @@ class AsyncOperationWrapper(_BaseWrapper):
         except BaseException as error:
             self._finish_error(span, error, scrub)
             raise
+        self._record_response(span, result, scrub)
         self._finish_ok(span, _document_count(result))
         return result
 
@@ -357,9 +382,12 @@ def end_open_streams() -> None:
 class _StreamState:
     """Ends one stream span exactly once; counts citations as chunks arrive."""
 
-    def __init__(self, span: Span, scrub: Optional[_Scrub]) -> None:
+    def __init__(
+        self, span: Span, scrub: Optional[_Scrub], capture: ResponseCapture | None = None
+    ) -> None:
         self.span = span
         self.scrub = scrub
+        self.capture = capture
         self.finished = False
         # Citations accumulate over chunks; the total is known only at the end.
         self.citations = 0
@@ -367,6 +395,12 @@ class _StreamState:
 
     def observe(self, chunk: Any) -> None:
         self.citations += _chunk_citations(chunk)
+        if not self.finished and self.capture is not None:
+            try:
+                self.capture.chunk(chunk)
+            except Exception:  # noqa: BLE001 - telemetry must not break iteration
+                self.capture = None  # Withhold an incomplete preview, not the user's chunk.
+                logger.debug("Exa stream inspection failed; output omitted")
 
     def _claim(self) -> bool:
         if self.finished:
@@ -377,14 +411,23 @@ class _StreamState:
 
     def ok(self) -> None:
         if self._claim():
-            _BaseWrapper._finish_ok(self.span, self.citations)
+            try:
+                if self.capture is not None:
+                    self.span.set_attributes(self.capture.attributes(stream=True))
+            except Exception:  # noqa: BLE001 - span finalization must still run
+                logger.debug("Exa stream output recording failed; output omitted")
+            finally:
+                self.capture = None
+                _BaseWrapper._finish_ok(self.span, self.citations)
 
     def error(self, error: BaseException) -> None:
         if self._claim():
+            self.capture = None
             _BaseWrapper._finish_error(self.span, error, self.scrub)
 
     def cancelled(self) -> None:
         if self._claim():
+            self.capture = None
             _BaseWrapper._finish_cancelled(self.span)
 
 
@@ -402,9 +445,12 @@ class _TracedStream(wrapt.ObjectProxy):  # type: ignore[misc]
     An ObjectProxy, so ``isinstance`` against the vendor class still holds.
     """
 
-    def __init__(self, response: Any, span: Span, scrub: Optional[_Scrub]) -> None:
+    def __init__(
+        self, response: Any, span: Span, scrub: Optional[_Scrub],
+        capture: ResponseCapture | None = None,
+    ) -> None:
         super().__init__(response)
-        self._self_state = _StreamState(span, scrub)
+        self._self_state = _StreamState(span, scrub, capture)
         self._self_iterator = None
 
     def __iter__(self) -> "_TracedStream":
@@ -460,15 +506,18 @@ class StreamWrapper(_BaseWrapper):
         except BaseException as error:
             self._finish_error(span, error, scrub)
             raise
-        return _TracedStream(response, span, scrub)
+        return _TracedStream(response, span, scrub, self._capture(scrub))
 
 
 class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
     """An AsyncStreamSearchResponse/AsyncStreamAnswerResponse that ends its span."""
 
-    def __init__(self, response: Any, span: Span, scrub: Optional[_Scrub]) -> None:
+    def __init__(
+        self, response: Any, span: Span, scrub: Optional[_Scrub],
+        capture: ResponseCapture | None = None,
+    ) -> None:
         super().__init__(response)
-        self._self_state = _StreamState(span, scrub)
+        self._self_state = _StreamState(span, scrub, capture)
         self._self_iterator = None
 
     def __aiter__(self) -> "_TracedAsyncStream":
@@ -549,4 +598,4 @@ class AsyncStreamWrapper(_BaseWrapper):
         except BaseException as error:
             self._finish_error(span, error, scrub)
             raise
-        return _TracedAsyncStream(response, span, scrub)
+        return _TracedAsyncStream(response, span, scrub, self._capture(scrub))
