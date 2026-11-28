@@ -24,7 +24,6 @@ module TraceAI
       FALLBACK_USAGE_KEYS = %w[input_tokens output_tokens total_tokens provider_total_tokens
                                cache_read_tokens cache_write_tokens output_tokens.reasoning
                                input_tokens.audio output_tokens.audio].map { |key| 'gen_ai.usage.' + key }.freeze
-      class Limit < StandardError; end
       class Budget
         MAX_NODES = CATALOG['limits']['max_nodes']
         def initialize = (@nodes = MAX_NODES; @bytes = CATALOG['limits']['max_text_chars']; @work = 0; @work_spent = false)
@@ -156,11 +155,14 @@ module TraceAI
       # response it was given. Nested JSON strings never inherit it.
       # `hinted` says that `hints` already hold the media context of this value's own siblings, read from the attributes as
       # they came (before a hide setting replaced any of them), so the value is not indexed again.
-      def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil, policy: nil, hinted: false)
+      # `attributes` says that the value is a span's attribute map (or an event's or link's), read by the pair rule as such.
+      def scrub(value, secrets = [], key = nil, depth = 0, budget = Budget.new, media = false, audio = false, hints = {}, framed = true, lossy: false, on_media: nil, policy: nil, hinted: false, attributes: false)
         secrets = normalized_secrets(secrets) if depth.zero?
         budget.spend
         raise Limit if depth > CATALOG['limits']['max_depth']
         path = key || ''
+        # A path of more than limits.max_depth components exports the whole value as the placeholder (see the rescue).
+        path_budget(path)
         budget.spend(path.bytesize + path_parts(path).length)
         # The session id set through the agent's API (attribute key exactly
         # session.id) is correlation data, not a credential: it is exempt from
@@ -183,7 +185,7 @@ module TraceAI
             name = Codec.type(k) == Symbol ? k.name : safe_string(k)
             cleaned = clean_string(name, secrets, budget)
             child_path = path.empty? ? name : path + '.' + name
-            out[cleaned] =
+            item =
               if (masked_choice && name == 'logprobs') || masked_text&.key?(name) || (masked_bytes && name == 'bytes')
                 REDACTED
               elsif token && Codec.type(k) == String && k == 'token'
@@ -191,6 +193,9 @@ module TraceAI
               else
                 scrub(v, secrets, child_path, depth + 1, budget, media, audio, hints, lossy: lossy, on_media: on_media, policy: policy)
               end
+            # Keys that are one after scrubbing keep one key, in the first one's place, with the placeholder as its value.
+            # Past the span's work bound every name is the placeholder: the last value written under it is the one kept.
+            out[cleaned] = out.key?(cleaned) && !budget.work_spent? ? REDACTED : item
           end
         elsif klass == Array
           raise Limit if value.length > Budget::MAX_NODES
@@ -211,14 +216,17 @@ module TraceAI
             on_media&.call
             return replacement
           end
+          structured = false
           if value.lstrip.start_with?('{', '[')
             # Preserve S1's fail-closed policy for partial/malformed JSON strings.
             parsed = Codec.parse(value)
             context = media_context(path, media, audio, hints)
             cleaned = scrub(parsed, secrets, nil, depth + 1, budget, context[0], context[1], lossy: lossy, on_media: on_media)
+            # Each leaf string went through the pair rule on its own; the re-dumped JSON is not read by it again.
+            structured = [Hash, Array].include?(Codec.type(parsed))
             value = Codec.generate(cleaned) unless cleaned == parsed
           end
-          cleaned = clean_string(value, secrets, budget, framed)
+          cleaned = clean_string(value, secrets, budget, framed, structured)
           on_media&.call if cleaned != value && cleaned.include?('<omitted:')
           cleaned
         elsif [Integer, Float, TrueClass, FalseClass, NilClass].include?(klass)
@@ -232,6 +240,34 @@ module TraceAI
         else
           clean_string(Codec.type_name(value), secrets, budget)
         end
+      rescue PathBudget
+        # A name (a path, a map key, a hint, a pair name in text) of more than limits.max_depth components: the exported
+        # value as a whole is the placeholder. In an attribute map each attribute is one exported value.
+        raise unless depth.zero?
+        attributes && Codec.type(value) == Hash ? scrub_attribute_map(value, secrets, media, audio, hints, framed, lossy, on_media) : REDACTED
+      end
+      # An attribute map one of whose attributes holds a name past the depth budget: that attribute's value is the
+      # placeholder, and the other attributes are scrubbed together (their sibling hints included) as usual.
+      def scrub_attribute_map(value, secrets, media, audio, hints, framed, lossy, on_media)
+        deep = value.select do |name, item|
+          Codec.type(scrub({name => item}, secrets, nil, 0, Budget.new, media, audio, {}, framed, lossy: lossy)) != Hash
+        end
+        # A deep name that is a media hint (a MIME or type name) leaves its siblings' context unknown: fail closed.
+        deep.each_key do |name|
+          folded = leaf(Codec.type(name) == Symbol ? name.name : safe_string(name))
+          raise Limit if MIME['names'].include?(folded) || %w[type format].include?(folded)
+        end
+        out = scrub(value.reject { |name, _| deep.key?(name) }, secrets, nil, 0, Budget.new, media, audio, hints, framed, lossy: lossy, on_media: on_media)
+        raise Limit unless Codec.type(out) == Hash
+        deep.each_key do |name|
+          cleaned = begin
+            clean_string(Codec.type(name) == Symbol ? name.name : safe_string(name), secrets.select { |secret| Codec.type(secret) == String && secret.length >= 8 }.uniq.sort_by { |secret| [-secret.length, secret] })
+          rescue Limit
+            next
+          end
+          out[cleaned] = REDACTED
+        end
+        out
       end
       ResponsePolicy = Struct.new(:token_parents, :masked_choices, :masked_text)
       def response_roots(value)
@@ -408,10 +444,14 @@ module TraceAI
               # Numeric values cannot echo string credentials, but their keys can.
               # Keep key/value budgets separate so an oversized identity value
               # cannot erase otherwise safe drop/usage counters.
-              result[cleaned_key] = scrub(value, [], key, 0, Budget.new, false, false, hints, lossy: lossy)
+              cleaned = scrub(value, [], key, 0, Budget.new, false, false, hints, lossy: lossy)
             elsif known
-              result[cleaned_key] = scrub(value, known, key, 0, budget, false, false, hints, lossy: lossy)
+              cleaned = scrub(value, known, key, 0, budget, false, false, hints, lossy: lossy)
+            else
+              next
             end
+            # Keys that are one after scrubbing keep one key, with the placeholder as its value.
+            result[cleaned_key] = result.key?(cleaned_key) ? REDACTED : cleaned
           rescue StandardError
             next
           end
@@ -423,7 +463,7 @@ module TraceAI
         safe_ratio || {}
       end
       def scrub_attributes(attributes)
-        scrub(attributes, Auto.secret_values)
+        scrub(attributes, Auto.secret_values, attributes: true)
       rescue StandardError
         safe_metadata(attributes)
       end
@@ -569,7 +609,7 @@ module TraceAI
           nil
         end
         begin
-          attributes = scrub(resource_attributes(record, resource), known)
+          attributes = scrub(resource_attributes(record, resource), known, attributes: true)
           attributes.reject! do |key, _|
             !AttributeProjection.protected_family(key) && (AttributeProjection.content_group(key, nil) || key == 'gen_ai.tool' || INVOCATION_FAMILIES.include?(key))
           end
@@ -630,7 +670,7 @@ module TraceAI
           # operation name read it from the attributes as they came (see below), so they do not wait for the scrub.
           name = scrub(safe_string(field(record, :name)), secrets, nil, 0, budget)
           status_text = hide_errors?(config) ? '__REDACTED__' : scrub(safe_string(description || ''), secrets, nil, 0, budget)
-          resource_scrubbed = scrub(hidden_by_name(resource_attributes(record, resource) || {}, config, operation_name(source)), secrets, nil, 0, budget)
+          resource_scrubbed = scrub(hidden_by_name(resource_attributes(record, resource) || {}, config, operation_name(source)), secrets, nil, 0, budget, attributes: true)
           scope = field(record, :instrumentation_scope)
           structured = Object.instance_method(:is_a?).bind_call(scope, Struct)
           scope_name = structured ? field(scope, :name) : ivar(scope, :@name)
@@ -638,7 +678,7 @@ module TraceAI
           scope_attrs = Codec.type(scope) == ExportScope ? field(scope, :attributes) : ivar(scope, :@attributes)
           scope_name_scrubbed = scrub(safe_string(scope_name || ''), secrets, nil, 0, budget)
           scope_version_scrubbed = scrub(safe_string(scope_version || ''), secrets, nil, 0, budget)
-          scope_attrs_scrubbed = scrub(hidden_by_name(scope_attrs || {}, config, operation_name(source)), secrets, nil, 0, budget)
+          scope_attrs_scrubbed = scrub(hidden_by_name(scope_attrs || {}, config, operation_name(source)), secrets, nil, 0, budget, attributes: true)
           # The operation name is an identity field: it is read from the attributes as they came, so a span that passes its
           # work bound before the name still tells a spoken input from a spoken output.
           operation = operation_name(source)
@@ -647,11 +687,11 @@ module TraceAI
           # The media context (a mime type beside a payload) is read from the same original attributes: a hide setting that
           # replaces a mime type must not take the context from the payload that sits beside it.
           hints = index_hints(source, '', {}, budget)
-          attributes = scrub(hidden_by_name(source, config, operation), secrets, nil, 0, budget, false, false, hints, lossy: lossy, hinted: true)
+          attributes = scrub(hidden_by_name(source, config, operation), secrets, nil, 0, budget, false, false, hints, lossy: lossy, hinted: true, attributes: true)
           apply_media = lambda do |attrs, decision|
             admitted = admitted_attributes(attrs, decision)
             original_hints = Codec.type(admitted) == Hash ? index_hints(admitted, '', {}, budget) : {}
-            mask(scrub(hidden_by_name(admitted, config, operation), secrets, nil, 0, budget, false, false, original_hints, lossy: lossy, hinted: true), config, operation)
+            mask(scrub(hidden_by_name(admitted, config, operation), secrets, nil, 0, budget, false, false, original_hints, lossy: lossy, hinted: true, attributes: true), config, operation)
           end
           safe_status = LocalStatus.new(copy.status.code, status_text)
           safe_resource = ExportResource.new(mask(resource_scrubbed, config, operation))

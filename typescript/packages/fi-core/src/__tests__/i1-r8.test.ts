@@ -296,13 +296,13 @@ test.each([65536, 131072])("R8 H1 two long exception fields fit one discovery de
   expect(clean["exception.type"]).toBe("Error");
   // PENDING I1xF2-PRECEDENCE: F2 scan bound precedes I1 long-prose retention.
   if (repeats === 65536) {
-    expect(clean["exception.message"]).toBe(`${prose}password="<redacted>"\nend of message`);
+    expect(clean["exception.message"]).toBe(`${prose}password=<redacted>`);
   } else {
     expect(clean["exception.message"]).toBe("[image-redacted]");
   }
   // PENDING I1xF2-PRECEDENCE: F2 scan bound precedes I1 long-prose retention.
   if (repeats === 65536) {
-    expect(clean["exception.stacktrace"]).toBe(`${prose}password="<redacted>"\nend of message`);
+    expect(clean["exception.stacktrace"]).toBe(`${prose}password=<redacted>`);
   } else {
     expect(clean["exception.stacktrace"]).toBe("[image-redacted]");
   }
@@ -320,7 +320,7 @@ test.each([65536, 131072])("R8 H1 recordException retains long prose and late pa
     expect(event.attributes?.["exception.type"]).toBe("Error");
     // PENDING I1xF2-PRECEDENCE: F2 scan bound precedes I1 long-prose retention.
     if (repeats === 65536) {
-      expect(event.attributes?.["exception.message"]).toBe(`${prose}password="<redacted>"\nend of message`);
+      expect(event.attributes?.["exception.message"]).toBe(`${prose}password=<redacted>`);
     } else {
       expect(event.attributes?.["exception.message"]).toBe("[image-redacted]");
     }

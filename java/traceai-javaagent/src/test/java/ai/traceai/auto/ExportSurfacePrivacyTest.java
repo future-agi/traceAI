@@ -101,11 +101,13 @@ class ExportSurfacePrivacyTest {
         // S6: apostrophes are legal URL characters, not query-value delimiters.
         assertEquals("prefix ?sig=<redacted>", privacy.text("prefix ?sig=PRIVATE_VALUE'suffix"));
         for (String delimiter : List.of(" ", "\t", "\n", "\"", "<", ">", "\\", "#")) {
-            assertEquals("prefix ?sig=<redacted>" + delimiter + "suffix", privacy.text("prefix ?sig=PRIVATE_VALUE" + delimiter + "suffix"));
+            // The credential pair rule runs after the catalog on free text: the pair's value runs to its true end, the end of the text here.
+            assertEquals("prefix ?sig=<redacted>", privacy.text("prefix ?sig=PRIVATE_VALUE" + delimiter + "suffix"), "delimiter " + delimiter.replace("\n", "\\n").replace("\t", "\\t"));
         }
         assertEquals("????sig=<redacted>", privacy.text("????sig=PRIVATE_VALUE"));
-        // S6 parses one URL layer; a nested URL inside an ordinary query value is not decoded recursively.
-        assertEquals("https://x/?next=https://y/?sig=PRIVATE_VALUE&safe=keep", privacy.text("https://x/?next=https://y/?sig=PRIVATE_VALUE&safe=keep"));
+        // S6 parses one URL layer; a nested URL inside an ordinary query value is not decoded recursively. A credential-named pair after
+        // a second '?' in a query value is replaced to the value's end (the shared URL catalog rule).
+        assertEquals("https://x/?next=https://y/?sig=<redacted>&safe=keep", privacy.text("https://x/?next=https://y/?sig=PRIVATE_VALUE&safe=keep"));
     }
     @Test void credentialHeaderNamesArePrivateWithoutPreviouslyObservingTheirValues() {
         var privacy = new WirePrivacy(Map.of(), null);

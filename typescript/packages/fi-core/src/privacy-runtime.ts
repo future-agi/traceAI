@@ -9,6 +9,7 @@ interface PrivacyCatalog {
     contextual_exclusions: { path_regex: string }[];
     seed_names: string[];
     value_shapes: { id: string; regex: string; flags: string }[];
+    vocabulary: { words: string[] };
   };
   logprob_tokens: { version: number; formats: { format: string; paths: string[][]; text_paths: string[][] }[] };
   signed_url: { parameters: string[] };
@@ -57,9 +58,37 @@ const exclusions = catalog.credentials.exclusions.map(item => ({
 }));
 const contextual = catalog.credentials.contextual_exclusions.map(item => new RegExp(item.path_regex));
 const JWT_SHAPE = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}";
+// Python 3 re, as the reference reads the catalog's value shapes: \b and \w are Unicode (a letter, a number or '_'), \s is
+// str.isspace, and IGNORECASE folds U+017F with s, U+212A with k and U+0130/U+0131 with i. JS \s, \b, \w and /i differ on
+// each, so a shape is built from explicit classes. A shape this table does not know keeps its catalog regex, unchanged.
+const PY_WORD = String.raw`\p{L}\p{N}_`;
+const PY_SPACE = String.raw`\t\n\v\f\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000`;
+const PY_BEFORE = `(?<![${PY_WORD}])`, PY_AFTER = `(?![${PY_WORD}])`;
+const PY_FOLD: Record<string, string> = { s: "sS\u017f", k: "kK\u212a", i: "iI\u0130\u0131" };
+const pyFold = (word: string) => [...word].map(c => `[${PY_FOLD[c.toLowerCase()] ?? c.toLowerCase() + c.toUpperCase()}]`).join("");
+const PY_SHAPES: Record<string, { regex: string; flags: string; lead: string; body: string }> = {
+  "provider-api-key": { regex: "\\bsk-[A-Za-z0-9_-]{20,}", flags: "", lead: PY_BEFORE, body: "sk-[A-Za-z0-9_-]{20,}" },
+  "aws-access-key": { regex: "\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b", flags: "", lead: PY_BEFORE, body: `(?:AKIA|ASIA)[A-Z0-9]{16}${PY_AFTER}` },
+  "authorization-value": {
+    regex: "\\b(?:Bearer|Basic)\\s+[A-Za-z0-9+/_=-]{8,}", flags: "i", lead: PY_BEFORE,
+    body: `(?:${pyFold("Bearer")}|${pyFold("Basic")})[${PY_SPACE}]+[A-Za-z0-9+/_=\\-\u0130\u0131\u017f\u212a]{8,}`,
+  },
+  // Python's $ also holds before a final newline; the lazy body stops there.
+  "private-key-pem": {
+    regex: "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\\s\\S]*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|$)", flags: "", lead: "",
+    body: "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\\s\\S]*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?=\\n?(?![\\s\\S])))",
+  },
+};
+const pyShape = (item: { id: string; regex: string; flags: string }) => {
+  const known = PY_SHAPES[item.id];
+  return known && known.regex === item.regex && known.flags === item.flags ? known : undefined;
+};
 // The jwt shape is scanned by replaceJwt (exactly equivalent, linear time); other shapes run as regexes.
-const valueShapes: (RegExp | ((value: string) => string))[] = catalog.credentials.value_shapes.map(item =>
-  item.id === "jwt" && item.regex === JWT_SHAPE && item.flags === "" ? replaceJwt : new RegExp(item.regex, item.flags + "g"));
+const valueShapes: (RegExp | ((value: string) => string))[] = catalog.credentials.value_shapes.map(item => {
+  if (item.id === "jwt" && item.regex === JWT_SHAPE && item.flags === "") return replaceJwt;
+  const known = pyShape(item);
+  return known ? new RegExp(known.lead + known.body, "gu") : new RegExp(item.regex, item.flags + "g");
+});
 const signed = new Set(catalog.signed_url.parameters.map(normalizePrivacyName));
 const excluded = (folded: string) => exclusions.some(({ regex, guards }) => regex.test(folded) && !guards.some(marker => folded.includes(marker)));
 /** The ONE credential-name predicate. Query mode adds signed-URL parameters.
@@ -67,19 +96,15 @@ const excluded = (folded: string) => exclusions.some(({ regex, guards }) => rege
  * initialization contract protects every credential-marked environment value.
  */
 export function isCredentialName(name: string, query: boolean | "environment" = false): boolean {
+  // A name of more than limits.max_depth components is not read: it fails closed.
+  if (typeof name === "string" && isPathOverBudget(name)) return true;
   const folded = normalizePrivacyName(name);
   if (query && query !== "environment" && signed.has(folded)) return true;
-  // Most prose assignments and attribute names contain no credential marker.
-  // Reject those before path splitting/exclusions; this is only a negative gate.
-  if (!patterns.some(pattern => folded.includes(pattern))) return false;
+  // Most prose assignments and attribute names contain no credential marker
+  // (a pattern or a vocabulary word). Reject those before path splitting/exclusions.
+  if (!patterns.some(pattern => folded.includes(pattern)) && !vocabulary(name)) return false;
   if (query === "environment") return true;
-  const parts = components(name).map(normalizePrivacyName);
-  let exempt = false;
-  for (let i = 0; i < parts.length; i++) {
-    if (excluded(parts[i]) || contextual.some(regex => regex.test(parts.slice(0, i + 1).join(".")))) exempt = true;
-    else if (patterns.some(pattern => parts[i].includes(pattern))) return true;
-  }
-  return !exempt && !excluded(folded);
+  return credentialName(name);
 }
 /** Compatibility/test inventory, not a second recognition list. */
 export const CREDENTIAL_HEADERS: readonly string[] = Object.freeze([...catalog.credentials.seed_names]);
@@ -135,15 +160,17 @@ function dataURI(value: string, inspect?: (characters: number) => void): string 
   inspect?.(payload.length);
   return !payload || encoded(payload) ? omitted(payload) : media.data_uri.other_replacement;
 }
-const DATA = String.raw`(?<![A-Za-z0-9+.\-_:])data:[^\s"'<>\\]*(?:[\r\n]+[A-Za-z0-9+/_=\-]+)*`;
-const URL_BODY = String.raw`(?:<redacted>|<omitted: (?:[0-9]+ base64 chars|media|data URI)>|[^\s"<>\\])+`;
-const URL_TOKEN = String.raw`(?:https?://|(?<!\S)[/?])${URL_BODY}`;
+// The reference's whitespace (Python's str.isspace), not JS \s: it adds U+001C-U+001F and U+0085 and leaves out U+FEFF.
+const SPACE = String.raw`\t\n\v\f\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000`;
+const DATA = String.raw`(?<![A-Za-z0-9+.\-_:])data:[^${SPACE}"'<>\\]*(?:[\r\n]+[A-Za-z0-9+/_=\-]+)*`;
+const URL_BODY = String.raw`(?:<redacted>|<omitted: (?:[0-9]+ base64 chars|media|data URI)>|[^${SPACE}"<>\\])+`;
+const URL_TOKEN = String.raw`(?:https?://|(?<![^${SPACE}])[/?])${URL_BODY}`;
 // Fragment-only references own their delimiters without becoming query URLs.
 const ASSIGNMENT_URL_TOKEN = String.raw`(?:${URL_TOKEN}|(?<!\S)#${URL_BODY})`;
 const URL_WHOLE = new RegExp(`^(?:${URL_TOKEN})$`, "i");
 const TEXT = new RegExp(`(${URL_TOKEN})|(${DATA})`, "gi");
 const DISCOVERY_URLS = new RegExp(URL_TOKEN, "gi");
-const dataText = (value: string, framed = false): string => (framed ? dataURI(value) : undefined) ?? value.replace(new RegExp(DATA, "gi"), original => dataURI(original) ?? original);
+const dataText = (value: string, framed = false): string => (framed ? dataURI(value) : undefined) ?? substituteData(value);
 
 // The third bit is a complete, non-media MIME discriminator. It is never set
 // for a value at the SDK's truncation boundary (even a syntactically valid prefix).
@@ -179,8 +206,13 @@ function hint(name: string, value: unknown, valueLimit = Infinity): Hint {
 }
 /** Index all siblings once, preserving exact indexed parents and combining duplicate query hints. */
 export function indexPrivacyHints(items: Iterable<readonly [string, unknown]>, path = "", previous: PrivacyHints = new Map(), valueLimit = Infinity): PrivacyHints {
+  return hintIndex(items, path, previous, valueLimit, false);
+}
+/** budgeted: the scrub reads each hint's full name through the path budget (an over-budget name exports the placeholder). */
+function hintIndex(items: Iterable<readonly [string, unknown]>, path: string, previous: PrivacyHints, valueLimit: number, budgeted: boolean): PrivacyHints {
   const hints = new Map(previous);
   for (const [name, value] of items) {
+    if (budgeted && (typeof value === "string" || (Array.isArray(value) && value.some(item => typeof item === "string")))) pathBudget(path ? `${path}.${name}` : name);
     const next = hint(name, value, valueLimit);
     if (!next[0] && !next[1] && !mime.names.includes(leaf(name))) continue;
     const parts = pathParts(path ? `${path}.${name}` : name);
@@ -318,23 +350,7 @@ function queryParts(url: string) {
   return { base, question, pairs, hash, fragment };
 }
 function urlValue(original: string, incomplete = false): string {
-  const { base, question, pairs, hash, fragment } = queryParts(original);
-  // A truncated query may end in a syntactically valid MIME prefix. Without
-  // complete context no query MIME can attest to a non-media value.
-  const hints = indexPrivacyHints(pairs.filter(pair => pair.equals).map(pair => [pair.decodedName, pair.decodedValue]), "", noHints, incomplete ? 0 : Infinity);
-  const query = pairs.map(pair => {
-    let value = pair.value;
-    if (pair.equals) {
-      if (isCredentialName(pair.decodedName, true)) value = replacement;
-      else {
-        let clean = mediaReplacement(pair.decodedValue, pair.decodedName, hints, true, false, false, incomplete);
-        if (clean === undefined) { const text = dataText(pair.decodedValue, true); if (text !== pair.decodedValue) clean = text; }
-        if (clean !== undefined) value = clean;
-      }
-    }
-    return pair.name + pair.equals + value;
-  }).join("&");
-  return dataText(base.replace(/^(https?:\/\/)[^\s/@]+:[^\s/@]+@/i, `$1${replacement}@`)) + question + query + hash + dataText(fragment);
+  return framedUrl(original, incomplete)[0];
 }
 function isURLValue(value: string, inspect?: (characters: number) => void): boolean {
   // URL_WHOLE requires this prefix too. Ordinary prose needs only this bounded
@@ -428,6 +444,14 @@ function credentialText(value: string, secrets: readonly string[]): string {
   return value;
 }
 const isRunCode = (c: number) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 45;
+const PY_WORD_CHAR = new RegExp(`[${PY_WORD}]`, "u");
+/** Whether the code point ending at index i is a Python \\w character (the word side of \\b). */
+function wordBefore(value: string, i: number): boolean {
+  if (i <= 0) return false;
+  const low = value.charCodeAt(i - 1);
+  const start = low >= 0xdc00 && low <= 0xdfff && i >= 2 && value.charCodeAt(i - 2) >= 0xd800 && value.charCodeAt(i - 2) <= 0xdbff ? i - 2 : i - 1;
+  return PY_WORD_CHAR.test(String.fromCodePoint(value.codePointAt(start)!));
+}
 /**
  * `\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}` replaced by the marker, in time
  * linear in the text. The classes exclude '.', so each run of [A-Za-z0-9_.-] splits at dots into
@@ -459,7 +483,7 @@ function replaceJwt(value: string): string {
       const a = starts[k], b = ends[k];
       let found = -1;
       for (let p = a; p + 3 <= b; p++) {
-        if (value.charCodeAt(p) === 101 && value.charCodeAt(p + 1) === 121 && value.charCodeAt(p + 2) === 74 && (p === a || value.charCodeAt(p - 1) === 45)) { found = p; break; }
+        if (value.charCodeAt(p) === 101 && value.charCodeAt(p + 1) === 121 && value.charCodeAt(p + 2) === 74 && (p === a ? !wordBefore(value, a) : value.charCodeAt(p - 1) === 45)) { found = p; break; }
       }
       if (found !== -1 && b - found - 3 >= 8 && ends[k + 1] - starts[k + 1] >= 8 && ends[k + 2] - starts[k + 2] >= 8) {
         result += value.slice(copied, found) + replacement;
@@ -484,31 +508,974 @@ function bareMedia(value: string): string {
     return candidate !== "__REDACTED__" && magic(candidate) ? omitted(candidate) : candidate;
   });
 }
-function text(value: string, secrets: readonly string[], framed: boolean, incomplete = false): string {
+function text(value: string, secrets: readonly string[], framed: boolean, incomplete = false, pairs = false, bare = true): string {
   // This function only receives prose gaps, names or URL-owned values. Match
   // original credentials before URL query/userinfo rewrites can split them.
   value = knownSecretText(value, secrets);
-  if (framed && isURLValue(value)) return credentialText(urlValue(value, incomplete), secrets);
+  if (framed && isURLValue(value)) return wholeUrlText(value, secrets, incomplete);
+  // A private key runs across URL-like tokens and lines, and a token read on its own (a leading '/' or '?') may be rewritten
+  // into a form that no longer holds the key's header: read it once over the whole prose first.
+  value = privateKeyText(value);
   let end = 0, result = "";
-  // matchAll clones its matcher; recursion never shares an active exec cursor.
-  TEXT.lastIndex = 0;
-  for (const match of value.matchAll(typeof value === "string" ? TEXT : new RegExp(TEXT.source, TEXT.flags))) {
-    const start = match.index!, original = match[0];
-    result += bareMedia(credentialText(value.slice(end, start), secrets));
-    if (match[1]) {
+  // Each data URI is cut where its continuation lines stop being base64; the rest is read as text.
+  for (const [start, stop, data] of scanText(typeof value === "string" ? TEXT_SCAN : new RegExp(TEXT.source, TEXT.flags), value, 2)) {
+    const original = value.slice(start, stop);
+    const gap = credentialText(value.slice(end, start), secrets);
+    result += bare ? bareMedia(gap) : gap;
+    if (!data) {
       const closing = start > 0 && value[start - 1] === "'" && original.endsWith("'") ? "'" : "";
       const token = closing ? original.slice(0, -1) : original;
       // A complete bare JPEG/MP3 can also begin with '/'. Check the WHOLE
       // framed token, never a slash-prefixed substring of an authority/path.
       result += (mediaReplacement(token) ?? urlValue(token, incomplete)) + closing;
     } else result += dataText(original);
-    end = start + original.length;
+    end = stop;
   }
-  result += bareMedia(credentialText(value.slice(end), secrets));
+  const tail = credentialText(value.slice(end), secrets);
+  result += bare ? bareMedia(tail) : tail;
   // Known values/shapes still apply to URI components and across text gaps.
   // Do not run bare-media recognition again over the assembled syntax.
-  return credentialText(result, secrets);
+  result = credentialText(result, secrets);
+  // The pair rule runs last, after known secrets and value shapes.
+  return pairs ? credentialPairs(result) : result;
 }
+// ---- Shared privacy spec v4: credential pair rule, URL catalog pairs, vocabulary and name budgets. ----
+// generate_privacy_fixtures.py (class Reference) is the executable reference. Positions are UTF-16 units, as in Java.
+/** A name of more than limits.max_depth components: the whole exported value becomes the placeholder (fail closed). */
+class PrivacyPathBudget extends Error { constructor() { super("Privacy path budget"); this.name = "PrivacyPathBudget"; } }
+const maxDepth = catalog.limits.max_depth;
+function isPathOverBudget(name: string): boolean {
+  try { pathBudget(name); return false; } catch (error) { if (error instanceof PrivacyPathBudget) return true; throw error; }
+}
+function pathBudget(name: string): void {
+  let separators = 0;
+  for (let k = 0; k < name.length; k++) { const c = name.charCodeAt(k); if (c === 46 || c === 91 || c === 93) separators++; }
+  if (separators >= maxDepth && name.split(/[.\[\]]+/).filter(Boolean).length > maxDepth) throw new PrivacyPathBudget();
+}
+/** Java Pattern semantics for the exclusions: '.' matches no line terminator (LF, CR, U+0085, U+2028, U+2029). */
+const javaExclusions = exclusions.map(({ regex, guards }) => ({ regex: new RegExp(regex.source.replace(/\./g, "[^\\n\\r\\u0085\\u2028\\u2029]")), guards }));
+const javaExcluded = (folded: string) => javaExclusions.some(({ regex, guards }) => regex.test(folded) && !guards.some(marker => folded.includes(marker)));
+const vocabularyWords: ReadonlySet<string> = new Set(catalog.credentials.vocabulary.words);
+const VOCABULARY_LETTER = /[\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nd}]/u, UPPERCASE = /\p{Uppercase}/u, LOWERCASE = /\p{Lowercase}/u;
+const javaLower = (c: string) => { const lowered = c.toLowerCase(); return lowered.length === 1 ? lowered : c === "İ" ? "i" : c; };
+/** Whether a segment of the name is a vocabulary word, over UTF-16 units: a segment is a run of letters and decimal digits,
+ * split at every other unit (each surrogate half included) and at a lowercase unit followed by an uppercase one. */
+function vocabulary(name: string): boolean {
+  const lowered = name.replace(/İ/g, "i").toLowerCase();
+  let any = false;
+  for (const word of vocabularyWords) if (lowered.includes(word)) { any = true; break; }
+  if (!any) return false;
+  let word = "", previous: string | undefined;
+  for (let k = 0; k <= name.length; k++) {
+    const unit = k < name.length ? name.charCodeAt(k) : 45, c = String.fromCharCode(unit);
+    const surrogate = unit >= 0xd800 && unit <= 0xdfff;
+    const letter = !surrogate && VOCABULARY_LETTER.test(c);
+    const boundary = !letter || (previous !== undefined && UPPERCASE.test(c) && LOWERCASE.test(previous));
+    if (boundary && word) { if (vocabularyWords.has(word)) return true; word = ""; }
+    if (letter) word += javaLower(c);
+    previous = surrogate ? undefined : c;
+  }
+  return false;
+}
+const markedName = (name: string) => { const folded = normalizePrivacyName(name); return patterns.some(pattern => folded.includes(pattern)) || vocabulary(name); };
+/** The catalog's credential name rule, path budget included: patterns, exclusions and vocabulary words per component, then on
+ * the whole name. Throws PrivacyPathBudget for a name of more than max_depth components. */
+function credentialName(name: string): boolean {
+  pathBudget(name);
+  if (!markedName(name)) return false;
+  const context: string[] = [];
+  let exempt = false;
+  for (const part of components(name)) {
+    const folded = normalizePrivacyName(part);
+    context.push(folded);
+    if (javaExcluded(folded) || contextual.some(regex => regex.test(context.join(".")))) exempt = true;
+    else if (patterns.some(pattern => folded.includes(pattern)) || vocabulary(part)) return true;
+  }
+  if (exempt) return false;
+  return !javaExcluded(normalizePrivacyName(name));
+}
+const queryName = (name: string) => signed.has(normalizePrivacyName(name)) || credentialName(name);
+
+const PAIR_NAME_CHARS = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-[]");
+const PAIR_NAME_START = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_");
+const PAIR_PADDING_FOLLOWERS = new Set("= \t\n\x0b\x0c\r,;)]}\"'");
+const PAIR_LIST_HEADERS = new Set(["cookie", "setcookie", "authorization", "proxyauthorization"]);
+const NAME_CAP = 128, QUESTION_CAP = 8, GAP_CAP = 8;
+const ESCAPED_QUOTE = '\\"', ENTITY_QUOTE = "&quot;";
+const ENCODED_EQUALS = new Set(["3D", "3d"]);
+const PATH_PAIR_SEPARATORS = new Set(";,&");
+const ENCODED_SPACES = new Set(["20", "09", "0A", "0B", "0C", "0D"]);
+const ENCODED_NBSP = "%C2%A0";
+const JSON_SPACE_ESCAPES = new Set("tnrfb");
+const HEX_DIGITS = new Set("0123456789abcdefABCDEF");
+const JAVA_FINAL_TERMINATORS = new Set(["\r\n", "\n", "\r", "\u0085", " ", " "]);
+const LINE_BREAKS = new Set("\n\r\u0085  \x0c\x0b");
+const JSON_SCALAR_CHARS = new Set("0123456789+-.eEtrufalsn");
+const JSON_NUMBER = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
+const PERCENT_ESCAPE = /%[0-9A-Fa-f]{2}/;
+const CONTROL = /^\p{Cc}$/u;
+const has = (set: ReadonlySet<string>, c: string | undefined) => c !== undefined && set.has(c);
+/** Python's str.isspace for one character: the reference's whitespace set (JS \s differs). */
+function pySpace(c: string | undefined): boolean {
+  if (c === undefined || c.length !== 1) return false;
+  const code = c.charCodeAt(0);
+  return (code >= 9 && code <= 13) || (code >= 0x1c && code <= 0x20) || code === 0x85 || code === 0xa0 || code === 0x1680
+    || (code >= 0x2000 && code <= 0x200a) || code === 0x2028 || code === 0x2029 || code === 0x202f || code === 0x205f || code === 0x3000;
+}
+/** Java's Character.isWhitespace. */
+function javaSpace(c: string | undefined): boolean {
+  if (c === undefined) return false;
+  const code = c.charCodeAt(0);
+  return (code >= 9 && code <= 13) || (code >= 0x1c && code <= 0x20) || code === 0x1680 || (code >= 0x2000 && code <= 0x2006)
+    || (code >= 0x2008 && code <= 0x200a) || code === 0x2028 || code === 0x2029 || code === 0x205f || code === 0x3000;
+}
+const hexSpace = (digits: string) => pySpace(String.fromCharCode(parseInt(digits, 16)));
+const allHex = (digits: string) => digits.length === 4 && [...digits].every(c => HEX_DIGITS.has(c));
+/** Percent-decode once ('+' stays), UTF-8 with replacement, as urllib's unquote. */
+const UTF8 = new TextDecoder();
+/** urllib's unquote: each run of %XX escapes is decoded as UTF-8 with replacement; every other character stays as it is. */
+function percentDecode(value: string, plus: boolean): string {
+  if (plus) value = value.replace(/\+/g, " ");
+  if (!value.includes("%")) return value;
+  return value.replace(/(?:%[0-9A-Fa-f]{2})+/g, run => {
+    const bytes = new Uint8Array(run.length / 3);
+    for (let k = 0; k < bytes.length; k++) bytes[k] = parseInt(run.slice(3 * k + 1, 3 * k + 3), 16);
+    return UTF8.decode(bytes);
+  });
+}
+const unquote = (value: string) => percentDecode(value, false);
+const unquotePlus = (value: string) => percentDecode(value, true);
+
+function nextPair(text: string, start: number, spaced: boolean): boolean {
+  const length = text.length;
+  let i = start;
+  if (spaced) {
+    while (i < length && (text[i] === " " || text[i] === "\t") && i - start <= 8) i++;
+    if (i - start > 8) return false;
+  }
+  const dashes = i;
+  while (i < length && text[i] === "-" && i - dashes <= 2) i++;
+  if (i - dashes > 2 || i >= length || !PAIR_NAME_START.has(text[i])) return false;
+  const name = i;
+  i++;
+  while (i < length && PAIR_NAME_CHARS.has(text[i]) && i - name < 128) i++;
+  if (i < length && PAIR_NAME_CHARS.has(text[i])) return false;
+  if (spaced) {
+    const gap = i;
+    while (i < length && text[i] === " " && i - gap <= 8) i++;
+    if (i - gap > 8) return false;
+  }
+  if (i >= length) return false;
+  if (text[i] === ":") return true;
+  if (text[i] !== "=") return false;
+  const rest = i + 1;
+  return !(rest >= length || PAIR_PADDING_FOLLOWERS.has(text[rest]) || (length - rest <= 2 && JAVA_FINAL_TERMINATORS.has(text.slice(rest))));
+}
+function pairValueEnd(text: string, start: number): number {
+  const length = text.length;
+  if (start >= length) return length;
+  if (text.startsWith("-----BEGIN", start)) {
+    const end = text.indexOf("-----END", start);
+    if (end < 0) return length;
+    const close = text.indexOf("-----", end + 8);
+    return close < 0 ? length : close + 5;
+  }
+  const first = text[start];
+  let i = start;
+  if (first === '"' || first === "'") {
+    i = start + 1;
+    while (i < length && text[i] !== first) i += text[i] === "\\" ? 2 : 1;
+    if (i >= length) return length;
+    i++;
+  }
+  let depth = 0;
+  for (; i < length; i++) {
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth = Math.max(depth - 1, 0);
+    else if (depth === 0) {
+      if ((c === "," || c === ";" || c === "\n" || c === "\r") && nextPair(text, i + 1, true)) return i;
+      if (c === " " && nextPair(text, i + 1, false)) return i;
+    }
+  }
+  return length;
+}
+function encodedSpaceWidth(text: string, end: number, floor: number): number {
+  if (end - 3 >= floor && text[end - 3] === "%" && ENCODED_SPACES.has(text.slice(end - 2, end).toUpperCase())) return 3;
+  if (end - 6 >= floor && text.slice(end - 6, end).toUpperCase() === ENCODED_NBSP) return 6;
+  let width = 0;
+  if (end - 2 >= floor && text[end - 2] === "\\" && has(JSON_SPACE_ESCAPES, text[end - 1])) width = 2;
+  else if (end - 6 >= floor && text.slice(end - 6, end - 4) === "\\u" && allHex(text.slice(end - 4, end)) && hexSpace(text.slice(end - 4, end))) width = 6;
+  if (!width) return 0;
+  let slashes = 1;
+  while (end - width - slashes >= floor && text[end - width - slashes] === "\\") slashes++;
+  return slashes % 2 ? width : 0;
+}
+function gapStart(text: string, end: number, floor: number): number {
+  while (end > floor) {
+    if (pySpace(text[end - 1])) { end--; continue; }
+    const width = encodedSpaceWidth(text, end, floor);
+    if (!width) break;
+    end -= width;
+  }
+  return end;
+}
+const escapeBefore = (text: string, end: number, floor: number) => end - 3 >= floor && text[end - 3] === "%" && has(HEX_DIGITS, text[end - 2]) && has(HEX_DIGITS, text[end - 1]);
+function escapedName(text: string, nameStart: number, nameEnd: number, floor: number): [string, boolean] | undefined {
+  if (!((escapeBefore(text, nameEnd, floor) && !ENCODED_EQUALS.has(text.slice(nameEnd - 2, nameEnd)))
+    || (nameStart > floor && escapeBefore(text, nameStart, floor) && text.slice(nameStart - 2, nameStart) === "25"))) return undefined;
+  let start = nameEnd;
+  while (start > floor && nameEnd - start < NAME_CAP) {
+    if (escapeBefore(text, start, floor)) {
+      if (ENCODED_EQUALS.has(text.slice(start - 2, start))) break;
+      start -= 3;
+    } else if (PAIR_NAME_CHARS.has(text[start - 1])) start--;
+    else break;
+  }
+  const overflow = nameEnd - start >= NAME_CAP && start > floor && (PAIR_NAME_CHARS.has(text[start - 1]) || escapeBefore(text, start, floor));
+  const decoded = unquote(text.slice(start, nameEnd));
+  const undecided = overflow || PERCENT_ESCAPE.test(decoded) || !/[\p{L}\p{N}_]/u.test(decoded);
+  return [decoded, undecided];
+}
+const DATA_LINE = /[\r\n]+([A-Za-z0-9+/_=\-]+)/y;
+const BASE64_INDEX = new Map<string, number>([..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"].map((c, k) => [c, k] as [string, number]).concat([["-", 62], ["_", 63]]));
+function padding(body: string, pad: number, base64: boolean, padded: boolean, count: number): boolean {
+  if (!base64 || padded || pad > 2 || !body || body.startsWith("-") || (count + body.length + pad) % 4) return false;
+  return BASE64_INDEX.get(body[body.length - 1])! % (pad === 1 ? 4 : 16) === 0;
+}
+/** The end of the data URI matched at text[start:end]: a continuation line belongs to it only if its '=' characters are
+ * trailing base64 padding; a line followed by a separator is a pair name. */
+function dataUriEnd(text: string, start: number, end: number): number {
+  let head = start + 5;
+  while (head < end && text[head] !== "\r" && text[head] !== "\n") head++;
+  const [metadata, comma, payload] = partition(text.slice(start + 5, head), ",");
+  const base64 = !!comma && metadata.toLowerCase().endsWith(";base64");
+  const decoded = unquote(payload);
+  let count = 0;
+  for (const ch of decoded) if (BASE64_INDEX.has(ch)) count++;
+  let padded = decoded.includes("="), position = head;
+  while (position < end) {
+    DATA_LINE.lastIndex = position;
+    const line = DATA_LINE.exec(text);
+    if (!line || line.index + line[0].length > end) break;
+    const after = line.index + line[0].length;
+    let gap = after;
+    while (gap < text.length && (dashesSpace(text[gap]) || encodedSpaceAhead(text, gap))) gap += encodedSpaceAhead(text, gap) || 1;
+    if (gap < text.length && (text[gap] === "=" || text[gap] === ":" || text.startsWith("%3D", gap) || text.startsWith("%3d", gap))) break;
+    const body = line[1].replace(/=+$/, ""), pad = line[1].length - body.length;
+    if (body.startsWith("--") || body.includes("=") || (pad && !padding(body, pad, base64, padded, count))) break;
+    count += body.length; padded = padded || !!pad; position = after;
+  }
+  return position;
+}
+/** The matches of a DATA or TEXT scanner (global, case-insensitive) left to right, each data URI cut by dataUriEnd. */
+function* scanText(pattern: RegExp, text: string, dataGroup: number): Generator<[number, number, boolean]> {
+  let position = 0;
+  while (position <= text.length) {
+    pattern.lastIndex = position;
+    const match = pattern.exec(text);
+    if (!match) return;
+    const data = dataGroup === 0 || match[dataGroup] !== undefined;
+    const end = data ? dataUriEnd(text, match.index, match.index + match[0].length) : match.index + match[0].length;
+    yield [match.index, end, data];
+    position = end > match.index ? end : match.index + 1;
+  }
+}
+const DATA_SCAN = new RegExp(DATA, "gi");
+const TEXT_SCAN = new RegExp(TEXT.source, TEXT.flags);
+function substituteData(value: string): string {
+  let out = "", copied = 0;
+  for (const [start, end] of scanText(DATA_SCAN, value, 0)) {
+    const original = value.slice(start, end);
+    out += value.slice(copied, start) + (dataURI(original) ?? original);
+    copied = end;
+  }
+  return copied ? out + value.slice(copied) : value;
+}
+const dashesSpace = (c: string | undefined) => pySpace(c) && !LINE_BREAKS.has(c!);
+const wordSpace = pySpace;
+function encodedControl(text: string, start: number, width: number): boolean {
+  if (text[start] === "%") return width === 3 && text.slice(start + 1, start + 3) !== "20";
+  if (width === 2) return true;
+  return CONTROL.test(String.fromCharCode(parseInt(text.slice(start + 2, start + 6), 16)));
+}
+function separatorAt(text: string, k: number): number {
+  const c = text[k];
+  if (c === "=" || (c === ":" && !text.startsWith("//", k + 1))) return 1;
+  return c === "%" && ENCODED_EQUALS.has(text.slice(k + 1, k + 3)) ? 3 : 0;
+}
+function separatorValueEnd(text: string, k: number, size: number): number {
+  let value = k + size;
+  while (value < text.length && value - k - size < 8 && text[value] === " ") value++;
+  let name = k;
+  while (name > 0 && k - name < NAME_CAP && PAIR_NAME_CHARS.has(text[name - 1])) name--;
+  if (PAIR_LIST_HEADERS.has(normalizePrivacyName(text.slice(name, k)))) {
+    while (value < text.length && text[value] !== "\n" && text[value] !== "\r") value++;
+    return value;
+  }
+  return pairValueEnd(text, value);
+}
+function consumedEnd(text: string, start: number, stop: number, decide: (k: number, size: number, floor: number) => number): number {
+  while (stop > start) {
+    let size: number;
+    if ((text[stop - 1] === "=" || text[stop - 1] === ":") && separatorAt(text, stop - 1)) size = 1;
+    else if (stop - 3 >= start && separatorAt(text, stop - 3) === 3) size = 3;
+    else return stop;
+    const end = decide(stop - size, size, start);
+    if (end <= stop) return stop;
+    stop = end;
+  }
+  return stop;
+}
+function encodedSpaceAhead(text: string, start: number): number {
+  if (text.startsWith("%", start)) {
+    if (ENCODED_SPACES.has(text.slice(start + 1, start + 3).toUpperCase())) return 3;
+    return text.slice(start, start + 6).toUpperCase() === ENCODED_NBSP ? 6 : 0;
+  }
+  if (text.startsWith("\\", start)) {
+    const next = text.slice(start + 1, start + 2);
+    if (next && JSON_SPACE_ESCAPES.has(next)) return 2;
+    const digits = text.slice(start + 2, start + 6);
+    if (next === "u" && allHex(digits) && hexSpace(digits)) return 6;
+  }
+  return 0;
+}
+const dashesSeparator = (text: string, start: number) => start < text.length && (text[start] === "=" || text[start] === ":" || (text[start] === "%" && ENCODED_EQUALS.has(text.slice(start + 1, start + 3))));
+function flagDashes(text: string, i: number): number {
+  if (text.startsWith("--", i)) return 2;
+  return text.startsWith("-", i) && has(PAIR_NAME_START, text[i + 1]) ? 1 : 0;
+}
+function readableGap(text: string, start: number, end: number): boolean {
+  if (end - start > GAP_CAP) return false;
+  for (let k = start; k < end; k++) if (text[k] !== " ") return false;
+  return true;
+}
+function quoteBefore(text: string, end: number): string | undefined {
+  if (end >= ENTITY_QUOTE.length && text.startsWith(ENTITY_QUOTE, end - ENTITY_QUOTE.length)) return ENTITY_QUOTE;
+  if (end < 1 || (text[end - 1] !== '"' && text[end - 1] !== "'")) return undefined;
+  if (text[end - 1] === '"') {
+    let slashes = 0;
+    while (end - 2 - slashes >= 0 && text[end - 2 - slashes] === "\\" && slashes < NAME_CAP) slashes++;
+    if (slashes % 2) return ESCAPED_QUOTE;
+  }
+  return text[end - 1];
+}
+type QuotedName = [opening: number, quote: string, close: number, overflow: boolean];
+/** Python's str.rfind(sub, start, end). */
+function rfind(text: string, sub: string, start: number, end: number): number {
+  // Read back no further than start: lastIndexOf has no lower bound and would scan to the beginning of the text on a miss.
+  for (let k = Math.min(end, text.length) - sub.length; k >= start; k--) if (text.startsWith(sub, k)) return k;
+  return -1;
+}
+/** Python's str.find(sub, start, end). */
+function find(text: string, sub: string, start: number, end: number): number {
+  // Read on no further than end: indexOf has no upper bound and would scan to the end of the text on a miss.
+  for (let k = start, last = Math.min(end, text.length) - sub.length; k <= last; k++) if (text.startsWith(sub, k)) return k;
+  return -1;
+}
+function jsonName(text: string, colon: number): QuotedName | undefined {
+  const end = gapStart(text, colon, 0);
+  const quote = quoteBefore(text, end);
+  if (quote === undefined || (quote.length === 1 && end < 3)) return undefined;
+  const close = end - quote.length;
+  const floor = Math.max(0, close - 130);
+  const opening = rfind(text, quote, floor, close);
+  if (opening >= 0) return [opening, quote, close, !readableGap(text, end, colon)];
+  return floor > 0 ? [-1, quote, close, true] : undefined;
+}
+function jsonStringEnd(text: string, start: number): number {
+  const quote = text[start];
+  for (let i = start + 1; i < text.length;) {
+    if (text[i] === "\\") { i += 2; continue; }
+    if (text[i] === quote) return i + 1;
+    i++;
+  }
+  return text.length;
+}
+function jsonMemberBoundary(text: string, end: number): boolean {
+  while (end < text.length && javaSpace(text[end])) end++;
+  return end >= text.length || text[end] === "," || text[end] === "}" || text[end] === "]";
+}
+function escapedStringEnd(text: string, start: number): number {
+  const length = text.length;
+  let i = start + ESCAPED_QUOTE.length, innerEscape = false;
+  while (i < length) {
+    if (text[i] === "\\" && i + 1 < length) {
+      const outer = text[i + 1];
+      i += 2;
+      if (innerEscape) innerEscape = false;
+      else if (outer === "\\") innerEscape = true;
+      else if (outer === '"') return i;
+    } else { i++; innerEscape = false; }
+  }
+  return length;
+}
+function entityStringEnd(text: string, start: number): number {
+  const length = text.length, size = ENTITY_QUOTE.length;
+  let i = start + size;
+  while (i < length) {
+    if (text[i] === "\\") i += 1 + (text.startsWith(ENTITY_QUOTE, i + 1) ? size : 1);
+    else if (text.startsWith(ENTITY_QUOTE, i)) return i + size;
+    else i++;
+  }
+  return length;
+}
+function jsonValueEnd(text: string, start: number, listHeader = false, quote = '"'): number {
+  const length = text.length;
+  if (start >= length) return start;
+  if (quote === ENTITY_QUOTE && text.startsWith(ENTITY_QUOTE, start)) return entityStringEnd(text, start);
+  if (quote === ESCAPED_QUOTE && text.startsWith(ESCAPED_QUOTE, start)) return escapedStringEnd(text, start);
+  const first = text[start];
+  if (first === '"' || first === "'") return jsonStringEnd(text, start);
+  let end = start;
+  while (end < length && JSON_SCALAR_CHARS.has(text[end])) end++;
+  if ((end >= length || ",}] \t\r\n".includes(text[end])) && jsonMemberBoundary(text, end)) {
+    const scalar = text.slice(start, end);
+    if (scalar === "true" || scalar === "false" || scalar === "null" || JSON_NUMBER.test(scalar)) return end;
+  }
+  if (listHeader) {
+    while (start < length && text[start] !== "\n" && text[start] !== "\r") start++;
+    return start;
+  }
+  return pairValueEnd(text, start);
+}
+/** The catalog's value shapes as read at a --name's value start: a leading word boundary is dropped (sticky). */
+const wordShapes = catalog.credentials.value_shapes.map(shape => {
+  const known = pyShape(shape);
+  return known ? new RegExp(known.body, "uy")
+    : new RegExp(shape.regex.startsWith("\\b") ? shape.regex.slice(2) : shape.regex, (shape.flags.includes("i") ? "i" : "") + "y");
+});
+/** A credential name for the pair rule, with the command-line and bracket spellings undone first. */
+function pairName(name: string): boolean {
+  if (!name) return false;
+  let stripped = name.replace(/^-+/, "");
+  if (stripped.startsWith("D") && stripped.length > 1 && name.startsWith("-D")) stripped = stripped.slice(1);
+  stripped = stripped.replace(/[\[\]]/g, ".");
+  return !!stripped && (credentialName(stripped) || credentialName(name));
+}
+type SeparatorPair = [pair: boolean, name: string, overflow: boolean];
+function separatorPair(text: string, i: number, floor: number, credential: (name: string) => boolean): SeparatorPair {
+  const nameEnd = gapStart(text, i, floor);
+  const readable = readableGap(text, nameEnd, i);
+  let nameStart = nameEnd;
+  while (nameStart > floor && nameEnd - nameStart < NAME_CAP && PAIR_NAME_CHARS.has(text[nameStart - 1]) && !escapeBefore(text, nameStart, floor)) nameStart--;
+  const overflow = nameEnd - nameStart >= NAME_CAP && nameStart > floor && PAIR_NAME_CHARS.has(text[nameStart - 1]) && !escapeBefore(text, nameStart, floor);
+  if (overflow) pathBudget(text.slice(nameStart, nameEnd));
+  const escaped = overflow ? undefined : escapedName(text, nameStart, nameEnd, floor);
+  const name = escaped === undefined ? text.slice(nameStart, nameEnd) : escaped[0];
+  const pair = (nameEnd - nameStart >= 2 && (overflow || !readable || credential(text.slice(nameStart, nameEnd))))
+    || (escaped !== undefined && (escaped[1] || !readable || credential(escaped[0])));
+  return [pair, name, overflow];
+}
+function flagAhead(text: string, start: number, credential: (name: string) => boolean): boolean {
+  const dashes = flagDashes(text, start);
+  if (dashes !== 1) return dashes === 2;
+  let end = start + 1;
+  while (end < text.length && PAIR_NAME_CHARS.has(text[end]) && end - start <= NAME_CAP) end++;
+  if (end - start < 3 || end - start > NAME_CAP || end >= text.length || !pySpace(text[end])) return false;
+  let after = end;
+  while (after < text.length && pySpace(text[after])) after++;
+  return after < text.length && credential(text.slice(start, end));
+}
+function lineStartsPair(text: string, start: number, credential: (name: string) => boolean): boolean {
+  const length = text.length;
+  let k = -1;
+  for (const quote of [ENTITY_QUOTE, ESCAPED_QUOTE, '"', "'"]) {
+    if (text.startsWith(quote, start)) {
+      const close = find(text, quote, start + quote.length, Math.min(length, start + quote.length + 130));
+      if (close < 0) return false;
+      k = close + quote.length;
+      break;
+    }
+  }
+  if (k < 0) {
+    if (flagAhead(text, start, credential)) return true;
+    let name = start;
+    while (name < length && text[name] === "-" && name - start < 2) name++;
+    k = name;
+    while (k < length && k - name < NAME_CAP) {
+      if (PAIR_NAME_CHARS.has(text[k])) k++;
+      else if (k + 3 <= length && escapeBefore(text, k + 3, k) && !ENCODED_EQUALS.has(text.slice(k + 1, k + 3)) && !encodedSpaceAhead(text, k)) k += 3;
+      else break;
+    }
+    if (k === name) return false;
+  }
+  while (k < length && (dashesSpace(text[k]) || encodedSpaceAhead(text, k))) k += encodedSpaceAhead(text, k) || 1;
+  return k < length && !!separatorAt(text, k);
+}
+interface Span { start: number; end: number; omission: boolean }
+/** The credential pair rule: replace the value of every credential-named (or undecided) pair with the placeholder, in one
+ * left-to-right pass linear in the text. skip holds the spans the catalog itself replaced in a whole URL value, by position. */
+function credentialPairs(text: string, skipSpans: readonly Span[] = []): string {
+  const length = text.length, out: string[] = [], known = new Map<string, boolean>();
+  let copied = 0, i = 0, dashesColon = -1;
+  // The '://' userinfo lookup reads the word after each '://' (no further than 1024 characters) for its last '@'. Both answers
+  // come from state kept across '://' marks: the end of the current run of non-space characters, and every '@' position, so
+  // the work for the whole text stays linear.
+  let spaceFrom = -1, spaceAt = -1, atMarks: number[] | undefined;
+  const wordLimit = (from: number): number => {
+    if (spaceFrom < 0 || from < spaceFrom || from > spaceAt) {
+      spaceFrom = from; spaceAt = from;
+      while (spaceAt < length && !javaSpace(text[spaceAt])) spaceAt++;
+    }
+    return spaceAt;
+  };
+  const lastAt = (start: number, end: number): number => {
+    if (!atMarks) { atMarks = []; for (let k = text.indexOf("@"); k >= 0; k = text.indexOf("@", k + 1)) atMarks.push(k); }
+    let low = 0, high = atMarks.length;
+    while (low < high) { const mid = (low + high) >> 1; if (atMarks[mid] < end) low = mid + 1; else high = mid; }
+    return low > 0 && atMarks[low - 1] >= start ? atMarks[low - 1] : -1;
+  };
+  const skip = skipSpans.filter(span => !span.omission), starts = skip.map(span => span.start);
+  const credential = (name: string) => {
+    let value = known.get(name);
+    if (value === undefined) { value = pairName(name); known.set(name, value); }
+    return value;
+  };
+  const skipped = (position: number) => {
+    let lo = 0, hi = starts.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid] <= position) lo = mid + 1; else hi = mid; }
+    const k = lo - 1;
+    return k >= 0 && position < skip[k].end ? skip[k].end : -1;
+  };
+  const quotedPair = (quoted: QuotedName): [boolean, string] => {
+    const [opening, quote, close, overflow] = quoted;
+    const name = opening < 0 ? "" : text.slice(opening + quote.length, close);
+    let plain = name.length;
+    while (plain > 0 && PAIR_NAME_CHARS.has(name[plain - 1]) && !escapeBefore(name, plain, 0)) plain--;
+    const escaped = opening >= 0 ? escapedName(name, plain, name.length, 0) : undefined;
+    return [overflow || credential(name) || (escaped !== undefined && (escaped[1] || credential(escaped[0]))), name];
+  };
+  const equalsValueEnd = (k: number, size: number, name: string) => {
+    let value = k + size;
+    while (value < length && value - k - size < 8 && text[value] === " ") value++;
+    if (PAIR_LIST_HEADERS.has(normalizePrivacyName(name))) {
+      while (value < length && text[value] !== "\n" && text[value] !== "\r") value++;
+      return value;
+    }
+    return pairValueEnd(text, value);
+  };
+  const decide = (k: number, size: number, floor: number, readEnd = true): number => {
+    const quoted = jsonName(text, k);
+    if (quoted !== undefined && quoted[0] >= floor) {
+      const [pair, name] = quotedPair(quoted);
+      if (size === 1 && text[k] === ":") {
+        if (!pair) return -1;
+        if (!readEnd) return k;
+        let value = k + 1;
+        while (value < length && javaSpace(text[value])) value++;
+        return jsonValueEnd(text, value, PAIR_LIST_HEADERS.has(normalizePrivacyName(name)), quoted[1]);
+      }
+      if (pair) return readEnd ? equalsValueEnd(k, size, name) : k;
+    }
+    if (!separatorPair(text, k, floor, credential)[0]) return -1;
+    return readEnd ? separatorValueEnd(text, k, size) : k;
+  };
+  const quotedEquals = (k: number) => {
+    const quoted = k > 0 ? jsonName(text, k) : undefined;
+    return quoted !== undefined && quotedPair(quoted)[0];
+  };
+  const wordEnd = (begin: number, value: number): number => {
+    let valueEnd = value, word = value;
+    if (text[value] === '"' || text[value] === "'") {
+      valueEnd = value + 1;
+      while (valueEnd < length && text[valueEnd] !== text[value]) valueEnd += text[valueEnd] === "\\" ? 2 : 1;
+      valueEnd = word = Math.min(length, valueEnd + 1);
+    }
+    let shapeEnd = value;
+    for (const shape of wordShapes) {
+      shape.lastIndex = value;
+      const match = shape.exec(text);
+      if (match) shapeEnd = Math.max(shapeEnd, match.index + match[0].length);
+    }
+    let first = -1, last = -1;
+    while (valueEnd < length && (valueEnd < shapeEnd || !wordSpace(text[valueEnd]))) {
+      const size = valueEnd >= word ? separatorAt(text, valueEnd) : 0;
+      if (size && decide(valueEnd, size, begin, false) >= 0) { if (first < 0) first = valueEnd; last = valueEnd; }
+      valueEnd++;
+    }
+    let ahead = valueEnd;
+    while (ahead < length && (dashesSpace(text[ahead]) || encodedSpaceAhead(text, ahead))) ahead += encodedSpaceAhead(text, ahead) || 1;
+    if (ahead > valueEnd && ahead < length && separatorAt(text, ahead) && decide(ahead, separatorAt(text, ahead), begin, false) >= 0) {
+      if (first < 0) first = ahead;
+      last = ahead;
+    }
+    for (const k of [...new Set([first, last])].filter(k => k !== -1).sort((a, b) => a - b)) valueEnd = Math.max(valueEnd, decide(k, separatorAt(text, k), begin));
+    return consumedEnd(text, begin, valueEnd, decide);
+  };
+  while (i < length) {
+    const c = text[i];
+    let start = -1, stop = -1, placeholder = replacement, userinfo = false;
+    const quoted = c === ":" && i > 0 ? jsonName(text, i) : undefined;
+    if (quoted !== undefined) {
+      const [pair, name] = quotedPair(quoted);
+      if (pair) {
+        let value = i + 1;
+        while (value < length && javaSpace(text[value])) value++;
+        if (skip.length && skipped(value) >= 0) { i = Math.max(skipped(value), i + 1); continue; }
+        const header = PAIR_LIST_HEADERS.has(normalizePrivacyName(name));
+        let end = jsonValueEnd(text, value, header, quoted[1]);
+        if (!header) end = consumedEnd(text, value, end, decide);
+        if (end > value) { start = value; stop = end; placeholder = quoted[1] + replacement + quoted[1]; }
+      }
+      if (start < 0) { i++; continue; }
+    } else if (c === ":" && text.startsWith("//", i + 1) && i !== dashesColon) {
+      const limit = Math.min(length, i + 3 + 512);
+      let end = i + 3;
+      while (end < limit && !"/?# \t\r\n".includes(text[end])) end++;
+      let at = rfind(text, "@", i + 3, end);
+      if (at < i + 3) {
+        const word = Math.min(wordLimit(i + 3), i + 1024);
+        const later = lastAt(i + 3, word);
+        const colon = later > i + 3 ? find(text, ":", i + 3, later) : -1;
+        if (later > i + 3 && colon > i + 3) at = later;
+      }
+      if (at < i + 3) { i += 3; continue; }
+      start = i + 3; stop = at; userinfo = true;
+    } else if ((c === "=" || (c === "%" && ENCODED_EQUALS.has(text.slice(i + 1, i + 3)))) && quotedEquals(i)) {
+      const size = c === "=" ? 1 : 3;
+      let value = i + size;
+      while (value < length && value - i - size < 8 && text[value] === " ") value++;
+      if (skip.length && skipped(value) >= 0) { i = Math.max(skipped(value), i + 1); continue; }
+      const name = quotedPair(jsonName(text, i)!)[1];
+      start = value;
+      stop = equalsValueEnd(i, size, name);
+      if (!PAIR_LIST_HEADERS.has(normalizePrivacyName(name))) stop = consumedEnd(text, value, stop, decide);
+    } else if (c === "=" || c === ":" || (c === "%" && ENCODED_EQUALS.has(text.slice(i + 1, i + 3)))) {
+      const size = c === "%" ? 3 : 1;
+      const [pair, name, overflow] = separatorPair(text, i, copied, credential);
+      if (pair) {
+        let value = i + size;
+        while (value < length && value - i - size < 8 && text[value] === " ") value++;
+        if (skip.length && skipped(value) >= 0) { i = Math.max(skipped(value), i + 1); continue; }
+        start = value;
+        if (!overflow && PAIR_LIST_HEADERS.has(normalizePrivacyName(name))) {
+          stop = value;
+          while (stop < length && text[stop] !== "\n" && text[stop] !== "\r") stop++;
+        } else stop = consumedEnd(text, value, pairValueEnd(text, value), decide);
+      }
+    } else if (c === "-" && (i === 0 || pySpace(text[i - 1]) || encodedSpaceWidth(text, i, 0)) && flagDashes(text, i)) {
+      const dashes = flagDashes(text, i);
+      let end = i + dashes;
+      while (end < length && PAIR_NAME_CHARS.has(text[end]) && end - i < NAME_CAP + dashes) end++;
+      const overflow = end - i >= NAME_CAP + dashes && end < length && PAIR_NAME_CHARS.has(text[end]);
+      while (overflow && end < length && PAIR_NAME_CHARS.has(text[end])) end++;
+      if (overflow) pathBudget(text.slice(i, end));
+      if (end < length && end - i - dashes >= (dashes === 2 ? 1 : 2)
+        && (dashesSpace(text[end]) || LINE_BREAKS.has(text[end]) || encodedSpaceAhead(text, end))
+        && (overflow || credential(text.slice(i, end)))) {
+        let value = end, control = -1, gapEnd = end, spaced = false;
+        while (value < length) {
+          if (dashesSpace(text[value])) { value++; spaced = spaced || control >= 0; continue; }
+          const width = encodedSpaceAhead(text, value);
+          if (!width) break;
+          if (control < 0 && encodedControl(text, value, width)) control = value;
+          value += width;
+          gapEnd = value;
+        }
+        if (dashesSeparator(text, value)) {
+          dashesColon = text[value] === ":" ? value : -1;
+          i = value;
+          continue;
+        }
+        const begin = control >= 0 ? control : value;
+        let valueEnd = -1, read = begin;
+        if (value < length && LINE_BREAKS.has(text[value])) {
+          let line = value + (text.startsWith("\r\n", value) ? 2 : 1), encoded = false;
+          while (line < length) {
+            if (dashesSpace(text[line])) { line++; continue; }
+            if (encoded && LINE_BREAKS.has(text[line])) { line += text.startsWith("\r\n", line) ? 2 : 1; encoded = false; continue; }
+            const width = encodedSpaceAhead(text, line);
+            if (!width) break;
+            if (control < 0 && encodedControl(text, line, width)) control = line;
+            line += width; encoded = true;
+          }
+          if (line >= length || LINE_BREAKS.has(text[line]) || dashesSeparator(text, line)) {
+            if (line >= length || LINE_BREAKS.has(text[line])) i = end;
+            else { dashesColon = text[line] === ":" ? line : -1; i = line; }
+            continue;
+          }
+          if (lineStartsPair(text, line, credential)) {
+            if (control >= 0) { start = control; stop = gapEnd; }
+            else { i = line; continue; }
+          } else {
+            read = control >= 0 ? control : line;
+            valueEnd = wordEnd(read, line);
+          }
+        } else if (control >= 0 && !spaced && value < length) valueEnd = wordEnd(begin, value);
+        else if (value >= length || flagAhead(text, value, credential)) {
+          if (control >= 0) { start = control; stop = gapEnd; }
+        } else valueEnd = wordEnd(begin, value);
+        if (valueEnd > read) { start = read; stop = valueEnd; }
+      }
+      if (start < 0) { i = end; continue; }
+    }
+    if (start >= 0 && skip.length) {
+      const spanEnd = skipped(start);
+      if (spanEnd >= 0 && !(userinfo && stop > spanEnd)) { i = Math.max(spanEnd, i + 1); continue; }
+    }
+    if (start >= copied && stop >= start) {
+      out.push(text.slice(copied, start), placeholder);
+      copied = stop;
+      i = Math.max(stop, i + 1);
+      continue;
+    }
+    i++;
+  }
+  if (!out.length) return text;
+  out.push(text.slice(copied));
+  return out.join("");
+}
+/** An output text built from kept and replaced pieces, recording by position every span the catalog replaced. */
+class Rewrite {
+  parts: string[] = []; spans: Span[] = []; length = 0;
+  keep(text: string): void { this.parts.push(text); this.length += text.length; }
+  put(text: string, omission = false): void { this.spans.push({ start: this.length, end: this.length + text.length, omission }); this.keep(text); }
+  /** Write a part of a URL: each run (sorted, disjoint; an empty run inserts the placeholder) becomes the placeholder, and each
+   * data URI in the original text its omission. Where a run and a data URI overlap, the run's placeholder is written and the
+   * data URI's omission covers the rest of it. */
+  region(text: string, runs: readonly (readonly [number, number])[] = []): void {
+    const data: [number, number, string][] = [];
+    for (const [start, end] of scanText(DATA_SCAN, text, 0)) {
+      const clean = dataURI(text.slice(start, end));
+      if (clean !== undefined) data.push([start, end, clean]);
+    }
+    const length = text.length;
+    let position = 0, r = 0, d = 0, last = "";
+    for (;;) {
+      while (r < runs.length && runs[r][1] <= position && !(runs[r][0] === runs[r][1] && runs[r][1] === position)) r++;
+      if (r < runs.length && runs[r][0] === runs[r][1] && runs[r][1] === position) { this.put(replacement); last = "run" + r; r++; continue; }
+      while (d < data.length && data[d][1] <= position) d++;
+      if (position >= length) break;
+      if (r < runs.length && runs[r][0] <= position) {
+        if (last !== "run" + r) { this.put(replacement); last = "run" + r; }
+        position = runs[r][1];
+      } else if (d < data.length && data[d][0] <= position) {
+        const end = r < runs.length ? Math.min(data[d][1], runs[r][0]) : data[d][1];
+        if (last !== "data" + d) { this.put(data[d][2], true); last = "data" + d; }
+        position = end;
+      } else {
+        let end = length;
+        if (r < runs.length) end = Math.min(end, runs[r][0]);
+        if (d < data.length) end = Math.min(end, data[d][0]);
+        this.keep(text.slice(position, end));
+        position = end; last = "";
+      }
+    }
+  }
+  result(): [string, Span[]] { return [this.parts.join(""), this.spans]; }
+}
+/** Replace each run (sorted, disjoint) with the placeholder. A span a run overlaps is dropped; the others move. */
+function replaceRuns(value: string, runs: readonly (readonly [number, number])[], spans: Span[]): [string, Span[]] {
+  if (!runs.length) return [value, spans];
+  const out: string[] = [], moved: Span[] = [];
+  let copied = 0, shift = 0, k = 0;
+  for (const [start, end] of runs) {
+    while (k < spans.length && spans[k].end <= start) { moved.push({ start: spans[k].start + shift, end: spans[k].end + shift, omission: spans[k].omission }); k++; }
+    while (k < spans.length && spans[k].start < end) k++;
+    out.push(value.slice(copied, start), replacement);
+    copied = end;
+    shift += replacement.length - (end - start);
+  }
+  for (; k < spans.length; k++) moved.push({ start: spans[k].start + shift, end: spans[k].end + shift, omission: spans[k].omission });
+  out.push(value.slice(copied));
+  return [out.join(""), moved];
+}
+/** The jwt value shape's matches, as replaceJwt reads them (linear). */
+function jwtRuns(value: string): [number, number][] {
+  const runs: [number, number][] = [];
+  if (!value.includes("eyJ")) return runs;
+  const n = value.length;
+  for (let i = 0; i < n;) {
+    if (!isRunCode(value.charCodeAt(i)) && value.charCodeAt(i) !== 46) { i++; continue; }
+    const starts: number[] = [], ends: number[] = [];
+    let j = i;
+    for (let segStart = i; ; j++) {
+      const c = j < n ? value.charCodeAt(j) : -1;
+      if (c === 46 || !(c !== -1 && isRunCode(c))) { starts.push(segStart); ends.push(j); if (c !== 46) break; segStart = j + 1; }
+    }
+    for (let k = 0; k + 2 < starts.length;) {
+      const a = starts[k], b = ends[k];
+      let found = -1;
+      for (let p = a; p + 3 <= b; p++) if (value.charCodeAt(p) === 101 && value.charCodeAt(p + 1) === 121 && value.charCodeAt(p + 2) === 74 && (p === a ? !wordBefore(value, a) : value.charCodeAt(p - 1) === 45)) { found = p; break; }
+      if (found !== -1 && b - found - 3 >= 8 && ends[k + 1] - starts[k + 1] >= 8 && ends[k + 2] - starts[k + 2] >= 8) { runs.push([found, ends[k + 2]]); k += 3; } else k++;
+    }
+    i = j;
+  }
+  return runs;
+}
+/** Known secrets, then value shapes, over a whole URL value: the catalog's spans move with each replacement. */
+function credentialRuns(value: string, spans: Span[], secrets: readonly string[]): [string, Span[]] {
+  for (const secret of prepareSecrets(secrets)) {
+    if (typeof value === "string" && typeof secret === "string" && value.indexOf(secret) < 0) continue;
+    const runs: [number, number][] = [];
+    let offset = 0;
+    for (const part of value.split(replacement)) {
+      for (let found = part.indexOf(secret); found >= 0; found = part.indexOf(secret, found + secret.length)) runs.push([offset + found, offset + found + secret.length]);
+      offset += part.length + replacement.length;
+    }
+    [value, spans] = replaceRuns(value, runs, spans);
+  }
+  for (const shape of valueShapes) {
+    const runs: [number, number][] = typeof shape === "function" ? jwtRuns(value)
+      : [...value.matchAll(shape as RegExp)].map(match => [match.index!, match.index! + match[0].length] as [number, number]);
+    [value, spans] = replaceRuns(value, runs.filter(([start, end]) => end > start), spans);
+  }
+  return [value, spans];
+}
+/** Whether a name after a '?' is a credential name; a name past NAME_CAP or one holding more than QUESTION_CAP '?' marks is
+ * undecided (true). */
+function afterQuestion(text: string, marks: readonly number[], end: number): boolean {
+  if (!marks.length) return false;
+  if (end - marks[0] - 1 > NAME_CAP || marks.length > QUESTION_CAP) return true;
+  return marks.some(q => queryName(unquotePlus(text.slice(q + 1, end))));
+}
+function questionName(rawName: string): boolean {
+  if (queryName(unquotePlus(rawName))) return true;
+  const marks: number[] = [];
+  for (let at = rawName.indexOf("?"); at >= 0 && marks.length <= QUESTION_CAP; at = rawName.indexOf("?", at + 1)) marks.push(at);
+  return afterQuestion(rawName, marks, rawName.length);
+}
+/** Where a credential pair after a second '?' cuts the value (after its '='), or -1, in one forward pass. */
+function secondQuestionCut(rawValue: string): number {
+  let i = rawValue.indexOf("?");
+  if (i < 0) return -1;
+  let marks: number[] = [];
+  for (const length = rawValue.length; i < length; i++) {
+    const c = rawValue[i];
+    if (c === "?") { if (marks.length <= QUESTION_CAP) marks.push(i); }
+    else if (c === "=") {
+      if (marks.length && afterQuestion(rawValue, marks, i)) return i + 1;
+      marks = [];
+    }
+  }
+  return -1;
+}
+/** The part of a URL after its '#': split at '&' like a query; a credential-named pair's value goes to the next '&'. */
+function tailPairs(segment: string, out: Rewrite): void {
+  const runs: [number, number][] = [];
+  let offset = 0;
+  for (const piece of segment.split("&")) {
+    const [rawName, equals, rawValue] = partition(piece, "=");
+    const value = offset + rawName.length + equals.length, end = offset + piece.length;
+    if (equals && questionName(rawName)) runs.push([value, end]);
+    else if (equals) { const cut = secondQuestionCut(rawValue); if (cut >= 0) runs.push([value + cut, end]); }
+    offset = end + 1;
+  }
+  out.region(segment, runs);
+}
+/** The end of a path pair's value in base[start:end] (one segment): the next ';', ',' or '&' that a non-empty name and then
+ * '=' or %3D follow, or the segment end. */
+function pathValueEnd(base: string, start: number, end: number): number {
+  let k = start;
+  while (k < end) {
+    if (!PATH_PAIR_SEPARATORS.has(base[k])) { k++; continue; }
+    let j = k + 1;
+    while (j < end && !PATH_PAIR_SEPARATORS.has(base[j]) && base[j] !== "=" && !(base[j] === "%" && ENCODED_EQUALS.has(base.slice(j + 1, j + 3)))) j++;
+    if (j < end && j > k + 1 && !PATH_PAIR_SEPARATORS.has(base[j])) return k;
+    k = j;
+  }
+  return end;
+}
+/** The URL path pair rule: every '=' and %3D in each path segment is read; a credential name's value is replaced to the next
+ * pair in the segment or the segment end. The scheme and authority of an absolute URL are not path segments. */
+function pathPairs(base: string, out: Rewrite): void {
+  let path = 0;
+  if (base.slice(0, 7).toLowerCase() === "http://" || base.slice(0, 8).toLowerCase() === "https://") {
+    path = base.indexOf("/", base.indexOf("//") + 2);
+    if (path < 0) path = base.length;
+  }
+  const runs: [number, number][] = [];
+  for (let position = path; position < base.length;) {
+    let end = base.indexOf("/", position + 1);
+    if (end < 0) end = base.length;
+    const first = base.startsWith("/", position) ? position + 1 : position;
+    let k = first, name = first, decided = false;
+    while (k < end) {
+      const c = base[k];
+      if (PATH_PAIR_SEPARATORS.has(c)) { k++; name = k; continue; }
+      const size = c === "=" ? 1 : c === "%" && ENCODED_EQUALS.has(base.slice(k + 1, k + 3)) ? 3 : 0;
+      if (!size) { k++; continue; }
+      let credential = k > name && credentialName(unquote(base.slice(name, k)));
+      if (!decided && !credential && k > first) credential = credentialName(unquote(base.slice(first, k)));
+      decided = true;
+      if (credential) {
+        const valueEnd = pathValueEnd(base, k + size, end);
+        runs.push([k + size, valueEnd]);
+        k = name = valueEnd;
+      } else k = name = k + size;
+    }
+    position = end;
+  }
+  out.region(base, runs);
+}
+const USERINFO = new RegExp(String.raw`^(https?://)[^${SPACE}/@]+:[^${SPACE}/@]+@`, "i");
+/** Scrub one already-framed URL: the text and the spans the catalog itself replaced in it, by position. */
+function framedUrl(original: string, incomplete = false): [string, Span[]] {
+  const out = new Rewrite();
+  const [target, hashmark, fragment] = partition(original, "#");
+  let [base, question, rawQuery] = partition(target, "?");
+  const userinfo = USERINFO.exec(base);
+  if (userinfo) { out.keep(userinfo[1]); out.put(replacement); out.keep("@"); base = base.slice(userinfo[0].length); }
+  pathPairs(base, out);
+  out.keep(question);
+  const parsed = rawQuery.split("&").map(pair => { const [name, equals, value] = partition(pair, "="); return { name, equals, value, decodedName: unquotePlus(name), decodedValue: unquotePlus(value) }; });
+  // A truncated query may end in a syntactically valid MIME prefix. Without complete context no query MIME can attest to a non-media value.
+  const hints = hintIndex(parsed.filter(pair => pair.equals).map(pair => [pair.decodedName, pair.decodedValue]), "", noHints, incomplete ? 0 : Infinity, true);
+  parsed.forEach((pair, index) => {
+    if (index) out.keep("&");
+    out.keep(pair.name + pair.equals);
+    if (!pair.equals) return;
+    if (queryName(pair.decodedName) || questionName(pair.name)) { out.put(replacement); return; }
+    const clean = mediaReplacement(pair.decodedValue, pair.decodedName, hints, true, false, false, incomplete);
+    if (clean !== undefined) { out.put(clean, true); return; }
+    const cut = secondQuestionCut(pair.value);
+    if (cut >= 0) { out.keep(pair.value.slice(0, cut)); out.put(replacement); }
+    else if (dataText(pair.decodedValue, true) !== pair.decodedValue) out.region(pair.decodedValue);
+    else out.keep(pair.value);
+  });
+  out.keep(hashmark);
+  if (hashmark) tailPairs(fragment, out);
+  return out.result();
+}
+/** A whole URL value at a framed site: the catalog pass records its spans; known secrets and value shapes move them; the pair
+ * rule then reads the URL text and skips only the spans still recorded. */
+function wholeUrlText(value: string, secrets: readonly string[], incomplete: boolean): string {
+  const [url, spans] = framedUrl(value, incomplete);
+  const [clean, moved] = credentialRuns(url, spans, secrets);
+  return credentialPairs(clean, moved);
+}
+/** A map key goes through the export rules of a string value at a framed site that need no context. */
+function mapKey(name: string, secrets: readonly string[], incomplete = false): string {
+  return mediaReplacement(name, "", noHints, true) ?? text(name, secrets, true, incomplete, true);
+}
+const privateKeyIndex = catalog.credentials.value_shapes.findIndex(item => item.id === "private-key-pem");
+const privateKeyShape = privateKeyIndex < 0 ? undefined : valueShapes[privateKeyIndex];
+function privateKeyText(value: string): string {
+  return typeof privateKeyShape === "function" || privateKeyShape === undefined || !value.includes("-----BEGIN ") ? value : value.replace(privateKeyShape, replacement);
+}
+/** A structured string (a JSON object or array held in a string): the reference reads the text of the scrubbed leaves again with the
+ * URL catalog, known secrets and value shapes, but not the pair rule, so a URL pair is read to the end of its value in the
+ * re-dumped text as well. */
+function structuredText(scrubbed: string, parsed: unknown, secrets: readonly string[], framed: boolean, incomplete: boolean): string {
+  return typeof parsed === "object" && parsed !== null ? text(scrubbed, secrets, framed, incomplete, false, false) : scrubbed;
+}
+/** A prose gap after the whole-text pass (URL catalog, known secrets, value shapes, pair rule): only bare media between its
+ * URL and data URI tokens is left to read; the URLs are never read a second time. */
+function bareGaps(value: string): string {
+  let end = 0, out = "";
+  for (const [start, stop] of scanText(typeof value === "string" ? TEXT_SCAN : new RegExp(TEXT.source, TEXT.flags), value, 2)) {
+    out += bareMedia(value.slice(end, start)) + value.slice(start, stop);
+    end = stop;
+  }
+  return out + bareMedia(value.slice(end));
+}
+/** A text that is one complete JSON document: each of its leaves and keys goes through the pair rule on its own. */
+function wholeJSON(value: string): boolean {
+  if (!/^\s*[\[{"]/.test(value)) return false;
+  try { JSON.parse(value); return true; } catch { return false; }
+}
+// ---- End of the shared privacy spec v4 section. ----
 export interface PrivacyBudget { nodes: number; text: number; seen: WeakSet<object> }
 const newBudget = (): PrivacyBudget => ({ nodes: catalog.limits.max_nodes, text: catalog.limits.max_text_chars, seen: new WeakSet() });
 function charge(budget: PrivacyBudget, depth: number, length = 0): void {
@@ -568,8 +1535,8 @@ function jsonNumbers(value: string, parsed: unknown, secrets: readonly string[],
         input.set(node, slots);
         if (!array) {
           const items = dataEntries(node);
-          hints = indexPrivacyHints(items, path, hints);
-          sourceHints = indexPrivacyHints(items, path, sourceHints);
+          hints = hintIndex(items, path, hints, Infinity, true);
+          sourceHints = hintIndex(items, path, sourceHints, Infinity, true);
         }
       }
       at++; space(); let index = 0;
@@ -673,11 +1640,17 @@ function scrubJSON(value: string, parsed: unknown, secrets: readonly string[], d
 }
 /** Walk only plain, already-materialized data. The Node S1 boundary rejects proxies before calling. */
 export function scrubValue(value: any, secrets: readonly string[] = [], path = "", depth = 0, inheritedAudio = false, budget: PrivacyBudget = newBudget(), hints: PrivacyHints = noHints, framed = true, inheritedMedia = false, incomplete = false, ambiguousBase64 = true): any {
-  return walkValue(value, secrets, path, depth, inheritedAudio, budget, hints, framed, inheritedMedia, incomplete, ambiguousBase64);
+  return pathBudgeted(() => walkValue(value, secrets, path, depth, inheritedAudio, budget, hints, framed, inheritedMedia, incomplete, ambiguousBase64));
+}
+/** A name (a path, a map key, a pair name in text) of more than max_depth components exports the whole value as the placeholder. */
+function pathBudgeted<T>(scrub: () => T): T | string {
+  try { return scrub(); } catch (error) { if (error instanceof PrivacyPathBudget) return replacement; throw error; }
 }
 function walkValue(value: any, secrets: readonly string[], path: string, depth: number, inheritedAudio: boolean, budget: PrivacyBudget, hints: PrivacyHints, framed: boolean, inheritedMedia: boolean, incomplete: boolean, ambiguousBase64: boolean, policy?: ResponsePolicy, exemptToken = false, numbers?: JsonNumbers, numericLexeme?: string): any {
   charge(budget, depth);
-  if (isCredentialName(path) && !exemptToken) return replacement;
+  // A path of more than limits.max_depth components exports the whole value as the placeholder.
+  pathBudget(path);
+  if (credentialName(path) && !exemptToken) return replacement;
   if (value && typeof value === "object") {
     if (budget.seen.has(value)) return "<omitted>";
     budget.seen.add(value);
@@ -686,24 +1659,27 @@ function walkValue(value: any, secrets: readonly string[], path: string, depth: 
       const items = dataEntries(value);
       if (items.length > budget.nodes) throw new Error("Privacy structure budget");
       budget.text -= items.reduce((n, [name]) => n + name.length, 0); if (budget.text < 0) throw new Error("Privacy text budget");
-      hints = indexPrivacyHints(items, path, hints);
+      hints = hintIndex(items, path, hints, Infinity, true);
       const token = policy?.tokenParents.has(value) ? own(value, "token") : undefined;
       const cleanToken = typeof token === "string"
         ? walkValue(token, secrets, "", depth + 1, false, budget, noHints, true, false, incomplete, ambiguousBase64) : undefined;
       const maskedBytes = typeof token === "string" && (cleanToken !== token || policy!.textPolicy(cleanToken) !== token);
       const numericOutput = new Map<string, string>();
-      const result = Object.fromEntries(items.map(([name, item]) => {
+      const entries = new Map<string, unknown>();
+      for (const [name, item] of items) {
         // Token bytes are another encoding of the same value, not harmless metadata.
         const masked = name === "logprobs" && policy?.maskedChoices.has(value) || policy?.maskedText.get(value)?.has(name) || name === "bytes" && maskedBytes;
         const exempt = name === "token" && typeof item === "string" && !!policy?.tokenParents.has(value);
-        const cleanName = text(name, secrets, false, numbers?.incompleteURLs), lexeme = numbers?.input.get(value)?.get(name);
+        const lexeme = numbers?.input.get(value)?.get(name);
         const clean = masked ? replacement : walkValue(item, secrets, path ? `${path}.${name}` : name, depth + 1, inheritedAudio, budget, hints, true, inheritedMedia, incomplete, true, policy, exempt, numbers, lexeme);
-        // A redacted key can collide with another key. Match Object.fromEntries'
-        // last-value-wins result, not the numeric origin of an overwritten value.
-        numericOutput.delete(cleanName);
+        // A key goes through the export text rules of a framed string value.
+        const cleanName = mapKey(name, secrets, numbers?.incompleteURLs);
+        // Two keys that are one after scrubbing: one key is kept, in the first one's place, and its value is the placeholder.
+        if (entries.has(cleanName)) { entries.set(cleanName, replacement); numericOutput.delete(cleanName); continue; }
         if (typeof clean === "number" && lexeme !== undefined) numericOutput.set(cleanName, lexeme);
-        return [cleanName, clean];
-      }));
+        entries.set(cleanName, clean);
+      }
+      const result = Object.fromEntries(entries);
       numbers?.output.set(result, numericOutput);
       return result;
     }
@@ -735,7 +1711,7 @@ function walkValue(value: any, secrets: readonly string[], path: string, depth: 
         // Source-number origins and budgets remain private to this JSON owner.
         // Never reprocess complete JSON as prose or match a rounded numeric alias.
         const payloadRole = !!numbers?.payloadRole || context(path, hints, inheritedMedia, inheritedAudio, true).payload;
-        return scrubJSON(value, parsed, secrets, depth + 1, budget, ctx.audio, ctx.media, incomplete, numbers?.incompleteURLs, payloadRole);
+        return structuredText(scrubJSON(value, parsed, secrets, depth + 1, budget, ctx.audio, ctx.media, incomplete, numbers?.incompleteURLs, payloadRole), parsed, secrets, framed, incomplete);
       }
     }
     const payloadRole = !!numbers?.payloadRole || context(path, hints, inheritedMedia, inheritedAudio, true).payload;
@@ -931,21 +1907,34 @@ function redactCrossOwnerSecrets(value: string, ranges: SourceRange[], owners: T
   return out + value.slice(end);
 }
 /** S1's additional malformed/embedded JSON policy; recognition still delegates to S6. */
-function scrubEmbeddedText(value: string, secrets: readonly string[], depth: number, budget: PrivacyBudget, framed: boolean, incomplete = false, incompleteURLs = false, payloadRole = false): string {
+function scrubEmbeddedText(value: string, secrets: readonly string[], depth: number, budget: PrivacyBudget, framed: boolean, incomplete = false, incompleteURLs = false, payloadRole = false, nested = false): string {
   if (depth > catalog.limits.max_depth) throw new Error("Privacy structure budget");
   if (wholeSecret(value, secrets)) return replacement;
   const ranges = knownSecretRanges(value, secrets, depth, budget);
   // A whole data URI or URL owns its delimiters, including brackets and quotes.
   if (framed) { const uri = mediaReplacement(value); if (uri !== undefined) return uri; if (isURLValue(value)) return text(value, secrets, true, incomplete || incompleteURLs); }
-  let owners = textOwners(value, depth, budget);
-  const matched = redactCrossOwnerSecrets(value, ranges, owners, depth, budget);
-  if (matched !== value) { value = matched; owners = textOwners(value, depth, budget); }
-  const assigned = scrubAssignments(value, owners);
-  if (assigned !== value) { value = assigned; owners = textOwners(value, depth, budget); }
+  // Owners are found on the text they frame; a pass that rewrites the text finds them again (once, below).
+  let owners: TextOwner[] | undefined;
+  if (ranges.length) {
+    owners = textOwners(value, depth, budget);
+    const matched = redactCrossOwnerSecrets(value, ranges, owners, depth, budget);
+    // A nested owner's text was read by the whole-text pass with its known secrets in place, so a value shape beside one was cut
+    // off by a word character; the reference replaces known secrets first, so read the shapes again on the replaced text.
+    if (matched !== value) { value = nested ? credentialText(matched, []) : matched; owners = undefined; }
+  }
+  let whole = false;
+  if (!nested && !(whole = wholeJSON(value))) {
+    // The credential pair rule reads the whole text once, after the URL catalog, known secrets and value shapes, before any
+    // owner below rewrites a name or a value it must read. Known secrets outside every owner were replaced just above; the
+    // owners replace their own (a JSON owner keeps its encoding), so this pass reads none.
+    const paired = text(value, [], false, incomplete || incompleteURLs, true, false);
+    if (paired !== value) { value = paired; owners = undefined; }
+  }
+  owners ??= textOwners(value, depth, budget);
   let end = 0, out = "";
   for (const owner of owners) {
     const raw = value.slice(owner.start, owner.end);
-    out += text(value.slice(end, owner.start), secrets, false, incomplete || incompleteURLs);
+    out += bareGaps(value.slice(end, owner.start));
     if (owner.kind === "json") {
       out += wholeSecret(raw, secrets) ? JSON.stringify(replacement) : scrubJSON(raw, owner.parsed, secrets, depth + 1, budget, false, false, incomplete, incompleteURLs, payloadRole);
     } else if (owner.kind === "field") {
@@ -957,7 +1946,7 @@ function scrubEmbeddedText(value: string, secrets: readonly string[], depth: num
         + value.slice(owner.keyEnd, owner.valueStart)
         + (clean === owner.parsed ? value.slice(owner.valueStart, owner.end) : JSON.stringify(clean));
     } else if (owner.kind === "wrapper") {
-      out += raw[0] + scrubEmbeddedText(raw.slice(1, -1), secrets, depth + 1, budget, false, incomplete, incompleteURLs, payloadRole) + raw.at(-1);
+      out += raw[0] + scrubEmbeddedText(raw.slice(1, -1), secrets, depth + 1, budget, false, incomplete, incompleteURLs, payloadRole, true) + raw.at(-1);
     } else {
       // A truncated JSON object cannot safely retain structural media context.
       const fields: [string, unknown][] = [];
@@ -974,20 +1963,24 @@ function scrubEmbeddedText(value: string, secrets: readonly string[], depth: num
         try { key = JSON.parse(propertyOnly[2]); } catch { out += text(raw, secrets, false, incomplete); end = owner.end; continue; }
         const clean = scrubValue(key, secrets, "", depth + 1, false, budget, noHints, true, false, incomplete);
         out += clean === key ? raw : propertyOnly[1] + JSON.stringify(clean) + propertyOnly[3];
-      } else out += raw[0] + scrubEmbeddedText(raw.slice(1), secrets, depth + 1, budget, false, incomplete, incompleteURLs, payloadRole);
+      } else out += raw[0] + scrubEmbeddedText(raw.slice(1), secrets, depth + 1, budget, false, incomplete, incompleteURLs, payloadRole, true);
     }
     end = owner.end;
   }
   // Only unowned gaps use the prose policy. Repaired JSON/quoted layers must
-  // never return through assignment, URL or bare-media scanning as one blob.
-  return out + text(value.slice(end), secrets, false, incomplete || incompleteURLs);
+  // never return through URL or bare-media scanning as one blob.
+  out += bareGaps(value.slice(end));
+  return whole && /^\s*[\[{]/.test(value) ? structuredText(out, {}, secrets, framed, incomplete || incompleteURLs) : out;
 }
 /** Free-text entry point: unlike scalar values, data: prefixes do not own trailing prose. */
 export function scrubText(value: string, secrets: readonly string[] = [], depth = 0): string {
   const budget = newBudget(); charge(budget, depth, value.length);
-  return scrubEmbeddedText(value, secrets, depth, budget, false);
+  return pathBudgeted(() => scrubEmbeddedText(value, secrets, depth, budget, false));
 }
 export function scrubAttribute(value: string, secrets: readonly string[] = [], incompleteURLs = false): string {
+  return pathBudgeted(() => attributeText(value, secrets, incompleteURLs));
+}
+function attributeText(value: string, secrets: readonly string[], incompleteURLs: boolean): string {
   if (value.length > catalog.limits.max_text_chars) throw new Error("Privacy text budget");
   if (wholeSecret(value, secrets)) return replacement;
   // Preserve S1's JSON-scalar handling as well as S6's object/array walker. SDKs
@@ -1010,7 +2003,7 @@ export function scrubAttribute(value: string, secrets: readonly string[] = [], i
   // The public numeric-root result is plain text, not a quoted JSON marker.
   // Keep the original spelling/whitespace and never match String(parsed).
   if (typeof parsed === "number") return knownSecretText(value, secrets);
-  return scrubJSON(value, parsed, secrets, 0, newBudget(), false, false, false, incompleteURLs);
+  return structuredText(scrubJSON(value, parsed, secrets, 0, newBudget(), false, false, false, incompleteURLs), parsed, secrets, true, false);
 }
 
 /** S5 harvesting over already-parsed data, sharing exactly the export predicate.
@@ -1128,6 +2121,9 @@ function responseTokens(value: unknown, format: LogprobFormat, budget: PrivacyBu
  * All passes share a budget; a budget failure belongs to the caller's fail-closed boundary.
  */
 export function scrubProviderResponse(value: unknown, secrets: readonly string[] = [], format: LogprobFormat = "openai.chat", textPolicy: (value: string) => unknown = value => value, incomplete = false): any {
+  return pathBudgeted(() => providerResponse(value, secrets, format, textPolicy, incomplete));
+}
+function providerResponse(value: unknown, secrets: readonly string[], format: LogprobFormat, textPolicy: (value: string) => unknown, incomplete: boolean): any {
   const budget = newBudget();
   const policy: ResponsePolicy = { tokenParents: incomplete ? new WeakSet<object>() : responseTokens(value, format, budget), maskedChoices: new WeakSet(), maskedText: new WeakMap(), textPolicy };
   const rule = catalog.logprob_tokens.formats.find(rule => rule.format === format);

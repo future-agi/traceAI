@@ -2,6 +2,13 @@
 
 ### Changed
 - Credential value shapes are scanned in time linear in the text, and a token is replaced whole whatever its length.
+- Exported text and object keys go through the shared credential pair rule, after registered secrets and value shapes: the value of a credential-named `name=value`, `name: value`, `"name": value`, `--name value` or `-name value` is replaced with `<redacted>` to the end of the value (the next pair, the line end for `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization`, or the end of the text). The placeholder is written bare (`password=<redacted>`), not quoted, and a value that runs on over later words of the same value is replaced with them.
+- A name the pair rule cannot read in full is treated as a credential name: one longer than 128 characters, one after more than 8 `?` marks, or one separated from its `=` or `:` by a tab, a line break, an encoded space (`%20`, `%09`, `%C2%A0`, ...), a JSON escape (`\t`, `\n`, ...) or more than 8 spaces.
+- `pwd`, `pass`, `passphrase`, `passwd`, `passcode` and `pin`, as a whole name or a segment, are credential names at every site.
+- Credential-named pairs after a URL's `#`, after a second `?` and in URL path segments are replaced like query pairs.
+- Object keys go through the export text rules; keys equal after scrubbing collapse to the first key, valued `<redacted>`.
+- A path, key or pair name of more than 32 components makes the whole exported value `<redacted>`.
+- URL and data URI tokens in text end at the shared whitespace set (U+0085 and U+001C–U+001F are whitespace, U+FEFF is not); a data URI's continuation line belongs to it only when its `=` characters are trailing base64 padding.
 
 ## [1.4.2] - 2026-11-20
 

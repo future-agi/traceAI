@@ -129,8 +129,8 @@ describe("scheme recognition never exempts independent media or credentials", ()
     const value = `wss://example.test/${secret}`;
     expect(scrubText(value, [secret])).toBe("wss://example.test/<redacted>");
     expect(scrubAttribute(value, [secret])).toBe("wss://example.test/<redacted>");
-    expect(scrubText("password=wss://example.test")).toBe('password="<redacted>"');
-    expect(scrubAttribute("password=wss://example.test")).toBe('password="<redacted>"');
+    expect(scrubText("password=wss://example.test")).toBe("password=<redacted>");
+    expect(scrubAttribute("password=wss://example.test")).toBe("password=<redacted>");
     expect(scrubValue({ api_key: "wss://example.test" })).toEqual({ api_key: "<redacted>" });
     expect(scrubValue({ mime_type: "audio/pcm", data: "wss://example.test" }))
       .toEqual({ mime_type: "audio/pcm", data: "<omitted: media>" });

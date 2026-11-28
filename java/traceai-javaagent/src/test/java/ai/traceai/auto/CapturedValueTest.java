@@ -310,7 +310,7 @@ class CapturedValueTest {
         inputs.put("single-quoted json names", "x': ".repeat(40_000));
         inputs.put("a long name before every colon", ("\"" + "n".repeat(120) + "\": ").repeat(1_500));
         inputs.forEach((label, value) -> {
-            String redacted = assertTimeoutPreemptively(java.time.Duration.ofMillis(1_000), () -> CapturedValue.redactCredentialPairs(value), label + " is not linear");
+            String redacted = assertTimeoutPreemptively(java.time.Duration.ofMillis(1_000), () -> CredentialPairs.redactCredentialPairs(value), label + " is not linear");
             assertTrue(redacted.length() <= value.length() + 64, label);
             String captured = assertTimeoutPreemptively(java.time.Duration.ofMillis(1_000), () -> text(value), label + " (as captured) is not bounded");
             assertTrue(captured.length() <= 140_000, label + ": " + captured.length()); // the budget, doubled for the escapes of a JSON string
@@ -502,9 +502,10 @@ class CapturedValueTest {
         }
     }
 
-    /** The catalog's unbounded JWT pattern, run by the backtracking engine, is the reference for the linear scan. */
+    /** The catalog's unbounded JWT pattern, run by the backtracking engine with the shared reference's word boundary (Python's: a
+     *  Unicode letter or number or '_' is a word character), is the reference for the linear scan. */
     private static final String JWT_REFERENCE = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}";
-    private static final java.util.regex.Pattern JWT_REFERENCE_PATTERN = java.util.regex.Pattern.compile(JWT_REFERENCE);
+    private static final java.util.regex.Pattern JWT_REFERENCE_PATTERN = PrivacyCatalog.pythonPattern(JWT_REFERENCE, 0);
 
     private static String reference(String input) {
         return JWT_REFERENCE_PATTERN.matcher(input).replaceAll(java.util.regex.Matcher.quoteReplacement("<redacted>"));

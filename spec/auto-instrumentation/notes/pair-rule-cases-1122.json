@@ -1,0 +1,2240 @@
+{
+ "fragment_targets": {
+  "literal-question-query-client_secret?tag-request_query": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "literal-question-query-client_secret?tag-response_body": "https://example.invalid/?client_secret?tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "literal-question-query-password?foo-request_query": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "literal-question-query-password?foo-response_body": "https://example.invalid/?password?foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "literal-question-query-token?filter-request_query": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "literal-question-query-token?filter-response_body": "https://example.invalid/?token?filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-literal-absolute-query": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-literal-absolute-response": {
+   "url": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-absolute-attribute": "https://example.invalid/?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-literal-relative-query": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-literal-relative-response": {
+   "url": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-literal-relative-attribute": "/path?client_secret'tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-encoded-absolute-query": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-encoded-absolute-response": {
+   "url": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-absolute-attribute": "https://example.invalid/?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-encoded-relative-query": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-0-encoded-relative-response": {
+   "url": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-0-encoded-relative-attribute": "/path?client_secret%27tag=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-literal-absolute-query": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-literal-absolute-response": {
+   "url": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-absolute-attribute": "https://example.invalid/?password'foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-literal-relative-query": "/path?password'foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-literal-relative-response": {
+   "url": "/path?password'foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-literal-relative-attribute": "/path?password'foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-encoded-absolute-query": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-encoded-absolute-response": {
+   "url": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-absolute-attribute": "https://example.invalid/?password%27foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-encoded-relative-query": "/path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-1-encoded-relative-response": {
+   "url": "/path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-1-encoded-relative-attribute": "/path?password%27foo=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-literal-absolute-query": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-literal-absolute-response": {
+   "url": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-absolute-attribute": "https://example.invalid/?token'filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-literal-relative-query": "/path?token'filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-literal-relative-response": {
+   "url": "/path?token'filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-literal-relative-attribute": "/path?token'filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-encoded-absolute-query": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-encoded-absolute-response": {
+   "url": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-absolute-attribute": "https://example.invalid/?token%27filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-encoded-relative-query": "/path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>",
+  "apostrophe-name-2-encoded-relative-response": {
+   "url": "/path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+  },
+  "apostrophe-name-2-encoded-relative-attribute": "/path?token%27filter=<redacted>&model=keep#fragment?token=<redacted>"
+ },
+ "new_cases": [
+  {
+   "name": "pair-rule-url-fragment-after-query-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?model=keep#token=TAILA",
+   "expected": "https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-fragment-after-query-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?model=keep#token=TAILA"
+   },
+   "expected": {
+    "url": "https://example.invalid/?model=keep#token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-url-fragment-after-query-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?model=keep#token=TAILA next",
+   "expected": "see https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-fragment-after-query-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?model=keep#token=TAILA",
+   "expected": "https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-second-question-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?a=1?token=TAILB",
+   "expected": "https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-second-question-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?a=1?token=TAILB"
+   },
+   "expected": {
+    "url": "https://example.invalid/?a=1?token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-url-second-question-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?a=1?token=TAILB next",
+   "expected": "see https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-second-question-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?a=1?token=TAILB",
+   "expected": "https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-placeholder-continues-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/?password=<redacted>,TAILC",
+   "expected": "https://example.invalid/?password=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-placeholder-continues-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/?password=<redacted>,TAILC"
+   },
+   "expected": {
+    "url": "https://example.invalid/?password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-url-placeholder-continues-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/?password=<redacted>,TAILC next",
+   "expected": "see https://example.invalid/?password=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-placeholder-continues-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/?password=<redacted>,TAILC",
+   "expected": "https://example.invalid/?password=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-shape-continues-query",
+   "site": "request_query",
+   "path": "",
+   "value": "https://example.invalid/#password=Bearer+EXAMPLEVALUEONLY,TAILD",
+   "expected": "https://example.invalid/#password=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-shape-continues-response",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "url": "https://example.invalid/#password=Bearer+EXAMPLEVALUEONLY,TAILD"
+   },
+   "expected": {
+    "url": "https://example.invalid/#password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-url-shape-continues-text",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "see https://example.invalid/#password=Bearer+EXAMPLEVALUEONLY,TAILD next",
+   "expected": "see https://example.invalid/#password=<redacted>"
+  },
+  {
+   "name": "pair-rule-url-shape-continues-attribute",
+   "site": "attribute_keys",
+   "path": "http.url",
+   "value": "https://example.invalid/#password=Bearer+EXAMPLEVALUEONLY,TAILD",
+   "expected": "https://example.invalid/#password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log https://example.invalid/?model=keep#token=TAILA then more",
+   "expected": "log https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log https://example.invalid/?model=keep#token=TAILA then more",
+   "expected": "log https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log https://example.invalid/?model=keep#token=TAILA then more",
+   "expected": "log https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log https://example.invalid/?model=keep#token=TAILA then more",
+   "expected": "log https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log https://example.invalid/?model=keep#token=TAILA then more",
+   "expected": "log https://example.invalid/?model=keep#token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log https://example.invalid/?model=keep#token=TAILA then more"
+   },
+   "expected": {
+    "message": "log https://example.invalid/?model=keep#token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log https://example.invalid/?model=keep#token=TAILA then more"
+   },
+   "expected": {
+    "message": "log https://example.invalid/?model=keep#token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-fragment-after-query-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log https://example.invalid/?model=keep#token=TAILA then more"
+   ],
+   "expected": [
+    "log https://example.invalid/?model=keep#token=<redacted>"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-second-question-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log https://example.invalid/?a=1?token=TAILB then more",
+   "expected": "log https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-second-question-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log https://example.invalid/?a=1?token=TAILB then more",
+   "expected": "log https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-second-question-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log https://example.invalid/?a=1?token=TAILB then more",
+   "expected": "log https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-second-question-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log https://example.invalid/?a=1?token=TAILB then more",
+   "expected": "log https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-second-question-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log https://example.invalid/?a=1?token=TAILB then more",
+   "expected": "log https://example.invalid/?a=1?token=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-second-question-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log https://example.invalid/?a=1?token=TAILB then more"
+   },
+   "expected": {
+    "message": "log https://example.invalid/?a=1?token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-second-question-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log https://example.invalid/?a=1?token=TAILB then more"
+   },
+   "expected": {
+    "message": "log https://example.invalid/?a=1?token=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-second-question-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log https://example.invalid/?a=1?token=TAILB then more"
+   ],
+   "expected": [
+    "log https://example.invalid/?a=1?token=<redacted>"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log password=<redacted>,TAILC then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log password=<redacted>,TAILC then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log password=<redacted>,TAILC then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log password=<redacted>,TAILC then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password=<redacted>,TAILC then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log password=<redacted>,TAILC then more"
+   },
+   "expected": {
+    "message": "log password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password=<redacted>,TAILC then more"
+   },
+   "expected": {
+    "message": "log password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-placeholder-continues-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log password=<redacted>,TAILC then more"
+   ],
+   "expected": [
+    "log password=<redacted>"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more",
+   "expected": "log password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more"
+   },
+   "expected": {
+    "message": "log password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log password=Bearer EXAMPLEVALUEONLY,TAILD then more"
+   },
+   "expected": {
+    "message": "log password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-shape-continues-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log password=Bearer EXAMPLEVALUEONLY,TAILD then more"
+   ],
+   "expected": [
+    "log password=<redacted>"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log #a?token=TAILE,password=TAILF then more",
+   "expected": "log #a?token=<redacted>,password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log #a?token=TAILE,password=TAILF then more",
+   "expected": "log #a?token=<redacted>,password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log #a?token=TAILE,password=TAILF then more",
+   "expected": "log #a?token=<redacted>,password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log #a?token=TAILE,password=TAILF then more",
+   "expected": "log #a?token=<redacted>,password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log #a?token=TAILE,password=TAILF then more",
+   "expected": "log #a?token=<redacted>,password=<redacted>"
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log #a?token=TAILE,password=TAILF then more"
+   },
+   "expected": {
+    "message": "log #a?token=<redacted>,password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log #a?token=TAILE,password=TAILF then more"
+   },
+   "expected": {
+    "message": "log #a?token=<redacted>,password=<redacted>"
+   }
+  },
+  {
+   "name": "pair-rule-prose-name-after-question-in-word-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log #a?token=TAILE,password=TAILF then more"
+   ],
+   "expected": [
+    "log #a?token=<redacted>,password=<redacted>"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": \"TAILG\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": \"TAILG\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": \"TAILG\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": \"TAILG\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": \"TAILG\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": \"TAILG\" then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": \"TAILG\" then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-string-then-text-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": \"TAILG\" then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\" then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": \"TAIL\\\"H\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": \"TAIL\\\"H\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": \"TAIL\\\"H\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": \"TAIL\\\"H\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": \"TAIL\\\"H\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": \"TAIL\\\"H\" then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": \"TAIL\\\"H\" then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-escaped-quote-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": \"TAIL\\\"H\" then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\" then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": \"TAIL&quot;I\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": \"TAIL&quot;I\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": \"TAIL&quot;I\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": \"TAIL&quot;I\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": \"TAIL&quot;I\" then more",
+   "expected": "log \"password\": \"<redacted>\" then more"
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": \"TAIL&quot;I\" then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": \"TAIL&quot;I\" then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\" then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-inside-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": \"TAIL&quot;I\" then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\" then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": &quot;TAILJ&quot; then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": &quot;TAILJ&quot; then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": &quot;TAILJ&quot; then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": &quot;TAILJ&quot; then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": &quot;TAILJ&quot; then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": &quot;TAILJ&quot; then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": &quot;TAILJ&quot; then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-entity-quote-delimited-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": &quot;TAILJ&quot; then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": TAILK then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": TAILK then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": TAILK then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": TAILK then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": TAILK then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": TAILK then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": TAILK then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-word-then-words-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": TAILK then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": 12345, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": 12345, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": 12345, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": 12345, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": 12345, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-comma-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": 12345, then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\", then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": 12345} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": 12345} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": 12345} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": 12345} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": 12345} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-brace-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": 12345} then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"} then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": 12345] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": 12345] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": 12345] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": 12345] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": 12345] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-bracket-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": 12345] then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"] then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": 12345",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": 12345",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": 12345",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": 12345",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": 12345",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-end-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": 12345"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": 12345 TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": 12345 TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": 12345 TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": 12345 TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": 12345 TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345 TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": 12345 TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-number-word-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": 12345 TAILL then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": true, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": true, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": true, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": true, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": true, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-comma-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": true, then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\", then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": true} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": true} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": true} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": true} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": true} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-brace-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": true} then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"} then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": true] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": true] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": true] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": true] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": true] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-bracket-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": true] then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"] then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": true",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": true",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": true",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": true",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": true",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-end-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": true"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": true TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": true TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": true TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": true TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": true TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": true TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-true-word-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": true TAILL then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": false, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": false, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": false, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": false, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": false, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-comma-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": false, then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\", then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": false} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": false} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": false} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": false} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": false} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-brace-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": false} then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"} then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": false] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": false] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": false] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": false] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": false] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-bracket-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": false] then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"] then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": false",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": false",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": false",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": false",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": false",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-end-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": false"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": false TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": false TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": false TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": false TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": false TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": false TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-false-word-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": false TAILL then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": null, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": null, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": null, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": null, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": null, then more",
+   "expected": "log \"password\": \"<redacted>\", then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null, then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\", then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-comma-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": null, then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\", then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": null} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": null} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": null} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": null} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": null} then more",
+   "expected": "log \"password\": \"<redacted>\"} then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null} then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"} then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-brace-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": null} then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"} then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": null] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": null] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": null] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": null] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": null] then more",
+   "expected": "log \"password\": \"<redacted>\"] then more"
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null] then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\"] then more"
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-bracket-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": null] then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\"] then more"
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": null",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": null",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": null",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": null",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": null",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-end-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": null"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": "log \"password\": null TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-attribute_keys",
+   "site": "attribute_keys",
+   "path": "exception.message",
+   "value": "log \"password\": null TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-flattened_paths",
+   "site": "flattened_paths",
+   "path": "output.message",
+   "value": "log \"password\": null TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-indexed_paths",
+   "site": "indexed_paths",
+   "path": "output.messages[0]",
+   "value": "log \"password\": null TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-free_text_urls",
+   "site": "free_text_urls",
+   "path": "",
+   "value": "log \"password\": null TAILL then more",
+   "expected": "log \"password\": \"<redacted>\""
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-object-request_body",
+   "site": "request_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-object-response_body",
+   "site": "response_body",
+   "path": "",
+   "value": {
+    "message": "log \"password\": null TAILL then more"
+   },
+   "expected": {
+    "message": "log \"password\": \"<redacted>\""
+   }
+  },
+  {
+   "name": "pair-rule-prose-json-null-word-array",
+   "site": "response_body",
+   "path": "",
+   "value": [
+    "log \"password\": null TAILL then more"
+   ],
+   "expected": [
+    "log \"password\": \"<redacted>\""
+   ]
+  }
+ ]
+}

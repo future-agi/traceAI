@@ -183,15 +183,26 @@ test("I1-NUMERIC-SNAPSHOT-ALL-SURFACES-WITH-SAFE-COUNTERS", () => {
   expect(named.attributes.safe).toBe("ordinary text");
 });
 
+// Shared privacy spec v4: a whole URL value keeps its other parameters (scrubAttribute, framed values); in prose the pair
+// rule reads the URL text and a credential pair's value runs to its true end (scrubText, free text).
+function stableModes(raw: string, prose: string, framed: string): void {
+  for (const run of [wire.scrubText, freeText]) {
+    expect(run(raw)).toBe(prose);
+    expect(run(prose)).toBe(prose);
+  }
+  expect(wire.scrubAttribute(raw)).toBe(framed);
+  expect(wire.scrubAttribute(framed)).toBe(framed);
+}
 test("I1-URL-OWNERSHIP-NONFIXTURE-AUTHORITIES", () => {
   const suffix = "&safe=%2f+YES&dup=one&dup=two#anchor?token=ordinary";
   for (const host of ["abcdef.invalid", "longordinary.example", "cdn.test"]) for (const scheme of ["http", "https"]) {
     const url = `${scheme}://${host}/path?access_token=private-value${suffix}`;
-    const expected = `${scheme}://${host}/path?access_token=<redacted>${suffix}`;
+    const expected = `${scheme}://${host}/path?access_token=<redacted>&safe=%2f+YES&dup=one&dup=two#anchor?token=<redacted>`;
+    const prose = `${scheme}://${host}/path?access_token=<redacted>`;
     expect(url).toContain("private-value");
-    stableText(url, expected);
-    stableText(`see "${url}" after`, `see "${expected}" after`);
-    stableText(`${url} then ${url} retry`, `${expected} then ${expected} retry`);
+    stableModes(url, prose, expected);
+    stableText(`see "${url}" after`, `see "${prose}`);
+    stableText(`${url} then ${url} retry`, `${prose} ${prose}`);
     expect(wire.scrubValue([url, "ordinary text"])).toEqual([expected, "ordinary text"]);
     const raw = JSON.stringify({ url, arguments: JSON.stringify({ url }) });
     const clean = wire.scrubAttribute(raw);
@@ -205,29 +216,33 @@ test("I1-URL-OWNERSHIP-NONFIXTURE-AUTHORITIES", () => {
 test("I1-URL-COMPONENT-PRIVACY-WITHOUT-NORMALIZATION", () => {
   const suffix = "&model=author's-model&safe=%2f+YES&dup=1&dup=2&empty=#fragment?token=ordinary";
   const url = "https://user:pass@abcdef.invalid/p?%74oken=secret-value" + suffix;
-  const expected = "https://<redacted>@abcdef.invalid/p?%74oken=<redacted>" + suffix;
+  // Shared privacy spec v4: a credential pair after a second '?' in the fragment is replaced; in prose a credential pair's
+  // value runs to its true end, and %3D is read as a separator.
+  const expected = "https://<redacted>@abcdef.invalid/p?%74oken=<redacted>" + suffix.replace("?token=ordinary", "?token=<redacted>");
   expect(url).toContain("secret-value"); stableText(url, expected);
-  stableText(`see '${url}' after`, `see '${expected}' after`);
+  stableText(`see '${url}' after`, `see '${expected}`);
   stableText("see /path?%74oken=private-value&safe=yes next", "see /path?%74oken=<redacted>&safe=yes next");
-  stableText("see ?token=private-value&safe=yes next", "see ?token=<redacted>&safe=yes next");
-  stableText("see #fragment?token=ordinary next", "see #fragment?token=ordinary next");
+  stableText("see ?token=private-value&safe=yes next", "see ?token=<redacted>");
+  stableText("see #fragment?token=ordinary next", "see #fragment?token=<redacted>");
   stableText("https://abcdef.invalid/?%invalid=safe&model=%252Fplain", "https://abcdef.invalid/?%invalid=safe&model=%252Fplain");
-  stableText("https://abcdef.invalid/?next=https%3A%2F%2Fnested.invalid%2F%3Ftoken%3Dordinary", "https://abcdef.invalid/?next=https%3A%2F%2Fnested.invalid%2F%3Ftoken%3Dordinary");
+  stableText("https://abcdef.invalid/?next=https%3A%2F%2Fnested.invalid%2F%3Ftoken%3Dordinary", "https://abcdef.invalid/?next=https%3A%2F%2Fnested.invalid%2F%3Ftoken%3D<redacted>");
   const secret = "path-private-value";
   stableText(`https://abcdef.invalid/${secret}#anchor-${secret}`, "https://abcdef.invalid/<redacted>#anchor-<redacted>", [secret]);
-  stableText(`see #fragment?token=${secret} next`, "see #fragment?token=<redacted> next", [secret]);
+  stableText(`see #fragment?token=${secret} next`, "see #fragment?token=<redacted>", [secret]);
   const shaped = "sk-" + "SYNTHETIC".repeat(4);
   stableText(`https://abcdef.invalid/p#${shaped}`, "https://abcdef.invalid/p#<redacted>");
-  stableText(`token=https://abcdef.invalid/#fragment?token=${secret}`, 'token="<redacted>"');
-  stableText('password={"city":"Oslo"} after', 'password="<redacted>"');
-  stableText('prefix token="https://abcdef.invalid/p" suffix', 'prefix token="<redacted>" suffix');
+  // The placeholder is written bare, and the value runs to its true end (shared privacy spec v4).
+  stableText(`token=https://abcdef.invalid/#fragment?token=${secret}`, "token=<redacted>");
+  stableText('password={"city":"Oslo"} after', "password=<redacted>");
+  stableText('prefix token="https://abcdef.invalid/p" suffix', "prefix token=<redacted>");
 });
 
 test.each(["iVBORw0KGgoAAAANSUhEUg==", "/9j/4AAQ", "_9j_4AAQ", "//4AAAAA"])
 ("I1-URL-AND-BARE-MEDIA-IN-THE-SAME-DIAGNOSTIC %s", payload => {
   const url = "https://abcdef.invalid/?token=private-value&safe=yes";
   const raw = `Cannot decode ${payload} at ${url} please retry ordinary-id-123 __REDACTED__ data:audio/wav;base64,AQIDBA== end`;
-  const expected = `Cannot decode <omitted: ${payload.length} base64 chars> at https://abcdef.invalid/?token=<redacted>&safe=yes please retry ordinary-id-123 __REDACTED__ <omitted: 8 base64 chars> end`;
+  // Shared privacy spec v4: in prose the URL's credential pair takes the rest of its value, to the end of the text.
+  const expected = `Cannot decode <omitted: ${payload.length} base64 chars> at https://abcdef.invalid/?token=<redacted>`;
   expect(raw).toContain(payload); expect(raw).toContain("AQIDBA==");
   stableText(raw, expected);
   expect(wire.scrubValue(raw)).toBe(expected);

@@ -50,7 +50,9 @@ public class ValueShapeBoundedTimeTests(ITestOutputHelper output)
             { "signature ends in underscore",$"{Header}.{Payload}.{underSig}_",Redacted },
             { "preceded by dash",$"x-{jwt}","x-"+Redacted },
             { "preceded by underscore-free word dash",$"access-token-{Header}.{Payload}.{dashSig}","access-token-"+Redacted },
-            { "in surrounding text",$"token: {jwt}, expires soon.",$"token: {Redacted}, expires soon." },
+            { "in surrounding text",$"note: {jwt}, expires soon.",$"note: {Redacted}, expires soon." },
+            // After a credential name the pair rule then takes the value to its true end (catalog version 4).
+            { "in surrounding text after a credential name",$"token: {jwt}, expires soon.",$"token: {Redacted}" },
             { "in surrounding text, dash-ending signature",$"got {Header}.{Payload}.{dashSig} here",$"got {Redacted} here" },
             { "quoted in JSON-ish text",$"{{\"id_token\":\"{Header}.{Payload}.{dashSig}\"}}","{\"id_token\":\""+Redacted+"\"}" },
         };
@@ -82,8 +84,9 @@ public class ValueShapeBoundedTimeTests(ITestOutputHelper output)
         Assert.DoesNotContain("eyJ",actual);
     }
 
-    // ---- Differential: the jwt shape alone against the plain unbounded reference regex (backtracking, no timeout). ----
-    private static readonly Regex Reference=new(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",RegexOptions.CultureInvariant);
+    // ---- Differential: the jwt shape alone against the plain unbounded catalog regex (backtracking, no timeout), its \b read as the
+    // spec's reference reads it (Python's word characters, PythonWord), not as .NET's \b. ----
+    private static readonly Regex Reference=new(PythonWord.Boundary+@"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",RegexOptions.CultureInvariant);
     private static void SameAsReference(string input,string label)
     {
         string expected=Reference.Replace(input,"<redacted>"), actual=JwtScan.Replace(input);
@@ -133,16 +136,90 @@ public class ValueShapeBoundedTimeTests(ITestOutputHelper output)
         }
         output.WriteLine($"mixed-run differential: {cases} rounds");
     }
-    [Fact] public void JwtShapeMatchesUnboundedReferenceNextToNonAsciiLetters()
+    // Each expected text is the output of the spec's reference (Reference.scrub at free_text_urls) for the same input: a combining
+    // mark, a joiner or connector punctuation before the token is no word character there, so the token starts at a boundary.
+    private const string Jwt=Header+"."+Payload+".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    public static TheoryData<string,string> JwtNextToNonAsciiCharacters=>new()
     {
-        foreach(var lead in new[]{ "\u00e9","\u00c9","\u0301","\u200c","\u200d","\u4e2d","\u0663","\u203f","\ud83d\ude00","\u00a0","\u2013","\u00b2" })
-            foreach(var tail in new[]{ "","\u00e9" })
-            {
-                string jwt=$"{Header}.{Payload}.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-                SameAsReference(lead+jwt+tail,"lead U+"+((int)lead[0]).ToString("X4"));
-                SameAsReference("a"+lead+jwt+tail+" "+lead+jwt,"twice U+"+((int)lead[0]).ToString("X4"));
-                SameAsReference(lead+"eyJ"+jwt,"lead U+"+((int)lead[0]).ToString("X4"));
-            }
+        { "\u00E9"+Jwt, "\u00E9"+Jwt },
+        { "a\u00E9"+Jwt+" \u00E9"+Jwt, "a\u00E9"+Jwt+" \u00E9"+Jwt },
+        { "\u00E9eyJ"+Jwt, "\u00E9eyJ"+Jwt },
+        { "\u00E9"+Jwt+"\u00E9", "\u00E9"+Jwt+"\u00E9" },
+        { "a\u00E9"+Jwt+"\u00E9 \u00E9"+Jwt, "a\u00E9"+Jwt+"\u00E9 \u00E9"+Jwt },
+        { "\u00E9eyJ"+Jwt, "\u00E9eyJ"+Jwt },
+        { "\u00C9"+Jwt, "\u00C9"+Jwt },
+        { "a\u00C9"+Jwt+" \u00C9"+Jwt, "a\u00C9"+Jwt+" \u00C9"+Jwt },
+        { "\u00C9eyJ"+Jwt, "\u00C9eyJ"+Jwt },
+        { "\u00C9"+Jwt+"\u00E9", "\u00C9"+Jwt+"\u00E9" },
+        { "a\u00C9"+Jwt+"\u00E9 \u00C9"+Jwt, "a\u00C9"+Jwt+"\u00E9 \u00C9"+Jwt },
+        { "\u00C9eyJ"+Jwt, "\u00C9eyJ"+Jwt },
+        { "\u0301"+Jwt, "\u0301<redacted>" },
+        { "a\u0301"+Jwt+" \u0301"+Jwt, "a\u0301<redacted> \u0301<redacted>" },
+        { "\u0301eyJ"+Jwt, "\u0301<redacted>" },
+        { "\u0301"+Jwt+"\u00E9", "\u0301<redacted>\u00E9" },
+        { "a\u0301"+Jwt+"\u00E9 \u0301"+Jwt, "a\u0301<redacted>\u00E9 \u0301<redacted>" },
+        { "\u0301eyJ"+Jwt, "\u0301<redacted>" },
+        { "\u200C"+Jwt, "\u200C<redacted>" },
+        { "a\u200C"+Jwt+" \u200C"+Jwt, "a\u200C<redacted> \u200C<redacted>" },
+        { "\u200CeyJ"+Jwt, "\u200C<redacted>" },
+        { "\u200C"+Jwt+"\u00E9", "\u200C<redacted>\u00E9" },
+        { "a\u200C"+Jwt+"\u00E9 \u200C"+Jwt, "a\u200C<redacted>\u00E9 \u200C<redacted>" },
+        { "\u200CeyJ"+Jwt, "\u200C<redacted>" },
+        { "\u200D"+Jwt, "\u200D<redacted>" },
+        { "a\u200D"+Jwt+" \u200D"+Jwt, "a\u200D<redacted> \u200D<redacted>" },
+        { "\u200DeyJ"+Jwt, "\u200D<redacted>" },
+        { "\u200D"+Jwt+"\u00E9", "\u200D<redacted>\u00E9" },
+        { "a\u200D"+Jwt+"\u00E9 \u200D"+Jwt, "a\u200D<redacted>\u00E9 \u200D<redacted>" },
+        { "\u200DeyJ"+Jwt, "\u200D<redacted>" },
+        { "\u4E2D"+Jwt, "\u4E2D"+Jwt },
+        { "a\u4E2D"+Jwt+" \u4E2D"+Jwt, "a\u4E2D"+Jwt+" \u4E2D"+Jwt },
+        { "\u4E2DeyJ"+Jwt, "\u4E2DeyJ"+Jwt },
+        { "\u4E2D"+Jwt+"\u00E9", "\u4E2D"+Jwt+"\u00E9" },
+        { "a\u4E2D"+Jwt+"\u00E9 \u4E2D"+Jwt, "a\u4E2D"+Jwt+"\u00E9 \u4E2D"+Jwt },
+        { "\u4E2DeyJ"+Jwt, "\u4E2DeyJ"+Jwt },
+        { "\u0663"+Jwt, "\u0663"+Jwt },
+        { "a\u0663"+Jwt+" \u0663"+Jwt, "a\u0663"+Jwt+" \u0663"+Jwt },
+        { "\u0663eyJ"+Jwt, "\u0663eyJ"+Jwt },
+        { "\u0663"+Jwt+"\u00E9", "\u0663"+Jwt+"\u00E9" },
+        { "a\u0663"+Jwt+"\u00E9 \u0663"+Jwt, "a\u0663"+Jwt+"\u00E9 \u0663"+Jwt },
+        { "\u0663eyJ"+Jwt, "\u0663eyJ"+Jwt },
+        { "\u203F"+Jwt, "\u203F<redacted>" },
+        { "a\u203F"+Jwt+" \u203F"+Jwt, "a\u203F<redacted> \u203F<redacted>" },
+        { "\u203FeyJ"+Jwt, "\u203F<redacted>" },
+        { "\u203F"+Jwt+"\u00E9", "\u203F<redacted>\u00E9" },
+        { "a\u203F"+Jwt+"\u00E9 \u203F"+Jwt, "a\u203F<redacted>\u00E9 \u203F<redacted>" },
+        { "\u203FeyJ"+Jwt, "\u203F<redacted>" },
+        { "\uD83D\uDE00"+Jwt, "\uD83D\uDE00<redacted>" },
+        { "a\uD83D\uDE00"+Jwt+" \uD83D\uDE00"+Jwt, "a\uD83D\uDE00<redacted> \uD83D\uDE00<redacted>" },
+        { "\uD83D\uDE00eyJ"+Jwt, "\uD83D\uDE00<redacted>" },
+        { "\uD83D\uDE00"+Jwt+"\u00E9", "\uD83D\uDE00<redacted>\u00E9" },
+        { "a\uD83D\uDE00"+Jwt+"\u00E9 \uD83D\uDE00"+Jwt, "a\uD83D\uDE00<redacted>\u00E9 \uD83D\uDE00<redacted>" },
+        { "\uD83D\uDE00eyJ"+Jwt, "\uD83D\uDE00<redacted>" },
+        { "\u00A0"+Jwt, "\u00A0<redacted>" },
+        { "a\u00A0"+Jwt+" \u00A0"+Jwt, "a\u00A0<redacted> \u00A0<redacted>" },
+        { "\u00A0eyJ"+Jwt, "\u00A0<redacted>" },
+        { "\u00A0"+Jwt+"\u00E9", "\u00A0<redacted>\u00E9" },
+        { "a\u00A0"+Jwt+"\u00E9 \u00A0"+Jwt, "a\u00A0<redacted>\u00E9 \u00A0<redacted>" },
+        { "\u00A0eyJ"+Jwt, "\u00A0<redacted>" },
+        { "\u2013"+Jwt, "\u2013<redacted>" },
+        { "a\u2013"+Jwt+" \u2013"+Jwt, "a\u2013<redacted> \u2013<redacted>" },
+        { "\u2013eyJ"+Jwt, "\u2013<redacted>" },
+        { "\u2013"+Jwt+"\u00E9", "\u2013<redacted>\u00E9" },
+        { "a\u2013"+Jwt+"\u00E9 \u2013"+Jwt, "a\u2013<redacted>\u00E9 \u2013<redacted>" },
+        { "\u2013eyJ"+Jwt, "\u2013<redacted>" },
+        { "\u00B2"+Jwt, "\u00B2"+Jwt },
+        { "a\u00B2"+Jwt+" \u00B2"+Jwt, "a\u00B2"+Jwt+" \u00B2"+Jwt },
+        { "\u00B2eyJ"+Jwt, "\u00B2eyJ"+Jwt },
+        { "\u00B2"+Jwt+"\u00E9", "\u00B2"+Jwt+"\u00E9" },
+        { "a\u00B2"+Jwt+"\u00E9 \u00B2"+Jwt, "a\u00B2"+Jwt+"\u00E9 \u00B2"+Jwt },
+        { "\u00B2eyJ"+Jwt, "\u00B2eyJ"+Jwt },
+    };
+    [Theory, MemberData(nameof(JwtNextToNonAsciiCharacters))]
+    public void JwtShapeMatchesTheSpecReferenceNextToNonAsciiCharacters(string input,string expected)
+    {
+        Assert.Equal(expected,JwtScan.Replace(input));
+        Assert.Equal(expected,WirePrivacy.ScrubString(input,null,"",null,false));
+        SameAsReference(input,"next to non-ASCII");
     }
     // 4 MiB (the 4 * 1024 * 1024 character text budget): the backtracking reference finishes this input in the test.
     [Fact] public void JwtShapeMatchesUnboundedReferenceOnOneLargeInput()

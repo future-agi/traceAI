@@ -106,11 +106,14 @@ describe("large JWTs (header > 1024 or payload > 8192 characters) are replaced w
 
 // ---- Differential: scrubText against the plain unbounded reference regex. ----
 describe("differential: jwt value shape equals the unbounded reference regex", () => {
-  const R = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+  // Python 3 re reads \b with Unicode \w (a letter, a number or '_'); the oracle spells that boundary out.
+  const R = /(?<![\p{L}\p{N}_])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/gu;
+  // A catalog regex read as Python reads it: a leading \b is a Unicode lookbehind, a trailing one a lookahead.
+  const python = (item: any) => new RegExp(item.regex.replace(/^\\b/, "(?<![\\p{L}\\p{N}_])").replace(/\\b$/, "(?![\\p{L}\\p{N}_])"), item.flags + "gu");
   const PIECES = ["eyJ", "eyJaaaaaaaa", "aaaaaaaa", ".", "-", "_", " ", "x", "é", "eyJ-", "-eyJ", "..", "a.", ".a"];
   const catalog = JSON.parse(readFileSync(resolve(__dirname, "../privacy.json"), "utf8"));
   const entry = catalog.credentials.value_shapes.find((item: any) => item.id.includes("jwt"));
-  const catalogShape = new RegExp(entry.regex, entry.flags + "g");
+  const catalogShape = python(entry);
   let seed = 20261121;
   const rnd = (n: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return Math.floor((seed / 4294967296) * n); };
   let hits = 0, compared = 0, rounds = 0;
@@ -166,13 +169,13 @@ describe("differential: jwt value shape equals the unbounded reference regex", (
     walk("", 0);
     expect(rounds - before).toBeGreaterThan(5000);
   });
-  it("non-ASCII letters adjacent to eyJ (JS \\b is ASCII-only, so they do not block a match)", () => {
+  it("non-ASCII letters before eyJ are word characters and block a match, as in Python", () => {
     const token = "eyJaaaaaaaa.bbbbbbbb.cccccccc";
     for (const s of ["é" + token, "á" + token, token + "é", "é" + token + "é", "aeyJaaaaaaaa.bbbbbbbb.cccccccc", "_" + token, "-" + token]) {
       check(s);
       expect(scrubText(s)).toBe(s.replace(R, MARKER));
     }
-    expect(scrubText("é" + token)).toBe("é" + MARKER);
+    expect(scrubText("é" + token)).toBe("é" + token);
   });
   it("one large input (2080000 characters) matches the backtracking reference", () => {
     // Many tokens, near-misses and long runs; the reference finishes this size because it has no 'eyJ-' x N pathology.
@@ -192,14 +195,16 @@ describe("differential: jwt value shape equals the unbounded reference regex", (
     // Random runs can contain 'sk-...' or 'AKIA...' and the sk-/aws shapes run before jwt, so the reference
     // applies every catalog shape in order, with the jwt entry replaced by the unbounded R.
     const everyShape = (text: string, jwt: RegExp) => catalog.credentials.value_shapes.reduce(
-      (acc: string, item: any) => acc.replace(item.id.includes("jwt") ? jwt : new RegExp(item.regex, item.flags + "g"), MARKER), text);
+      (acc: string, item: any) => acc.replace(item.id.includes("jwt") ? jwt : python(item), MARKER), text);
     const expected = everyShape(s, R);
     const start = Date.now();
     const actual = scrubText(s);
     const elapsed = Date.now() - start;
     process.stderr.write(`LARGE differential: ${s.length} chars, scrubText ${elapsed} ms\n`);
     expect(everyShape(s, catalogShape)).toBe(expected);
-    if (!actual.includes("<omitted:")) expect(actual).toBe(expected);
+    // The credential pair rule (shared privacy spec v4) runs after the value shapes: a dash word whose name runs past its
+    // window is undecided and its value word is replaced. Scrubbing the reference output applies that rule to it.
+    if (!actual.includes("<omitted:")) expect(actual).toBe(scrubText(expected));
     expect(actual).not.toBe(s);
     expect(actual.includes("<omitted:")).toBe(false); // so the comparison above really ran
     expect(elapsed).toBeLessThan(2000);
