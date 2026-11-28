@@ -1,4 +1,17 @@
+## [0.2.2](https://github.com/future-agi/traceAI/compare/traceai-livekit-v0.2.1...traceai-livekit-v0.2.2) (2026-11-28)
 
+
+### Features
+
+* **livekit:** record committed conversation turns on the call root ([7181caa](https://github.com/future-agi/traceAI/commit/7181caa6d5a0bfce9f4d817642e51460218c80a8))
+* **livekit:** record committed conversation turns on the call root ([4f8e29a](https://github.com/future-agi/traceAI/commit/4f8e29aa1a44049dc89214490e2b23392ccbc294))
+
+
+### Bug Fixes
+
+* **livekit:** honor every applicable hide policy and the span value limit ([f78f2a5](https://github.com/future-agi/traceAI/commit/f78f2a564688a3e68bf107e0bf0b1de3cabbe7f0))
+* **livekit:** import the transcript policy from its module ([4f04ea8](https://github.com/future-agi/traceAI/commit/4f04ea867338aaadf0288dadd171bd383d8f1f67))
+* **livekit:** read the value-length limit from the span's attributes ([307bbdb](https://github.com/future-agi/traceAI/commit/307bbdb88155e2dfe012d7b4adb45ec1f8a7dc68))
 
 ## [0.2.1] - 2026-11-09
 

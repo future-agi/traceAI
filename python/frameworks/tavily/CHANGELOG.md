@@ -2,6 +2,13 @@
 
 All notable changes to `traceAI-tavily` will be documented here.
 
+## [0.1.2](https://github.com/future-agi/traceAI/compare/traceai-tavily-v0.1.1...traceai-tavily-v0.1.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **python:** send key-carrying exports over TLS or to a chosen collector (fi-instrumentation-otel 1.5.2) ([04d29e4](https://github.com/future-agi/traceAI/commit/04d29e43ea8c26cf12dead94e8950c35a64f8237))
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-tavily-v0.1.0...traceai-tavily-v0.1.1) (2026-11-05)
 
 

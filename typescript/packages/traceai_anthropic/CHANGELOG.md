@@ -7,6 +7,13 @@
 - `init()` now returns an array of module definitions (the base SDK plus the two hosted-client packages) instead of one definition. `init()` is a protected method of the instrumentation base class; a subclass that overrides it or reads its result needs to accept an array.
 - Raw input and raw output are not recorded while any hide setting is on, and an input hide setting records only response-side fields as output.
 
+## [0.1.7](https://github.com/future-agi/traceAI/compare/npm-traceai-anthropic-v0.1.6...npm-traceai-anthropic-v0.1.7) (2026-11-28)
+
+
+### Features
+
+* **anthropic:** trace the Bedrock and Vertex hosted Anthropic clients ([b548f94](https://github.com/future-agi/traceAI/commit/b548f9429ad902b5f15a2b487abcde3673852ade))
+
 ## [0.1.6] - 2026-11-12
 
 ### Fixed

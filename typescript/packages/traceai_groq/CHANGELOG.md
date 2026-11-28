@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/future-agi/traceAI/compare/npm-traceai-groq-v0.1.1...npm-traceai-groq-v0.1.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **typescript:** hide settings cover raw payloads, key families and whole-response output ([534a268](https://github.com/future-agi/traceAI/commit/534a2689cb4e61dfc25f5ae98205ffa22c00294a))
+
 ## [0.1.2] - pending release
 
 ### Fixed
