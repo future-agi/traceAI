@@ -1,0 +1,994 @@
+{
+  "description": "Synthetic trusted observations for explicit session binding, not client assertions or browser race proof. Existing security-table controls remain independently required. A cookie request has no Path metadata; v2-only issuance and row provenance are a cutover requirement. wire_version is a test observation of issuance under the v2 gate, not a required persistence column or timestamp-based selector.",
+  "base": {
+    "now": "2030-01-01T00:00:00Z",
+    "origin": "https://example.invalid",
+    "request": {
+      "bearer_authenticated": true,
+      "origin": "https://example.invalid",
+      "user_id": "0000000f-0000-0000-0000-000000000001",
+      "application_session_id": "00000010-0000-0000-0000-000000000001",
+      "organization_id": "00000001-0000-0000-0000-000000000001",
+      "headers": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001"
+      }
+    },
+    "session": {
+      "id": "00000011-0000-0000-0000-000000000001",
+      "user_id": "0000000f-0000-0000-0000-000000000001",
+      "application_session_id": "00000010-0000-0000-0000-000000000001",
+      "organization_id": "00000001-0000-0000-0000-000000000001",
+      "expires_at": "2030-01-01T00:15:00Z",
+      "revoked": false,
+      "wire_version": 2,
+      "credential_digest": "25c9d2d1566bcef6d9ca65acb46067723936cf5cb4f7e63fab15cb182e3004ef"
+    },
+    "access_rows": {
+      "00000010-0000-0000-0000-000000000001": {
+        "user_id": "0000000f-0000-0000-0000-000000000001",
+        "active": true
+      },
+      "ffffffff-ffff-ffff-ffff-ffffffffffff": {
+        "user_id": "0000000f-0000-0000-0000-000000000001",
+        "active": true
+      }
+    },
+    "gateway": {
+      "path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
+      "cookies": [
+        {
+          "name": "fi_media_session_v2",
+          "value": "synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "grant": {
+      "audience": "fi-attachment-playback",
+      "viewer_id": "0000000f-0000-0000-0000-000000000001",
+      "application_session_id": "00000010-0000-0000-0000-000000000001",
+      "media_session_id": "00000011-0000-0000-0000-000000000001",
+      "scope": {
+        "organization_id": "00000001-0000-0000-0000-000000000001",
+        "workspace_id": "00000002-0000-0000-0000-000000000001",
+        "project_id": "00000003-0000-0000-0000-000000000001"
+      },
+      "occurrence_id": "00000007-0000-0000-0000-000000000001",
+      "parent": {
+        "trace_id": "01234567-89ab-cdef-0123-456789abcdef",
+        "span_id": "0123456789abcdef"
+      },
+      "representation": "playable",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "policy_version": "policy_v1",
+      "deletion_generation": 0,
+      "expires_at": "2030-01-01T00:10:00Z"
+    },
+    "grant_token": "synthetic_grant",
+    "resolve_response": {
+      "items": [
+        {
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "status": "ready",
+          "gateway_path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
+          "expires_at": "2030-01-01T00:10:00Z"
+        },
+        {
+          "occurrence_id": "0000000e-0000-0000-0000-000000000001",
+          "status": "not_found"
+        }
+      ]
+    },
+    "controls": {
+      "action": "resolve",
+      "scope_matches": true,
+      "parent_matches": true,
+      "writer_matches": true,
+      "nonce_matches": true,
+      "credential_eligible": true,
+      "operation_allowed": true,
+      "policy_current": true,
+      "generation_current": true,
+      "not_expired": true,
+      "private_storage_verified": true,
+      "immutable_version_verified": true,
+      "serving_identity_server_owned": true,
+      "bytes_ready": true,
+      "binding_observed": true,
+      "source_retained": true,
+      "retention_provenance_known": true,
+      "viewer_authorized": true,
+      "session_matches": true,
+      "representation_matches": true,
+      "csrf_origin_valid": true,
+      "source_occurrence_authorized": true,
+      "target_authorized": true,
+      "reservation_available": true,
+      "idempotency_matches": true,
+      "decoder_isolated": true,
+      "source_envelope_private": true,
+      "direct_upload_qualified": true,
+      "live_authorization_checked": true
+    },
+    "exchange_response": {
+      "status": 204,
+      "body": "",
+      "safe_headers": {
+        "X-Attachment-Media-Session": "00000011-0000-0000-0000-000000000001",
+        "X-Attachment-Media-Expires-At": "2030-01-01T00:15:00Z"
+      },
+      "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=900; Secure; HttpOnly; SameSite=Strict",
+      "cache_control": "private, no-store"
+    }
+  },
+  "cases": [
+    {
+      "id": "resolve-authorized",
+      "stage": "resolve",
+      "overrides": {},
+      "valid": true
+    },
+    {
+      "id": "resolve-session-revoked",
+      "stage": "resolve",
+      "overrides": {
+        "session": {
+          "revoked": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-session-expired",
+      "stage": "resolve",
+      "overrides": {
+        "session": {
+          "expires_at": "2030-01-01T00:00:00Z"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-session-legacy-row",
+      "stage": "resolve",
+      "overrides": {
+        "session": {
+          "wire_version": 1
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-original-access-revoked",
+      "stage": "resolve",
+      "overrides": {
+        "access_rows": {
+          "00000010-0000-0000-0000-000000000001": {
+            "active": false
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-original-access-user-mismatch",
+      "stage": "resolve",
+      "overrides": {
+        "access_rows": {
+          "00000010-0000-0000-0000-000000000001": {
+            "user_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-missing-original-access-row",
+      "stage": "resolve",
+      "overrides": {
+        "access_rows": {
+          "00000010-0000-0000-0000-000000000001": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-post-refresh-logout-is-not-family-revocation",
+      "stage": "resolve",
+      "overrides": {
+        "access_rows": {
+          "ffffffff-ffff-ffff-ffff-ffffffffffff": {
+            "active": false
+          }
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "resolve-occurrence-parent_matches",
+      "stage": "resolve",
+      "overrides": {
+        "controls": {
+          "parent_matches": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-occurrence-scope_matches",
+      "stage": "resolve",
+      "overrides": {
+        "controls": {
+          "scope_matches": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-occurrence-viewer_authorized",
+      "stage": "resolve",
+      "overrides": {
+        "controls": {
+          "viewer_authorized": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-occurrence-source_retained",
+      "stage": "resolve",
+      "overrides": {
+        "controls": {
+          "source_retained": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-occurrence-generation_current",
+      "stage": "resolve",
+      "overrides": {
+        "controls": {
+          "generation_current": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-occurrence-live_authorization_checked",
+      "stage": "resolve",
+      "overrides": {
+        "controls": {
+          "live_authorization_checked": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-authorized",
+      "stage": "gateway",
+      "overrides": {},
+      "valid": true
+    },
+    {
+      "id": "gateway-session-revoked",
+      "stage": "gateway",
+      "overrides": {
+        "session": {
+          "revoked": true
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-session-expired",
+      "stage": "gateway",
+      "overrides": {
+        "session": {
+          "expires_at": "2030-01-01T00:00:00Z"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-session-legacy-row",
+      "stage": "gateway",
+      "overrides": {
+        "session": {
+          "wire_version": 1
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-original-access-revoked",
+      "stage": "gateway",
+      "overrides": {
+        "access_rows": {
+          "00000010-0000-0000-0000-000000000001": {
+            "active": false
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-original-access-user-mismatch",
+      "stage": "gateway",
+      "overrides": {
+        "access_rows": {
+          "00000010-0000-0000-0000-000000000001": {
+            "user_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-missing-original-access-row",
+      "stage": "gateway",
+      "overrides": {
+        "access_rows": {
+          "00000010-0000-0000-0000-000000000001": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-post-refresh-logout-is-not-family-revocation",
+      "stage": "gateway",
+      "overrides": {
+        "access_rows": {
+          "ffffffff-ffff-ffff-ffff-ffffffffffff": {
+            "active": false
+          }
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "gateway-occurrence-parent_matches",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "parent_matches": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-occurrence-scope_matches",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "scope_matches": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-occurrence-viewer_authorized",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "viewer_authorized": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-occurrence-source_retained",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "source_retained": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-occurrence-generation_current",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "generation_current": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-occurrence-representation_matches",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "representation_matches": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-occurrence-live_authorization_checked",
+      "stage": "gateway",
+      "overrides": {
+        "controls": {
+          "live_authorization_checked": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-wrong-user_id",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "user_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-missing-user_id",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "user_id": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-wrong-application_session_id",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "application_session_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-missing-application_session_id",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "application_session_id": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-wrong-organization_id",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "organization_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-missing-organization_id",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "organization_id": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-missing-handle",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "headers": {
+            "X-Attachment-Media-Session": null
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-wrong-handle",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "headers": {
+            "X-Attachment-Media-Session": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-malformed-handle",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "headers": {
+            "X-Attachment-Media-Session": "not-a-uuid"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-no-bearer",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "bearer_authenticated": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-no-origin",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "origin": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-wrong-origin",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "origin": "https://foreign.invalid"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-null-origin",
+      "stage": "resolve",
+      "overrides": {
+        "request": {
+          "origin": "null"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-returned-wrong-session",
+      "stage": "resolve",
+      "overrides": {
+        "resolve_response": {
+          "items": [
+            {
+              "occurrence_id": "00000007-0000-0000-0000-000000000001",
+              "status": "ready",
+              "gateway_path": "/tracer/v1/attachment-media/ffffffff-ffff-ffff-ffff-ffffffffffff/00000007-0000-0000-0000-000000000001/synthetic_grant",
+              "expires_at": "2030-01-01T00:10:00Z"
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "resolve-response-outlives-session",
+      "stage": "resolve",
+      "overrides": {
+        "resolve_response": {
+          "items": [
+            {
+              "occurrence_id": "00000007-0000-0000-0000-000000000001",
+              "status": "ready",
+              "gateway_path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/synthetic_grant",
+              "expires_at": "2030-01-01T00:15:01Z"
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-route-session",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "path": "/tracer/v1/attachment-media/ffffffff-ffff-ffff-ffff-ffffffffffff/00000007-0000-0000-0000-000000000001/synthetic_grant"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-route-occurrence",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/ffffffff-ffff-ffff-ffff-ffffffffffff/synthetic_grant"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-route-grant",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "path": "/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/00000007-0000-0000-0000-000000000001/other_grant"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-no-cookie",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "cookies": []
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-cookie",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "cookies": [
+            {
+              "name": "fi_media_session_v2",
+              "value": "wrong_secret"
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-old-parent-cookie",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "cookies": [
+            {
+              "name": "fi_media_session",
+              "value": "synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-legacy-cookie-alongside-v2",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "cookies": [
+            {
+              "name": "fi_media_session",
+              "value": "old_secret"
+            },
+            {
+              "name": "fi_media_session_v2",
+              "value": "synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "gateway-duplicate-v2-cookie",
+      "stage": "gateway",
+      "overrides": {
+        "gateway": {
+          "cookies": [
+            {
+              "name": "fi_media_session_v2",
+              "value": "synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "name": "fi_media_session_v2",
+              "value": "synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-grant-viewer_id",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "viewer_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-grant-application_session_id",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "application_session_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-grant-media_session_id",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "media_session_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-grant-occurrence_id",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "occurrence_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-wrong-grant-org",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "scope": {
+            "organization_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-grant-expired",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "expires_at": "2030-01-01T00:00:00Z"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "gateway-grant-outlives-session",
+      "stage": "gateway",
+      "overrides": {
+        "grant": {
+          "expires_at": "2030-01-01T00:15:01Z"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-authorized",
+      "stage": "exchange",
+      "overrides": {},
+      "valid": true
+    },
+    {
+      "id": "exchange-missing-bearer",
+      "stage": "exchange",
+      "overrides": {
+        "request": {
+          "bearer_authenticated": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-missing-origin",
+      "stage": "exchange",
+      "overrides": {
+        "request": {
+          "origin": null
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-foreign-origin",
+      "stage": "exchange",
+      "overrides": {
+        "request": {
+          "origin": "https://foreign.invalid"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-wrong-user",
+      "stage": "exchange",
+      "overrides": {
+        "request": {
+          "user_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-wrong-access",
+      "stage": "exchange",
+      "overrides": {
+        "request": {
+          "application_session_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-wrong-org",
+      "stage": "exchange",
+      "overrides": {
+        "request": {
+          "organization_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-status",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "status": 200
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-body",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "body": "SYNTHETIC_SECRET"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-cache",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "cache_control": "public"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-wrong-handle",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "safe_headers": {
+            "X-Attachment-Media-Session": "ffffffff-ffff-ffff-ffff-ffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-wrong-expiry",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "safe_headers": {
+            "X-Attachment-Media-Expires-At": "2030-01-01T00:16:00Z"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-secret-header",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "safe_headers": {
+            "media_secret": "synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-parent-path",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/; Max-Age=900; Secure; HttpOnly; SameSite=Strict"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-old-name",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=900; Secure; HttpOnly; SameSite=Strict"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-domain",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=900; Secure; HttpOnly; SameSite=Strict; Domain=example.invalid"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-no-secure",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=900; HttpOnly; SameSite=Strict"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-no-httponly",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=900; Secure; SameSite=Strict"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-lax",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=900; Secure; HttpOnly; SameSite=Lax"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-overlong-age",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Max-Age=901; Secure; HttpOnly; SameSite=Strict"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-missing-age",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/00000011-0000-0000-0000-000000000001/; Secure; HttpOnly; SameSite=Strict"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "exchange-wrong-path",
+      "stage": "exchange",
+      "overrides": {
+        "exchange_response": {
+          "set_cookie": "fi_media_session_v2=synthetic_cookie_aaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/tracer/v1/attachment-media/ffffffff-ffff-ffff-ffff-ffffffffffff/; Max-Age=900; Secure; HttpOnly; SameSite=Strict"
+        }
+      },
+      "valid": false
+    }
+  ]
+}

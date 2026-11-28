@@ -1,0 +1,35 @@
+name: Attachment contracts
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'spec/attachments/**'
+      - '.github/workflows/attachment-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    name: Attachment v1 conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install isolated fixture validator dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/attachment-contract"
+          "$RUNNER_TEMP/attachment-contract/bin/python" -m pip install -r spec/attachments/v1/requirements.txt
+      - name: Validate shared fixtures and contract unit tests without egress
+        run: |
+          sudo unshare --net -- "$RUNNER_TEMP/attachment-contract/bin/python" -I spec/attachments/v1/validate.py
+          sudo unshare --net -- "$RUNNER_TEMP/attachment-contract/bin/python" -I spec/attachments/v1/test_contract.py
+      - name: Validate synthetic HTTP protocol with loopback only
+        run: |
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            "$RUNNER_TEMP/attachment-contract/bin/python" -I spec/attachments/v1/test_protocol.py

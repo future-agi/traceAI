@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "initial": {
+    "state": "pending_upload",
+    "binding": "pending",
+    "generation": 0
+  },
+  "terminal": [
+    "failed",
+    "rejected",
+    "expired",
+    "deleted"
+  ],
+  "transitions": [
+    {
+      "event": "complete",
+      "from": [
+        "pending_upload",
+        "importing"
+      ],
+      "to": "validating"
+    },
+    {
+      "event": "validate",
+      "from": [
+        "validating"
+      ],
+      "to": "ready"
+    },
+    {
+      "event": "fail",
+      "from": [
+        "pending_upload",
+        "importing",
+        "validating"
+      ],
+      "to": "failed"
+    },
+    {
+      "event": "reject",
+      "from": [
+        "pending_upload",
+        "importing",
+        "validating"
+      ],
+      "to": "rejected"
+    },
+    {
+      "event": "expire",
+      "from": [
+        "pending_upload",
+        "importing",
+        "validating",
+        "ready"
+      ],
+      "to": "expired"
+    },
+    {
+      "event": "delete",
+      "from": [
+        "pending_upload",
+        "importing",
+        "validating",
+        "ready",
+        "failed",
+        "rejected",
+        "expired"
+      ],
+      "to": "deleted"
+    }
+  ],
+  "cases": [
+    {
+      "id": "late-root-releases-ready-bytes",
+      "events": [
+        "complete",
+        "validate",
+        "bind"
+      ],
+      "readable_after_each": [
+        false,
+        false,
+        true
+      ],
+      "final": "ready"
+    },
+    {
+      "id": "root-first-still-needs-validation",
+      "events": [
+        "bind",
+        "complete",
+        "validate"
+      ],
+      "readable_after_each": [
+        false,
+        false,
+        true
+      ],
+      "final": "ready"
+    },
+    {
+      "id": "missing-tail-sampled-root",
+      "events": [
+        "complete",
+        "validate",
+        "expire",
+        "bind"
+      ],
+      "readable_after_each": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "final": "expired"
+    },
+    {
+      "id": "deletion-fences-completion-and-binding",
+      "events": [
+        "complete",
+        "delete",
+        "validate",
+        "bind"
+      ],
+      "readable_after_each": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "final": "deleted"
+    },
+    {
+      "id": "ready-delete-replay",
+      "events": [
+        "bind",
+        "complete",
+        "validate",
+        "delete",
+        "complete",
+        "validate"
+      ],
+      "readable_after_each": [
+        false,
+        false,
+        true,
+        false,
+        false,
+        false
+      ],
+      "final": "deleted"
+    },
+    {
+      "id": "client-success-not-readiness",
+      "events": [
+        "bind",
+        "complete"
+      ],
+      "readable_after_each": [
+        false,
+        false
+      ],
+      "final": "validating"
+    },
+    {
+      "id": "failed-cannot-retry-validation",
+      "events": [
+        "fail",
+        "complete",
+        "validate"
+      ],
+      "readable_after_each": [
+        false,
+        false,
+        false
+      ],
+      "final": "failed"
+    }
+  ]
+}
