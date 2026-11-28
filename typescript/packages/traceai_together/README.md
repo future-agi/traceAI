@@ -13,42 +13,40 @@ pnpm add @traceai/together
 ## Requirements
 
 - Node.js 18+
-- `together-ai` SDK version >= 0.5.0
+- `together-ai` SDK version >= 0.6.0 and < 2 (0.5.x is a different SDK without `chat`, `completions` or `embeddings` resources)
 
 ## Quick Start
 
 ```typescript
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
+import { register, ProjectType } from "@traceai/fi-core";
+import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { TogetherInstrumentation } from "@traceai/together";
 import Together from "together-ai";
 
-// Set up the tracer provider
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
-provider.register();
+const tracerProvider = register({
+  projectType: ProjectType.OBSERVE,
+  projectName: "together_project",
+});
 
-// Create and enable the instrumentation
 const instrumentation = new TogetherInstrumentation();
-instrumentation.setTracerProvider(provider);
-instrumentation.enable();
+registerInstrumentations({ instrumentations: [instrumentation], tracerProvider });
+// Patch the imported SDK explicitly; this works for ESM and CommonJS alike.
+instrumentation.manuallyInstrument(Together);
 
-// Import and patch the Together module
-const togetherModule = await import("together-ai");
-instrumentation.manuallyInstrument(togetherModule);
+const client = new Together({ apiKey: process.env.TOGETHER_API_KEY });
 
-// Use Together AI as normal - all calls will be traced
-const client = new Together({
-  apiKey: process.env.TOGETHER_API_KEY,
-});
-
-const response = await client.chat.completions.create({
-  model: "meta-llama/Llama-3-8b-chat-hf",
-  messages: [
-    { role: "user", content: "Hello!" },
-  ],
-});
+try {
+  const response = await client.chat.completions.create({
+    model: "meta-llama/Llama-3-8b-chat-hf",
+    messages: [{ role: "user", content: "Hello!" }],
+  });
+  console.log(response.choices[0]?.message?.content);
+} finally {
+  await tracerProvider.shutdown();
+}
 ```
+
+The instrumentation wraps the SDK's shared `Chat.Completions`, `Completions` and `Embeddings` resources, so clients created before or after `manuallyInstrument()` are traced. If the installed SDK does not expose those resources, it logs a warning and `isPatched()` stays `false`.
 
 ## Instrumented Methods
 
@@ -112,7 +110,7 @@ const instrumentation = new TogetherInstrumentation({
     enabled: true, // Enable/disable instrumentation
   },
   traceConfig: {
-    hideInputs: false,  // Hide input content in traces
+    hideInputs: false,  // Hide prompts, messages, tools, embedding text and non-numeric parameters
     hideOutputs: false, // Hide output content in traces
   },
 });
@@ -133,8 +131,10 @@ for await (const chunk of stream) {
   // Process chunks as they arrive
   console.log(chunk.choices[0]?.delta?.content);
 }
-// Span is ended with full content captured
+// The span ends when the stream finishes, fails or you stop iterating early
 ```
+
+The span records the aggregated text, tool calls, finish reason and usage rather than every raw chunk. `stream.tee()`, `stream.controller` and `withResponse()` keep working.
 
 ## Supported Models
 
