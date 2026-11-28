@@ -24,6 +24,7 @@ class GoogleGenAIInstrumentor(BaseInstrumentor):  # type: ignore
         "_original_generate_content_stream",
         "_original_async_generate_content_stream",
         "_tracer",
+        "_resource_patches",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -83,7 +84,14 @@ class GoogleGenAIInstrumentor(BaseInstrumentor):  # type: ignore
             wrapper=_AsyncGenerateContentStream(tracer=self._tracer),
         )
 
+        from traceai_google_genai._resource_wrappers import instrument_resources
+
+        self._resource_patches = instrument_resources(self._tracer, config)
+
     def _uninstrument(self, **kwargs: Any) -> None:
+        for cls, method, original in reversed(getattr(self, "_resource_patches", [])):
+            setattr(cls, method, original)
+        self._resource_patches = []
         from google.genai.models import AsyncModels, Models
 
         if self._original_generate_content is not None:
