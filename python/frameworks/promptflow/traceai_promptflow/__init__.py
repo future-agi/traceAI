@@ -26,6 +26,7 @@ import importlib
 import logging
 import os
 import sys
+import weakref
 from typing import Any, Callable, Collection, Dict, List, Optional, Tuple
 
 import wrapt
@@ -208,6 +209,7 @@ def _handle_span_exception(span: Any, exception: BaseException) -> None:
     stream, which promptflow leaves open."""
     try:
         if span.is_recording():
+            _keep_received_items(span)
             _fail(span, exception)
             if not getattr(span, "__should_end", True):
                 span.end()
@@ -321,6 +323,29 @@ def _noop(*args: Any, **kwargs: Any) -> None:
     """Prompt template text and variables are not exported."""
 
 
+@_safe
+def _watch_stream(stream: Any) -> None:
+    """Let the stream's span reach the items a failing stream has yielded so far (weakly, so a dropped
+    stream still ends its span at once)."""
+    span = stream.__dict__.get("_span")
+    if isinstance(span, _Span):
+        span._self_stream = weakref.ref(stream)
+
+
+@_safe
+def _keep_received_items(span: Any) -> None:
+    """A stream that fails mid-way records what it yielded before the failure, as on exhaustion."""
+    ref = getattr(span, "_self_stream", None)
+    stream = ref() if isinstance(ref, weakref.ref) else None
+    if stream is None:
+        return
+    if not getattr(stream, "_traceai_exhausted", False):  # a stream read to the end is complete
+        span.set_attribute(_INCOMPLETE, True)
+    items = getattr(stream, "items", None)
+    if items:
+        _enrich_span_with_output(span, list(items))  # hidden with outputs, like the exhausted stream's
+
+
 def _finish_early(span: Any) -> None:
     try:
         if span.is_recording():
@@ -330,10 +355,45 @@ def _finish_early(span: Any) -> None:
         logger.debug("promptflow stream finalisation failed", exc_info=True)
 
 
-def _stream_classes(module: Any) -> Tuple[Any, Any]:
-    """Subclass promptflow's iterator proxies so a stream also ends on close or when dropped."""
+def _stream_classes(module: Any) -> Dict[str, Any]:
+    """Subclass promptflow's iterator proxies so a stream also ends on close or when dropped.
+    A proxy this Prompt flow version does not have is skipped."""
+    classes: Dict[str, Any] = {}
+    if hasattr(module, "TracedIterator"):
+        classes["TracedIterator"] = _traced_iterator(module)
+    if hasattr(module, "TracedAsyncIterator"):
+        classes["TracedAsyncIterator"] = _traced_async_iterator(module)
+    return classes
 
-    class TracedIterator(module.TracedIterator):  # type: ignore[misc]
+
+def _proxy_base(cls: Any, method: str) -> Any:
+    """The class whose ``method`` Prompt flow's stream proxy calls through ``super()`` to read the
+    next item (its ``IteratorProxy`` / ``AsyncIteratorProxy``), or ``None``."""
+    return next((base for base in cls.__mro__[1:] if method in base.__dict__), None)
+
+
+def _traced_iterator(module: Any) -> Any:
+    bases: Tuple[Any, ...] = (module.TracedIterator,)
+    proxy = _proxy_base(module.TracedIterator, "__next__")
+    if proxy is not None:
+        class _Exhaustion(proxy):  # type: ignore[misc,valid-type]
+            """Placed between Prompt flow's ``TracedIterator`` and its proxy, so it sees the end of
+            the stream before Prompt flow's own finalization runs."""
+
+            def __next__(self) -> Any:
+                try:
+                    return super().__next__()
+                except StopIteration:
+                    self._traceai_exhausted = True
+                    raise
+
+        bases += (_Exhaustion,)
+
+    class TracedIterator(*bases):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            _watch_stream(self)
+
         def close(self) -> Any:
             try:
                 closer = getattr(self._iterator, "close", None)
@@ -350,7 +410,31 @@ def _stream_classes(module: Any) -> Tuple[Any, Any]:
         def __del__(self) -> None:
             _finish_early(self.__dict__.get("_span"))
 
-    class TracedAsyncIterator(module.TracedAsyncIterator):  # type: ignore[misc]
+    return TracedIterator
+
+
+def _traced_async_iterator(module: Any) -> Any:
+    bases: Tuple[Any, ...] = (module.TracedAsyncIterator,)
+    proxy = _proxy_base(module.TracedAsyncIterator, "__anext__")
+    if proxy is not None:
+        class _Exhaustion(proxy):  # type: ignore[misc,valid-type]
+            """Placed between Prompt flow's ``TracedAsyncIterator`` and its proxy, so it sees the end
+            of the stream before Prompt flow's own finalization runs."""
+
+            async def __anext__(self) -> Any:
+                try:
+                    return await super().__anext__()
+                except StopAsyncIteration:
+                    self._traceai_exhausted = True
+                    raise
+
+        bases += (_Exhaustion,)
+
+    class TracedAsyncIterator(*bases):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            _watch_stream(self)
+
         async def aclose(self) -> Any:
             try:
                 closer = getattr(self._iterator, "aclose", None)
@@ -367,11 +451,10 @@ def _stream_classes(module: Any) -> Tuple[Any, Any]:
         def __del__(self) -> None:
             _finish_early(self.__dict__.get("_span"))
 
-    return TracedIterator, TracedAsyncIterator
+    return TracedAsyncIterator
 
 
 def _replacements(module: Any) -> Dict[str, Any]:
-    traced_iterator, traced_async_iterator = _stream_classes(module)
     return {
         "start_as_current_span": _start_as_current_span,
         "handle_span_exception": _handle_span_exception,
@@ -383,8 +466,7 @@ def _replacements(module: Any) -> Dict[str, Any]:
         "enrich_span_with_trace": _enrich_span_with_trace_chained,
         "enrich_span_with_prompt_info": _noop,
         "enrich_prompt_template": _noop,
-        "TracedIterator": traced_iterator,
-        "TracedAsyncIterator": traced_async_iterator,
+        **_stream_classes(module),
     }
 
 
@@ -408,8 +490,10 @@ _TARGETS = (
 _CONTENT_HOOKS = (
     "enrich_span_with_input", "enrich_span_with_output", "enrich_span_with_llm", "enrich_span_with_embedding",
     "enrich_span_with_prompt_info", "enrich_prompt_template", "handle_span_exception", "TracedIterator",
+    "TracedAsyncIterator",
 )
 _SPAN_HOOK = "start_as_current_span"
+_STREAM_PROXIES = ("TracedIterator", "TracedAsyncIterator")
 
 
 def _bound_modules(name: str, original: Any) -> List[Any]:
@@ -442,7 +526,12 @@ class PromptflowInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._set_env = False
             return
         for name in _CONTENT_HOOKS:
-            if not hasattr(base, name):
+            if not hasattr(base, name) and name in _STREAM_PROXIES:
+                logger.warning(
+                    "traceai-promptflow: promptflow.tracing._trace.%s is missing in this Prompt flow version; "
+                    "streams are traced without ending their span on close or when dropped", name,
+                )
+            elif not hasattr(base, name):
                 # Native content stays off our spans regardless: the span drops those attributes and events.
                 logger.warning(
                     "traceai-promptflow: promptflow.tracing._trace.%s is missing in this Prompt flow version; "
@@ -453,6 +542,7 @@ class PromptflowInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         originals: Dict[Tuple[str, str], Any] = {}
         _state["originals"] = originals
         replacements = _replacements(base)
+        _state["replacements"] = {name: (replacements[name], getattr(base, name)) for name in replacements if hasattr(base, name)}
         for module_name, _names in _TARGETS:
             try:
                 importlib.import_module(module_name)
@@ -473,7 +563,13 @@ class PromptflowInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _uninstrument(self, **kwargs: Any) -> None:
         for (module_name, name), original in (_state.get("originals") or {}).items():
             setattr(sys.modules[module_name], name, original)
+        # Modules that bound a replacement by name after instrument() are not in ``originals``.
+        for name, (replacement, original) in (_state.get("replacements") or {}).items():
+            for module_name, module in list(sys.modules.items()):
+                if module is not None and module_name.startswith("promptflow") and getattr(module, name, None) is replacement:
+                    setattr(module, name, original)
         _state["originals"] = {}
+        _state["replacements"] = {}
         _state["tracer"] = _state["config"] = None
         if getattr(self, "_set_env", False):
             os.environ.pop(_ENV, None)

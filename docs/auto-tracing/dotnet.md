@@ -138,11 +138,18 @@ The `HttpClient` layer captures content by default. Use these switches to hide i
   `true`, `1` or `yes` keep it on.
 
 **Library content in ASP.NET Core hosts.** For the chat clients and agents the
-hosting startup wraps, prompt and response content stays off unless
-`FI_AUTO_CAPTURE_CONTENT=true` and no hide setting is on. The libraries' content
-switch puts content on the span for every listener the application has, not only
-this agent. Content also stays off when `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`
-is set to anything other than `true`.
+hosting startup wraps, prompt and response content is recorded by default, as in
+every other language. The libraries' content switch puts content on the span for
+every listener the application has, not only this agent, so your other
+OpenTelemetry listeners and exporters receive it unscrubbed; the agent prints one
+line when it first turns the switch on for a service it keeps. Content stays off
+with `FI_AUTO_CAPTURE_CONTENT=false` (or `0`, `no`, `off`), with any of
+`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`,
+`FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or
+`FI_HIDE_INPUT_IMAGES` set to `true` (or a `TraceConfig` you supply with any of
+those hides), and when `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` is set
+to anything other than `true`. The package README lists what a blank value means
+for each `FI_*` setting.
 
 ## What gets traced
 

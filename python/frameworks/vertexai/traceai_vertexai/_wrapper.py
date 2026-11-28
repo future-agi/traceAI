@@ -25,7 +25,7 @@ from typing import (
 
 import proto
 import wrapt
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     FiLLMProviderValues,
@@ -40,7 +40,6 @@ from fi_instrumentation.fi_types import (
 from google.cloud import aiplatform_v1 as v1
 from google.cloud import aiplatform_v1beta1 as v1beta1
 from google.cloud.aiplatform_v1.types.prediction_service import (
-    GenerateContentRequest,
     PredictRequest,
     PredictResponse,
 )
@@ -112,9 +111,9 @@ class _Wrapper:
     variable `_instrumentation_status._IS_INSTRUMENTED` to False or True, respectively.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, tracer: trace_api.Tracer, config: Optional[TraceConfig] = None) -> None:
         self._tracer = tracer
+        self._config = config if config is not None else TraceConfig()
 
     @wrapt.decorator  # type: ignore[misc]
     def __call__(
@@ -137,27 +136,38 @@ class _Wrapper:
         span = self._tracer.start_span(name=span_name, attributes=attributes)
         span.set_attribute(GEN_AI_SPAN_KIND, LLM)
 
-        if isinstance(request, proto.Message):
-            input = request.__class__.to_dict(request)
-            span.set_attribute(INPUT_VALUE, safe_json_dumps(input))
-            extracted_data = _extract_image_data(input.get("contents", []))
-
-            if input_data := extracted_data.get("filtered_messages"):
-                span.set_attribute(INPUT_VALUE, safe_json_dumps(input_data))
-                span.set_attribute(INPUT_MIME_TYPE, JSON)
-                span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
-            if input_images := extracted_data.get("input_images"):
-                span.set_attribute(INPUT_IMAGES, safe_json_dumps(input_images))
-            if eval_input := extracted_data.get("eval_input"):
-                span.set_attribute(INPUT_VALUE, safe_json_dumps(eval_input))
-            if query := extracted_data.get("query"):
-                span.set_attribute(INPUT_VALUE, safe_json_dumps(query))
-
-        else:
-            span.set_attribute(INPUT_VALUE, safe_json_dumps(request))
-            span.set_attribute(INPUT_VALUE, str(request))
+        if isinstance(request, proto.Message) and not isinstance(
+            request, (v1.PredictRequest, v1beta1.PredictRequest)
+        ):
+            try:
+                data = request.__class__.to_dict(request)
+                extracted = _extract_image_data(data.get("contents", []))
+                if extracted:
+                    if extracted.get("filtered_messages"):
+                        span.set_attribute(INPUT_MIME_TYPE, JSON)
+                        span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
+                    if images := extracted.get("input_images"):
+                        span.set_attribute(INPUT_IMAGES, safe_json_dumps(images))
+                    # Older cores do not mask the opaque value for all input flags.
+                    if not (
+                        self._config.hide_inputs
+                        or self._config.hide_input_messages
+                        or self._config.hide_input_text
+                        or self._config.hide_input_images
+                    ):
+                        if value := extracted["eval_input"]:
+                            span.set_attribute(INPUT_VALUE, safe_json_dumps(value))
+                        elif _has_only_image_parts(data.get("contents", [])):
+                            # Image-only spans historically use the SDK's request JSON.
+                            span.set_attribute(INPUT_VALUE, safe_json_dumps(data))
+            except Exception:
+                # Instrumentation must not replace the SDK result or export a raw fallback.
+                logger.debug("Could not extract Vertex request attributes")
         try:
-            _update_span(request, span)
+            if isinstance(request, (v1.PredictRequest, v1beta1.PredictRequest)):
+                _update_predict_request(request, span, self._config)
+            else:
+                _update_span(request, span)
         except BaseException:
             pass
         try:
@@ -419,30 +429,31 @@ def _(resp: GenerateContentResponse, span: Span) -> None:
             span.set_attribute(k, v)
 
 
-@_update_span.register(v1.PredictRequest)
-def _(req: PredictRequest, span: Span) -> None:
-    """
-    Extract and set attributes from PredictRequest onto the span.
-
-    Args:
-        req: a PredictRequest proto.Message
-        span: the OpenTelemetry span to update with attributes
-    """
+def _update_predict_request(
+    req: Union[PredictRequest, v1beta1.PredictRequest], span: Span, config: TraceConfig
+) -> None:
+    """Record only the typed prompts recognized by the legacy prediction API."""
     if req.endpoint:
         span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
         span.set_attribute("prediction.endpoint", req.endpoint)
 
-    if req.instances:
-        for idx, instance in enumerate(req.instances):
-            if prompt := instance.get("prompt"):
-                span.set_attribute(
-                    f"{GEN_AI_INPUT_MESSAGES}.{idx}.{MESSAGE_CONTENT}",
-                    safe_json_dumps(prompt),
-                )
-                span.set_attribute(
-                    f"{GEN_AI_INPUT_MESSAGES}.{idx}.{MESSAGE_ROLE}",
-                    "user",
-                )
+    prompts = []
+    for idx, instance in enumerate(req.instances):
+        if not isinstance(instance, Mapping):
+            continue
+        # Text generation and embedding models use content instead of prompt.
+        prompt = instance.get("prompt" if "prompt" in instance else "content")
+        if not isinstance(prompt, str) or not prompt:
+            continue
+        prefix = f"{GEN_AI_INPUT_MESSAGES}.{idx}"
+        span.set_attribute(f"{prefix}.{MESSAGE_CONTENT}", safe_json_dumps(prompt))
+        span.set_attribute(f"{prefix}.{MESSAGE_ROLE}", "user")
+        prompts.append(prompt)
+
+    if prompts and not (config.hide_input_messages or config.hide_input_text):
+        # The span applies the installed core's hide_inputs value and MIME policy.
+        span.set_attribute(INPUT_VALUE, "\n".join(prompts))
+        span.set_attribute(INPUT_MIME_TYPE, "text/plain")
 
 
 @_update_span.register(v1.PredictResponse)
@@ -639,65 +650,84 @@ def _role(role: str) -> str:
     return role
 
 
+def _has_only_image_parts(contents):
+    if not contents:
+        return False
+    for content in contents:
+        parts = content.get("parts")
+        if not parts:
+            return False
+        for part in parts:
+            file = part.get("file_data") or {}
+            inline = part.get("inline_data") or {}
+            if not (
+                (
+                    file.get("file_uri")
+                    and file.get("mime_type", "").startswith("image/")
+                )
+                or (
+                    inline.get("data")
+                    and inline.get("mime_type", "").startswith("image/")
+                )
+            ):
+                return False
+    return True
+
+
 def _extract_image_data(messages):
     try:
         input_images = []
         filtered_messages = []
         eval_input = []
-        query = ""
 
-        if isinstance(messages, list):
-            for message in messages:
-                filtered_parts = []
-                content = message.get("parts", [])
+        if not isinstance(messages, list):
+            return {}
+        for message in messages:
+            filtered_parts = []
+            content = message.get("parts", [])
 
-                # Handle both string and list content
-                if isinstance(content, str):
-                    filtered_messages.append(message)
-                    eval_input.append(content)
-                    continue
+            # Handle both string and list content
+            if isinstance(content, str):
+                filtered_messages.append(message)
+                eval_input.append(content)
+                continue
 
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict):
-                            if "text" in item:
-                                filtered_parts.append(item)
-                                if item.get("text"):
-                                    eval_input.append(str(item.get("text")))
-                            if "file_data" in item:
-                                if (
-                                    item.get("file_data", {}).get("mime_type")
-                                    == "image/jpeg"
-                                ):
-                                    input_images.append(
-                                        item.get("file_data", {}).get("file_uri")
-                                    )
+            elif isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        return {}
+                    if "text" in item:
+                        filtered_parts.append(item)
+                        if item.get("text"):
+                            eval_input.append(str(item.get("text")))
+                    if "file_data" in item:
+                        if (
+                            item.get("file_data", {}).get("mime_type")
+                            == "image/jpeg"
+                        ):
+                            input_images.append(
+                                item.get("file_data", {}).get("file_uri")
+                            )
 
-                # Create new message with only parts
-                if filtered_parts:
-                    filtered_message = {
-                        "role": message.get("role"),
-                        "parts": filtered_parts,
-                    }
-                    filtered_messages.append(filtered_message)
+            else:
+                return {}
 
-        if eval_input and len(eval_input) > 0:
-            query = eval_input[0]
+            # Create new message with only parts
+            if filtered_parts:
+                filtered_message = {
+                    "role": message.get("role"),
+                    "parts": filtered_parts,
+                }
+                filtered_messages.append(filtered_message)
 
         return {
             "input_images": input_images if input_images else None,
             "filtered_messages": filtered_messages if filtered_messages else None,
             "eval_input": " | ".join(eval_input),
-            "query": query,
         }
-    except Exception as e:
-        print(f"Error in _extract_image_data: {e}")
-        return {
-            "input_images": input_images,
-            "filtered_messages": messages,
-            "eval_input": "",
-            "query": query,
-        }
+    except Exception:
+        # Do not substitute the original messages for a failed extraction.
+        return {}
 
 
 IMAGE_URL = ImageAttributes.IMAGE_URL

@@ -27,10 +27,18 @@ import {
 } from "@opentelemetry/sdk-trace-node";
 import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
+import { isolateGrpcExporterHeaders, isolateHttpExporterHeaders } from "./otlp-header-isolation";
+import { type OwnResponse } from "./fi-transport";
+import { channelCredentials, describeFailure, failureSuffix, guardedFetch, guardOtlpGrpcExporter, guardOtlpHttpExporter, intendedFrom, type Intended } from "./fi-send-guard";
+import { declareFiRoute, isFiRouteDeclared } from "./fi-route-registry";
+import { isFiEndpoint, sameEndpointTarget, type EndpointTransport } from "./fi-endpoint";
+import { assertNoKeysInAmbientHeaders, fiKeyHeaderValues, decideFiRequest, metadataKeyValues, metadataStrings, FiKeyRefusal, hostClass, type FiDecision, type FiRequest } from "./fi-request-policy";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { ADOPT_PROVIDER_POLICY, runtimeProcessorInstances } from "./runtime-metadata";
+import { FutureAGIRuntimeAttributesSpanProcessor } from "./trace/runtimeAttributesProcessor";
 
 const privacyDestinations = new WeakSet<SpanExporter>();
 /** @internal True only for constructors in this core copy, never based on user properties. */
@@ -40,8 +48,8 @@ interface ExportPrivacyOptions {
   /** Routing attributes are added only to this destination's detached snapshot. */
   resourceAttributes?: Attributes;
 }
-function exportPrivacy(options: ExportPrivacyOptions, headers: FIHeaders = {}) {
-  const credentials = credentialSecrets(headers);
+function exportPrivacy(options: ExportPrivacyOptions, headers: FIHeaders = {}, configured: readonly string[] = []) {
+  const credentials = credentialSecrets(headers, configured);
   seedSecrets(process.env, credentials);
   const filter = privacyFilter(options.traceConfig, credentials);
   return (spans: ReadableSpan[]) => spans.map(span => filter.span(span, [], options.resourceAttributes));
@@ -129,6 +137,14 @@ interface HTTPSpanExporterOptions extends ExportPrivacyOptions {
   endpoint: string; // This should be the full URL
   headers?: FIHeaders;
   verbose?: boolean;
+  /** Allows plaintext to a self-hosted collector that is not a Future AGI host; see FI_ALLOW_INSECURE_HTTP. */
+  allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
 }
 
 // --- Custom ID Generator (using UUIDs) ---
@@ -148,12 +164,18 @@ class UuidIdGenerator implements IdGenerator {
 class HTTPSpanExporter implements SpanExporter {
   private readonly endpoint: string;
   private readonly headers: FIHeaders;
+  private readonly intended: Intended;
+  private readonly allowInsecureHttp: unknown;
+  private readonly httpsProxy: unknown;
   private isShutdown = false;
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
   constructor(options: HTTPSpanExporterOptions) {
-    const headers = resolveFiHeaders(options.headers);
+    const { headers } = decide({ target: options.endpoint, transport: "http", headers: options.headers, allowInsecureHttp: options.allowInsecureHttp });
+    this.intended = intendedFrom({ headers });
+    this.allowInsecureHttp = options.allowInsecureHttp;
+    this.httpsProxy = options.httpsProxy;
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
@@ -179,7 +201,7 @@ class HTTPSpanExporter implements SpanExporter {
     try {
       return JSON.parse(JSON.stringify(attributes));
     } catch (e) {
-      diag.error(`HTTPSpanExporter: Error converting attributes: ${e}`);
+      diag.error(`HTTPSpanExporter: Error converting attributes: ${describeFailure(e)}`);
       return {};
     }
   }
@@ -254,24 +276,22 @@ class HTTPSpanExporter implements SpanExporter {
         diag.info("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
     }
 
-    fetch(this.endpoint, {
-      method: "POST",
-      headers: this.headers,
-      body: JSON.stringify(spansData),
-    })
-      .then((response) => {
+    // The one guarded fetch: the final headers and the proxy exposure are judged right before the send, redirects are not followed.
+    guardedFetch({ url: this.endpoint, init: { method: "POST", headers: this.headers, body: JSON.stringify(spansData) }, intended: this.intended, allowInsecureHttp: this.allowInsecureHttp, httpsProxy: this.httpsProxy })
+      .then(async (response) => {
+        // The answer's body is not read: drop it so its connection is released.
+        await response.body?.cancel();
         if (response.ok) {
           resultCallback({ code: ExportResultCode.SUCCESS });
         } else {
           diag.error(
             `HTTPSpanExporter: Failed to export spans: ${response.status} ${response.statusText}`,
           );
-          response.text().then(text => diag.error(`HTTPSpanExporter: Server response: ${text}`));
           resultCallback({ code: ExportResultCode.FAILED });
         }
       })
-      .catch((errorCaught) => { 
-        diag.error(`HTTPSpanExporter: Error exporting spans: ${errorCaught}`);
+      .catch((errorCaught) => {
+        diag.error(errorCaught instanceof FiKeyRefusal ? `HTTPSpanExporter: not sent${failureSuffix(errorCaught)}` : `HTTPSpanExporter: Error exporting spans: ${describeFailure(errorCaught)}`);
         resultCallback({ code: ExportResultCode.FAILED });
       });
   }
@@ -286,32 +306,46 @@ class HTTPSpanExporter implements SpanExporter {
   }
 }
 
+/** Every credential value in the caller's gRPC Metadata, repeated values included. */
+function metadataSecrets(metadata: unknown): string[] {
+  const found = new Set<string>();
+  try {
+    const source = metadata as { getMap?: () => Record<string, unknown>; get?: (name: string) => unknown[] } | undefined;
+    for (const name of Object.keys(source?.getMap?.() ?? {}))
+      for (const value of source?.get?.(name) ?? []) if (typeof value === "string") for (const secret of credentialSecrets({ [name]: value })) found.add(secret);
+  } catch { /* An unreadable metadata object adds nothing. */ }
+  return [...found];
+}
+
 // --- Custom GRPCSpanExporter extending OTLP gRPC exporter ---
 class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
-  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
-    const { endpoint, verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
-    const headers = resolveFiHeaders(options.headers) ?? {};
-    delete restOptions.headers;
-    const auth_header = headers;
-    const lower_case_auth_header = auth_header 
-      ? Object.fromEntries(Object.entries(auth_header).map(([k, v]) => [k.toLowerCase(), v]))
-      : {};
-
-    const metadata = new grpc.Metadata();
-    Object.entries(lower_case_auth_header).forEach(([key, value]) => {
-      metadata.set(key, value);
-    });
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; verbose?: boolean; allowInsecureHttp?: boolean; [key: string]: any }) {
+    const { endpoint: givenEndpoint, url: givenUrl, metadata: callerMetadata, credentials: callerCredentials, headers: callerHeaders,
+      verbose = false, traceConfig, resourceAttributes, allowInsecureHttp, ...restOptions } = options;
+    delete restOptions.fiEndpoint; // never an option: only the SDK's own FI route (fi-route.ts) declares an FI endpoint
+    // The target is the one the options name (endpoint, or the standard url option), so the classification
+    // below is made on the host that is dialled.
+    const endpoint = resolveTarget({ endpoint: givenEndpoint, url: givenUrl }, true) ?? getEnvGrpcCollectorEndpoint();
+    const callerStrings = metadataStrings(callerMetadata);
+    const metadataKnown = metadataSecrets(callerMetadata);
+    seedSecrets(process.env, metadataKnown);
+    // One decision, on the target and the final outgoing set (the caller's metadata merged with the headers).
+    const decision = decide({ target: endpoint, transport: "grpc", headers: callerHeaders, metadata: callerMetadata, credentials: callerCredentials, allowInsecureHttp, declaredFi: isFiRouteDeclared(options) });
+    const { fiBound, metadata } = decision;
+    const decidedCredentials = decision.credentials ?? (decision.credentialsKind ? channelCredentials(decision.credentialsKind) : undefined);
+    // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
+    if (!fiBound) assertNoKeysInAmbientHeaders([...fiKeyHeaderValues(callerHeaders, callerStrings), ...metadataKeyValues(callerMetadata)]);
+    const headers = decision.headers ?? {};
+    const lower_case_auth_header = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
 
     const grpcConfig = {
+      ...restOptions,
       url: endpoint,
       metadata: metadata,
-      ...(endpoint.includes('localhost') || endpoint.includes('127.0.0.1') ? { 
-        credentials: grpc.credentials.createInsecure() 
-      } : {}),
-      ...restOptions,
+      ...(decidedCredentials ? { credentials: decidedCredentials } : {}),
     };
 
     try {
@@ -320,13 +354,16 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
       diag.error(`GRPCSpanExporter: Error initializing OTLP exporter:`, error);
       throw error;
     }
+    if (fiBound) isolateGrpcExporterHeaders(this, grpcConfig);
+    // Every send is judged on its final metadata, and a plaintext channel that carries keys, loopback included, is built with proxies off.
+    guardOtlpGrpcExporter(this, intendedFrom(decision), allowInsecureHttp);
     
     this.verbose = verbose;
-    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, headers);
+    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, { ...callerStrings, ...headers }, metadataKnown);
     privacyDestinations.add(this);
 
     if (this.verbose) {
-      diag.info(`GRPCSpanExporter: Configured for endpoint: ${endpoint}`);
+      diag.info(`GRPCSpanExporter: Configured for endpoint: ${hostClass(endpoint)}`);
       diag.info(`GRPCSpanExporter: Authentication: ${Object.keys(lower_case_auth_header).length > 0 ? 'Enabled' : 'None'}`);
     }
   }
@@ -356,59 +393,72 @@ function getEnvVerbose(): boolean | undefined {
   return undefined;
 }
 
-function getEnvFiAuthHeader(): FIHeaders | undefined {
-  const apiKey = getEnv("FI_API_KEY");
-  const secretKey = getEnv("FI_SECRET_KEY");
-  if (apiKey?.trim() && secretKey?.trim()) {
-    // Use lowercase headers for gRPC compatibility
-    return { "x-api-key": apiKey, "x-secret-key": secretKey };
+/**
+ * The one target an exporter's options name. `endpoint` is this SDK's option and `url` the standard OTLP
+ * exporter option; both may be given only when they name the same host and port, and the error names neither.
+ */
+function resolveTarget(options: { endpoint?: unknown; url?: unknown }, grpcTransport: boolean): string | undefined {
+  const endpoint = typeof options.endpoint === "string" ? options.endpoint : undefined;
+  const url = typeof options.url === "string" ? options.url : undefined;
+  if (endpoint !== undefined && url !== undefined && endpoint !== url && !sameEndpointTarget(endpoint, url, grpcTransport ? "grpc" : "http")) {
+    throw new Error("Conflicting exporter options: endpoint and url name different targets. Pass only one of them.");
   }
-  if (apiKey?.trim() || secretKey?.trim()) {
-    diag.warn(`Ignoring incomplete FI credentials from environment: missing ${apiKey?.trim() ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`);
-    return {}; // Resolved empty source: nested constructors must not warn again.
-  }
-  return undefined;
+  return endpoint ?? url;
 }
-function resolveFiHeaders(headers?: FIHeaders): FIHeaders | undefined {
-  // Selection is atomic, but ignored halves remain known FI secrets (ROUND5 B2).
-  seedSecrets(process.env, credentialSecrets(headers ?? {}));
-  if (headers === undefined) return getEnvFiAuthHeader();
-  const items = Object.entries(headers), pair = items.filter(([name]) => /^(?:x-api-key|x-secret-key)$/i.test(name));
-  if (!pair.length) return headers; // Explicit bearer/custom/empty headers remain host-owned.
-  const key = pair.find(([name]) => name.toLowerCase() === "x-api-key")?.[1];
-  const secret = pair.find(([name]) => name.toLowerCase() === "x-secret-key")?.[1];
-  if (key?.trim() && secret?.trim()) return headers;
-  if (key?.trim() || secret?.trim()) diag.warn(`Ignoring incomplete FI credentials from explicit headers: missing ${key?.trim() ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`);
-  return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...getEnvFiAuthHeader() };
+/**
+ * The one decision for a request: see fi-request-policy.ts. The endpoint the FI environment selects is supplied here, so a
+ * target that names it is Future AGI bound whatever its host.
+ */
+function decide(request: Omit<FiRequest, "envRoute">): FiDecision {
+  return decideFiRequest({ ...request, envRoute: request.transport === "grpc" ? getEnvGrpcCollectorEndpoint() : constructFullEndpoint() });
 }
 
 function getEnvGrpcCollectorEndpoint(): string {
-  let endpoint = getEnv("FI_GRPC_COLLECTOR_ENDPOINT") ?? 
-                 getEnv("FI_GRPC_URL") ?? 
-                 DEFAULT_FI_GRPC_COLLECTOR_BASE_URL;
-                 
-  // Remove http:// or https:// prefix if present (gRPC doesn't use HTTP protocol prefix)
-  endpoint = endpoint.replace(/^https?:\/\//, '');
-  
-  return endpoint;
+  // Kept as written: an http:// prefix is a plaintext request and goes through the same decision as any other target.
+  return getEnv("FI_GRPC_COLLECTOR_ENDPOINT") ??
+         getEnv("FI_GRPC_URL") ??
+         DEFAULT_FI_GRPC_COLLECTOR_BASE_URL;
 }
 
 // Explicit endpoints retain their base-or-full URL behavior. Environment collector
 // endpoints are full URLs; only FI_BASE_URL and the default are base origins.
+/** The collector URL an HTTP exporter given `endpoint` dials: the endpoint itself when it is a usable URL, else the environment's or the default route. It carries no userinfo. */
+export function resolveTraceEndpoint(endpoint?: string): string {
+  const resolved = constructFullEndpoint(endpoint);
+  try {
+    const url = new URL(resolved);
+    if (!url.username && !url.password) return resolved;
+    url.username = ""; url.password = "";
+    return url.toString();
+  } catch { return resolved; }
+}
+/**
+ * The scheme and authority of a URL as written (userinfo removed), so the host the exporter dials, and every
+ * decision about it, is the host the configuration names rather than the one a URL parser rewrites it to.
+ */
+function writtenOrigin(text: string, parsed: URL): string {
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([\s\S]*)$/.exec(text.trim());
+  // A backslash ends the authority only for the schemes in which a URL parser reads it as a separator.
+  const authority = match === null ? undefined : (/^(?:https?|wss?|ftp|file)$/i.test(match[1]) ? /^[^/?#\\]*/ : /^[^/?#]*/).exec(match[2])?.[0];
+  // An empty authority is refused, never re-read from the path (`https:///host/` and `https://\host/` would otherwise name the host "tracer").
+  if (authority === "") throw new FiKeyRefusal("FI_EMPTY_AUTHORITY");
+  return `${parsed.protocol}//${authority === undefined ? parsed.host : authority.slice(authority.lastIndexOf("@") + 1)}`;
+}
 function constructFullEndpoint(customEndpoint?: string): string {
   if (customEndpoint) {
     try {
       const parsedCustom = new URL(customEndpoint);
       if (!parsedCustom.protocol || !parsedCustom.host) {
-        diag.warn(`Custom endpoint '${customEndpoint}' is missing protocol or host. Falling back to environment or default.`);
+        diag.warn(`The custom endpoint (${hostClass(customEndpoint)}) is missing protocol or host. Falling back to environment or default.`);
       } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
-        diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
+        diag.warn(`Using the custom endpoint (${hostClass(customEndpoint)}) as a full URL.`);
         return customEndpoint;
       } else {
-        return `${parsedCustom.protocol}//${parsedCustom.host}${FI_COLLECTOR_PATH}`;
+        return `${writtenOrigin(customEndpoint, parsedCustom)}${FI_COLLECTOR_PATH}`;
       }
     } catch (e) {
-      diag.warn(`Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
+      if (e instanceof FiKeyRefusal) throw e;
+      diag.warn("The custom endpoint is not a valid URL. Falling back to environment or default.");
     }
   }
 
@@ -432,9 +482,17 @@ function constructFullEndpoint(customEndpoint?: string): string {
 /** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
 class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
   private readonly sanitize: ReturnType<typeof exportPrivacy>;
-  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders } = {}) {
-    const headers = resolveFiHeaders(options.headers);
-    super({ url: constructFullEndpoint(options.endpoint), headers });
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; url?: string; headers?: FIHeaders; allowInsecureHttp?: boolean; httpsProxy?: string } = {}) {
+    const named = resolveTarget(options, false);
+    const url = constructFullEndpoint(named);
+    const { headers, fiBound } = decide({ target: url, written: named, transport: "http", headers: options.headers, declaredFi: isFiRouteDeclared(options), allowInsecureHttp: options.allowInsecureHttp });
+    // An exporter for another collector merges the ambient OTLP headers: they are judged here, where the OTLP exporter reads them.
+    // (It sends with its own http.Agent, which does not consult a proxy environment.)
+    if (!fiBound) assertNoKeysInAmbientHeaders(fiKeyHeaderValues(options.headers));
+    super({ url, headers });
+    if (fiBound) isolateHttpExporterHeaders(this, { url, headers }, headers);
+    // Every send is judged on its final url and headers, after every merge the exporter performs.
+    guardOtlpHttpExporter(this, intendedFrom({ headers }), options.allowInsecureHttp, options.httpsProxy);
     this.sanitize = exportPrivacy(options, headers);
     privacyDestinations.add(this);
   }
@@ -445,13 +503,31 @@ class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
 /** Construct a privacy-protected FI exporter without registering a provider or doing I/O. */
 export function createSpanExporter(options: ExportPrivacyOptions & {
   endpoint?: string;
+  /** The standard OTLP exporter option; it names the target the same way `endpoint` does. */
+  url?: string;
   headers?: FIHeaders;
   transport?: Transport;
   verbose?: boolean;
+  /**
+   * Allows FI keys to go in plaintext to a self-hosted collector that is not a Future AGI host and not loopback
+   * (the environment's FI_ALLOW_INSECURE_HTTP=1 does the same). Never applies to a Future AGI host or through a proxy.
+   */
+  allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
 } = {}): SpanExporter {
+  // Whether the endpoint is the FI route is the SDK's own wiring (see fi-route.ts), carried by the
+  // identity of the options object; no property of a caller's options can say so.
+  const declared = isFiRouteDeclared(options);
+  const { fiEndpoint: _ignored, ...rest } = options as typeof options & { fiEndpoint?: unknown };
+  const mark = <T extends object>(built: T): T => (declared ? declareFiRoute(built) : built);
   return options.transport === Transport.GRPC
-    ? new GRPCSpanExporter({ ...options, endpoint: options.endpoint ?? getEnvGrpcCollectorEndpoint() })
-    : new OTLPHTTPSpanExporter(options);
+    ? new GRPCSpanExporter(mark({ ...rest }))
+    : new OTLPHTTPSpanExporter(mark({ ...rest }));
 }
 
 // --- TracerProvider ---
@@ -462,10 +538,23 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
   verbose?: boolean;
   idGenerator?: IdGenerator;
   endpoint?: string; // Custom endpoint (can be base or full, _constructFullEndpoint will handle)
+  url?: string; // The standard OTLP exporter option; names the target like `endpoint`
   headers?: FIHeaders;
   transport?: Transport; // Transport type
   sampler?: Sampler;
   spanProcessors?: SpanProcessor[];
+  /** See `createSpanExporter`. */
+  allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
+  /** Opt in to stamping skill/context scope attributes before exporter and application
+   * processors (default false: no runtime processor, as before). A runtime processor
+   * passed in `spanProcessors` is also an opt-in unless this is `false`. */
+  runtimeAttributes?: boolean;
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -486,35 +575,58 @@ class FITracerProvider extends BasicTracerProvider {
     
     // Construct the appropriate endpoint based on transport
     let endpoint: string;
+    const named = resolveTarget(config, transport === Transport.GRPC);
     if (transport === Transport.GRPC) {
-      endpoint = config.endpoint ?? getEnvGrpcCollectorEndpoint();
+      endpoint = named ?? getEnvGrpcCollectorEndpoint();
     } else {
-      endpoint = constructFullEndpoint(config.endpoint);
+      endpoint = constructFullEndpoint(named);
     }
     
-    const headers = resolveFiHeaders(config.headers);
+    // The key decision belongs to the SDK exporter that carries the keys: with explicit span processors none is built.
+    const headers = config.spanProcessors === undefined
+      ? decide({ target: endpoint, written: named, transport: transport === Transport.GRPC ? "grpc" : "http", headers: config.headers, allowInsecureHttp: config.allowInsecureHttp }).headers
+      : config.headers;
 
     if (verbose) {
-      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${endpoint}`);
+      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${hostClass(endpoint)}`);
     }
 
     // Explicit lists, including [], never construct a hidden default exporter.
     let defaultProcessor: DefaultBatchSpanProcessor | DefaultSimpleSpanProcessor | undefined;
     if (config.spanProcessors === undefined) {
       // Resolve the original options, not an already-resolved full environment URL.
-      const exporter = createSpanExporter({ ...config, transport, headers });
+      const exporter = createSpanExporter({ ...config, transport, headers, allowInsecureHttp: config.allowInsecureHttp, httpsProxy: config.httpsProxy });
       defaultProcessor = config.batch
         ? new DefaultBatchSpanProcessor(exporter)
         : new DefaultSimpleSpanProcessor(exporter);
     }
+    // Opt-in only. Omitted means no runtime processor, exactly as before;
+    // a caller-supplied runtime processor is itself an explicit opt-in.
+    const suppliedRuntime = config.spanProcessors?.find(processor => runtimeProcessorInstances.has(processor));
+    // A supplied processor masks with this provider's policy too (stricter wins),
+    // whether it is adopted ahead of the registry or left inside it.
+    if (suppliedRuntime) (suppliedRuntime as FutureAGIRuntimeAttributesSpanProcessor)[ADOPT_PROVIDER_POLICY](config.traceConfig);
+    const runtimeProcessor = config.runtimeAttributes === false ? undefined
+      : config.runtimeAttributes === true
+        ? suppliedRuntime ?? new FutureAGIRuntimeAttributesSpanProcessor({ traceConfig: config.traceConfig })
+        : suppliedRuntime;
     const processorRegistry = new SpanProcessorRegistry(
-      config.spanProcessors ?? [],
+      runtimeProcessor
+        ? (config.spanProcessors ?? []).filter(processor => !runtimeProcessorInstances.has(processor))
+        : config.spanProcessors ?? [],
       () => defaultProcessor?.disable(),
+      // A user-supplied runtime processor is moved ahead of the registry. It
+      // may already have distributed setters; do not attest early observation.
+      !runtimeProcessor || !config.spanProcessors?.includes(runtimeProcessor),
     );
     // Keep the actual SDK default at the top level for native adapters that borrow
     // its exporter, and for SDK-owned flush/shutdown of its accepted batch queue.
+    // Keep scope stamping separate from the replaceable default destination.
+    // An explicit [] still creates no exporter; legacy processor replacement
+    // cannot remove the runtime processor. Never install via addSpanProcessor.
+    const runtimeProcessors = runtimeProcessor ? [runtimeProcessor] : [];
     super({ resource: applicationResource(config.resource), idGenerator, sampler: config.sampler,
-      spanProcessors: defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry] });
+      spanProcessors: [...runtimeProcessors, ...(defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry])] });
     this.processorRegistry = processorRegistry;
     this.defaultProcessorAttached = config.spanProcessors === undefined;
     this.batch = config.batch ?? false;
@@ -525,7 +637,7 @@ class FITracerProvider extends BasicTracerProvider {
 
     // Log to confirm processor and exporter details
     if (verbose) {
-      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${endpoint}`);
+      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${hostClass(endpoint)}`);
     }
 
     if (verbose) {
@@ -612,6 +724,14 @@ class BatchSpanProcessor extends OTelBatchSpanProcessor {
 }
 
 export interface RegisterOptions extends ExportPrivacyOptions {
+  /** See `createSpanExporter`: plaintext to a self-hosted collector that is not a Future AGI host. */
+  allowInsecureHttp?: boolean;
+  /**
+   * An http:// or https:// proxy for key-carrying exports and checks to https destinations (CONNECT only, TLS verified to the destination and, for an
+   * https proxy, to the proxy). Wins over FI_HTTPS_PROXY. Credentials in the URL are sent to the proxy as Proxy-Authorization; with an http:// proxy they
+   * travel unencrypted to it. A plaintext destination is refused while a proxy is set. gRPC does not use it.
+   */
+  httpsProxy?: string;
   /** Preserve application service identity; FI project routing is separate. */
   resource?: Resource;
   projectName?: string;
@@ -632,6 +752,10 @@ export interface RegisterOptions extends ExportPrivacyOptions {
   sampler?: Sampler;
   /** When provided, use these processors instead of constructing the default exporter. */
   spanProcessors?: SpanProcessor[];
+  /** Opt in to stamping skill/context scope attributes before exporter and application
+   * processors (default false: no runtime processor, as before). A runtime processor
+   * passed in `spanProcessors` is also an opt-in unless this is `false`. */
+  runtimeAttributes?: boolean;
 }
 
 function register(options: RegisterOptions = {}): FITracerProvider {
@@ -691,7 +815,8 @@ if (!projectName) {
       projectName,
       preparedEvalTags,
       optEndpoint,
-      verbose
+      verbose,
+      { allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy },
     ).then(customEvalConfigExists => {
       if (customEvalConfigExists) {
         // Log an error instead of throwing, as register has already returned.
@@ -703,7 +828,7 @@ if (!projectName) {
       }
     }).catch(error => {
         // Log any error from the check itself
-        diag.error(`register: Error during background checkCustomEvalConfigExists for project '${projectName}': ${error}`);
+        diag.error(`register: Error during background checkCustomEvalConfigExists for project '${projectName}': ${describeFailure(error)}`);
     });
   }
 
@@ -724,7 +849,8 @@ if (!projectName) {
 
   
   // Headers for the exporter
-  const exporterHeaders = resolveFiHeaders(optHeaders);
+  // The provider resolves them against the endpoint it exports to.
+  const exporterHeaders = optHeaders;
   // Endpoint for the exporter is now determined by FITracerProvider's constructor
   // using _constructFullEndpoint, which considers optEndpoint and env vars.
 
@@ -738,8 +864,11 @@ if (!projectName) {
     sampler: options.sampler,
     batch: options.batch ?? false,
     spanProcessors: options.spanProcessors,
+    runtimeAttributes: options.runtimeAttributes,
     traceConfig: options.traceConfig,
     resourceAttributes: options.resourceAttributes,
+    allowInsecureHttp: options.allowInsecureHttp,
+    httpsProxy: options.httpsProxy,
   });
 
   if (setGlobalTracerProvider) {
@@ -773,44 +902,67 @@ export interface CheckCustomEvalTemplateExistsResponse {
   // Add other fields if the API returns more
 }
 
+/** The Future AGI API base the FI environment (or the default) selects. */
+function fiApiBase(): string {
+  return getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+}
+/**
+ * The base URL an eval check is sent to. The check carries the FI keys, so it goes only to a Future AGI base:
+ * a custom endpoint is used when it is one (a futureagi.com host, or the host FI_BASE_URL selects); any other
+ * endpoint is the application's own collector, and the check goes to the base the FI environment selects.
+ */
+function evalCheckBase(name: string, checkPath: string, customEndpoint: string | undefined, verbose?: boolean): string {
+  if (customEndpoint) {
+    let candidate: string | undefined;
+    try {
+      const parsedCustom = new URL(customEndpoint);
+      if (parsedCustom.pathname.endsWith(checkPath)) {
+        if (verbose) diag.info(`${name}: Using custom full endpoint: ${hostClass(customEndpoint)}`);
+        candidate = customEndpoint.substring(0, customEndpoint.lastIndexOf(checkPath));
+      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") {
+        candidate = writtenOrigin(customEndpoint, parsedCustom);
+      } else {
+        candidate = customEndpoint;
+      }
+    } catch (e) {
+      if (verbose) diag.warn(`${name}: The custom endpoint is not a valid URL. Falling back to environment or default.`);
+    }
+    if (candidate !== undefined) {
+      if (isFiEndpoint(candidate, "http") || sameEndpointTarget(candidate, fiApiBase(), "http")) return candidate;
+      if (verbose) diag.info(`${name}: The endpoint is not a Future AGI base; checking the Future AGI base instead.`);
+    }
+  }
+  return fiApiBase();
+}
+
 async function checkCustomEvalConfigExists(
   projectName: string,
   evalTags: any[], // Expects result of prepareEvalTags
   customEndpoint?: string, // Can be base or full URL for the API call itself
-  verbose?: boolean
+  verbose?: boolean,
+  options: { allowInsecureHttp?: boolean; /** An https proxy for the check (see `createSpanExporter`). */ httpsProxy?: string; /** A dispatcher option is refused for a key-carrying check. */ dispatcher?: unknown } = {},
 ): Promise<boolean> {
   if (!evalTags || evalTags.length === 0) {
     return false;
   }
 
-  let apiBaseUrl: string;
-  if (customEndpoint) {
-    try {
-      const parsedCustom = new URL(customEndpoint);
-      if (parsedCustom.pathname.endsWith(FI_CUSTOM_EVAL_CONFIG_CHECK_PATH)) {
-        if (verbose) diag.info(`checkCustomEvalConfigExists: Using custom full endpoint: ${customEndpoint}`);
-        apiBaseUrl = customEndpoint.substring(0, customEndpoint.lastIndexOf(FI_CUSTOM_EVAL_CONFIG_CHECK_PATH));
-      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") { 
-         apiBaseUrl = `${parsedCustom.protocol}//${parsedCustom.host}`;
-      } else { 
-         apiBaseUrl = customEndpoint; 
-      }
-    } catch (e) {
-      if (verbose) diag.warn(`checkCustomEvalConfigExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-    }
-  } else {
-    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-  }
+  let apiBaseUrl = evalCheckBase("checkCustomEvalConfigExists", FI_CUSTOM_EVAL_CONFIG_CHECK_PATH, customEndpoint, verbose);
 
   if (apiBaseUrl.endsWith('/')) {
     apiBaseUrl = apiBaseUrl.slice(0, -1);
   }
   const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_CONFIG_CHECK_PATH}`;
 
+  // The check goes only to a Future AGI base (see evalCheckBase); the decision is the same one every request gets.
+  let keys: FIHeaders | undefined;
+  try { keys = decide({ target: url, transport: "http", declaredFi: true, allowInsecureHttp: options.allowInsecureHttp, dispatcher: options.dispatcher }).headers; }
+  catch (error) {
+    diag.warn(`checkCustomEvalConfigExists: skipped${failureSuffix(error)}`);
+    return false;
+  }
   const headers: FIHeaders = {
     "Content-Type": "application/json",
-    ...(getEnvFiAuthHeader() || {}),
+    ...(keys || {}),
   };
 
   const payload = {
@@ -819,20 +971,22 @@ async function checkCustomEvalConfigExists(
   };
 
   if (verbose) {
-    diag.info(`checkCustomEvalConfigExists: Checking custom eval config at ${url} with payload:`, JSON.stringify(payload, null, 2));
+    diag.info(`checkCustomEvalConfigExists: Checking custom eval config at ${hostClass(url)} with payload:`, JSON.stringify(payload, null, 2));
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload),
-    });
-
+    let response: OwnResponse;
+    try {
+      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy,
+        init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
+    } catch (error) {
+      if (error instanceof FiKeyRefusal) { diag.warn(`checkCustomEvalConfigExists: skipped${failureSuffix(error)}`); return false; }
+      throw error;
+    }
     if (!response.ok) {
-      const errorText = await response.text();
+      await response.body?.cancel();
       diag.error(
-        `checkCustomEvalConfigExists: Failed to check custom eval config: ${response.status} ${response.statusText} - ${errorText}`,
+        `checkCustomEvalConfigExists: Failed to check custom eval config: ${response.status} ${response.statusText}`,
       );
       return false; 
     }
@@ -843,7 +997,7 @@ async function checkCustomEvalConfigExists(
     }
     return result?.result?.exists === true;
   } catch (error) {
-    diag.error(`checkCustomEvalConfigExists: Error checking custom eval config: ${error}`);
+    diag.error(`checkCustomEvalConfigExists: Error checking custom eval config: ${describeFailure(error)}`);
     return false;
   }
 }
@@ -852,6 +1006,7 @@ export async function checkCustomEvalTemplateExists(
   eval_template_name: string,
   verbose?: boolean,
   customEndpoint?: string,
+  options: { allowInsecureHttp?: boolean; /** An https proxy for the check (see `createSpanExporter`). */ httpsProxy?: string; /** A dispatcher option is refused for a key-carrying check. */ dispatcher?: unknown } = {},
 ): Promise<CheckCustomEvalTemplateExistsResponse> {
   if (!eval_template_name || eval_template_name.length === 0) {
     const response: CheckCustomEvalTemplateExistsResponse = {
@@ -863,34 +1018,23 @@ export async function checkCustomEvalTemplateExists(
     return response;
   }
 
-  let apiBaseUrl: string;
-  if (customEndpoint) {
-    try {
-      const parsedCustom = new URL(customEndpoint);
-      if (parsedCustom.pathname.endsWith(FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH)) {
-        if (verbose) diag.info(`checkCustomEvalTemplateExists: Using custom full endpoint: ${customEndpoint}`);
-        apiBaseUrl = customEndpoint.substring(0, customEndpoint.lastIndexOf(FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH));
-      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") { 
-         apiBaseUrl = `${parsedCustom.protocol}//${parsedCustom.host}`;
-      } else { 
-         apiBaseUrl = customEndpoint; 
-      }
-    } catch (e) {
-      if (verbose) diag.warn(`checkCustomEvalTemplateExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-    }
-  } else {
-    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-  }
+  let apiBaseUrl = evalCheckBase("checkCustomEvalTemplateExists", FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH, customEndpoint, verbose);
 
   if (apiBaseUrl.endsWith('/')) {
     apiBaseUrl = apiBaseUrl.slice(0, -1);
   }
   const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH}`;
 
+  // The check goes only to a Future AGI base (see evalCheckBase); the decision is the same one every request gets.
+  let keys: FIHeaders | undefined;
+  try { keys = decide({ target: url, transport: "http", declaredFi: true, allowInsecureHttp: options.allowInsecureHttp, dispatcher: options.dispatcher }).headers; }
+  catch (error) {
+    diag.warn(`checkCustomEvalTemplateExists: skipped${failureSuffix(error)}`);
+    return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+  }
   const headers: FIHeaders = {
     "Content-Type": "application/json",
-    ...(getEnvFiAuthHeader() || {}),
+    ...(keys || {}),
   };
 
   const payload = {
@@ -898,20 +1042,25 @@ export async function checkCustomEvalTemplateExists(
   };
 
   if (verbose) {
-    diag.info(`checkCustomEvalTemplateExists: Checking custom eval template at ${url} with payload:`, JSON.stringify(payload, null, 2));
+    diag.info(`checkCustomEvalTemplateExists: Checking custom eval template at ${hostClass(url)} with payload:`, JSON.stringify(payload, null, 2));
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload),
-    });
-
+    let response: OwnResponse;
+    try {
+      response = await guardedFetch({ url, intended: intendedFrom({ headers }), allowInsecureHttp: options.allowInsecureHttp, httpsProxy: options.httpsProxy,
+        init: { ...(options.dispatcher ? { dispatcher: options.dispatcher as any } : {}), method: "POST", headers: headers, body: JSON.stringify(payload) } });
+    } catch (error) {
+      if (error instanceof FiKeyRefusal) {
+        diag.warn(`checkCustomEvalTemplateExists: skipped${failureSuffix(error)}`);
+        return { result: { isUserEvalTemplate: false, evalTemplate: null } };
+      }
+      throw error;
+    }
     if (!response.ok) {
-      const errorText = await response.text();
+      await response.body?.cancel();
       diag.error(
-        `checkCustomEvalTemplateExists: Failed to check custom eval template: ${response.status} ${response.statusText} - ${errorText}`,
+        `checkCustomEvalTemplateExists: Failed to check custom eval template: ${response.status} ${response.statusText}`,
       );
       return {
         result: {
@@ -927,7 +1076,7 @@ export async function checkCustomEvalTemplateExists(
     }
     return result;
   } catch (error) {
-    diag.error(`checkCustomEvalTemplateExists: Error checking custom eval template: ${error}`);
+    diag.error(`checkCustomEvalTemplateExists: Error checking custom eval template: ${describeFailure(error)}`);
     return {
       result: {
         isUserEvalTemplate: false,

@@ -29,6 +29,12 @@ class MediaAdmissionTest < Minitest::Test
     payloads.merge(filler).merge(root + '.' + hint => value)
   end
 
+  # These tests pin the admission model on SDKs whose hooks the probe proves. On any other SDK
+  # exports omit media instead (test_media_sdk_verification.rb).
+  def setup
+    skip 'media admission hooks are unproven on this SDK' unless A::MediaAdmission.verified?
+  end
+
   def provider(count = nil, length = nil)
     OpenTelemetry::SDK::Trace::Span.prepend(A::MediaAdmission) unless OpenTelemetry::SDK::Trace::Span.ancestors.include?(A::MediaAdmission)
     host = OpenTelemetry::SDK::Trace::TracerProvider.new
@@ -330,6 +336,7 @@ class EndToEndTest
   end
 
   def test_owned_and_host_providers_zero_code_and_init_preserve_application_and_omit_media
+    skip 'media admission hooks are unproven on this SDK' unless TraceAI::Auto::MediaAdmission.verified?
     # Without an application provider, a zero-code start waits for one (or for
     # the first AI request), so application spans need 'host' or an explicit init.
     [%w[owned init], %w[host zero], %w[host init]].each do |ownership, boot|

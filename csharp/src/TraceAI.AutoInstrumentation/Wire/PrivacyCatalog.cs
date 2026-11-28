@@ -23,10 +23,18 @@ internal static class PrivacyCatalog
     private static readonly Regex[] ContextExclusions=Credentials["contextual_exclusions"]!.AsArray().Select(n=>Rx(n!["path_regex"]!.GetValue<string>())).ToArray();
     // Credential-shaped values are redacted wherever they appear in exported text,
     // independent of names. They never exempt anything.
-    private static readonly Regex[] ValueShapes=Credentials["value_shapes"]!.AsArray().Select(n=>n!["flags"]!.GetValue<string>() switch {
-        ""=>Rx(n["regex"]!.GetValue<string>()),
-        "i"=>new Regex(n["regex"]!.GetValue<string>(),RegexOptions.CultureInvariant|RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(250)),
-        _=>throw new InvalidDataException("Unsupported value shape flags")
+    // The jwt shape is scanned by JwtScan.Replace (exactly equivalent to its catalog regex, in time linear in the text); every other
+    // shape runs as its catalog regex. A jwt regex that differs from the one JwtScan implements runs as a regex.
+    private const string JwtRegex=@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}";
+    private static readonly Func<string,string>[] ValueShapes=Credentials["value_shapes"]!.AsArray().Select<JsonNode?,Func<string,string>>(n=>{
+        string pattern=n!["regex"]!.GetValue<string>(), flags=n["flags"]!.GetValue<string>();
+        if(flags=="" && n["id"]?.GetValue<string>()=="jwt" && pattern==JwtRegex) return JwtScan.Replace;
+        Regex rule=flags switch {
+            ""=>Rx(pattern),
+            "i"=>new Regex(pattern,RegexOptions.CultureInvariant|RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(250)),
+            _=>throw new InvalidDataException("Unsupported value shape flags")
+        };
+        return v=>rule.Replace(v,Redacted);
     }).ToArray();
     private static readonly HashSet<string> Signed=Strings(Catalog["signed_url"]!["parameters"]!).Select(Normalize).ToHashSet(StringComparer.Ordinal);
     private static readonly HashSet<char> Alphabet=Media["base64_alphabet"]!.GetValue<string>().ToHashSet();
@@ -217,7 +225,7 @@ internal static class PrivacyCatalog
         string candidate=UrlValue(value,true);
         return candidate!=value&&Full(ExactUrl,candidate);
     }
-    internal static string Text(string value,IEnumerable<string>? secrets=null,bool framed=true)
+    internal static string Text(string value,IEnumerable<string>? secrets=null,bool framed=true,bool shapes=true)
     {
         if(framed&&IsUrlValue(value)) value=UrlValue(value);
         else
@@ -230,10 +238,42 @@ internal static class PrivacyCatalog
                 return UrlValue(original)+quote;
             });
         }
-        foreach(string secret in (secrets??[]).Where(s=>s.Length>=8&&s!=Redacted).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length).ThenBy(s=>s,StringComparer.Ordinal))
-            value=string.Join(Redacted,value.Split(Redacted,StringSplitOptions.None).Select(part=>part.Replace(secret,Redacted,StringComparison.Ordinal)));
-        foreach(var shape in ValueShapes) value=shape.Replace(value,Redacted);
+        value=ReplaceSecrets(value,secrets);
+        // Known secrets are replaced first, then the credential value shapes on the result, in this one call. A pass that does not
+        // replace known secrets (shapes: false) never runs a shape on text that still holds one.
+        if(shapes) foreach(var shape in ValueShapes) value=shape(value);
         return value;
+    }
+    /// <summary>Replaces every occurrence of every known secret (eight or more characters). Occurrences that overlap or contain
+    /// one another, including secrets that overlap only at their edges, are replaced as one span, so no part of either secret
+    /// remains. Text already replaced is left as it is and no secret matches across a placeholder.</summary>
+    internal static string ReplaceSecrets(string value,IEnumerable<string>? secrets)
+    {
+        if(secrets==null||value.Length<8) return value;
+        // A registry snapshot is an immutable array shared by every value of an export batch: prepare it once, not per value.
+        var known=secrets is string[] snapshot?Prepared.GetValue(snapshot,Prepare):Prepare(secrets.ToArray());
+        if(known.Length==0) return value;
+        return string.Join(Redacted,value.Split(Redacted,StringSplitOptions.None).Select(part=>ReplaceInPart(part,known)));
+    }
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<string[],string[]> Prepared=new();
+    private static string[] Prepare(string[] secrets)=>secrets.Where(s=>s.Length>=8&&s!=Redacted).Distinct(StringComparer.Ordinal).ToArray();
+    private static string ReplaceInPart(string part,string[] known)
+    {
+        List<(int Start,int End)>? spans=null;
+        foreach(var secret in known)
+            for(int at=part.IndexOf(secret,StringComparison.Ordinal);at>=0;at=at+1<part.Length?part.IndexOf(secret,at+1,StringComparison.Ordinal):-1)
+                (spans??=[]).Add((at,at+secret.Length));
+        if(spans==null) return part;
+        spans.Sort((a,b)=>a.Start!=b.Start?a.Start.CompareTo(b.Start):b.End.CompareTo(a.End));
+        var result=new System.Text.StringBuilder(part.Length);
+        int copied=0,start=spans[0].Start,end=spans[0].End;
+        for(int i=1;i<=spans.Count;i++)
+        {
+            if(i<spans.Count&&spans[i].Start<end) { end=Math.Max(end,spans[i].End); continue; }
+            result.Append(part,copied,start-copied).Append(Redacted); copied=end;
+            if(i<spans.Count) { start=spans[i].Start; end=spans[i].End; }
+        }
+        return result.Append(part,copied,part.Length-copied).ToString();
     }
     internal sealed class Budget
     {
@@ -241,7 +281,7 @@ internal static class PrivacyCatalog
         internal void Node(int depth) { if(depth>MaxDepth||--nodes<0) throw new InvalidDataException("Privacy structure budget"); }
         internal void Text(int length) { if((characters-=length)<0) throw new InvalidDataException("Privacy text budget"); }
     }
-    internal static JsonNode? Scrub(JsonNode? value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false)
+    internal static JsonNode? Scrub(JsonNode? value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false,bool shapes=true)
     {
         budget??=new(); budget.Node(depth);
         if(CredentialName(path)) return JsonValue.Create(Redacted);
@@ -252,11 +292,11 @@ internal static class PrivacyCatalog
             var result=new JsonObject();
             foreach(var pair in obj)
             {
-                string key=Text(pair.Key,secrets),child=path.Length>0?path+"."+pair.Key:pair.Key;
+                string key=Text(pair.Key,secrets,true,shapes),child=path.Length>0?path+"."+pair.Key:pair.Key;
                 // Preserve the pre-S6 embedding-vector export policy. This is not
                 // a credential/media recognition list and never affects harvesting.
                 result[key]=pair.Key.ToLowerInvariant() is "embedding" or "embeddings" && pair.Value is JsonObject or JsonArray
-                    ?JsonValue.Create(Redacted):Scrub(pair.Value,child,hints,secrets,true,budget,depth+1,media,audio);
+                    ?JsonValue.Create(Redacted):Scrub(pair.Value,child,hints,secrets,true,budget,depth+1,media,audio,shapes);
             }
             return result;
         }
@@ -265,15 +305,15 @@ internal static class PrivacyCatalog
         {
             if(context.Payload&&array.Count>0&&array.All(IsNumberOrBool)) return JsonValue.Create(OtherMedia);
             var result=new JsonArray();
-            for(int i=0;i<array.Count;i++) result.Add(Scrub(array[i],path+"."+i,hints,secrets,true,budget,depth+1,media,audio));
+            for(int i=0;i<array.Count;i++) result.Add(Scrub(array[i],path+"."+i,hints,secrets,true,budget,depth+1,media,audio,shapes));
             return result;
         }
         if(WireCore.S(value) is not {} text) return value!=null&&context.Payload?JsonValue.Create(OtherMedia):value?.DeepClone();
         budget.Text(text.Length);
-        return JsonValue.Create(String(text,path,hints,secrets,framed,budget,depth,media,audio));
+        return JsonValue.Create(String(text,path,hints,secrets,framed,budget,depth,media,audio,shapes));
     }
     private static bool IsNumberOrBool(JsonNode? value)=>value is JsonValue scalar&&(scalar.GetValueKind() is System.Text.Json.JsonValueKind.Number or System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False);
-    internal static string String(string value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false)
+    internal static string String(string value,string path="",Dictionary<string,Hint>? hints=null,IEnumerable<string>? secrets=null,bool framed=true,Budget? budget=null,int depth=0,bool media=false,bool audio=false,bool shapes=true)
     {
         if(CredentialName(path)) return Redacted;
         if(MediaString(value,path,hints,framed,media,audio) is {} replacement) return replacement;
@@ -282,9 +322,9 @@ internal static class PrivacyCatalog
         {
             // Invalid/deep serialized JSON fails closed at S1 rather than being treated as prose.
             var parsed=JsonNode.Parse(value); var context=Context(path,hints,media,audio);
-            var clean=Scrub(parsed,"",null,secrets,true,budget,depth+1,context.Media,context.Audio);
+            var clean=Scrub(parsed,"",null,secrets,true,budget,depth+1,context.Media,context.Audio,shapes);
             if(!JsonNode.DeepEquals(parsed,clean)) value=WireCore.J(clean);
         }
-        return Text(value,secrets,framed);
+        return Text(value,secrets,framed,shapes);
     }
 }

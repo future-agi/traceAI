@@ -5,6 +5,12 @@ using System.Diagnostics;
 
 namespace TraceAI.AutoInstrumentation;
 
+/// <summary>FI_BASE_URL is set but blank: the agent does not start.</summary>
+internal sealed class BlankBaseUrlException : ArgumentException
+{
+    internal BlankBaseUrlException() : base("FI_BASE_URL is set but empty") { }
+}
+
 /// <summary>Unset values inherit environment, then futureagi.toml, then defaults.</summary>
 public sealed class AutoOptions
 {
@@ -24,6 +30,9 @@ public sealed class AutoOptions
     public int? WireMaxBodyBytes { get; set; }
     public double? SampleRate { get; set; }
     public bool? Debug { get; set; }
+    /// <summary>Allows the Future AGI keys to go in plaintext to a self-hosted collector that is not a Future AGI host (FI_ALLOW_INSECURE_HTTP=1 does the same).
+    /// Loopback needs no setting and a Future AGI host is always TLS.</summary>
+    public bool? AllowInsecureHttp { get; set; }
     /// <summary>Optional exporter for embedding or tests; otherwise OTLP HTTP/protobuf is used.</summary>
     public BaseExporter<Activity>? Exporter { get; set; }
     /// <summary>Optional caller-owned provider. Configure its source subscriptions
@@ -51,14 +60,24 @@ internal sealed class AutoConfig
     internal AutoConfig(AutoOptions options)
     {
         Options = options;
+        // A blank FI_CONFIG_FILE names no file, so none is read; only an unset one falls back to ./futureagi.toml.
         Values = ReadFile(options.ConfigFile ?? Environment.GetEnvironmentVariable("FI_CONFIG_FILE") ?? Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
         var fileApi=Values.GetValueOrDefault("FI_API_KEY"); var fileSecret=Values.GetValueOrDefault("FI_SECRET_KEY");
+        bool blankBaseUrl=false;
         foreach (System.Collections.DictionaryEntry pair in Environment.GetEnvironmentVariables())
             if (pair.Key is string key && (key.StartsWith("FI_") || key == "OTEL_SDK_DISABLED"))
             {
                 var value = pair.Value?.ToString() ?? "";
-                // A blank hide switch is not set, so it does not replace the file's value.
-                if (key.StartsWith("FI_HIDE_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value)) continue;
+                // A blank value counts as not set, so the file's value or the default applies, except where not set is not the
+                // cautious reading: a blank FI_CONFIG_FILE stays blank (no file is read) and a blank FI_WIRE_CAPTURE is off.
+                // A blank FI_BASE_URL is checked below, once the explicit options are known.
+                if (key.StartsWith("FI_", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(value))
+                {
+                    if (key == "FI_CONFIG_FILE") Values[key] = "";
+                    else if (key == "FI_WIRE_CAPTURE") Values[key] = "false";
+                    else if (key == "FI_BASE_URL") blankBaseUrl = true;
+                    continue;
+                }
                 Values[key] = value;
             }
         Set("CONFIG_FILE",options.ConfigFile); Values.TryAdd("FI_CONFIG_FILE",Path.Combine(Environment.CurrentDirectory,"futureagi.toml"));
@@ -87,6 +106,9 @@ internal sealed class AutoConfig
         Set("DISABLED_INSTRUMENTATIONS",options.DisabledInstrumentations == null ? null : string.Join(',',options.DisabledInstrumentations));
         Set("WIRE_CAPTURE",options.WireCapture?.ToString()); Set("WIRE_MAX_BODY_BYTES",options.WireMaxBodyBytes?.ToString(CultureInfo.InvariantCulture));
         Set("SAMPLE_RATE",options.SampleRate?.ToString(CultureInfo.InvariantCulture)); Set("AUTO_DEBUG",options.Debug?.ToString());
+        // A blank FI_BASE_URL stops the agent, whatever the file or the default says: the collector it names is unknown.
+        // It does not apply when the caller gave the URL, or supplied the exporter or provider that sends the spans.
+        if(blankBaseUrl && options.BaseUrl==null && options.Exporter==null && options.Provider==null && !Disabled) throw new BlankBaseUrlException();
         Values.TryAdd("FI_BASE_URL",FIInstrumentation.Settings.DefaultBaseUrl);
         Values.TryAdd("FI_PROJECT_NAME",DefaultProjectName());
         Values.TryAdd("FI_PROJECT_VERSION_NAME",FIInstrumentation.Settings.DefaultProjectVersionName);
@@ -112,8 +134,24 @@ internal sealed class AutoConfig
     private void Set(string key,string? value) { if(value!=null) Values["FI_"+key]=value; }
     internal string Get(string key) => Values.GetValueOrDefault("FI_"+key)??"";
     /// <summary>Switches other than the hide switches (FI_WIRE_CAPTURE, FI_AUTO_DEBUG): true,
-    /// 1 or yes is on, trimmed and case-insensitive; anything else is off.</summary>
+    /// 1 or yes is on, trimmed and case-insensitive; anything else, including a blank FI_WIRE_CAPTURE, is off.</summary>
     internal bool Bool(string key) => Get(key).Trim().ToLowerInvariant() is "true" or "1" or "yes";
+    /// <summary>FI_AUTO_CAPTURE_CONTENT: on when unset or blank, and for true, 1, yes or on; off for false, 0, no or off.
+    /// Any other value is off, the cautious reading of a switch someone set, reported with one warning that names only the setting.</summary>
+    internal bool CaptureContent
+    {
+        get
+        {
+            switch (Get("AUTO_CAPTURE_CONTENT").Trim().ToLowerInvariant())
+            {
+                case "" or "true" or "1" or "yes" or "on": return true;
+                case "false" or "0" or "no" or "off": return false;
+                default:
+                    TraceAIAuto.Warn("capture-content","FI_AUTO_CAPTURE_CONTENT has a value that is not recognised, so content is not recorded. Use true, 1, yes or on to record it, or false, 0, no or off to keep it off.");
+                    return false;
+            }
+        }
+    }
     /// <summary>A hide switch, from FI_HIDE_* or its file setting, trimmed and case-insensitive:
     /// true, 1, yes or on hides; false, 0, no or off shows. Null when it is not set or blank, so
     /// the caller's default applies. Any other value hides, because a hide switch someone set
@@ -142,7 +180,15 @@ internal sealed class AutoConfig
         return (allow.Length==0||allow.Contains(name,StringComparer.OrdinalIgnoreCase))&&!deny.Contains(name,StringComparer.OrdinalIgnoreCase)&&(name!="wire"||Bool("WIRE_CAPTURE"));
     }
     internal Dictionary<string,string> Masked() => Values.ToDictionary(p=>p.Key,p=>Wire.WirePrivacy.CredentialKey(p.Key)?"***":RedactSecrets(p.Value));
-    internal string RedactSecrets(string text) => Wire.WirePrivacy.ScrubString(text,CredentialValues.OrderByDescending(s=>s.Length));
+    /// <summary>Replaces every secret the agent knows: the FI credentials of this configuration and the process-wide registry
+    /// (registered secrets and credentials discovered in requests), the same set the Future AGI copy uses. When the registry is
+    /// unavailable the text is replaced entirely.</summary>
+    internal string[] KnownValues()=>CredentialValues.Concat(KnownSecrets.Snapshot()).Distinct(StringComparer.Ordinal).OrderByDescending(s=>s.Length).ToArray();
+    internal string RedactSecrets(string text)
+    {
+        try { return Wire.WirePrivacy.ScrubString(text,KnownValues()); }
+        catch { return Wire.WirePrivacy.Redacted; }
+    }
     private static string DefaultProjectName()
     {
         if(Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") is { Length:>0 } service) return service;
@@ -167,9 +213,9 @@ internal sealed class AutoConfig
             var pair=text.Split('=',2); if(pair.Length!=2) continue;
             var key=pair[0].Trim(); var value=pair[1].Trim(); if(key.Length==0||value.Length==0) continue;
             var name=key=="debug"?"FI_AUTO_DEBUG":"FI_"+key.ToUpperInvariant();
-            // A hide switch someone set must never be dropped. When its value is outside the flat
+            // A hide switch or the content switch someone set must never be dropped. When its value is outside the flat
             // subset, keep the text (a single-quoted string without its quotes) and let Hide() decide.
-            bool hide=name.StartsWith("FI_HIDE_",StringComparison.Ordinal);
+            bool hide=name.StartsWith("FI_HIDE_",StringComparison.Ordinal)||name=="FI_AUTO_CAPTURE_CONTENT";
             try
             {
                 if(value.StartsWith('[')) value=string.Join(',',JsonSerializer.Deserialize<string[]>(value)??[]);

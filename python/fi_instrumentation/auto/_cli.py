@@ -76,21 +76,25 @@ def check_collector(settings: AutoConfig, timeout: float = 5.0) -> Tuple[bool, s
     import requests
     from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, attach, detach, set_value
 
-    from fi_instrumentation.otel import _normalized_endpoint
+    from fi_instrumentation.otel import _guard_future_agi_request, _normalized_endpoint, _post_with_keys
 
     if not settings.has_credentials:
         return False, settings.export_off or "FI_API_KEY and FI_SECRET_KEY are not set"
     _, endpoint = _normalized_endpoint(settings.base_url)
+    keys = (
+        {"X-Api-Key": settings.api_key or "", "X-Secret-Key": settings.secret_key or ""}
+        if _guard_future_agi_request(endpoint, named=True, base=settings.base_url)
+        else {}
+    )
     token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
     try:
-        with requests.Session() as session:
-            response = session.post(
-                endpoint,
-                data=b"",
-                headers={"Content-Type": "application/x-protobuf", "X-Api-Key": settings.api_key or "",
-                         "X-Secret-Key": settings.secret_key or ""},
-                timeout=timeout,
-            )
+        response = _post_with_keys(
+            endpoint,
+            bool(keys),
+            data=b"",
+            headers={"Content-Type": "application/x-protobuf", **keys},
+            timeout=timeout,
+        )
     except requests.RequestException as error:
         return False, f"{endpoint} unreachable: {type(error).__name__}"
     finally:

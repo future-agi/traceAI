@@ -188,22 +188,37 @@ describe('Semantic Conventions Package Integration', () => {
     });
 
     it('should not cause memory leaks on repeated imports', () => {
-      const initialMemory = process.memoryUsage().heapUsed;
-      
-      // Import multiple times
-      for (let i = 0; i < 5; i++) {
+      // The heap is collected before each reading, so the difference is what the imports retain and not garbage
+      // that a collector has not reached yet. Node 24 leaves more of that garbage behind under load.
+      const collect = (): void => {
+        if (global.gc) {
+          global.gc();
+          return;
+        }
+        require('v8').setFlagsFromString('--expose-gc');
+        require('vm').runInNewContext('gc')();
+      };
+      const reload = (): void => {
         delete require.cache[require.resolve('../index')];
         require('../index');
+      };
+
+      // One import first, so what the module loads once (code, caches) is not counted as growth.
+      reload();
+      collect();
+      collect();
+      const initialMemory = process.memoryUsage().heapUsed;
+
+      // Import multiple times
+      for (let i = 0; i < 5; i++) {
+        reload();
       }
-      
-      // Force garbage collection if available
-      if (global.gc) {
-        global.gc();
-      }
-      
+
+      collect();
+      collect();
       const finalMemory = process.memoryUsage().heapUsed;
       const memoryIncrease = finalMemory - initialMemory;
-      
+
       // Should not increase memory by more than 500KB
       expect(memoryIncrease).toBeLessThan(500 * 1024);
     });

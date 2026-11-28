@@ -1,0 +1,2 @@
+import http from "node:http";
+http.request("http://example.invalid/");

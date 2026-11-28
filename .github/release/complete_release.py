@@ -10,7 +10,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from release_plan import REPO_ROOT, load_config, other_packages, python_packages, typescript_packages, published_versions
+from release_plan import REPO_ROOT, load_config, other_packages, python_packages, typescript_packages, published_versions, skip_reason
 
 
 def gh_json(*args):
@@ -43,11 +43,11 @@ def with_version(package, version):
 
 def unreleased(packages, tags, skip):
     """The first reason these package versions are not fully released, or None."""
-    missing = [p["tag"] for p in packages if p["name"] not in skip and p["tag"] not in tags]
+    missing = [p["tag"] for p in packages if skip_reason(skip, p) is None and p["tag"] not in tags]
     if missing:
         return f"{len(missing)} package releases ({', '.join(missing[:5])}); finish credentials/publishing and rerun Release"
     for package in packages:
-        if package["name"] in skip:
+        if skip_reason(skip, package) is not None:
             continue
         # A historical Java reactor is an atomic Central deployment. New modules in today's
         # inventory did not exist at the release version and cannot be uploaded retroactively.

@@ -16,7 +16,7 @@ import re
 import subprocess
 import tomllib
 
-from release_plan import REPO_ROOT, _get_json, load_config
+from release_plan import REPO_ROOT, _get_json, load_config, skip_reason
 
 BASELINE = "35f2e3dc364676fa5bdab1e71ae500daf9efc00c"
 AUDIT = Path(__file__).with_name("bootstrap-audit.json")
@@ -87,8 +87,9 @@ def package_history(root: Path, ref: str, package: dict, since: str) -> list[dic
 
 
 def audit_package(root: Path, ref: str, package: dict, skipped: dict) -> dict:
-    if package["name"] in skipped:
-        return {**package, "status": "excluded", "reason": skipped[package["name"]]}
+    reason = skip_reason(skipped, package)
+    if reason is not None:
+        return {**package, "status": "excluded", "reason": reason}
     if package["ecosystem"] == "python":
         url = f"https://pypi.org/pypi/{package['name']}/json"
     else:

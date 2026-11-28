@@ -59,10 +59,30 @@ def test_stack_trace_detection():
         (TraceConfig(hide_input_images=True, hide_embedding_vectors=True), (True, True)),
     ],
 )
-def test_trace_config_sides(config, sides):
+@pytest.mark.parametrize("without_helper", [False, True], ids=["installed-core", "without-helper"])
+def test_trace_config_sides(config, sides, without_helper, monkeypatch):
+    if without_helper:
+        monkeypatch.setattr(privacy, "allows_conversation_transcript", None)
     capture = Capture.from_trace_config(config)
     assert (capture.input, capture.output) == sides
     assert capture.everything is all(sides)
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_transcript_helper_uses_capture_config(monkeypatch, allowed):
+    seen = []
+
+    def helper(config):
+        seen.append(config)
+        return allowed
+
+    monkeypatch.setattr(privacy, "allows_conversation_transcript", helper)
+    config = TraceConfig()
+    assert Capture.from_trace_config(config).everything is allowed
+    assert len(seen) == 1 and seen[0] is config
+
+    hidden = TraceConfig(hide_input_text=True)
+    assert Capture.from_trace_config(hidden).everything is False
 
 
 def test_classification():

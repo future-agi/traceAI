@@ -243,6 +243,45 @@ def test_stream_error_midway(spans):
     assert "SECRETDETAIL" not in blob(span)
 
 
+def test_stream_error_midway_keeps_what_was_received(instrument):
+    class Boom(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: ' + json.dumps(chunk("Tok")).encode() + b"\n\n"
+            raise httpx.ReadError("connection lost SECRETDETAIL")
+
+    handler = lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Boom())
+
+    def run(spans):
+        with pytest.raises(httpx.ReadError):
+            for _ in make_client(handler).chat.chat(messages=MESSAGES, model="m", stream=True):
+                pass
+        return one(spans)
+
+    span = run(instrument())
+    assert span.status.status_code == StatusCode.ERROR
+    assert attrs(span)["error.type"] == "ReadError"
+    assert attrs(span)["output.value"] == "Tok"
+    assert attrs(span)["gen_ai.response.model"] == "palmyra-x5-served"
+    assert attrs(span)["writer.stream.incomplete"] is True
+    assert "SECRETDETAIL" not in blob(span)
+
+
+def test_stream_error_midway_respects_hidden_outputs(instrument):
+    class Boom(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: ' + json.dumps(chunk("Tok")).encode() + b"\n\n"
+            raise httpx.ReadError("lost")
+
+    handler = lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Boom())
+    spans = instrument(config=TraceConfig(hide_outputs=True))
+    with pytest.raises(httpx.ReadError):
+        for _ in make_client(handler).chat.chat(messages=MESSAGES, model="m", stream=True):
+            pass
+    span = one(spans)
+    assert "Tok" not in blob(span)
+    assert attrs(span)["error.type"] == "ReadError"
+
+
 # --- completions -------------------------------------------------------------------------------
 
 def test_completions_sync_async_and_stream(spans):
@@ -431,7 +470,8 @@ def test_async_chat_stream_helper_left_early_ends_its_span_once(spans):
     assert attrs(span)["writer.stream.incomplete"] is True
 
 
-def test_abandoned_stream_is_ended_when_it_is_collected(spans):
+def test_abandoned_stream_is_not_exported_from_garbage_collection(spans):
+    """A finalizer must not export a span: it can run at any point, including interpreter exit."""
     import gc
 
     stream = make_client(stream_handler()).chat.chat(messages=MESSAGES, model="m", stream=True)
@@ -439,4 +479,58 @@ def test_abandoned_stream_is_ended_when_it_is_collected(spans):
     assert spans.get_finished_spans() == ()
     del stream
     gc.collect()
-    assert attrs(one(spans))["writer.stream.incomplete"] is True
+    assert spans.get_finished_spans() == ()
+
+
+def test_abandoned_stream_exports_nothing_at_interpreter_exit():
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import httpx, json
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+        from traceai_writer import WriterInstrumentor
+        from writerai import Writer
+
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+        WriterInstrumentor().instrument(tracer_provider=provider)
+        body = "".join("data: " + json.dumps({"id": "c", "model": "m", "choices": [
+            {"index": 0, "delta": {"content": t}, "finish_reason": None}]}) + "\\n\\n" for t in "ab")
+        client = Writer(api_key="k", base_url="http://writer.test", max_retries=0, http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, content=body.encode()))))
+        stream = client.chat.chat(messages=[{"role": "user", "content": "hi"}], model="m", stream=True)
+        next(iter(stream))
+        print("DONE")
+    """)
+    done = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert "DONE" in done.stdout
+    assert "writer.chat" not in done.stdout, done.stdout
+
+
+def test_stream_has_no_finalizer():
+    from traceai_writer import _Stream
+
+    assert "__del__" not in vars(_Stream)
+
+
+def test_stream_response_is_still_the_sdk_response_class(spans):
+    stream = make_client(stream_handler()).chat.chat(messages=MESSAGES, model="m", stream=True)
+    assert isinstance(stream.response, httpx.Response)
+    assert isinstance(stream, writerai.Stream)
+    next(iter(stream))
+    stream.close()
+
+
+def test_async_stream_is_still_the_sdk_class(spans):
+    async def go():
+        stream = await make_async_client(stream_handler()).chat.chat(messages=MESSAGES, model="m", stream=True)
+        assert isinstance(stream, writerai.AsyncStream)
+        assert isinstance(stream.response, httpx.Response)
+        await stream.close()
+
+    asyncio.run(go())

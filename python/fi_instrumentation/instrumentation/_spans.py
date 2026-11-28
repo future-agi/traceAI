@@ -317,6 +317,20 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         if ERROR_TYPE not in existing:
             self.set_attribute(ERROR_TYPE, error_type)
 
+    def _fi_agent_source_v1(self, *, mark: bool = False) -> bool:
+        """Optional SDK writer observation, not an unwrap or a write capability.
+
+        Both public FiSpan setters apply masking before writing to the same
+        native span the processor saw. Mark only after that write completes.
+        """
+        observer = sys.modules.get("fi.telemetry._agent_name")
+        if observer is None:
+            return False
+        span = self.__wrapped__
+        if mark:
+            observer.mark_native(span)
+        return bool(observer.automatic(span))
+
     def set_attributes(self, attributes: Dict[str, AttributeValue]) -> None:
         for k, v in attributes.items():
             self.set_attribute(k, v)

@@ -31,6 +31,7 @@ type settings struct {
 	processor       sdktrace.SpanProcessor
 	provider        *sdktrace.TracerProvider
 	ignoreInherited map[string]bool
+	module          bool // activation by a dedicated module's first span
 }
 
 func configOption(update func(*Config), keys ...string) Option {
@@ -147,7 +148,7 @@ func arm() {
 		agent.last = makeReport(c, false, "")
 		return
 	}
-	state := &agentState{config: c, done: make(chan struct{})}
+	state := &agentState{config: c, done: make(chan struct{}), hooksDone: make(chan struct{})}
 	state.armed.Store(true)
 	state.transport = wrapTransport(http.DefaultTransport, state)
 	http.DefaultTransport = state.transport
@@ -166,6 +167,12 @@ func collectorEndpoint(c Config) (*url.URL, error) {
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
 		return nil, fmt.Errorf("invalid FI_BASE_URL")
+	}
+	if err := keyTransport(c.BaseURL, u); err != nil {
+		return nil, err
+	}
+	if err := ambientHeaderKeys(c); err != nil {
+		return nil, err
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/tracer/v1/traces"
 	u.RawPath, u.Fragment, u.RawFragment = "", "", ""
@@ -189,6 +196,8 @@ type agentState struct {
 	nativeHooks    nativeCredentialHooks
 	attributeLimit int
 	ownedRatio     *ratioSampler // Only the known wrapper installed on our private provider.
+	hooksStarted   atomic.Bool   // Shutdown hooks of dedicated modules run once (see runHooks).
+	hooksDone      chan struct{}
 }
 
 // retire stops an armed wrapper that will not be activated. Inside an
@@ -320,12 +329,18 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 		processor = sdktrace.NewBatchSpanProcessor(&resourceExporter{SpanExporter: exp, client: client, config: c, res: res, limits: limits}, sdktrace.WithBatchTimeout(200*time.Millisecond), sdktrace.WithExportTimeout(5*time.Second))
 	}
 	capture := c.WireCapture && allowed(c, "wire")
+	if s.module && armed == nil {
+		// A module's first span can come while requests are in flight: never
+		// replace http.DefaultTransport then. Only an agent armed at package
+		// initialization captures wire spans.
+		capture = false
+	}
 	if armed != nil && capture {
 		// Fields are published by active.Store below; the armed wrapper reads
 		// none of them before that.
 		state = armed
 	} else {
-		state = &agentState{done: make(chan struct{})}
+		state = &agentState{done: make(chan struct{}), hooksDone: make(chan struct{})}
 	}
 	state.config, state.processor, state.res = c, processor, res
 	state.registration = &processorRegistration{processor: processor, config: c, res: res, privacy: &spanPrivacy{}, queued: queued, limits: limits}
@@ -362,6 +377,7 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 	state.active.Store(true)
 	state.armed.Store(false)
 	agent.current, agent.first = state, state
+	moduleState.Store(state)
 	agent.last = makeReport(c, state.transport != nil, "")
 	if c.Debug {
 		b, _ := json.Marshal(agent.last)
@@ -372,11 +388,13 @@ func activate(ctx context.Context, s settings, explicit bool) (shutdown func(con
 func (s *agentState) shutdown(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	s.runHooks(ctx)
 	s.once.Do(func() {
 		s.active.Store(false)
 		s.registration.active.Store(false)
 		agent.Lock()
 		if agent.current == s {
+			moduleState.CompareAndSwap(s, nil)
 			if s.transport != nil && http.DefaultTransport == s.transport {
 				http.DefaultTransport = unwrapTransport(s.transport).(*wireTransport).base
 			}

@@ -13,6 +13,7 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
+  import { startingStandalone } from "../../runtime-metadata";
   import { activeFIContext, runInFIContext } from "./activeContext";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext, getSession } from "../contextAttributes";
@@ -151,13 +152,12 @@ import {
         return;
       }
       const { opts, ctx, fn } = formattedArgs;
-      const { attributes } = opts ?? {};
       const contextAttributes = getAttributesFromContext(ctx);
       const fiSpan = this.startFISpan(
         this.tracer,
         name,
         opts,
-        { ...contextAttributes, ...attributes },
+        contextAttributes,
         ctx,
         getSession(ctx)?.sessionId,
       );
@@ -190,7 +190,7 @@ import {
         tracer,
         name,
         options,
-        { ...contextAttributes, ...options?.attributes },
+        contextAttributes,
         ctx,
         getSession(ctx)?.sessionId,
       );
@@ -207,10 +207,11 @@ import {
       tracer: Tracer,
       name: string,
       options: SpanOptions | undefined,
-      attributes: Attributes | undefined,
+      contextAttributes: Attributes,
       context: Context | undefined,
       sessionId?: string,
     ): FISpan {
+      const attributes = { ...contextAttributes, ...options?.attributes };
       // Exact-secret/media/hide sanitization precedes SDK count/value limits.
       // Otherwise truncation can turn a known credential into an unknown prefix.
       let startAttributes: Attributes | undefined;
@@ -235,13 +236,14 @@ import {
         try { return { ...link, attributes: privacyFilter(this.config).admissionAttributes(link.attributes) }; }
         catch { return { ...link, attributes: {} }; }
       });
-      const span = tracer.startSpan(
-        name,
-        links != null
-          ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
-          : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
-        context,
-      );
+      const spanOptions = links != null
+        ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
+        : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes };
+      // The caller's own Context object reaches the sampler and processors.
+      // A standalone start is signalled synchronously, never through Context.
+      const span = this.autoDestination
+        ? tracer.startSpan(name, spanOptions, context)
+        : startingStandalone(() => tracer.startSpan(name, spanOptions, context));
       // Only spans made here export session and user grouping keys as set.
       try { rememberFITracerSpan(span.spanContext()); }
       catch { /* Without the mark the span keeps the stricter credential name rule. */ }

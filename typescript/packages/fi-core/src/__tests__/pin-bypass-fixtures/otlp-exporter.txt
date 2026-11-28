@@ -1,0 +1,2 @@
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+new OTLPTraceExporter({});

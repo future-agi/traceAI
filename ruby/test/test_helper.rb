@@ -109,3 +109,48 @@ module ChildHelper
     end
   end
 end
+
+# On an OpenTelemetry SDK whose span hooks the agent cannot verify (1.3 and 1.4), the spans the agent exports (AI and server spans, and every span sent to a supplied exporter) export only
+# identity, timing and usage metadata from the application SDK path, so tests that read exported content
+# do not apply there. test_media_sdk_verification.rb covers that fail-closed behaviour.
+#
+# A probe that cannot run is not "unproven": a child that exits non-zero, writes to stderr or prints
+# anything but exactly true or false fails the suite. With TRACEAI_EXPECT_MEDIA_PROVEN=1 an SDK whose span
+# data reports remote parents (1.10 and later, which the suite is built for) must prove the hooks, so
+# a regression there fails the suite instead of skipping the content tests.
+module SkipWhenMediaHooksUnproven
+  def self.interpret(out, err, status)
+    unless status.success?
+      raise "media hook probe failed to run: #{err.to_s.strip[0, 300]}"
+    end
+    raise "media hook probe wrote to stderr: #{err.to_s.strip[0, 300]}" unless err.to_s.empty?
+    case out
+    when 'true' then true
+    when 'false' then false
+    else raise "media hook probe printed unexpected output: #{out.to_s[0, 80].inspect}"
+    end
+  end
+
+  def self.unproven_outcome(env, span_data_members)
+    expected = env['TRACEAI_EXPECT_MEDIA_PROVEN'] == '1' && span_data_members.include?(:parent_span_is_remote)
+    expected ? :fail : :skip
+  end
+
+  def self.proven?
+    return @proven unless @proven.nil?
+    script = "require 'opentelemetry/sdk'; require 'traceai/auto/agent'; require 'traceai/auto/media_admission'; " \
+             "print TraceAI::Auto::MediaAdmission::Probe.run"
+    out, err, status = Open3.capture3(RbConfig.ruby, '-I', File.join(ROOT, 'lib'), '-e', script)
+    @proven = interpret(out, err, status)
+  end
+
+  def before_setup
+    super
+    return if SkipWhenMediaHooksUnproven.proven?
+    members = OpenTelemetry::SDK::Trace::SpanData.members
+    if SkipWhenMediaHooksUnproven.unproven_outcome(ENV, members) == :fail
+      flunk 'the media hooks are unproven on this OpenTelemetry SDK, which reports remote parents; AI spans would lose their content'
+    end
+    skip 'media hooks are unproven on this OpenTelemetry SDK; AI spans export metadata only'
+  end
+end

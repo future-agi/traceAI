@@ -56,7 +56,10 @@ const exclusions = catalog.credentials.exclusions.map(item => ({
   regex: new RegExp(item.regex), guards: ("unless_contains_patterns" in item ? item.unless_contains_patterns ?? [] : []).map(id => catalog.credentials.patterns.find(p => p.id === id)!.contains),
 }));
 const contextual = catalog.credentials.contextual_exclusions.map(item => new RegExp(item.path_regex));
-const valueShapes = catalog.credentials.value_shapes.map(item => new RegExp(item.regex, item.flags + "g"));
+const JWT_SHAPE = "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}";
+// The jwt shape is scanned by replaceJwt (exactly equivalent, linear time); other shapes run as regexes.
+const valueShapes: (RegExp | ((value: string) => string))[] = catalog.credentials.value_shapes.map(item =>
+  item.id === "jwt" && item.regex === JWT_SHAPE && item.flags === "" ? replaceJwt : new RegExp(item.regex, item.flags + "g"));
 const signed = new Set(catalog.signed_url.parameters.map(normalizePrivacyName));
 const excluded = (folded: string) => exclusions.some(({ regex, guards }) => regex.test(folded) && !guards.some(marker => folded.includes(marker)));
 /** The ONE credential-name predicate. Query mode adds signed-URL parameters.
@@ -421,8 +424,52 @@ function knownSecretRanges(value: string, secrets: readonly string[], depth: num
 const wholeSecret = (value: string, secrets: readonly string[]) => value.length >= 8 && value !== replacement && value !== "__REDACTED__" && secrets.includes(value);
 function credentialText(value: string, secrets: readonly string[]): string {
   value = knownSecretText(value, secrets);
-  for (const shape of valueShapes) value = value.replace(shape, replacement);
+  for (const shape of valueShapes) value = typeof shape === "function" ? shape(value) : value.replace(shape, replacement);
   return value;
+}
+const isRunCode = (c: number) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 45;
+/**
+ * `\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}` replaced by the marker, in time
+ * linear in the text. The classes exclude '.', so each run of [A-Za-z0-9_.-] splits at dots into
+ * deterministic segments. A token is a header segment holding an 'eyJ' (at the segment start, or
+ * after a '-', the only non-word characters inside a run) with at least 8 characters after it,
+ * followed by two segments of at least 8 characters; it ends where the third segment ends. The
+ * leftmost eyJ of the header segment decides (a later one has fewer characters after it and the
+ * same two following segments). A failed triple advances one segment; a match resumes after it.
+ * Each character is read a constant number of times.
+ */
+function replaceJwt(value: string): string {
+  if (!value.includes("eyJ")) return value;
+  const n = value.length;
+  let result = "", copied = 0;
+  for (let i = 0; i < n;) {
+    if (!isRunCode(value.charCodeAt(i)) && value.charCodeAt(i) !== 46) { i++; continue; }
+    // One maximal run [A-Za-z0-9_.-] and its dot-separated segments.
+    const starts: number[] = [], ends: number[] = [];
+    let j = i;
+    for (let segStart = i; ; j++) {
+      const c = j < n ? value.charCodeAt(j) : -1;
+      if (c === 46 || !(c !== -1 && isRunCode(c))) {
+        starts.push(segStart); ends.push(j);
+        if (c !== 46) break;
+        segStart = j + 1;
+      }
+    }
+    for (let k = 0; k + 2 < starts.length;) {
+      const a = starts[k], b = ends[k];
+      let found = -1;
+      for (let p = a; p + 3 <= b; p++) {
+        if (value.charCodeAt(p) === 101 && value.charCodeAt(p + 1) === 121 && value.charCodeAt(p + 2) === 74 && (p === a || value.charCodeAt(p - 1) === 45)) { found = p; break; }
+      }
+      if (found !== -1 && b - found - 3 >= 8 && ends[k + 1] - starts[k + 1] >= 8 && ends[k + 2] - starts[k + 2] >= 8) {
+        result += value.slice(copied, found) + replacement;
+        copied = ends[k + 2];
+        k += 3;
+      } else k++;
+    }
+    i = j;
+  }
+  return copied === 0 ? value : result + value.slice(copied);
 }
 function bareMedia(value: string): string {
   // Only free-text gaps enter this lexer, never reconstructed URL/JSON syntax.
@@ -713,9 +760,30 @@ function walkValue(value: any, secrets: readonly string[], path: string, depth: 
   }
   return value == null || typeof value === "boolean" ? value : typeof value;
 }
+/**
+ * Next `name["']?\s*[:=]\s*` at or after `from`, name = [A-Za-z_][A-Za-z0-9_.-]* starting at a
+ * word boundary. A single regex retried the whole key run from every '-' or '.' inside it
+ * (quadratic on "sk-sk-sk-..."); every start in one run has the same end, so each run is tried once.
+ */
+const KEY_RUN = /(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]+/g;
+const ASSIGNMENT_TAIL = /["']?\s*[:=]\s*/y;
+function nextAssignment(value: string, from: number): { index: number; name: string; lastIndex: number } | undefined {
+  KEY_RUN.lastIndex = from;
+  for (let run: RegExpExecArray | null; (run = KEY_RUN.exec(value));) {
+    const text = run[0], runEnd = run.index + text.length;
+    ASSIGNMENT_TAIL.lastIndex = runEnd;
+    const tail = ASSIGNMENT_TAIL.exec(value);
+    if (!tail) continue;
+    // First \b start of [A-Za-z_]: run start, or right after a '.' / '-' (non-word) separator.
+    for (let i = 0; i < text.length; i++) {
+      if (/[A-Za-z_]/.test(text[i]) && (i === 0 || text[i - 1] === "." || text[i - 1] === "-"))
+        return { index: run.index + i, name: text.slice(i), lastIndex: runEnd + tail[0].length };
+    }
+  }
+  return undefined;
+}
 /** Text assignments use the same catalog predicate as structured fields. */
 function scrubAssignments(value: string, owners: readonly TextOwner[] = []): string {
-  const assignment = /\b([A-Za-z_][A-Za-z0-9_.-]*)(["']?)\s*[:=]\s*/g;
   // URL tokens own their query and fragment delimiters. The URL sanitizer below
   // already masks catalog credentials (including encoded names); applying the
   // prose assignment grammar inside them consumes safe &pairs and adds quotes.
@@ -731,17 +799,18 @@ function scrubAssignments(value: string, owners: readonly TextOwner[] = []): str
   // Diagnostic paragraphs repeat names (e.g. 'Note:') many thousands of times.
   // Bound a per-string name-only memo; no credential values or cross-call state.
   const names = new Map<string, boolean>();
-  for (let match: RegExpExecArray | null; (match = assignment.exec(value));) {
+  for (let match: ReturnType<typeof nextAssignment>, next = 0; (match = nextAssignment(value, next));) {
+    next = match.lastIndex;
     while (urlIndex < urls.length && urls[urlIndex][1] <= match.index) urlIndex++;
     if (urlIndex < urls.length && urls[urlIndex][0] <= match.index) continue;
-    const name = match[1];
+    const name = match.name;
     let credential = names.get(name);
     if (credential === undefined) {
       credential = isCredentialName(name);
       if (names.size < 256 && name.length <= 256) names.set(name, credential);
     }
     if (!credential) continue;
-    const start = assignment.lastIndex;
+    const start = match.lastIndex;
     let end = start;
     const quote = value[start];
     if (quote === '"' || quote === "'") {
@@ -764,7 +833,7 @@ function scrubAssignments(value: string, owners: readonly TextOwner[] = []): str
     if (end === start) continue;
     result += value.slice(offset, start) + JSON.stringify(replacement);
     offset = end;
-    assignment.lastIndex = end;
+    next = end;
   }
   return result + value.slice(offset);
 }

@@ -47,7 +47,8 @@ jobs:
       - name: Compile the SDK and package tests at the default target, then resolve runtime dependencies
         run: |
           # -DskipTests still compiles the package tests at the SDK's intended 1.1.8 target.
-          mvn -B -ntp -f java/pom.xml -pl traceai-spring-ai -am install -DskipTests
+          # The agent is installed too: the real-observation test attaches it to a child JVM.
+          mvn -B -ntp -f java/pom.xml -pl traceai-spring-ai,traceai-javaagent -am install -DskipTests
           mvn -B -ntp -f java/pom.xml -pl traceai-spring-ai dependency:resolve -DincludeScope=test -Dspring-ai.version=${{ matrix.spring }}
           mvn -B -ntp -f java/compatibility/spring-ai/pom.xml test -DskipTests -Dspring-ai.version=${{ matrix.spring }} ${{ matrix.profile }}
           mvn -B -ntp -f java/compatibility/spring-ai/pom.xml dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3

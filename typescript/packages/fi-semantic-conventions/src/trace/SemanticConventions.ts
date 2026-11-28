@@ -645,7 +645,75 @@ export const SemanticAttributePrefixes = {
   /** Provenance of captured content, for example a source transcript; not evidence of native request capture. */
   export const FI_AGENT_CONTENT_SOURCE = "fi.agent.content.source" as const;
 
+  /** Verified runtime loads are delivery evidence, never proof of model use. */
+  export const SKILL_LOAD_SPAN_NAME = "skill.load" as const;
+  export const CONTEXT_LOAD_SPAN_NAME = "context.load" as const;
+  export const FI_SKILL_ID = "fi.skill.id" as const;
+  export const FI_SKILL_NAME = "fi.skill.name" as const;
+  export const FI_SKILL_VERSION_ID = "fi.skill.version_id" as const;
+  export const FI_SKILL_VERSION = "fi.skill.version" as const;
+  export const FI_SKILL_DIGEST = "fi.skill.digest" as const;
+  export const FI_SKILL_REQUESTED_LABEL = "fi.skill.requested_label" as const;
+  export const FI_SKILL_REQUESTED_VERSION = "fi.skill.requested_version" as const;
+  export const FI_SKILL_LOAD_VIA = "fi.skill.load.via" as const;
+  export const FI_SKILL_LOAD_EVIDENCE = "fi.skill.load.evidence" as const;
+  export const FI_SKILL_LOAD_CACHED = "fi.skill.load.cached" as const;
+  export const FI_SKILL_LOAD_ROOT_FILE = "fi.skill.load.root_file" as const;
+  export const FI_SKILL_FILES = "fi.skill.files" as const;
+  export const FI_SKILL_BYTES = "fi.skill.bytes" as const;
+  export const FI_SKILL_VIA_CONTEXT_VERSION_ID = "fi.skill.via_context.version_id" as const;
+  /** Ordered, capped scope lists; scalar fi.skill.* belongs only on skill.load. */
+  export const FI_SKILLS_VERSION_IDS = "fi.skills.version_ids" as const;
+  export const FI_SKILLS_IDS = "fi.skills.ids" as const;
+  export const FI_SKILLS_REFS = "fi.skills.refs" as const;
+  export const FI_SKILLS_COUNT = "fi.skills.count" as const;
+  export const FI_SKILLS_TRUNCATED = "fi.skills.truncated" as const;
+  export const FI_CONTEXT_ID = "fi.context.id" as const;
+  export const FI_CONTEXT_VERSION_ID = "fi.context.version_id" as const;
+  export const FI_CONTEXT_DIGEST = "fi.context.digest" as const;
+  export const FI_CONTEXT_NAME = "fi.context.name" as const;
+  export const FI_CONTEXT_VERSION = "fi.context.version" as const;
+  export const FI_CONTEXT_REQUESTED_LABEL = "fi.context.requested_label" as const;
+  export const FI_CONTEXT_BINDING_ID = "fi.context.binding_id" as const;
+  export const FI_CONTEXT_SESSION_ID = "fi.context.session_id" as const;
+  /** Available closure, not loaded skills; emitted only on context.load. */
+  export const FI_CONTEXT_LINKED_SKILL_VERSION_IDS = "fi.context.linked_skill_version_ids" as const;
+  export const GEN_AI_AGENT_NAME = "gen_ai.agent.name" as const;
+  export const GEN_AI_AGENT_ID = "gen_ai.agent.id" as const;
+  export const ERROR_TYPE = "error.type" as const;
+
   export const SemanticConventions = {
+    FI_SKILL_ID,
+    FI_SKILL_NAME,
+    FI_SKILL_VERSION_ID,
+    FI_SKILL_VERSION,
+    FI_SKILL_DIGEST,
+    FI_SKILL_REQUESTED_LABEL,
+    FI_SKILL_REQUESTED_VERSION,
+    FI_SKILL_LOAD_VIA,
+    FI_SKILL_LOAD_EVIDENCE,
+    FI_SKILL_LOAD_CACHED,
+    FI_SKILL_LOAD_ROOT_FILE,
+    FI_SKILL_FILES,
+    FI_SKILL_BYTES,
+    FI_SKILL_VIA_CONTEXT_VERSION_ID,
+    FI_SKILLS_VERSION_IDS,
+    FI_SKILLS_IDS,
+    FI_SKILLS_REFS,
+    FI_SKILLS_COUNT,
+    FI_SKILLS_TRUNCATED,
+    FI_CONTEXT_ID,
+    FI_CONTEXT_VERSION_ID,
+    FI_CONTEXT_DIGEST,
+    FI_CONTEXT_NAME,
+    FI_CONTEXT_VERSION,
+    FI_CONTEXT_REQUESTED_LABEL,
+    FI_CONTEXT_BINDING_ID,
+    FI_CONTEXT_SESSION_ID,
+    FI_CONTEXT_LINKED_SKILL_VERSION_IDS,
+    GEN_AI_AGENT_NAME,
+    GEN_AI_AGENT_ID,
+    ERROR_TYPE,
     GEN_AI_COST_TOTAL,
     GEN_AI_COST_INPUT,
     GEN_AI_COST_OUTPUT,

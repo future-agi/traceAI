@@ -12,6 +12,14 @@ module TraceAI
       end
       CATALOG = freeze_catalog(Codec.parse(File.binread(File.join(__dir__, 'privacy.json'))))
       REDACTED = CATALOG.fetch('credentials').fetch('replacement')
+      # A list of secrets already read and sorted (see Privacy.normalized_secrets); `plain` is the part of it that holds no placeholder.
+      class NormalizedSecrets < Array
+        attr_reader :plain
+        def initialize(list)
+          super(list)
+          @plain = list.select { |secret| secret != REDACTED && !secret.include?(REDACTED) }.freeze
+        end
+      end
       PATTERNS = CATALOG['credentials']['patterns'].map { |item| item['contains'] }.freeze
       EXCLUSIONS = CATALOG['credentials']['exclusions'].map do |item|
         guards = item.fetch('unless_contains_patterns', []).map do |id|
@@ -49,6 +57,53 @@ module TraceAI
       VALUE_SHAPES = CATALOG['credentials'].fetch('value_shapes', []).map do |item|
         Regexp.new(end_anchored(item['regex']), item['flags'].to_s.include?('i') ? Regexp::IGNORECASE : 0)
       end.freeze
+      # The JWT shape is scanned exactly, in time linear in the text. Its character
+      # classes exclude ".", so each segment is one maximal run of [A-Za-z0-9_-]
+      # and a match is fully determined by three consecutive dot-separated segments
+      # of a run of [A-Za-z0-9_.-]: "eyJ" at a word boundary in the first segment
+      # with 8 or more characters after it, then two segments of 8 or more. Each
+      # segment is examined as a first segment at most once, so repeated starts
+      # such as "eyJ-" * N are never rescanned. A token ends where its third
+      # segment ends, whatever the segment lengths.
+      JWT_RUN = /(?<boundary>(?=eyJ)\b)?[A-Za-z0-9_.-]+/.freeze
+      # Offset of the leftmost start of a token inside the first segment, or nil.
+      def self.jwt_start(segment, boundary_at_zero)
+        found = segment.index('eyJ')
+        while found
+          return nil if segment.length - found - 3 < 8
+          return found if found.zero? ? boundary_at_zero : segment.getbyte(found - 1) == 45
+          found = segment.index('eyJ', found + 1)
+        end
+        nil
+      end
+      def self.jwt_gsub(text)
+        text.gsub(JWT_RUN) do
+          run = $~[0]
+          boundary = !$~[:boundary].nil?
+          next run unless run.include?('eyJ') && run.count('.') >= 2
+          segments = run.split('.', -1)
+          offsets = []
+          position = 0
+          segments.each { |segment| offsets << position; position += segment.length + 1 }
+          out = +''
+          copied = 0
+          index = 0
+          while index + 2 < segments.length
+            if segments[index].length >= 11 && segments[index + 1].length >= 8 && segments[index + 2].length >= 8 &&
+               (start = jwt_start(segments[index], !index.zero? || boundary))
+              out << run[copied...(offsets[index] + start)] << REDACTED
+              copied = offsets[index + 2] + segments[index + 2].length
+              index += 3
+            else
+              index += 1
+            end
+          end
+          out << run[copied..]
+        end
+      end
+      def self.shape_gsub(shape, text)
+        shape.source.start_with?('\\beyJ') ? jwt_gsub(text) : text.gsub(shape, REDACTED)
+      end
       # Version 3: the closed list of provider-response logprob token paths.
       # Only an explicit, parsed provider response root may use them.
       LOGPROB_FORMATS = CATALOG.fetch('logprob_tokens', {}).fetch('formats', []).to_h { |rule| [rule['format'], rule] }.freeze
@@ -316,8 +371,186 @@ module TraceAI
         end.join('&') + hashmark + fragment
         candidate != value && URL_VALUE.match?(candidate)
       end
+      # Four limits bound what the fragment matcher may do. Three are for one value:
+      #   MATCH_ROUNDS - rounds over every secret that may still change the value;
+      #   MATCH_STEPS  - automaton steps, in total;
+      #   MATCH_WORK   - everything scanned, in total: each character of every scan of the text, every candidate
+      #                  examined for every secret (and every character a membership test reads), the binary searches
+      #                  over the candidates, the code points of every secret, the table and the bit masks built and
+      #                  used for it, the output built for a replacement, and the automaton steps. Each amount is
+      #                  charged BEFORE the work it pays for, so the charged total never exceeds the limit.
+      # The fourth is for one span, that is, for every value scrubbed with one Budget:
+      #   MATCH_SPAN_WORK - the same work, added up over all of those values (a value's work counts toward both its own
+      #                  MATCH_WORK and this). Without it a span of max_nodes strings could cost that many times
+      #                  MATCH_WORK.
+      # Past a value's limit, the whole value becomes the placeholder; a fragment is never left behind. Past the
+      # span's, that value and every later value of the span becomes the placeholder. A value that still changes in
+      # the last round is replaced whole only if one more pass over it would change it again.
+      MATCH_ROUNDS = 8
+      MATCH_STEPS = 200_000
+      MATCH_WORK = 16_000_000
+      # What the matcher costs scales with the registry, not only with the text: a value that holds a placeholder is
+      # read once for every registered secret (up to 1024), at the length of the secret, and each placeholder is
+      # examined for every secret. A span with a full registry of long credentials and a few hundred placeholders in
+      # its values can therefore reach this bound; the span of a few values with a few placeholders, and the largest
+      # span without them, cannot: the text budget of a span is max_text_chars (4 MiB) and charges each string twice,
+      # so a span holds about 2 MiB of text, and a value with one fragment next to a placeholder costs about 4 units a
+      # character (12 million for 3 million characters), about 8 million for such a span. The bound is 32 million:
+      # twice MATCH_WORK, so a single value can still use all of its own. Matching costs from 20 to 90 nanoseconds a
+      # unit, so the bound caps the matching of one span at roughly one to three seconds on the host's thread.
+      # Past it the value being matched and every later value of the span (and every later name in it) is the
+      # placeholder. Privacy.snapshot scrubs a span's name, status text, resource and scope before its attributes, so
+      # the span keeps its identity. The fallbacks that run only after the snapshot failed (Privacy.safe_metadata, with
+      # one Budget for keys and one for values, and Privacy.recover_identity, with one for the name and one for the
+      # resource) each use a Budget of their own, so the worst case for one span is five times this bound.
+      MATCH_SPAN_WORK = 32_000_000
+      class MatchLimit < StandardError; end
+
+      # A secret learned after a span was captured, or one that overlaps another, can leave part of itself next to a
+      # placeholder: two secrets that share their edges leave the rest of the longer one beside the placeholder of the
+      # other, and a secret overlapped at both ends by others is left as its middle. Whatever the shape, an
+      # occurrence of a secret in the text is the secret with any number of disjoint runs of its characters replaced
+      # by placeholders (a placeholder may also reach past the secret's end). So a secret S is matched here as the
+      # language "S, in which any non-empty substrings may be a placeholder": an automaton whose state is the position
+      # in S and whose placeholder step moves to any later position. A match holds at least one placeholder and one
+      # literal character, and is replaced by one placeholder. A replacement can complete a match for another secret
+      # (a chain), so the secrets are applied again until nothing changes. Every round that changes something adds a
+      # placeholder and removes characters, so the process ends; the limits above bound the work, and a
+      # value that reaches any of them is replaced whole.
+      def close_fragments(text, secrets, work = [0, 0, nil])
+        return text unless text.include?(REDACTED)
+        # work: characters and candidates scanned, automaton steps. The scan is rebuilt only after a change and then
+        # serves the rest of the round, the next round, and the final check.
+        scan = fragment_scan(text, work)
+        MATCH_ROUNDS.times do
+          changed = false
+          secrets.each do |secret|
+            replaced = replace_fragments(scan, secret, work)
+            next if replaced.nil?
+            text = replaced; changed = true
+            scan = fragment_scan(text, work)
+          end
+          return text unless changed
+        end
+        secrets.any? { |secret| replace_fragments(scan, secret, work) } ? REDACTED : text
+      rescue MatchLimit
+        REDACTED
+      end
+
+      # Charges `amount` before the work it pays for; past the limit the work is never done.
+      # `work` is [work, steps] of one value, with the span's Budget as a third item when there is one: the amount
+      # is charged to the span as well.
+      def spend(work, amount)
+        raise MatchLimit if work[0] + amount > MATCH_WORK
+        work[2]&.spend_work(amount)
+        work[0] += amount
+      end
+
+      # The text as items (a character's code point, or nil for a placeholder), the placeholder positions, and the positions of
+      # each character, so that one secret finds its candidate starts without reading the whole text.
+      def fragment_scan(text, work)
+        spend(work, text.length + 1)
+        items = []
+        parts = text.split(REDACTED, -1)
+        parts.each_with_index do |part, index|
+          items.concat(part.codepoints)
+          items << nil unless index == parts.length - 1
+        end
+        tokens = []; positions = Hash.new { |hash, key| hash[key] = [] }
+        items.each_with_index do |item, index|
+          tokens << index if item.nil?
+          positions[item] << index
+        end
+        [items, tokens, positions]
+      end
+
+      # `text` with every match of `secret` beside a placeholder replaced by one, or nil when there is none.
+      def replace_fragments(scan, secret, work)
+        items, tokens, positions = scan
+        size = secret.length
+        spend(work, tokens.length + 1)
+        spend(work, 2 * size) # codepoints reads the whole secret, and so does the set of its characters below
+        codes = secret.codepoints
+        present = {}
+        codes.each { |code| present[code] = true }
+        listed = positions.fetch(codes[0], nil)
+        starts = []
+        second = codes[1]
+        # Two binary searches per token, each at most one step more than the bits of the list's length.
+        spend(work, 2 * tokens.length * (listed.length.bit_length + 1)) if listed
+        tokens.each do |token|
+          # A match that starts at the placeholder goes on with a character of the secret (or another placeholder).
+          following = items[token + 1]
+          if token + 1 >= items.length || following.nil?
+            starts << token
+          else
+            starts << token if present.key?(following) # one hash lookup; the loop is charged above
+          end
+          next unless listed
+          low = token - size + 1
+          first = listed.bsearch_index { |index| index >= low }
+          next unless first
+          last = listed.bsearch_index { |index| index >= token } || listed.length
+          spend(work, last - first + 1) # the window walk below
+          (first...last).each do |at|
+            following = items[listed[at] + 1]
+            starts << listed[at] if following.nil? || following == second
+          end
+        end
+        return nil if starts.empty?
+        # One step per start, and one per character of the secret for the loop that builds the table. The table sets
+        # bit `index` of one mask per distinct character, and both `1 << index` and the `|=` make a mask of at most
+        # index / 64 + 1 words: at most 2 * (size + size * (size - 1) / 128) words in all, which 2 * size +
+        # size * size / 64 covers.
+        spend(work, starts.length + size + 2 * size + ((size * size) >> 6))
+        table = Hash.new(0)
+        codes.each_with_index { |code, index| table[code] |= 1 << index }
+        full = (1 << (size + 1)) - 1
+        accept = 1 << size
+        output = []; cursor = 0; found = false
+        starts.uniq.sort.each do |start|
+          next if start < cursor
+          stop = match_end(items, start, table, full, accept, work, size)
+          next unless stop
+          spend(work, start - cursor + 1)
+          output.concat(items[cursor...start]); output << nil
+          cursor = stop; found = true
+        end
+        return nil unless found
+        spend(work, (items.length - cursor) + output.length + 1) # the final copy, then map and join of the whole output
+        output.concat(items[cursor..])
+        output.slice_when { |a, b| a.nil? != b.nil? }.map { |run| run.first.nil? ? REDACTED * run.length : run.pack('U*') }.join
+      end
+
+      # The end of the longest match of the automaton from `start` that holds a placeholder and a literal, or nil.
+      def match_end(items, start, table, full, accept, work, size)
+        mask = 1; position = start; best = nil; token = false; literal = false
+        # A step makes at most seven operations on masks of at most size + 1 bits (the placeholder branch: negate, and,
+        # shift, subtract, complement, and, then the test against `accept`), each reading and writing at most
+        # (size + 1) / 64 + 1 words; 8 words' worth covers them, plus one for the step itself.
+        step = 1 + 8 * (((size + 1) >> 6) + 1)
+        while mask != 0 && position < items.length
+          work[1] += 1
+          raise MatchLimit if work[1] > MATCH_STEPS
+          spend(work, step)
+          item = items[position]
+          if item.nil?
+            lowest = mask & -mask
+            mask = full & ~((lowest << 1) - 1)
+            token = true
+          else
+            mask = (mask & table[item]) << 1
+            literal = true
+          end
+          position += 1
+          best = position if token && literal && mask & accept != 0
+        end
+        best
+      end
       def clean_string(value, secrets, budget = Budget.new, framed = true)
         budget.spend(value.bytesize)
+        # The span has used all the matching work it may: nothing more of it is read.
+        return REDACTED if budget.work_spent?
         text = value.encode('UTF-8', invalid: :replace, undef: :replace)
         replacement = media_replacement(text, '', false, false, {}, framed)
         return replacement if replacement
@@ -339,11 +572,19 @@ module TraceAI
             end
           end
         end
-        secrets.each do |secret|
-          next unless Codec.type(secret) == String && secret.length >= 8 && secret != REDACTED
+        # Secrets first, none matching across a placeholder; then whatever of an overlapping secret the first pass left
+        # beside a placeholder (see close_fragments).
+        # Secrets are read as the registry reads them (invalid bytes become U+FFFD), never skipped for their bytes.
+        plain = if secrets.instance_of?(NormalizedSecrets)
+                  secrets.plain
+                else
+                  normalize_secrets(secrets).select { |secret| secret != REDACTED && !secret.include?(REDACTED) }
+                end
+        plain.each do |secret|
           text = text.split(REDACTED, -1).map { |part| part.gsub(secret, REDACTED) }.join(REDACTED)
         end
-        VALUE_SHAPES.each { |shape| text = text.gsub(shape, REDACTED) }
+        text = close_fragments(text, plain, [0, 0, budget])
+        VALUE_SHAPES.each { |shape| text = shape_gsub(shape, text) }
         text
       end
     end

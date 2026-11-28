@@ -297,6 +297,8 @@ class EndToEndTest
   end
 
   def test_a11_supplied_otlp_exporter_gets_detached_privacy_and_sdk_status_codes
+    # OTLP exporter 0.31 reads SpanData#parent_span_is_remote, which SDKs below 1.10 do not have.
+    skip 'the OTLP exporter needs an SDK with parent_span_is_remote' unless OpenTelemetry::SDK::Trace::SpanData.members.include?(:parent_span_is_remote)
     code = <<~RUBY
       require 'opentelemetry/sdk'; require 'opentelemetry/exporter/otlp'; require 'traceai/auto/agent'
       sink = OpenTelemetry::Exporter::OTLP::Exporter.new(endpoint: '#{@collector.url}/tracer/v1/traces', compression: 'none')

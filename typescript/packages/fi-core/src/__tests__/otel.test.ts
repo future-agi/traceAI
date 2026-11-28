@@ -19,21 +19,26 @@ import {
 } from '../otel';
 import { ProjectType, EvalTag, EvalTagType, EvalSpanKind, EvalName, ModelChoices } from '../fi_types';
 
-// Mock fetch globally
+// The SDK sends key-carrying requests with undici's own fetch (it never reads globalThis.fetch): that is the transport mocked here.
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
-global.fetch = mockFetch;
+jest.spyOn(require("../fi-transport"), "ownFetch").mockImplementation(mockFetch as any);
 
 // Mock grpc
+// These tests replace the exporter class with a plain stand-in that has no OTLP delegate. Shipped
+// isolation classifies every exporter the same way whatever the environment, so the stand-in is
+// exempted here, in the test, by stubbing the isolation step.
+jest.mock("../fi-send-guard", () => ({ ...(jest.requireActual("../fi-send-guard") as object), guardOtlpHttpExporter: jest.fn(), guardOtlpGrpcExporter: jest.fn() }));
+jest.mock("../otlp-header-isolation", () => ({ ...(jest.requireActual("../otlp-header-isolation") as object), isolateHttpExporterHeaders: jest.fn(), isolateGrpcExporterHeaders: jest.fn() }));
 jest.mock('@grpc/grpc-js', () => ({
   credentials: {
     createSsl: jest.fn(),
     createInsecure: jest.fn(),
   },
-  Metadata: jest.fn().mockImplementation(() => ({
-    set: jest.fn(),
-    get: jest.fn(),
-    add: jest.fn(),
-  })),
+  Metadata: jest.fn().mockImplementation(() => {
+    const metadata: any = { set: jest.fn(), get: jest.fn(() => []), add: jest.fn(), getMap: jest.fn(() => ({})) };
+    metadata.clone = jest.fn(() => metadata);
+    return metadata;
+  }),
 }));
 
 // Mock the OTLP HTTP trace exporter

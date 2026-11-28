@@ -80,16 +80,19 @@ class _Recorder:
         self.response_id: Optional[str] = None
         self.finish: List[str] = []
         self.usage: Dict[str, int] = {}
-        self.pieces: List[str] = []
-        self.length = 0
+        self.choices: Dict[int, List[str]] = {}
+        self.lengths: Dict[int, int] = {}
+        # Whether the response had a choice other than choice 0, with or without text.
+        self.several = False
         self.tools: List[Dict[str, Any]] = []
         self.result: Any = None
 
-    def _add(self, text: Optional[str]) -> None:
-        if text and self.length < _LIMIT:
-            text = text[: _LIMIT - self.length]
-            self.pieces.append(text)
-            self.length += len(text)
+    def _add(self, text: Optional[str], index: int = 0) -> None:
+        length = self.lengths.get(index, 0)
+        if text and length < _LIMIT:
+            text = text[: _LIMIT - length]
+            self.choices.setdefault(index, []).append(text)
+            self.lengths[index] = length + len(text)
 
     def _finish(self, reason: Any) -> None:
         reason = _enum(reason)
@@ -144,13 +147,17 @@ class _Recorder:
         # complete: CompletionResponse, StreamChunk, StreamSummary
         completions = _field(value, "completions")
         if isinstance(completions, (list, tuple)):
-            first = completions[0] if completions else None
-            if first is not None:
-                self._add(_text(_field(first, "completion")))
-                self._finish(_field(first, "finish_reason"))
+            self.several = self.several or len(completions) > 1
+            for position, choice in enumerate(completions):
+                self._add(_text(_field(choice, "completion")), position)
+                self._finish(_field(choice, "finish_reason"))
             return
-        if _field(value, "completion") is not None and _field(value, "index") in (0, None):
-            self._add(_text(_field(value, "completion")))
+        index = _field(value, "index")
+        index = index if isinstance(index, int) and not isinstance(index, bool) and index >= 0 else 0
+        if self.operation == "text_completion" and index:
+            self.several = True  # a streamed chunk or summary of a choice other than choice 0
+        if _field(value, "completion") is not None:
+            self._add(_text(_field(value, "completion")), index)
         # chat: ChatResponse, ChatStreamChunk, a streamed ToolCall, or an OpenAI-shaped body
         message = _field(value, "message")
         if message is not None:
@@ -189,8 +196,13 @@ class _Recorder:
             if self.capture_output and slot["args"]:
                 span.set_attribute(f"{prefix}.function.arguments", slot["args"][:_LIMIT])
         if self.capture_output:
-            if self.pieces:
-                span.set_attribute(A.OUTPUT_VALUE, "".join(self.pieces))
+            if self.choices:
+                # output.value is choice 0's text only; the other choices are in the per-index content.
+                if self.choices.get(0):
+                    span.set_attribute(A.OUTPUT_VALUE, "".join(self.choices[0]))
+                if self.several:
+                    for index, pieces in sorted(self.choices.items()):
+                        span.set_attribute(f"{A.GEN_AI_OUTPUT_MESSAGES}.{index}.message.content", "".join(pieces))
             elif self.result is not None:
                 try:
                     span.set_attribute(A.OUTPUT_VALUE, json.dumps(self.result, default=str)[:_LIMIT])
@@ -320,6 +332,16 @@ class _Stream:
         finally:
             self._span.end()
 
+    def _fail(self, exc: BaseException) -> None:
+        if self._ended:
+            return
+        self._ended = True
+        try:
+            self._recorder.apply(self._span)  # keep what was received before the failure
+        except Exception:
+            logger.debug("aleph alpha stream finalisation failed", exc_info=True)
+        _failure(self._span, exc)
+
     def __aiter__(self) -> "_Stream":
         return self
 
@@ -331,9 +353,7 @@ class _Stream:
             self._finish()
             raise
         except BaseException as exc:
-            if not self._ended:
-                self._ended = True
-                _failure(self._span, exc)
+            self._fail(exc)
             raise
         try:
             self._recorder.observe(item)
@@ -351,9 +371,7 @@ class _Stream:
         try:
             return await self._source.athrow(*args)
         except BaseException as exc:
-            if not self._ended:
-                self._ended = True
-                _failure(self._span, exc)
+            self._fail(exc)
             raise
 
     async def asend(self, value: Any) -> Any:

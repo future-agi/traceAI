@@ -23,6 +23,7 @@ from .._recording_attributes import (
     _withhold_recording_failures,
 )
 from .._recording_boundary import _copy_span, _RecordingScope
+from .._transcript import _TranscriptRoot
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +426,8 @@ class BaseMappedSpanExporter(SpanExporter):
             if not original:
                 return span
             mapped = self._convert_attributes(dict(original))
+            if isinstance(span, _TranscriptRoot):
+                mapped["fi.conversation.transcript"] = span._self_transcript
             return span if mapped == original else _copy_span(span, attributes=mapped)
 
         policies = scope.recording_policies if isinstance(scope, _RecordingScope) else (TraceConfig(),)

@@ -2060,4 +2060,4 @@ grpc = ["opentelemetry-exporter-otlp-proto-grpc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.16"
-content-hash = "df956e9b90726253582f13a6f385e29e6f97b94ddfa0f69b71240c06d6678909"
+content-hash = "98440da93ef5cb894fc992c18d915da3a03742d737a27c4d4db0703889fda17f"

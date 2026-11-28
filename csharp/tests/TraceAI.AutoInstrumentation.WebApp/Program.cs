@@ -51,7 +51,8 @@ try
     else
     {
         var chat = app.Services.GetRequiredService<IChatClient>();
-        result["chat"] = (await chat.GetResponseAsync("hello chat")).Text;
+        // A test may seed a secret into the prompt through FI_SECRET_KEY, which the agent knows and must scrub.
+        result["chat"] = (await chat.GetResponseAsync("hello chat " + Environment.GetEnvironmentVariable("FI_SECRET_KEY"))).Text;
         result["wrappedChat"] = chat.GetService<OpenTelemetryChatClient>() != null;
         var agent = app.Services.GetService<AIAgent>();
         if (agent != null) result["agent"] = (await agent.RunAsync("hello agent")).Text;

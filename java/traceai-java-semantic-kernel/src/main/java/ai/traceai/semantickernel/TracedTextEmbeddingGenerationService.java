@@ -207,14 +207,6 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
             firstEmbedding != null && firstEmbedding.getVector() != null ? firstEmbedding.getVector().size() : 0));
     }
 
-    private String truncateIfNeeded(String value) {
-        int maxLength = 1000;
-        if (value != null && value.length() > maxLength) {
-            return value.substring(0, maxLength - 13) + "...[truncated]";
-        }
-        return value;
-    }
-
     /**
      * Internal class to summarize embedding output without storing full vectors.
      */

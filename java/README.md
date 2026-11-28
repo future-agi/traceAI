@@ -170,7 +170,7 @@ TraceAI.init(TraceConfig.builder()
     .build());
 ```
 
-Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
+Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Export requires both `FI_API_KEY` and `FI_SECRET_KEY`. Future AGI hosts use `https://`; plaintext `http://` is accepted for literal `localhost`, `127.0.0.1` and `::1`, and for other hosts only when `FI_ALLOW_INSECURE_HTTP=1`. Export requests do not follow redirects, and a plaintext send does not use a proxy. Console export can include request and response content; enable it only when that is appropriate.
 
 ### Provider ownership and shutdown
 
@@ -217,6 +217,8 @@ TraceAI.init(TraceConfig.builder()
 
 You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection, resource or sampler settings. An application-owned provider keeps its own sampler, regardless of these options or environment variables. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
 
+Known secrets: `TraceAI.init` registers the configured API and secret keys. The Future AGI and console exporters it creates replace every occurrence of a known secret (including overlapping ones) with `<redacted>` at export time, on span names, string and string-array attributes, event and link attributes, status descriptions, and resource and instrumentation scope names, versions and attributes; other attribute types are not rewritten, and spans keep their raw values. Values shorter than 8 characters are not registered (one warning per process says so). The registry holds at most 1024 values and 4 MiB of characters; beyond that it fails closed, the exporter drops spans, and one warning per process names the bound. Where TraceAI itself cuts content to a length cap, a known secret that straddles the cut is replaced first, or the text kept before the cut loses its last characters; the cut text ends with `...[truncated]`. At export every `...[truncated]` marker in a value is a cut point, so a secret learned later also loses its start before a marker inside a JSON attribute, and a secret is replaced in its raw and its JSON-escaped (quotes, backslashes, control characters) form. Exporters on an application-owned SDK are not covered unless you wrap them: `SecretReplacingSpanExporter.wrap(exporter)` (package `ai.traceai.privacy`), and `KnownSecrets.process().register(value)` adds any other credential your application wants replaced. What is replaced before a truncation marker: any run of characters right before a `...[truncated]` marker that is a prefix of a known secret (one character or more) becomes `<redacted>`, so a short legitimate run there can be replaced, and a one-character prefix shows the full placeholder. A replaced region never splits a JSON escape: one that would start or end inside an escape (`\n`, `\t`, `\"`, `\uXXXX`) takes the whole escape, so JSON attributes still parse. `KnownSecrets.cap` and `sealCut(text, limit)` return at most `limit` characters (the cut moves back when a replacement lengthens the text); `sealCut(text)` without a limit has no fixed growth bound over the text plus the marker (each replaced match of eight or nine characters becomes the ten-character placeholder, and the number of matches is not bounded); use `sealCut(text, limit)` for a bounded result. An escaped surrogate pair (`\ud83d\ude00`) is replaced as one unit, so no lone surrogate is left. A value too large for the replacement work bound (its length times the number of secrets) is replaced whole by `<redacted>`, which is not JSON even when the attribute held JSON. Not matched: a secret written as `\u2028` or `\u2029`, and a secret inside double-encoded JSON.
+
 The first initialization wins until `TraceAI.shutdown()`. Shutdown flushes and closes only a TraceAI-owned provider, with a ten-second wait each for flush and shutdown. In borrowed mode it only detaches TraceAI; the application remains responsible for flushing and closing its SDK. Reinitialization is supported in either mode. Obtain a new `FITracer` and rebuild wrappers after restarting a TraceAI-owned provider; existing wrappers retain their previous tracer.
 
 **Migrating from global registration:** older versions implicitly installed their provider globally. If you relied on that behavior for spans created outside TraceAI, configure an application-owned SDK for all those spans and pass it to the overload above. TraceAI no longer claims ownership of the process-wide SDK.
@@ -258,7 +260,11 @@ traceai:
   hide-outputs: false
   hide-input-messages: false
   hide-output-messages: false
+  allow-insecure-http: false      # the explicit form of FI_ALLOW_INSECURE_HTTP=1
+  fail-on-refused-transport: true # false: log one value-free warning and disable export instead of failing the startup
 ```
+
+`allow-insecure-http` lets plaintext `http://` go to a host that is neither literal loopback nor a Future AGI host; it never applies to a Future AGI host and a plaintext send is never proxied. When the target, or `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, may not receive the keys, the starter fails the application context with a `KeyTransport.Refused` error whose message names no value (and `FI_ALLOW_INSECURE_HTTP` when plaintext is the reason). With `fail-on-refused-transport: false` the context starts, one value-free warning is logged and nothing is exported anywhere: no exporter is created and `FI_BASE_URL` and the keys are not read again, so an approved `FI_BASE_URL` is not used either.
 
 ## Instrumentation modules
 
@@ -267,11 +273,13 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Area | Integration | Artifact |
 | --- | --- | --- |
 | Core | Tracer, configuration, semantic attributes | `traceai-java-core` |
+| Core | Method annotations (`@Agent`, `@Chain`, `@LLM`, `@Tool`, `@Span`, `@ExcludeFromSpan`) | `traceai-java-annotations` |
 | LLM | OpenAI | `traceai-java-openai` |
 | LLM | Azure OpenAI | `traceai-java-azure-openai` |
 | LLM | Anthropic | `traceai-java-anthropic` |
 | LLM | Cohere | `traceai-java-cohere` |
 | LLM | Google GenAI | `traceai-java-google-genai` |
+| Framework | Google ADK for Java (1.0.0 to 1.15.0) | `traceai-java-google-adk` |
 | LLM | Ollama | `traceai-java-ollama` |
 | LLM | AWS Bedrock | `traceai-java-bedrock` |
 | LLM | Google Vertex AI | `traceai-java-vertexai` |
@@ -297,6 +305,68 @@ For Anthropic Java 3.2.0–3.4.0, prefer the [native OpenTelemetry example](exam
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
+
+### Trace your own methods
+
+Annotate application methods and the agent turns each call into a typed span, with no tracing code:
+
+```java
+import ai.traceai.annotations.*;
+
+public class Assistant {
+    @Agent(name = "planner")
+    public String answer(String question, @ExcludeFromSpan String apiKey) {
+        String facts = lookup(question);
+        return generate("Answer using: " + facts);
+    }
+
+    @Tool(name = "search", description = "Searches the knowledge base")
+    String lookup(String query) { ... }
+
+    @LLM
+    String generate(String prompt) { ... }
+
+    @Span(kind = "retriever", name = "fetch_docs")
+    List<String> fetch(String query) { ... }
+}
+```
+
+Add the annotations (they have no dependencies; the BOM manages the version) and run with the agent:
+
+```xml
+<dependency>
+    <groupId>com.futureagi</groupId>
+    <artifactId>traceai-java-annotations</artifactId>
+</dependency>
+```
+
+```bash
+java -javaagent:traceai-javaagent-<version>.jar -jar app.jar
+```
+
+Without `-javaagent`, put `traceai-javaagent` on the class path and call `TraceAIAuto.init()` once at startup; it attaches itself to the JVM and also instruments classes that are already loaded. Calling it with the agent attached changes nothing, and one annotation transformer is installed per JVM, whichever copy of the engine asks first, so no method is traced twice. Two things to know about this mode: on JDK 21 and later the JVM prints a warning when a program attaches an agent to itself, and a future JDK will refuse it unless you start the JVM with `-XX:+EnableDynamicAgentLoading`, so pass that flag (or use `-javaagent`). The woven code finds the agent first through the system class loader and then through the class loader of the annotated class, so the jar can sit on the system class path, in a Spring Boot fat jar or in a web application next to the annotated classes; if `init()` ran in a loader that the annotated classes cannot see, those methods are not traced and nothing is reported.
+
+* **Kinds:** `@Agent` is `AGENT`, `@Chain` is `CHAIN`, `@LLM` is `LLM`, `@Tool` is `TOOL` (`gen_ai.tool.name` / `tool.name` and `gen_ai.tool.description`), and `@Span(kind = "...")` takes any other kind (`RETRIEVER`, `EMBEDDING`, `RERANKER`, `GUARDRAIL`, `WORKFLOW`; blank means `CHAIN`). If a method carries several, the first of `@Agent`, `@Chain`, `@LLM`, `@Tool`, `@Span` is used and it gets one span. The span name is the annotation's `name`, else the method name.
+* **Input and output:** `input.value` is a JSON object of the arguments by parameter name (compile with `-parameters` for real names, otherwise `arg0`, `arg1`), without any `@ExcludeFromSpan` parameter. `output.value` is the JSON of the return value, omitted for `void`. Capturing a value runs no application code except a record's accessor methods, each at most once per capture and with any failure shown as a type placeholder; an application object's own `toString()` is never run and never exported; values are bounded while they are read (depth 6, 100 items per collection, 2 000 values in all, at most 64 KiB of text per input or output, whichever of that and `FI_WIRE_MAX_BODY_BYTES` is smaller; the result is always valid JSON, never a cut one); a reference back to a value that is already being shown is `"<cycle>"`. What is captured for each kind of value:
+
+| Argument or return value | Captured as |
+| --- | --- |
+| `null`, booleans, JDK numbers, strings, characters, enums (by name), `UUID`, `Path`, `Class`, `java.time` values, `Date`, `Locale` | the value itself (numbers that are not finite as text); strings are cut as they are read |
+| `URI` | its scheme, host, port and path; never the user information or the fragment, and a query shows its keys with `<redacted>` for each value |
+| `char[]` and `byte[]` | the placeholder `"<char[n]>"` or `"<byte[n]>"`, never the content (they carry passwords and tokens) |
+| other arrays | a list of the first 100 elements |
+| `ArrayList`, `LinkedList`, `ArrayDeque`, `Vector`, `HashMap`, `LinkedHashMap`, `TreeMap`, `EnumMap`, `Hashtable`, `HashSet`, `LinkedHashSet`, `TreeSet`, `PriorityQueue`, the `java.util.concurrent` map and list classes, `List.of` / `Set.of` / `Map.of`, `Arrays.asList`, and the `Collections` empty, singleton and `nCopies` collections | a list or object of the first 100 entries, each captured by these rules (a map key is shown only when it is a boxed primitive, a `String`, a `UUID` or an enum; any other key is a type placeholder and none of its methods runs). |
+| a `Collections` unmodifiable, synchronized or checked wrapper (it may wrap a lazy collection or be guarded by a lock), any other `Iterable`, `Map`, `Iterator`, `Enumeration`, `Stream`, `AutoCloseable` (a `DirectoryStream`, a stream-backed iterable, a lazy map, a cursor), `Future` or `Throwable` | the placeholder `"<fully.qualified.Type>"`: it is never iterated, closed or read |
+| `Optional` | the contained value, or `null` |
+| records | an object of their components by name (each accessor runs once); a component whose name is a credential name (`password`, `passphrase`, `pwd`, `pass`, `token`, `secret`, `apiKey` and the like, also as a segment such as `dbPassword`) is `<redacted>`; the value of every other component is captured by these rules |
+| other application objects | the placeholder `"<fully.qualified.Type>"`: the object's `toString()` is never exported, because text an application chose to print cannot be reliably searched for credentials (an object's printed form can hold a credential in any shape), and private fields are never read |
+
+A plain `String` argument or return value keeps its text, with these replaced in this order, on every path (a string that fits as well as one that is cut): known credentials, then the credential shapes (keys, JWTs, `Bearer`, `Basic`, `Negotiate`, `NTLM` and `Digest` values, private keys), then the value of every credential-named `name=value` or `name: value` pair. The shapes run before the pair rule because the pair rule removes the word (`Basic`) that anchors a shape. Credential names are the export catalog's, which also knows `pwd`, `pass`, `passphrase`, `passwd`, `passcode` and `pin` as a name or a segment (`dbPass`, `db.pwd`); the same rule is used for method parameter names, record components, Map keys and JSON fields, and over-redaction (a name such as `pin`) is accepted; the same rule decides which JSON fields, headers and query names the agent redacts on the wire, so a field named `pass` or `pin` is redacted there too, and the values under such names are registered as known secrets. Spellings handled in text: `--password=x`, `-Ddb.password=x`, `--password x` (the next word), `user[password]=x`, `"pwd": value` in JSON text (the value is replaced by a JSON string), and the user information of any `scheme://user:password@host` (a `user:password` form before a later `@` in the same word counts even when the password holds `/`, `?` or `#`). Single- and double-quoted names (`{'password': 'x'}`) and a quoted word after a flag are handled. For `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` the value is the rest of the line. For any other pair, the value ends only where the next pair starts (after a comma, semicolon, line break or space, then a name and `:` or `=`) or at the end of the text: a bracket, parenthesis, brace or quote inside the value does not end it, a bracket that closes a group around the pair is replaced with it, a value that starts with a quote runs past its closing quote to the next pair, and a private key runs through its `END` line. A single `=` before a comma, semicolon, parenthesis, quote or a space (base64 padding) never starts a pair. The limit: a credential value that itself contains `, name=` or `; name:` ends there, where it looks like the next pair. A string is read once, up to the text limit plus a bounded reach of at least 8 KiB (the longest known secret, if longer) and 1 KiB, so the work does not grow with the string's length; if replacements bring the cut within the shape reach (8 KiB) of the end of the read, the trailing word that could begin a credential shape (and a scheme word such as `Bearer` before it) is dropped before the cut and the text is marked truncated. The text limit is the smaller of 64 KiB and `FI_WIRE_MAX_BODY_BYTES`. A `Date` or `Path` that an application defines is its epoch milliseconds or its type placeholder, not its own text. Over-redaction fails closed. There is no per-class opt-in to export an object's `toString()`: it was not built, and printing a credential in a `toString()` stays safe because it is never exported, and what could still be the start of a known secret is dropped before the cut marker; all of it is replaced again on export. Numbers count against the text limit like any other text.
+* **Errors:** an exception sets the error status, `error.type`, `error.message` and the exception event (`exception.type`, `exception.message`), and is rethrown unchanged. The message is `getMessage()` only when the exception class does not override it, otherwise the simple class name; known secrets and credential shapes are replaced in it, and the stack trace is not exported. `FI_HIDE_ERROR_DETAILS` keeps only the type.
+* **Async:** a method returning `CompletableFuture` (any `CompletionStage`) or a Reactor `Mono` / `Flux` (found by name, so Reactor is not required) ends its span when the result completes, fails or is cancelled, but only when the method is declared to return exactly `Mono` or `Flux`: for any other declared type (`Object`, `Publisher`, a subclass, a type variable) the returned instance is never replaced, and the span ends when the method returns, with no output (a cancelled `CompletableFuture` carries `traceai.cancelled=true` and is not an error); `output.value` of a `Flux` is the list of its first 100 items. A cancelled span (for example `take(2)`, `next()` or `blockFirst()`) carries `traceai.cancelled=true`, its status is left as for any other span that did not fail, and its `output.value` is the items emitted before the cancel (a cancelled `Mono` has none). A `Mono` or `Flux` that is never subscribed never ends its span, and code that runs on another thread after the method returns does not see the annotated span as its parent.
+* **Nesting:** an annotated call inside another is its child; an AI provider call made inside an annotated method is traced as a child of the annotated span, even in an `@LLM` method. With no enclosing annotated span, your own active OpenTelemetry span is the parent. A Google ADK run started inside an annotated method nests under it; ADK's model and tool spans, and the HTTP calls they make, nest under ADK's own spans; an annotated method that ADK calls (a function tool or a model) nests under the ADK span that calls it. An annotated function tool's own HTTP calls nest under it; a model's own HTTP call is covered by ADK's model-call span and is not traced again.
+* **Privacy:** the agent's hide switches apply (`FI_HIDE_INPUTS` drops `input.value`, `FI_HIDE_OUTPUTS` drops `output.value`, `FI_HIDE_ERROR_DETAILS` keeps only the exception type), known credentials are replaced on export, and the tool name is never withheld. Argument names come from the class file: for a class compiled without `-parameters` the names are unknown, so every argument except `null`, booleans and enum constants is redacted in `input.value` (strings, numbers, arrays, collections, `Optional`, `Map`, records and other objects), and the agent prints one warning per process. Compile with `-parameters` to export them (a credential name still redacts its value).
+* **Scope:** only methods that carry the annotation are traced; an overriding method needs its own annotation. A default method of an interface is traced when the interface declares the annotation on it. Constructors and abstract methods are not traced, and neither are the compiler's bridge and other synthetic methods, so one call is one span. `FI_DISABLED_INSTRUMENTATIONS=annotations` turns it off. Like the rest of the agent, it stays off when the OpenTelemetry Java agent is also running.
 
 ### AWS Bedrock
 
@@ -345,7 +415,7 @@ Search methods return lazy `SearchPagedIterable` results. Consume the results to
 
 ## Build and test
 
-Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode; the Arconia and Quarkus examples have their own Java 21 requirements.
+Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode, except `traceai-java-quarkus-langchain4j`, which requires Java 21; the Arconia and Quarkus examples also have their own Java 21 requirements. CI tests the complete reactor on Java 21, and on Java 17 without `traceai-java-quarkus-langchain4j`.
 
 ```bash
 cd java

@@ -110,11 +110,15 @@ What happens at startup:
   soon as you set one.
 - Without `opentelemetry-sdk` in the bundle, or in a standalone script, the agent
   uses a dependency-free pipeline with the same activation boundaries.
+- Forwarding through the application's OpenTelemetry SDK is tested on `opentelemetry-sdk` 1.10 and
+  later (the Gemfile lock pins 1.10.0) with the locked `opentelemetry-api` 1.8 (CI runs the lock; API 1.11 is not part of the CI run), and spans are forwarded
+  from SDK 1.3 through 1.9 as well (OTLP exporter 0.31.1 and later require SDK 1.10; 0.31.0 resolves with older SDKs but reads span data fields they lack). SDK 1.10 and later report whether a span's parent is remote;
+  spans from an earlier SDK are forwarded with a local parent. At startup the agent runs a one-time probe of its media bookkeeping hooks on a throwaway span of the SDK in use. When the probe cannot verify them, the spans the agent exports (AI and server spans, and every span sent to an exporter you pass to the agent) are still forwarded but keep only identity, timing and usage metadata (content, events and links are not exported) and one line says so; SDK 1.3 and 1.4 are such SDKs.
 - Export to Future AGI always uses the agent's built-in exporter, which sends
   OTLP/HTTP protobuf to `${FI_BASE_URL}/tracer/v1/traces` (default base
   `https://api.futureagi.com`). It loads OpenSSL itself when your application has
-  not, and it connects directly: `HTTPS_PROXY` and other proxy settings are not
-  used.
+  not. It connects directly, or through an HTTPS proxy when `https_proxy` or
+  `HTTPS_PROXY` is set (see "Exporting behind an HTTPS proxy").
 - On Ruby older than 3.2 the agent prints one warning and the application runs
   untraced. Any initialization error also leaves the application running.
 - Files and environment values are read as UTF-8 whatever the process locale,
@@ -211,6 +215,7 @@ content, and a file that does not exist prints nothing.
 | --- | --- |
 | `FI_API_KEY`, `FI_SECRET_KEY` | Future AGI credentials. Used only as a complete pair from one source. |
 | `FI_BASE_URL` | Collector base URL. A `base_url` in the config file is used only when the key pair comes from the same file. |
+| `FI_ALLOW_INSECURE_HTTP` | Exactly `1` allows keys over plaintext `http://` to a non-loopback, non-Future-AGI `FI_BASE_URL`. Future AGI hosts always require `https://`. |
 | `FI_PROJECT_NAME`, `FI_PROJECT_TYPE`, `FI_PROJECT_VERSION_NAME` | Project routing. The default name is `OTEL_SERVICE_NAME`, then the working directory name. |
 | `FI_INSTRUMENTATIONS`, `FI_DISABLED_INSTRUMENTATIONS` | Allow or deny integrations. `wire` covers both transports; `net_http` or `httpx` alone enables the wire layer for that transport only; `rack` controls server spans. `ruby_llm` controls the RubyLLM spans. An allowlist must name every integration you want, for example `wire,rack,ruby_llm`. |
 | `FI_WIRE_CAPTURE` | `false` turns off wire capture. |
@@ -259,6 +264,34 @@ instrumentations = ["wire", "rack"]
 wire_max_body_bytes = 4194304
 sample_rate = 1.0
 ```
+
+### Exporting behind an HTTPS proxy
+
+Set `https_proxy` or `HTTPS_PROXY` (the lower-case name is read first) to an `http://` or
+`https://` URL, for example `https://user:password@proxy.corp:3128`. Exports to an
+`https://` `FI_BASE_URL` then go through the proxy with a `CONNECT` request.
+
+- A host matched by `no_proxy` or `NO_PROXY` connects directly. Entries are read as Ruby reads
+  them: `host` matches that host and its subdomains, `.domain` matches subdomains only,
+  `host:port` limits the match to that port, and an IPv4 address or CIDR (`10.0.0.0/8`) matches an
+  IPv4 target written as an address. `*` and `*.domain` are not special. The agent does not resolve
+  a name to test it against an address entry, so a name that resolves into such an entry is still
+  proxied. The names `localhost`, `127.x.x.x` and `::1` connect directly; another name that resolves
+  to loopback is proxied.
+- Verification is always on. The tunnelled session is checked in full against the Future AGI host,
+  never against the proxy, and a certificate that is not trusted or does not match the host is
+  refused before any key is written. An `https://` proxy has its own certificate and name verified
+  too. `SSL_CERT_FILE` and `SSL_CERT_DIR` name extra trusted authorities.
+- Plaintext is never proxied. An `http://` target, loopback included, connects directly and ignores
+  `HTTP_PROXY`, so Future AGI keys never reach a proxy in the clear.
+- Credentials in the proxy URL are sent to the proxy only, as `Proxy-Authorization: Basic`.
+  The keys are never placed in the proxy URL or in a proxy header, and no log line shows the proxy URL.
+- A proxy that refuses the tunnel, answers with a redirect, uses another scheme (for example
+  `socks5://`) or has a value that cannot be read refuses the export with one warning that names a
+  reason; so does a proxy that cannot be reached, closes, or answers too much or too slowly, and
+  a tunnelled session that cannot be verified. The agent keeps running and the export is never
+  retried directly.
+- The settings are read once, when the exporter starts.
 
 ## What is captured
 
@@ -349,6 +382,10 @@ of `spec/auto-instrumentation/privacy.json`, version 3):
   credential headers and query values on outgoing `Net::HTTP` and `HTTPX`
   requests, including requests made before the first AI request, and values
   passed to `register_secret`) are removed from every exported string.
+  Secrets that overlap one another are replaced whole, whatever the overlap, and
+  a value too costly to match is replaced entirely. Values registered as secret after a span has ended are replaced in the copy sent to Future AGI; the application's own exporters receive spans as they were when they ended.
+  A RubyLLM span that is open when a secret is learned is replaced again when it
+  ends.
 - Media is omitted: data URLs, base64 images and audio, and payloads next to a
   media MIME type.
 - The `session.id` you set with `TraceAI::Auto.using_session` (or
@@ -438,6 +475,14 @@ install anything.
 
 ## Limitations
 
+- Matching known secrets that overlap one another has a work limit per value and a larger one per span. The cost
+  grows with the registered secrets (at most 1024, each read once for every value that holds a placeholder) and the
+  placeholders in a span's values. A value past its limit is replaced with the placeholder. When a span reaches its
+  limit, the value being matched and every later value (numbers and booleans too) and name of that span are replaced
+  with the placeholder, except a base64 media string, which keeps its `<omitted: N base64 chars>` text; the later names
+  share one entry that holds the last value written. The hide settings still apply by each attribute's own name, and the
+  span's name, status text, resource and scope, scrubbed first, are kept. The agent's fallbacks after a
+  failed snapshot each have their own limit, so the worst case for one span is five times the span's limit.
 - Not covered: non-default Faraday adapters (Typhoeus, Excon, HTTP.rb), direct
   sockets, WebSockets, gRPC and custom HTTPX transport plugins.
 - Apart from RubyLLM, there are no library-level instrumentors in this gem;
@@ -447,9 +492,9 @@ install anything.
   report shows `pending` until then. Your framework's instrumentation still
   decides where the Rack middleware goes. The `traceai-roast` gem is not enabled
   automatically.
-- The built-in exporter does not use HTTP proxies (`HTTPS_PROXY` is ignored).
-  It loads OpenSSL itself only when that cannot conflict with a version your
-  application pins.
+- The built-in exporter sends through an HTTPS proxy only with `CONNECT` and only for
+  `https://` targets; `HTTP_PROXY` and every other plaintext path are ignored. It loads
+  OpenSSL itself only when that cannot conflict with a version your application pins.
 - Before the agent has started, request credentials are learned only when the
   process has a Future AGI key pair or an OpenTelemetry SDK tracer provider, and
   a proxy `CONNECT` is not observed: the proxy credentials of a connection

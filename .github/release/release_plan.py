@@ -130,6 +130,95 @@ def typescript_packages(root: Path = REPO_ROOT) -> list[dict]:
     return out
 
 
+GO_REPO_PREFIX = "github.com/future-agi/traceAI/go/"
+GO_FLOORS = ".github/release/go_module_floors.json"
+
+
+def go_modules(root: Path) -> list[Path]:
+    """The go.mod files that are published: one per go/<module>, and any deeper module
+    named in release-please-config.json. Unpublished test modules (go/auto/sdkcompat) are not."""
+    found = {f for f in (root / "go").glob("*/go.mod")}
+    config = root / "release-please-config.json"
+    if config.is_file():
+        for path in json.loads(config.read_text()).get("packages", {}):
+            if path.startswith("go/") and (root / path / "go.mod").is_file():
+                found.add(root / path / "go.mod")
+    return sorted(found)
+
+
+def _go_directives(text: str, keyword: str) -> list[list[str]]:
+    """The fields of every `keyword ...` line of a go.mod, in single-line and block form."""
+    rows, block = [], False
+    for raw in text.splitlines():
+        line = raw.split("//")[0].strip()
+        if not line:
+            continue
+        if block:
+            if line == ")":
+                block = False
+            else:
+                rows.append(line.split())
+        elif line == keyword + " (":
+            block = True
+        elif line.startswith(keyword + " "):
+            rows.append(line[len(keyword):].split())
+    return rows
+
+
+def _version_tuple(version: str) -> tuple[int, int, int]:
+    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", version)
+    return tuple(int(x) for x in match.groups()) if match else (0, 0, 0)
+
+
+def go_release_blockers(root: Path, package: dict) -> list[str]:
+    """Reasons a Go module must not be tagged: a replace directive that points into the working tree,
+    or a requirement on another module of this repository that is not newer than the floor in
+    go_module_floors.json (the last release without the APIs this module uses). Consumers ignore
+    the replace directives of the modules they depend on, so such a tag would not build for them."""
+    mod = root / package["dir"] / "go.mod"
+    if not mod.is_file():
+        return []
+    text = mod.read_text()
+    blockers = []
+    for fields in _go_directives(text, "replace"):
+        if "=>" in fields and len(fields[fields.index("=>") + 1:]) < 2:  # no version after the target: a path
+            blockers.append(f"{package['dir']}/go.mod: replace {' '.join(fields)} points into the working tree and is not releasable")
+    floors_file = root / GO_FLOORS
+    floors = json.loads(floors_file.read_text()).get(package["dir"], {}) if floors_file.is_file() else {}
+    for fields in _go_directives(text, "require"):
+        if len(fields) >= 2 and fields[0] in floors and not _version_tuple(fields[1]) > _version_tuple(floors[fields[0]]):
+            blockers.append(f"{package['dir']}/go.mod: requires {fields[0]} {fields[1]}, which lacks the APIs this module uses; "
+                            f"it needs a release newer than {floors[fields[0]]}")
+    return blockers
+
+
+def pending_go_problems(root: Path) -> list[str]:
+    """Checks for Go modules that are not yet releasable, and for Go modules that claim to be.
+
+    A module listed in go_module_floors.json is known to be pending: it stays out of
+    release-please-config.json and the manifest (so no release PR bumps a module that cannot be
+    tagged, which would leave the merged PR pending and stop every later release PR), and it must
+    leave the list in the same change that adds it to the config. A Go module in the config must
+    be taggable, for the same reason."""
+    floors_file = root / GO_FLOORS
+    floors = {k: v for k, v in json.loads(floors_file.read_text()).items() if not k.startswith("_")} if floors_file.is_file() else {}
+    config_file = root / "release-please-config.json"
+    config = json.loads(config_file.read_text()).get("packages", {}) if config_file.is_file() else {}
+    problems = []
+    for path in sorted(floors):
+        if not (root / path / "go.mod").is_file():
+            problems.append(f"{path}: listed in {GO_FLOORS} but has no go.mod")
+        elif path in config:
+            problems.append(f"{path}: is in the release config while {GO_FLOORS} lists it as not yet releasable; keep it in one place")
+        elif not go_release_blockers(root, {"dir": path}):
+            problems.append(f"{path}: is releasable now; remove it from {GO_FLOORS} and add it to release-please-config.json and the manifest (initial version 0.1.0)")
+    for path in sorted(p for p in config if p.startswith("go/") and p not in floors and (root / p / "go.mod").is_file()):
+        blockers = go_release_blockers(root, {"dir": path})
+        if blockers:
+            problems.append(f"{path}: is in the release config but cannot be tagged ({blockers[0]}); its merged release PR would stay pending and stop later release PRs")
+    return problems
+
+
 def other_packages(root: Path = REPO_ROOT) -> list[dict]:
     out = []
     pom = root / "java/pom.xml"
@@ -148,7 +237,7 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
                     "declared": declared_java_versions(root / "java")})
     manifest_path = root / ".release-please-manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
-    for f in sorted((root / "go").glob("*/go.mod")):
+    for f in go_modules(root):
         module = re.search(r"^module\s+(\S+)", f.read_text(), re.M).group(1)
         path = str(f.parent.relative_to(root))
         version = manifest.get(path, "0.1.0")
@@ -191,6 +280,12 @@ def load_config(path: Path = CONFIG) -> dict:
     return json.loads(path.read_text()) if path.is_file() else {"skip": {}}
 
 
+def skip_reason(skip: dict, package: dict) -> str | None:
+    """The configured reason a package is not published: an "<ecosystem>:<name>" entry for that registry alone (one name
+    can be a package in two ecosystems), else a plain name entry for every ecosystem."""
+    return skip.get(f"{package['ecosystem']}:{package['name']}", skip.get(package["name"]))
+
+
 def consistency_problems(packages: list[dict]) -> list[str]:
     problems, seen = [], {}
     for p in packages:
@@ -225,7 +320,7 @@ def coverage_problems(root: Path, packages: list[dict]) -> list[str]:
             extra_files = {e if isinstance(e, str) else e.get("path") for e in cfg.get(path, {}).get("extra-files", [])}
             if scoped_rel not in extra_files:
                 problems.append(f"{p['dir']}/{rel}: missing release-please extra-file")
-    return problems
+    return problems + pending_go_problems(root)
 
 
 def _get_json(url: str) -> dict | list[dict] | None:
@@ -284,16 +379,22 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     raise ValueError(f"Unknown ecosystem: {eco}")
 
 
-def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set[str] | None = None, include_published: bool = False) -> dict:
+def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set[str] | None = None, include_published: bool = False, root: Path = REPO_ROOT) -> dict:
     out = {eco: [] for eco in ECOSYSTEMS}
     out["skipped"] = []
     skip = config.get("skip", {})
     for p in packages:
         if only and p["name"] not in only:
             continue
-        if p["name"] in skip:
-            out["skipped"].append({"name": p["name"], "reason": skip[p["name"]]})
+        reason = skip_reason(skip, p)
+        if reason is not None:
+            out["skipped"].append({"name": p["name"], "reason": reason})
             continue
+        if p["ecosystem"] == "go":
+            blockers = go_release_blockers(root, p)
+            if blockers:
+                out["skipped"].append({"name": p["name"], "reason": "not tagged: " + "; ".join(blockers)})
+                continue
         if p["ecosystem"] == "java" and (p["group"] != "com.futureagi" or "SNAPSHOT" in p["version"]):
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
@@ -326,9 +427,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--include-published", action="store_true", help="include existing registry versions for tag/release reconciliation")
     ap.add_argument("--only", nargs="*", metavar="NAME")
+    ap.add_argument("--go-gate", metavar="DIR", help="exit 1 unless the Go module in DIR can be tagged")
     ap.add_argument("--root", default=str(REPO_ROOT))
     args = ap.parse_args(argv)
     root = Path(args.root)
+    if args.go_gate:
+        package = {"dir": args.go_gate.rstrip("/")}
+        blockers = go_release_blockers(root, package)
+        for blocker in blockers:
+            print(f"release: {blocker}", file=sys.stderr)
+        return 1 if blockers else 0
     packages = python_packages(root) + typescript_packages(root) + other_packages(root)
     problems = consistency_problems(packages) + coverage_problems(root, packages)
     if problems:
@@ -338,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         print(f"release: {len(packages)} packages, versions and coverage consistent", file=sys.stderr)
         return 0
-    result = plan(packages, load_config(), offline=args.offline, only=set(args.only or []) or None, include_published=args.include_published)
+    result = plan(packages, load_config(), offline=args.offline, only=set(args.only or []) or None, include_published=args.include_published, root=root)
     json.dump(result, sys.stdout, indent=2)
     print()
     return 0

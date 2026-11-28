@@ -29,6 +29,9 @@ public static class TraceAI
     /// <summary>
     /// Primary entry point. Creates a TracerProvider, configures exporters, and returns an FITracer.
     /// </summary>
+    /// <exception cref="FiKeyRefusedException">The keys may not go to the endpoint (see <see cref="FiKeyTransport.Decide"/>), or
+    /// <c>OTEL_EXPORTER_OTLP_HEADERS</c> or <c>OTEL_EXPORTER_OTLP_TRACES_HEADERS</c> carries an <c>x-api-key</c> or <c>x-secret-key</c> header,
+    /// or a value that contains one of the Future AGI keys. The message names the setting to change and no value; nothing is sent and no provider is created.</exception>
     public static FITracer Register(Action<RegisterOptions>? configure = null)
     {
         lock (s_lock)
@@ -107,6 +110,20 @@ public static class TraceAI
         // Build auth headers
         var headers = BuildHeaders(options);
 
+        // The destination of the keys is decided before anything is attached to a request: loopback may be plaintext, a Future AGI host is TLS
+        // only, another host in plaintext needs FI_ALLOW_INSECURE_HTTP=1 (or the option), and the client follows no redirect.
+        var carriesKeys = headers.Any(h => (h.Key.Equals("X-Api-Key", StringComparison.OrdinalIgnoreCase) || h.Key.Equals("X-Secret-Key", StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrEmpty(h.Value));
+        var target = options.Endpoint
+            ?? (options.Transport == Transport.Grpc ? Settings.GetGrpcEndpoint() : Settings.GetCollectorEndpoint());
+        var decision = FiKeyTransport.Decide(options.Transport == Transport.Grpc ? target : target.TrimEnd('/') + "/tracer/v1/traces",
+            options.Transport == Transport.Grpc, carriesKeys, options.AllowInsecureHttp);
+
+        // The exporter merges OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS into what it sends: refuse when they carry a Future AGI
+        // key header or a value that contains one of the keys this registration uses.
+        FiKeyTransport.AssertNoFiKeysInAmbientHeaders(headers
+            .Where(h => h.Key.Equals("X-Api-Key", StringComparison.OrdinalIgnoreCase) || h.Key.Equals("X-Secret-Key", StringComparison.OrdinalIgnoreCase))
+            .Select(h => h.Value));
+
         // Build TracerProvider
         var builder = Sdk.CreateTracerProviderBuilder()
             .SetResourceBuilder(resourceBuilder)
@@ -116,10 +133,9 @@ public static class TraceAI
             .AddProcessor(new FISpanProcessor());
 
         // Add exporter based on transport
-        var endpoint = options.Endpoint
-            ?? (options.Transport == Transport.Grpc
-                ? Settings.GetGrpcEndpoint()
-                : Settings.GetCollectorEndpoint());
+        var endpoint = options.Transport == Transport.Grpc
+            ? decision.Endpoint
+            : target;
 
         if (options.Transport == Transport.Grpc)
         {
@@ -142,6 +158,8 @@ public static class TraceAI
                 {
                     exporterOptions.ExportProcessorType = ExportProcessorType.Simple;
                 }
+                // Last, so the client carries the exporter's own timeout (a custom factory replaces the default one that sets it).
+                exporterOptions.HttpClientFactory = FiKeyTransport.HttpClientFactory(decision, exporterOptions.TimeoutMilliseconds);
             });
         }
         else
@@ -166,6 +184,8 @@ public static class TraceAI
                 {
                     exporterOptions.ExportProcessorType = ExportProcessorType.Simple;
                 }
+                // Last, so the client carries the exporter's own timeout (a custom factory replaces the default one that sets it).
+                exporterOptions.HttpClientFactory = FiKeyTransport.HttpClientFactory(decision, exporterOptions.TimeoutMilliseconds);
             });
         }
 
@@ -234,4 +254,7 @@ public class RegisterOptions
     public Sampler? Sampler { get; set; }
     public bool Verbose { get; set; } = true;
     public bool EnableConsoleExporter { get; set; }
+    /// <summary>Allows the Future AGI keys to go in plaintext to a self-hosted collector that is not a Future AGI host (FI_ALLOW_INSECURE_HTTP=1 does the same).
+    /// Loopback needs no setting and a Future AGI host is always TLS.</summary>
+    public bool AllowInsecureHttp { get; set; }
 }

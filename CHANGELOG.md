@@ -18,7 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Ruby `traceai-auto` instruments RubyLLM 2.x with no application code: a chat span for each model request (streamed or not) and an `execute_tool <name>` span for each tool call, masked by the existing hide settings, with no second wire span for the same call. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
 
+### Changed
+- Ruby `traceai-auto` is tested with `opentelemetry-sdk` 1.10 and later (the Gemfile declares `opentelemetry-sdk` `~> 1.10` and `opentelemetry-exporter-otlp` `~> 0.31`, at least 0.31.1) and the locked `opentelemetry-api` 1.8 (CI runs the lock; API 1.11 is not part of the CI run), and forwards spans from SDK 1.3 through 1.9 with a local parent. It runs a one-time probe of its media bookkeeping hooks at startup; on an SDK where the probe cannot verify them (1.3 and 1.4) the spans the agent exports (AI and server spans, and every span sent to an exporter you pass to the agent) keep only identity, timing and usage metadata, and content, events and links are not exported, with one line printed. See [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md).
+- .NET auto-instrumentation records prompt and response content by default in ASP.NET Core hosts, like every other language. Set `FI_AUTO_CAPTURE_CONTENT=false`, or any of `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` or `FI_HIDE_INPUT_IMAGES` set to `true`, to keep it off; a `TraceConfig` supplied to the agent with any of those hides keeps it off too. See [`csharp/src/TraceAI.AutoInstrumentation/CHANGELOG.md`](csharp/src/TraceAI.AutoInstrumentation/CHANGELOG.md).
+
 ### Fixed
+- Ruby `traceai-auto` copies span events and links whether the SDK and API define them as structs or plain objects, and keeps a batch that has an SDK span-data member it does not know.
 - Java Anthropic instrumentation unwraps optional temperature values, so requests with an absent or configured temperature reach the client instead of failing during tracing.
 
 ### Coming Soon

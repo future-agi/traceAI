@@ -157,7 +157,10 @@ format, so OpenAI-compatible gateways are covered too.
 | `FI_INSTRUMENTATIONS` | All. Comma-separated allowlist. Include `wire` to allow HTTP tracing. |
 | `FI_DISABLED_INSTRUMENTATIONS` | None. Comma-separated denylist. The denylist wins over the allowlist. |
 | `FI_WIRE_CAPTURE` | `true`. |
+| `FI_GOOGLE_ADK_SKIP_WRAPPED_CALLS` | `false`. Set `true` to skip the agent's Google ADK span for a model or tool call made through `TracedLlm` or `TracedTool`, so the wrapper's span is the only one. Spans started while a skipped wrapped tool runs (a sub-agent's, a lazily subscribed tool's HTTP call) are parented to the nearest span the agent records, so no exported span refers to a span that is not exported; if such spans were started under the skipped call's own span, that span is exported after all. |
 | `FI_WIRE_MAX_BODY_BYTES` | `4194304`. Body buffering bound per direction. |
+
+A failed Google ADK tool's result still reaches the next model call's input messages (`gen_ai.input.messages.*`). `FI_HIDE_ERROR_DETAILS` withholds it from the tool's own span only; the input hide switches (`FI_HIDE_INPUTS`, `FI_HIDE_INPUT_MESSAGES`) govern the input messages.
 
 Names you can use in the denylist:
 

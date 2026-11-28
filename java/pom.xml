@@ -39,6 +39,7 @@
 
         <!-- Core -->
         <module>traceai-java-core</module>
+        <module>traceai-java-annotations</module>
 
         <!-- Zero-code agent -->
         <module>traceai-javaagent</module>
@@ -49,6 +50,7 @@
         <module>traceai-java-anthropic</module>
         <module>traceai-java-cohere</module>
         <module>traceai-java-google-genai</module>
+        <module>traceai-java-google-adk</module>
         <module>traceai-java-ollama</module>
         <module>traceai-java-bedrock</module>
         <module>traceai-java-vertexai</module>
@@ -101,6 +103,7 @@
         <!-- Additional LLM SDK versions -->
         <cohere-java.version>1.9.3</cohere-java.version>
         <google-genai.version>1.1.0</google-genai.version>
+        <google-adk.version>1.15.0</google-adk.version>
         <ollama4j.version>1.0.79</ollama4j.version>
         <watsonx-ai.version>0.12.0</watsonx-ai.version>
 

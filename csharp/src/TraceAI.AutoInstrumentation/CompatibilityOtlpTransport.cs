@@ -40,6 +40,8 @@ internal sealed class CompatibilityOtlpTransport : IDisposable
         using var request=new HttpRequestMessage(HttpMethod.Post,_endpoint) { Content=new ByteArrayContent(Encode(resource,spans,_spanAttributeLimit)) };
         request.Content.Headers.ContentType=new MediaTypeHeaderValue("application/x-protobuf");
         using var response=_client.Send(request,HttpCompletionOption.ResponseHeadersRead);
+        // The client follows no redirect: a 3xx answer is a failed export, and nothing goes to the address it names.
+        if((int)response.StatusCode is >=300 and <400) TraceAIAuto.Warn("redirect","The collector answered with a redirect, which is not followed when Future AGI keys are sent; nothing further was sent.");
         return response.IsSuccessStatusCode;
     }
     internal static byte[] Encode(Resource resource,IEnumerable<Activity> spans,int? spanAttributeLimit=null)

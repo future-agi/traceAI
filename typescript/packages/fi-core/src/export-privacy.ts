@@ -6,9 +6,12 @@ import { REDACTED_VALUE } from "./trace/trace-config/constants";
 import { stripStackTrace } from "./trace/trace-config/errorDetails";
 import { maskAttributes, redactValue } from "./trace/trace-config/maskingRules";
 import { capBase64Images } from "./trace/trace-config/imageCap";
+import { redactPiiInString } from "./trace/trace-config/piiRedaction";
 import { redactEmbeddingValues, redactRequestMetadata } from "./trace/trace-config/structuredRedaction";
 import type { TraceConfigOptions } from "./trace/trace-config/types";
 import { DROPPED_CONTENT_COUNT, isProjectionMetadata, isSamplingRatio, PROJECTION_METADATA, SAMPLING_RATIO } from "./attribute-projection";
+import { admittedRuntime, validRuntimeValue } from "./runtime-metadata";
+import { AGENT_NAME, AGENT_ID } from "./trace/trace-config/agentIdentity";
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
@@ -16,6 +19,9 @@ import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialN
 
 // Compatibility name for integration tests/packages migrating this round; the agent never reads or propagates it.
 export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credentials");
+// Hub session receipts are emitted by the Python session-snapshot consumer.
+// The JS SDK has no verified Hub session producer. Raw span writes, including
+// attributes copied by an FI instrumentor, retain ordinary credential policy.
 const HOST_TRUNCATED = "<unknown: host-truncated>";
 const HOST_DATA_UNKNOWN = "traceai.capture.host_data_unknown";
 // The image cap's whole-value fallback marker (module-private WHOLE_MARKER in
@@ -220,15 +226,19 @@ function exportedMarker(attrs: unknown, key: string, value: unknown): boolean {
 }
 function carryAttributeEvidence(source: unknown, target: Attributes): void {
   if (!source || typeof source !== "object" || types.isProxy(source)) return;
-  const proof = admittedText.get(source), next = new Map<string, unknown>(), markers = new Map<string, string>();
+  const proof = admittedText.get(source), runtime = admittedRuntime.get(source), nextRuntime = new Map<string, unknown>(), next = new Map<string, unknown>(), markers = new Map<string, string>();
   for (const [key, value] of entries(target)) {
     const original = data(source, key);
+    if (runtime?.has(key) && sameAttribute(value, runtime.get(key)) && sameAttribute(original, value)) {
+      nextRuntime.set(key, runtime.get(key));
+    }
     if (proof?.has(key) && sameAttribute(original, proof.get(key)) && sameAttribute(original, value)) {
       next.set(key, Array.isArray(value) ? Array.from({ length: data(value, "length") }, (_, i) => data(value, String(i))) : value);
     }
     if (typeof value === "string" && (exportedMarker(source, key, value)
         || value !== original && value.length <= 48 && /^(?:<redacted>|__REDACTED__|\[REDACTED\]|<omitted: (?:[0-9]+ base64 chars|media|data URI)>)$/.test(value))) markers.set(key, value);
   }
+  if (nextRuntime.size) admittedRuntime.set(target, nextRuntime);
   if (next.size) admittedText.set(target, next);
   if (markers.size) exportedMarkers.set(target, markers);
 }
@@ -452,23 +462,61 @@ function sameAttribute(a: unknown, b: unknown): boolean {
   return a === b;
 }
 /** @internal Call only with the complete, already-sanitized pre-SDK view. */
-export function rememberMediaAdmission(span: object, complete: Attributes): void {
+/** `evidence.runtime` holds only values the SDK wrote through FISpan's privileged
+ * identity calls; `evidence.siblings` is the complete pre-projection map. A value
+ * that equals any credential-named, non-grouping sibling never gains runtime
+ * evidence, so retaining one key cannot export a dropped credential's value. */
+export function rememberMediaAdmission(span: object, complete: Attributes,
+  evidence: { runtime?: ReadonlyMap<string, unknown>; siblings?: Attributes } = {}): void {
   try {
     const current = data(span, "attributes");
     if (!current || types.isProxy(current)) return;
-    const hints = indexPrivacyHints(entries(complete)), proven = new Map<string, unknown>();
+    const hints = indexPrivacyHints(entries(complete)), proven = new Map<string, unknown>(), runtime = new Map<string, unknown>();
+    const written = evidence.runtime, credentialValues = new Set<string>();
+    if (written?.size) for (const [key, value] of entries(evidence.siblings ?? complete)) {
+      if (identityKey(key) || !isCredentialName(key)) continue;
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === "string" || typeof item === "number") credentialValues.add(String(item));
+      }
+    }
+    const shared = (value: unknown) => (Array.isArray(value) ? value : [value]).some(item => credentialValues.has(String(item)));
     for (const [key, original] of entries(complete)) {
-      if (!completeNonMediaMime(key, hints)) continue;
+      const typed = !!written?.has(key) && sameAttribute(written.get(key), original) && validRuntimeValue(key, original) && !shared(original);
+      const textMime = completeNonMediaMime(key, hints);
+      if (!typed && !textMime) continue;
       const actual = data(current, key);
+      if (typed && sameAttribute(original, actual)) {
+        runtime.set(key, Array.isArray(original) ? [...original] : original);
+      }
+      if (!textMime) continue;
       // SDK strings may be prefixes. Never accept another processor's different
       // value, or an SDK-dropped key, as evidence of complete admission.
       if (typeof original === "string" && typeof actual === "string" && original.startsWith(actual)) proven.set(key, actual);
       else if (sameAttribute(original, actual)) proven.set(key, Array.isArray(actual) ? Array.from({ length: data(actual, "length") }, (_, i) => data(actual, String(i))) : actual);
     }
     admittedText.set(current, proven);
+    if (runtime.size) admittedRuntime.set(current, runtime); else admittedRuntime.delete(current);
   } catch { /* Missing evidence invokes the conservative export fallback. */ }
 }
 export type PrivacyOptions = TraceConfigOptions & { hideLLMInvocationParameters?: boolean };
+
+/** Read-back is an export, not a complete caller write. Require this
+ * native source's own limit (never an unrelated global provider's), then
+ * use the same loss, discovery and masking decision as the FI exporter. */
+export function exportedAgentIdentity(span: object, privacy: Pick<ReturnType<typeof privacyFilter>, "span">): { name?: string; id?: string } {
+  const limit = data(span, "_attributeValueLengthLimit") ?? data(data(span, "_spanLimits"), "attributeValueLengthLimit");
+  if (typeof limit !== "number" || !(limit >= 0)) return {};
+  const raw = data(span, "attributes");
+  const hasName = typeof data(raw, AGENT_NAME) === "string", hasId = typeof data(raw, AGENT_ID) === "string";
+  if (!hasName && !hasId) return {};
+  const clean = privacy.span(span as ReadableSpan).attributes;
+  // A provider can export with stricter PII settings than this wrapper; the
+  // read-back never returns more than the strictest exporter would emit.
+  const strict = (value: unknown) => typeof value === "string" ? redactPiiInString(value) : value;
+  const name = strict(clean[AGENT_NAME]), id = strict(clean[AGENT_ID]);
+  return { name: hasName && typeof name === "string" ? name : undefined,
+    id: hasId && typeof id === "string" ? id : undefined };
+}
 
 /** The sole FI export boundary. No original span, resource or context is reachable from its snapshot. */
 export function privacyFilter(options: PrivacyOptions = {}, configured: readonly string[] = [],
@@ -558,14 +606,16 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     // grant completeness; unchanged FI pre-admission evidence below still can.
     const hints = indexPrivacyHints(hintItems, "", authoredHints, !admission && incomplete ? 0 : valueLimit);
     const proven = attrs && typeof attrs === "object" ? admittedText.get(attrs) : undefined;
-    const value = (item: unknown, key: string, depth = 0, admitted = false): any => {
+    const runtime = attrs && typeof attrs === "object" ? admittedRuntime.get(attrs) : undefined;
+    const value = (item: unknown, key: string, depth = 0, admitted = false, runtimeMatch = false): any => {
+      if (!depth) runtimeMatch = !!runtime?.has(key) && sameAttribute(item, runtime.get(key));
       if (--budget.nodes < 0 || depth > 32) throw new Error("Privacy value budget");
       // Protected identity/usage is exempt only from the arbitrary-base64
       // heuristic, never from catalog paths/magic or a possibly truncated value.
       admitted ||= !!proven?.has(key) && sameAttribute(item, proven.get(key));
       const truncated = !NON_CONTENT_KEYS.has(key) && typeof item === "string" && item.length >= valueLimit;
       const lostContext = incomplete && !admitted;
-      const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
+      const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !runtimeMatch && !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
       const grouping = groupingKey(key);
       if (!admission && !grouping && isCredentialName(key)) return credentialAttributeSentinel;
@@ -573,7 +623,11 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       if (typeof item === "number" || typeof item === "boolean") {
         // Numeric registered secrets outrank even media ancestry and metric roles.
         if (secrets.includes(String(item))) return "<redacted>";
-        const media = mediaValue(item); if (media !== undefined) return media;
+        // This exact numeric field is a byte count, not a projected media
+        // payload. Do not exempt strings, arrays, or other *.bytes paths.
+        const skillByteCount = runtimeMatch && key === "fi.skill.bytes";
+        const media = mediaReplacement(item, key, hints, true, false, false, lostContext && !skillByteCount, ambiguousBase64);
+        if (media !== undefined) return media;
         const raw = String(item), clean = string(raw);
         if (clean !== raw) return clean;
         return typeof item === "number" && !Number.isFinite(item) ? raw : item;
@@ -602,7 +656,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (length > budget.nodes) throw new Error("Privacy array budget");
         const items = Array.from({ length }, (_, i) => data(item, String(i)));
         const media = mediaValue(items); if (media !== undefined) return media;
-        return items.map((item, i) => value(item, `${key}.${i}`, depth + 1, admitted));
+        return items.map((item, i) => value(item, `${key}.${i}`, depth + 1, admitted, runtimeMatch));
       }
       return string(item === null ? "null" : typeof item);
     };

@@ -8,6 +8,7 @@ require_relative '../lib/traceai/auto/config'
 # application in a child process with the zero-code RUBYOPT flag, so the agent
 # loads before RubyLLM does, as it does in production.
 class RubyLLMInstrumentorTest < Minitest::Test
+  include SkipWhenMediaHooksUnproven
   include ChildHelper
   JSON_TYPE = {'Content-Type' => 'application/json'}.freeze
   CHAT = JSON.generate(id: 'chat-1', object: 'chat.completion', model: 'gpt-4o-mini-2024-07-18', choices: [{index: 0, message: {role: 'assistant', content: 'Hello from RubyLLM'}, finish_reason: 'stop'}], usage: {prompt_tokens: 3, completion_tokens: 2, total_tokens: 5}).freeze
@@ -116,6 +117,25 @@ class RubyLLMInstrumentorTest < Minitest::Test
     assert_equal inside_tool, tool_span.span_id.unpack1('H*')
     assert_equal app_span, tool_span.parent_span_id.unpack1('H*')
     assert_equal [app_span], all.select { |s| s.name.start_with?('chat') }.map { |s| s.parent_span_id.unpack1('H*') }.uniq
+  end
+
+  # A secret learned while a RubyLLM span is open (here a tool's own code registers the call id) is replaced on both
+  # copies of that span: the span has an end moment after the capture, so its start-time attributes are re-scrubbed.
+  def test_a_secret_learned_while_a_span_is_open_is_replaced_in_the_application_and_the_future_agi_copy
+    secret = 'LEARNEDCALLID-8d41f6'
+    call = JSON.generate(id: 'chat-0', object: 'chat.completion', model: 'm', choices: [{index: 0, message: {role: 'assistant', content: nil, tool_calls: [{id: secret, type: 'function', function: {name: 'weather', arguments: JSON.generate(city: 'Paris')}}]}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 7, completion_tokens: 4, total_tokens: 11})
+    @provider.stop
+    @provider = MockHTTP.new { |r| [200, JSON_TYPE, calls_tool?(r[:body]) ? call : CHAT] }
+    tool = TOOL.sub('def execute(city:) = "Sunny in #{city}"') { %q(def execute(city:); TraceAI::Auto.register_secret('LEARNEDCALLID-8d41f6'); "Sunny in #{city}"; end) }
+    sdk = "require 'opentelemetry/sdk'; require 'json'; memory = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new\n" \
+          "host = OpenTelemetry::SDK::Trace::TracerProvider.new; host.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(memory)); OpenTelemetry.tracer_provider = host\n"
+    dump = "\nTraceAI::Auto.flush; puts JSON.generate(memory.finished_spans.select { |s| s.name.start_with?('execute_tool') }.map { |s| s.attributes.to_a.flatten.map(&:to_s) + [s.name] })"
+    stdout, stderr, status = app(sdk + llm('chat.ask("weather?")', tool: tool) + dump)
+    assert status.success?, stderr
+    refute_includes stdout, secret, 'application copy of the tool span'
+    refute_empty JSON.parse(stdout.lines.last)
+    exported = spans.map { |span| [span.name, attrs(span.attributes)].to_s }.join("\n")
+    refute_includes exported, secret, 'Future AGI copy'
   end
 
   CALLS = JSON.generate(id: 'chat-0', object: 'chat.completion', model: 'gpt-4o-mini-2024-07-18', choices: [{index: 0, message: {role: 'assistant', content: nil, tool_calls: %w[Paris Rome].each_with_index.map { |city, i| {id: "call_#{i}", type: 'function', function: {name: 'weather', arguments: JSON.generate(city: city)}} }}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 7, completion_tokens: 4, total_tokens: 11}).freeze
@@ -324,7 +344,7 @@ class RubyLLMInstrumentorTest < Minitest::Test
     assert status.success?, stderr; assert_equal ":answer\nKEPT from the block\n", stdout
   end
 
-  # fi-security: the instrumentor writes the tool arguments into three attributes of the execute_tool
+  # The instrumentor writes the tool arguments into three attributes of the execute_tool
   # span and the tool result into three more. Every copy follows its own side's hide settings, and
   # the raw copies follow all nine content settings. A new attribute that carries either value must
   # be added to these lists, or the key-set check below fails.

@@ -40,6 +40,8 @@ jobs:
         run: gem install json -v 2.6.3 --no-document --install-dir "$(bundle exec ruby -e 'print Gem.dir')"
       - name: Test traceai-auto
         working-directory: ruby
+        env:
+          TRACEAI_EXPECT_MEDIA_PROVEN: '1'
         run: bundle exec rake test
       - name: Build RubyGem
         working-directory: ruby

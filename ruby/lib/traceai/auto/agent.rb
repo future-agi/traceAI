@@ -553,6 +553,8 @@ module TraceAI
           @borrowed_flush_targets << @provider if @owned_processors.empty? && @borrowed_flush_targets.empty?
           require_relative 'media_admission'
           prepend_once(OpenTelemetry::SDK::Trace::Span, MediaAdmission)
+          # Prove the hooks on this SDK now; on an unproven SDK AI spans export metadata only.
+          MediaAdmission.verify!
           # A provider the agent attached to before (a provisional start that
           # an explicit init replaced) keeps its marker processor; never add a
           # second one.
@@ -887,7 +889,7 @@ module TraceAI
       # marks the call as already reported, so that the wire layer adds no
       # second span for the HTTP request made inside it. Returns nil when the
       # agent is not active. Ended exactly once, by finish_span.
-      SpanScope = Struct.new(:name, :kind, :identity, :started, :parent, :span, :token, :finished)
+      SpanScope = Struct.new(:name, :kind, :identity, :started, :parent, :span, :token, :finished, :start)
       def begin_span(name, kind:, identity:, capture: false)
         return unless active?
         check_startup_window
@@ -898,6 +900,7 @@ module TraceAI
         context = parent
         if @sdk
           start = Privacy.mask(Privacy.scrub_attributes(identity), @config)
+          scope.start = start
           scope.span = @tracer.start_span(name, with_parent: parent, kind: kind, start_timestamp: scope.started, attributes: start)
           context = OpenTelemetry::Trace.context_with_span(scope.span, parent_context: parent)
         end
@@ -922,6 +925,13 @@ module TraceAI
         if span
           begin
             if span.recording?
+              # A secret learned while the span was open: what the span carried from its start is replaced again, on
+              # the full values, before the span's own length limit cuts them.
+              again = Privacy.mask(Privacy.scrub_attributes(scope.identity), @config)
+              again = again.reject { |key, value| scope.start[key] == value }
+              span.add_attributes(again) unless again.empty?
+              renamed = Privacy.best_effort_scrub(scope.name)
+              span.name = renamed if renamed != scope.name && span.respond_to?(:name=)
               projection = AttributeProjection.project(attributes, projection_limit - (span.attributes || {}).size)
               span.add_attributes(projection.attributes)
               if projection.dropped.positive? && span.respond_to?(:to_span_data)
@@ -1296,7 +1306,11 @@ module TraceAI
           if @sdk_records
             # The internal FI serializer uses OTLP status numbers; application
             # SDK exporters expect the SDK API's different OK/UNSET numbering.
-            copy = OpenTelemetry::SDK::Trace::SpanData.new(*copy.to_a)
+            # Build with exactly the members this SDK's SpanData has: older releases lack
+            # parent_span_is_remote, and a member this agent does not know stays nil.
+            known = copy.members
+            sdk_members = OpenTelemetry::SDK::Trace::SpanData.members
+            copy = OpenTelemetry::SDK::Trace::SpanData.new(*sdk_members.map { |member| known.include?(member) ? copy[member] : nil })
             copy.trace_flags = OpenTelemetry::Trace::TraceFlags.from_byte(copy.trace_flags)
             copy.tracestate = OpenTelemetry::Trace::Tracestate.from_string(copy.tracestate)
             copy.links = copy.links.map do |link|

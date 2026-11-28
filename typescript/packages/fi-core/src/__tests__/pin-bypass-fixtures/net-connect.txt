@@ -1,0 +1,2 @@
+import net from "node:net";
+net.connect(1, "example.invalid");
