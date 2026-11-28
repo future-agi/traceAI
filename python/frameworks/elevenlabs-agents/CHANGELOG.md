@@ -2,6 +2,19 @@
 ### Changed
 - A content key is masked by key whatever the type of its value (number, boolean or text), including `input.value`, `gen_ai.input.images` and `gen_ai.request.parameters`.
 
+## [0.1.2](https://github.com/future-agi/traceAI/compare/traceai-elevenlabs-agents-v0.1.1...traceai-elevenlabs-agents-v0.1.2) (2026-11-28)
+
+
+### Features
+
+* **fi-instrumentation:** add a shared conversation transcript policy ([88a8469](https://github.com/future-agi/traceAI/commit/88a846977f3404fe1f982a89f13da15f51ed4021))
+* **fi-instrumentation:** add a shared conversation transcript policy ([e5f04d7](https://github.com/future-agi/traceAI/commit/e5f04d770d675dd42e5edb16b97217332b4d0184))
+
+
+### Bug Fixes
+
+* **fi-instrumentation:** keep the transcript policy out of package imports ([18bf7da](https://github.com/future-agi/traceAI/commit/18bf7da827f9d038db9e1eb5321dae4a7bc0900f))
+
 ## [0.1.0] - unreleased
 ### Feature
 - ElevenLabs Agents post-call OpenTelemetry forwarder: HMAC-verified `post_call_transcription_otel`

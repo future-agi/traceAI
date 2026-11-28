@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-writer-v0.1.0...traceai-writer-v0.1.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **writer:** keep SDK types for isinstance and keep what a failed stream received ([#789](https://github.com/future-agi/traceAI/issues/789)) ([1d86959](https://github.com/future-agi/traceAI/commit/1d8695970ded3b0bbe1fa13a79abff57047dfca3))
+
 ## [Unreleased]
 
 - Stream and response proxies keep passing `isinstance` checks against the SDK's `Stream`, `AsyncStream` and `httpx.Response`.

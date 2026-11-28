@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/future-agi/traceAI/compare/npm-traceai-elevenlabs-v0.1.1...npm-traceai-elevenlabs-v0.1.2) (2026-11-28)
+
+
+### Features
+
+* **typescript:** send Future AGI keys only to allowed destinations over the SDK's own transport ([e84aa91](https://github.com/future-agi/traceAI/commit/e84aa91d39e049edbe4e0eaae5abbf94b321c27f))
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/npm-traceai-elevenlabs-v0.1.0...npm-traceai-elevenlabs-v0.1.1) (2026-11-05)
 
 

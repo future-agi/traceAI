@@ -7,6 +7,13 @@
 ### Behaviour change
 - With any content-hiding flag on (e.g. `hideInputs` / `FI_HIDE_INPUTS`), error spans have no status description and no exception message. Set `hideErrorDetails: false` to keep them.
 
+## [0.2.2](https://github.com/future-agi/traceAI/compare/npm-traceai-openai-agents-v0.2.1...npm-traceai-openai-agents-v0.2.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **typescript:** hide settings cover raw payloads, key families and whole-response output ([534a268](https://github.com/future-agi/traceAI/commit/534a2689cb4e61dfc25f5ae98205ffa22c00294a))
+
 ## [0.2.0] - 2026-10-22
 ### Fix
 - Support `@openai/agents` up to 0.21. The peer range is now `>=0.4.0 <0.22.0`. It was `^0.4.0`, so `npm install @traceai/openai-agents @openai/agents@latest` failed with `ERESOLVE`. The require hook now matches the same range.

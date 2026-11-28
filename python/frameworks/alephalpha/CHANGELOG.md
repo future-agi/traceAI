@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-alephalpha-v0.1.0...traceai-alephalpha-v0.1.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **alephalpha:** output.value takes choice 0's text only and every multi-choice response records per-index content ([7db6bbe](https://github.com/future-agi/traceAI/commit/7db6bbea45f7d2c3a12e64c6cd4f98b147b1cc2a))
+* **alephalpha:** record every completion and keep a failed stream's partial output ([#788](https://github.com/future-agi/traceAI/issues/788)) ([1e64e89](https://github.com/future-agi/traceAI/commit/1e64e894f64989d74252b9a6466bb50137c284c4))
+
 ## [Unreleased]
 
 - `output.value` is the text of choice 0 only. When choice 0 has no text, `output.value` is not set, even if another choice has text.

@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <PackageId>TraceAI.AutoInstrumentation</PackageId>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <Description>Fail-open startup hook and ActivitySource/HttpClient tracing for traceAI</Description>
@@ -31,23 +31,23 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Only this BCL-only type enters the application's default load context. -->
-    <Compile Include="StartupHook.cs" />
-    <ProjectReference Include="AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj" />
+    <Compile Include="StartupHook.cs"/>
+    <ProjectReference Include="AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj"/>
     <!-- Shipped beside the hook; loaded only by an ASP.NET Core host, by name, when the hook enables it. It is built
          first and copied as a file: referencing it normally would pull its ASP.NET Core framework reference into
          this project and prune the Microsoft.Extensions assemblies the private runtime needs from the output. -->
-    <ProjectReference Include="HostingStartup/TraceAI.AutoInstrumentation.HostingStartup.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
-    <Content Include="HostingStartup/bin/$(Configuration)/net8.0/TraceAI.AutoInstrumentation.HostingStartup.dll" Link="TraceAI.AutoInstrumentation.HostingStartup.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="README.md" Pack="true" PackagePath="/" />
+    <ProjectReference Include="HostingStartup/TraceAI.AutoInstrumentation.HostingStartup.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true"/>
+    <Content Include="HostingStartup/bin/$(Configuration)/net8.0/TraceAI.AutoInstrumentation.HostingStartup.dll" Link="TraceAI.AutoInstrumentation.HostingStartup.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+    <None Include="README.md" Pack="true" PackagePath="/"/>
   </ItemGroup>
   <!-- Pack runs the same publish the README's build-from-source route runs, then puts the whole
        published directory under tools/net8.0/any/. The hook DLL, the private runtime DLL and the
        pinned OpenTelemetry files stay together there; one directory serves .NET 8 and .NET 10. -->
   <Target Name="CollectHookPayload">
-    <RemoveDir Directories="$(HookPayloadDir)" />
-    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Publish" Properties="NoBuild=true;PublishDir=$(HookPayloadDir)" />
+    <RemoveDir Directories="$(HookPayloadDir)"/>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Publish" Properties="NoBuild=true;PublishDir=$(HookPayloadDir)"/>
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(HookPayloadDir)**" PackagePath="tools/net8.0/any/%(RecursiveDir)%(Filename)%(Extension)" />
+      <TfmSpecificPackageFile Include="$(HookPayloadDir)**" PackagePath="tools/net8.0/any/%(RecursiveDir)%(Filename)%(Extension)"/>
     </ItemGroup>
   </Target>
 </Project>

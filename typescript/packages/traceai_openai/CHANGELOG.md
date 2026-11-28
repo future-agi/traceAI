@@ -4,6 +4,15 @@
 - For non-streaming chat completion, completion, Responses and embedding calls, a provider error returned with HTTP 200 comes back to your code unchanged and is recorded as an error span, instead of the call throwing a TypeError.
 - Token usage for embedding requests is recorded.
 
+## [0.1.19](https://github.com/future-agi/traceAI/compare/npm-traceai-openai-v0.1.18...npm-traceai-openai-v0.1.19) (2026-11-28)
+
+
+### Bug Fixes
+
+* **openai:** accept the module namespace in manuallyInstrument types ([26b02a1](https://github.com/future-agi/traceAI/commit/26b02a100d9e8c949528734c6dcae26acd0825ac))
+* **openai:** keep dropped request rejections visible ([dbce3af](https://github.com/future-agi/traceAI/commit/dbce3af8235420545dc77f55c9270ffad11ea4b7))
+* **typescript:** hide settings cover raw payloads, key families and whole-response output ([534a268](https://github.com/future-agi/traceAI/commit/534a2689cb4e61dfc25f5ae98205ffa22c00294a))
+
 ## [0.1.17] - 2026-11-07
 ### Feature
 - Embeddings now also set `gen_ai.request.model` from the request and `gen_ai.response.model` from the response when present, while retaining `embedding.model_name`.

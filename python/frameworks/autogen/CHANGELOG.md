@@ -6,6 +6,13 @@
 ### Fixed
 - AgentChat spans use the standard content attributes, so the tracing hide-input and hide-output settings apply, and a team span records its last generated message as output, not the task.
 
+## [0.2.3](https://github.com/future-agi/traceAI/compare/traceai-autogen-v0.2.2...traceai-autogen-v0.2.3) (2026-11-28)
+
+
+### Bug Fixes
+
+* **autogen:** report the model on agent spans for current autogen-ext clients ([2cd7d4f](https://github.com/future-agi/traceAI/commit/2cd7d4f6bb5e18db52ea03fbdae6104abb1a07f2))
+
 ## [0.2.1] - 2026-10-18
 ### Fixed
 - Agent, team and tool spans were created with a raw OpenTelemetry tracer, so the

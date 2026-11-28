@@ -1,4 +1,10 @@
+## [0.1.13](https://github.com/future-agi/traceAI/compare/traceai-vertexai-v0.1.12...traceai-vertexai-v0.1.13) (2026-11-28)
 
+
+### Bug Fixes
+
+* **vertexai:** keep multi-turn and typed prediction input in legacy spans ([35e2229](https://github.com/future-agi/traceAI/commit/35e2229bdda4e68420411c26bed137b1191fc820))
+* **vertex:** trace typed prediction content in both SDK clients ([008ce09](https://github.com/future-agi/traceAI/commit/008ce097035fef53935b9fb141194d2839598fc5))
 
 ## [0.1.12] - 2026-11-12
 

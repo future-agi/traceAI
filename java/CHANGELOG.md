@@ -28,6 +28,64 @@
 * **javaagent:** `gen_ai.tool.name` is kept under the input hide switches, like `traceai-java-core`; the other `gen_ai.tool.*` keys are still withheld.
 * **google-adk, javaagent:** under `hideErrorDetails` (`FI_HIDE_ERROR_DETAILS`), a failed model call records no output (`output.value`, `output.mime_type`, `gen_ai.output.*`), and a failed tool call records no result (`gen_ai.tool.call.result`, `output.value`, `output.mime_type`), in `TracedLlm`, `TracedTool` and the agent alike. A tool call counts as failed when it throws, or when its result is a map with an `error` entry or with `status` set to `error` (the shape ADK's function tool answers with when its function throws); the span status of such a call is unchanged.
 
+## [1.5.0](https://github.com/future-agi/traceAI/compare/java-v1.4.1...java-v1.5.0) (2026-11-28)
+
+
+### Features
+
+* **javaagent:** trace Google ADK for Java with no code ([92fcacf](https://github.com/future-agi/traceAI/commit/92fcacfd1c381c983ad044e4bab7996e0109a0ad))
+* **java:** execute_tool spans for LangChain4j and Spring AI tools ([038ce88](https://github.com/future-agi/traceAI/commit/038ce88de46c7191483639e34e48fb01cb69d2c2))
+* **java:** execute_tool spans for LangChain4j tool executors and Spring AI tool callbacks ([79043e9](https://github.com/future-agi/traceAI/commit/79043e9df20785d9231d08e54791a01ed8f281e2))
+* **java:** send Future AGI keys only over a checked transport and replace known secrets at export ([8f1b7c8](https://github.com/future-agi/traceAI/commit/8f1b7c84326089b167529d7ba7d4671a71d3c850))
+* **java:** trace annotated application methods (@Agent, @Chain, @LLM, @Tool, @Span) ([0a714fe](https://github.com/future-agi/traceAI/commit/0a714fe7541f6d30fbd267121f968e8f98cf876b))
+* **java:** trace annotated application methods as typed spans ([2e894ea](https://github.com/future-agi/traceAI/commit/2e894eadb03695fca52e60f48e31f9d0d3554d6c))
+* **java:** trace Google ADK for Java with no code ([37ba978](https://github.com/future-agi/traceAI/commit/37ba978be827d91faf6cd467fa71aec9141e4a2a))
+* **java:** traceai-java-google-adk with TracedLlm, TracedTool and the ADK attribute mapping ([d22aefd](https://github.com/future-agi/traceAI/commit/d22aefd3c18d98f61d6373cda08f1070f7773aa0))
+
+
+### Bug Fixes
+
+* **java:** a refused transport with failure off creates no exporter and reads no environment; a send ends before its result completes; agent opt-in forms match core ([4f5f2f6](https://github.com/future-agi/traceAI/commit/4f5f2f60461967ccbd9ca08dee9f1febeb0c0f29))
+* **java:** ambient OTLP key headers and zone literals are refused, exporters report flush and shutdown honestly, the agent checks its target at startup, the starter gains the opt-in and a failure mode ([b5a8b24](https://github.com/future-agi/traceAI/commit/b5a8b24c14eb1b7e823acc92048dc24d3428e305))
+* **java:** application objects are type placeholders, credential pairs in strings are redacted to the end of the pair, the read window reads on after a large shrink, Mono and Flux are wrapped only on an exact declared type ([1670283](https://github.com/future-agi/traceAI/commit/1670283804c163c6449c4d569030e55881107dee))
+* **java:** bounded user-information and JSON-name scans, map keys shown only for known JDK value types, the tail guard uses the shape reach ([d01a447](https://github.com/future-agi/traceAI/commit/d01a4475385ed7ddb035424e4b21297f38a5296a))
+* **java:** bounded walker for annotated-method arguments and results, cancelled reactive spans, default methods, class-loader fallback, inner application span as parent ([05f786e](https://github.com/future-agi/traceAI/commit/05f786e1fda53bd507f15c8669de81170bfa9695))
+* **java:** escaped surrogate pairs are replaced as one unit, a trailing backslash keeps the whole marker, backslash runs are scanned once, exact sealCut and oversized-value docs ([92b143f](https://github.com/future-agi/traceAI/commit/92b143f3f1923c4fbcda863877f46c96cddb04f5))
+* **java:** execute_tool recognises Spring AI's open tool-calling observation, traces every recursion level, and skips wrapper subclasses ([279ba48](https://github.com/future-agi/traceAI/commit/279ba48e70a062640eb75cc3573bd1a48ce1e771))
+* **java:** execute_tool spans no longer double the library wrappers, Spring AI native tool spans or recursive calls ([df2d267](https://github.com/future-agi/traceAI/commit/df2d267a8afe55701a3a97a1262f48a6cd420b72))
+* **java:** flags with any blank run or a quoted word, single-quoted names, passwords holding a slash in user information ([aeaab49](https://github.com/future-agi/traceAI/commit/aeaab49c28c0ab80a97a158a6915b9702bdab725))
+* **java:** Google ADK — hidden error details for failed model and tool calls, Gemini client traced once, opt-in skip of wrapped calls ([6bd14d4](https://github.com/future-agi/traceAI/commit/6bd14d4a5b751232c94d3ae24ef88192e80ce387))
+* **java:** Negotiate, NTLM and Digest values are credential shapes with no name in front of them ([d6652c5](https://github.com/future-agi/traceAI/commit/d6652c5bf588aeef86a30cba8f0c5470ddace7f0))
+* **java:** redact every argument except null, booleans and enum constants when parameter names are absent ([7f99a5a](https://github.com/future-agi/traceAI/commit/7f99a5af6290ba3429eb02257fae433261456301))
+* **java:** redact text arguments when parameter names are absent, and export guarded exception messages ([3704a47](https://github.com/future-agi/traceAI/commit/3704a47673a070b5747dc9df681d8fdc4a7aab4a))
+* **java:** replaced regions never split a JSON escape, caps stay within the limit, one snapshot per sealed field ([958e069](https://github.com/future-agi/traceAI/commit/958e0699d1db64fd18086097c43f5fe6bfbc87a1))
+* **java:** scan the JWT value shape in linear time, skipping the rest of a run a failed start has read ([4b06015](https://github.com/future-agi/traceAI/commit/4b060155337ce48b8457aff6c29a7af153038576))
+* **java:** shapes before the pair rule on every string path, one bounded read, one credential vocabulary for names, map keys and JSON, list headers, flags, bracket names and user information ([dd259fd](https://github.com/future-agi/traceAI/commit/dd259fdaf03fb72711f959b93228c27e3c88796e))
+* **java:** span-less requests fail open, bounded iteration, enums and UUIDs keep their values, failed output withheld everywhere, serialization never fails the call ([74f22d9](https://github.com/future-agi/traceAI/commit/74f22d9086feb5c571b0e13ffbda9991bc35c824))
+* **java:** the agent does not register a global OpenTelemetry ([8ede03d](https://github.com/future-agi/traceAI/commit/8ede03dac5f01995ad6be913149cddf2324f2e33))
+* **java:** the agent keeps its OpenTelemetry SDK private and registers no global ([cb80c3a](https://github.com/future-agi/traceAI/commit/cb80c3a3cc1f35b7dde1a1bf303fbc2fed9afa04))
+* **java:** the agent records a tool call unless Spring AI's tool observation has a tracing span ([7cb3925](https://github.com/future-agi/traceAI/commit/7cb392548733d338e941ca894775e04a8764902a))
+* **privacy:** credential value shapes scan in linear time in every SDK, tokens replaced whole ([607ee0c](https://github.com/future-agi/traceAI/commit/607ee0c7658118db01601772a9d233bec59bbcbc))
+* **privacy:** credential value shapes scan in linear time in every SDK, tokens replaced whole ([5defddd](https://github.com/future-agi/traceAI/commit/5defddd0dd3531d2e76d47c34075c14875ab8c22))
+
+
+### Documentation
+
+* **java:** a model's own HTTP call inside an annotated model method is covered by the ADK model-call span ([8ff8a45](https://github.com/future-agi/traceAI/commit/8ff8a45f33ec09306393a97109352fae46b872c3))
+* **java:** behaviour wording for Spring AI message JSON ([63dd8e0](https://github.com/future-agi/traceAI/commit/63dd8e0a3466a76b61f391031e4873effbc6eae6))
+* **java:** changelog entry for the agent's global OpenTelemetry under Unreleased ([c2aef66](https://github.com/future-agi/traceAI/commit/c2aef66593ae20d1d07040060d5ebdc40709bd02))
+* **java:** every argument but null, booleans and enum constants is redacted without parameter names; simple class name ([19089ab](https://github.com/future-agi/traceAI/commit/19089ab7645af615c9bd8a14156220b4ba65776a))
+* **java:** execute_tool spans for LangChain4j and Spring AI tools ([2f81c94](https://github.com/future-agi/traceAI/commit/2f81c94227c2925c7fea4bbe4545d01e116eee56))
+* **java:** key-transport entries under Unreleased ([8ad5aca](https://github.com/future-agi/traceAI/commit/8ad5acacfbd5e8fadec4dad9b11879821915a79b))
+* **java:** move the execute_tool tool-span notes to Unreleased and document the wrapper and recursion rules ([b6d6150](https://github.com/future-agi/traceAI/commit/b6d61504ab8a4e6d3d07d703d27b9443e777be1f))
+* **java:** nesting of annotated methods and Google ADK spans, and the google-adk allowlist name ([8aba3ed](https://github.com/future-agi/traceAI/commit/8aba3ed852f48f428c496587d3f42a7900449311))
+* **java:** parameter names, map keys, exception messages, authorization shapes and the cut guard ([26a3446](https://github.com/future-agi/traceAI/commit/26a3446e1c32e549e39d4b373a5190b9d581473d))
+* **java:** scan wording in the changelog, drop a stale phrase from the annotation nesting note ([1bb7a34](https://github.com/future-agi/traceAI/commit/1bb7a34d37c8c525770ef2ce11cde44028b0882d))
+* **java:** trace your own methods with annotations ([64a99de](https://github.com/future-agi/traceAI/commit/64a99def39b6e582120d571cb907e39354c3543a))
+* **java:** what is replaced before a truncation marker, JSON escapes, limits and what is not matched ([213c202](https://github.com/future-agi/traceAI/commit/213c202f9a4f9508a6974983cb3cefec32cd6f4b))
+* known-secret bounds, minimum length, resource and scope, capture-time caps ([cb32720](https://github.com/future-agi/traceAI/commit/cb32720a5a86e6b40e30f3b3d84bb3348073577b))
+* state release and SDK behaviour directly ([5522224](https://github.com/future-agi/traceAI/commit/5522224174529ffca1107b7053a18363497c1d14))
+
 ## 1.4.1 (2026-11-19)
 
 ### Changes
