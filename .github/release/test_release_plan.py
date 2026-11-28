@@ -129,6 +129,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(p["skipped"], [{"name": "traceai", "reason": "the PyPI name belongs to another publisher"}])
         self.assertNotIn("declared", p["python"][0])
 
+    def test_an_ecosystem_scoped_skip_holds_that_registry_only(self):
+        nuget = {"ecosystem": "nuget", "name": "fi-instrumentation-otel", "version": "1.0.1", "dir": "csharp/src/FIInstrumentation",
+                 "project": "csharp/src/FIInstrumentation/FIInstrumentation.csproj", "tag": "nuget-fi-instrumentation-otel-v1.0.1",
+                 "core": False, "changelog": "csharp/src/FIInstrumentation/CHANGELOG.md"}
+        cfg = {"skip": {"nuget:fi-instrumentation-otel": "waits for its own review"}}
+        p = release_plan.plan(self.packages + [nuget], cfg, offline=True)
+        self.assertIn("fi-instrumentation-otel", [e["name"] for e in p["python"]])
+        self.assertEqual(p["nuget"], [])
+        self.assertEqual(p["skipped"], [{"name": "fi-instrumentation-otel", "reason": "waits for its own review"}])
+        self.assertEqual(release_plan.skip_reason({"skip-me": "x"}, {"ecosystem": "ruby", "name": "skip-me"}), "x")
+        self.assertIsNone(release_plan.skip_reason({"ruby:other": "x"}, {"ecosystem": "nuget", "name": "other"}))
+
     def test_plan_skips_published_versions(self):
         have = {"traceAI-openai": {"0.1.9", "0.1.10"}, "fi-instrumentation-otel": {"1.0.0"}, "@traceai/openai": None}
         with patch.object(release_plan, 'published_versions', side_effect=lambda p, **kw: have.get(p["name"], set())):

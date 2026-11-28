@@ -280,6 +280,12 @@ def load_config(path: Path = CONFIG) -> dict:
     return json.loads(path.read_text()) if path.is_file() else {"skip": {}}
 
 
+def skip_reason(skip: dict, package: dict) -> str | None:
+    """The configured reason a package is not published: an "<ecosystem>:<name>" entry for that registry alone (one name
+    can be a package in two ecosystems), else a plain name entry for every ecosystem."""
+    return skip.get(f"{package['ecosystem']}:{package['name']}", skip.get(package["name"]))
+
+
 def consistency_problems(packages: list[dict]) -> list[str]:
     problems, seen = [], {}
     for p in packages:
@@ -380,8 +386,9 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
     for p in packages:
         if only and p["name"] not in only:
             continue
-        if p["name"] in skip:
-            out["skipped"].append({"name": p["name"], "reason": skip[p["name"]]})
+        reason = skip_reason(skip, p)
+        if reason is not None:
+            out["skipped"].append({"name": p["name"], "reason": reason})
             continue
         if p["ecosystem"] == "go":
             blockers = go_release_blockers(root, p)
