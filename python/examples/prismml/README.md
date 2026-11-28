@@ -1,203 +1,131 @@
 # PrismML (OpenAI-compatible) with traceAI
 
-PrismML here means the Bonsai local server from prismml.com; this recipe traces Chat Completions through the `openai` SDK at `http://localhost:8080/v1` ([server docs](https://docs.prismml.com/run/server)). It uses `traceai-openai`, with no PrismML instrumentation package.
-
-Not these: other products named Prism are not covered here, for example the [ssimplifi Prism proxy guide](https://ssimplifi.com/guides/openai-compatible-api), [prism-proxy](https://git.sovereign-society.org/prism/prism-proxy) and [Prism PHP](https://mintlify.wiki/prism-php/prism/providers/overview).
+Trace calls to your local [PrismML Bonsai server](https://docs.prismml.com/run/server) in Future AGI using the maintained `traceai-openai` package. This recipe uses the OpenAI Python SDK's Chat Completions API; it is not an integration for other products named Prism.
 
 ## Install
 
-From this recipe directory, install the pinned dependencies:
+Use Python 3.10–3.13. From this recipe directory:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-The plain installation form is:
+For an existing application, install the same packages directly:
 
 ```bash
-pip install traceAI-openai fi-instrumentation-otel openai
+python -m pip install 'openai==3.42.1' 'traceAI-openai==0.1.12' 'fi-instrumentation-otel==1.2.2'
 ```
 
-The test versions and verification scope are listed below.
+## Start the local server
+
+Follow the [PrismML server setup](https://docs.prismml.com/run/server) to download a model and start the llama.cpp server. In the Bonsai demo directory, give the loaded model a stable name:
+
+```bash
+./scripts/start_llama_server.sh --alias bonsai
+```
+
+The API base URL is `http://localhost:8080/v1`. Keep the server on loopback: it does not authenticate requests. Binding to a non-loopback address exposes it to your network; use a trusted network or firewall the port.
+
+On Apple Silicon, PrismML also provides `./scripts/start_mlx_server.sh` at `http://localhost:8081/v1`. Follow its [sampling and thinking configuration](https://docs.prismml.com/run/server); unlike the llama.cpp launcher, the MLX server expects those settings in each request.
 
 ## Configure
 
-Start your server first, following the [PrismML server docs](https://docs.prismml.com/run/server): `./scripts/start_llama_server.sh` serves llama.cpp on port 8080; `./scripts/start_mlx_server.sh` serves MLX on Apple Silicon on port 8081. Both expose the same OpenAI-compatible API.
+Set your Future AGI credentials in the shell that runs the Python client:
 
-| Variable | Value or default | Destination |
+```bash
+export FI_API_KEY="YOUR_FUTURE_AGI_API_KEY"
+export FI_SECRET_KEY="YOUR_FUTURE_AGI_SECRET_KEY"
+export FI_PROJECT_NAME="prismml-bonsai"
+export PRISMML_BASE_URL="http://localhost:8080/v1"
+export PRISMML_MODEL="bonsai"
+```
+
+The tracer sends OTLP to `https://api.futureagi.com/tracer/v1/traces` by default. The OpenAI client sends model requests only to `PRISMML_BASE_URL`. Do not use your Future AGI credentials as the local server key.
+
+| Variable | Value or default | Purpose |
 |---|---|---|
-| `FI_API_KEY` | Your Future AGI API key | Tracer only; never the local server |
-| `FI_SECRET_KEY` | Your Future AGI secret key | Tracer only; never the local server |
-| `PRISMML_API_KEY` | Optional; `not-needed` | OpenAI client only; never the Future AGI export |
-| `PRISMML_MODEL` | Optional; `bonsai` | Model name sent by the OpenAI client |
-| `PRISMML_BASE_URL` | Optional; `http://localhost:8080/v1` | OpenAI client; use `http://localhost:8081/v1` for MLX |
-| `FI_BASE_URL` | Optional; the tracer's Future AGI collector default | Tracer export origin |
-| `FI_PROJECT_NAME` | Optional; `prismml-bonsai` | Tracer only; the Observe project name |
-| `FI_HIDE_INPUTS` | Optional; `true` masks input attributes | Tracer only |
-| `FI_HIDE_OUTPUTS` | Optional; `true` masks output attributes | Tracer only |
-| `FI_HIDE_LLM_INVOCATION_PARAMETERS` | Optional; `true` omits invocation parameters | Tracer only |
-
-The local key is a placeholder, not a Future AGI secret. The OpenAI SDK requires a non-empty key, but the server does not check it ([server docs](https://docs.prismml.com/run/server)). An unset or empty `PRISMML_API_KEY` uses `not-needed`; an unset or empty `PRISMML_MODEL` uses `bonsai`.
-
-The recipe validates `PRISMML_BASE_URL` before tracing. Invalid URLs exit 2 and name that variable. An explicitly empty `--model` exits 2 and names `PRISMML_MODEL`. The recipe does not validate the Future AGI keys.
+| `FI_API_KEY` | Your Future AGI API key | Authenticate trace export |
+| `FI_SECRET_KEY` | Your Future AGI secret key | Authenticate trace export |
+| `FI_PROJECT_NAME` | Optional; `prismml-bonsai` | Observe project name |
+| `FI_BASE_URL` | Optional; `https://api.futureagi.com` | Trace export origin; omit `/tracer/v1/traces` |
+| `PRISMML_BASE_URL` | Optional; `http://localhost:8080/v1` | Local server API base URL |
+| `PRISMML_MODEL` | Optional; `bonsai` | Requested model name |
+| `PRISMML_API_KEY` | Optional; `not-needed` | Non-empty placeholder required by the OpenAI SDK |
 
 ## Run
 
-From this recipe directory, with your server already running:
+Return to this recipe directory and run a normal or streamed completion:
 
 ```bash
-export FI_API_KEY="placeholder-fi-api-key"
-export FI_SECRET_KEY="placeholder-fi-secret-key"
-export PRISMML_API_KEY="not-needed"
-export PRISMML_MODEL="bonsai"
-export PRISMML_BASE_URL="http://localhost:8080/v1"
-python src/app.py
-python src/app.py --stream
+python src/app.py --prompt "What is the capital of France?"
+python src/app.py --stream --prompt "What is the capital of France?"
 ```
 
-Replace the Future AGI placeholders with your keys. `--prompt` changes the question and `--model` overrides `PRISMML_MODEL`. Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or empty, they go to `prismml-bonsai`. The app prints answer text and flushes the tracer.
+The application prints the answer and flushes traces before exiting. If a stream ends without a finish reason, it exits with status 1; treat any printed text as a partial answer and retry. `--model` overrides `PRISMML_MODEL`. An unset or empty project name uses `prismml-bonsai`.
 
 ## Code
 
-Instrument before creating the client. Future AGI keys are read by the tracer from its environment.
+For your own application, register the tracer and instrument the SDK once, before creating the client. Do not add a second OpenAI instrumentor around the same requests.
 
 ```python
 import os
+
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from openai import OpenAI
 from traceai_openai import OpenAIInstrumentor
-provider = register(  # FI_PROJECT_NAME overrides, as in src/app.py
-    project_name=os.environ.get("FI_PROJECT_NAME") or "prismml-bonsai", project_type=ProjectType.OBSERVE,
-    set_global_tracer_provider=False, verbose=False,
+
+provider = register(
+    project_name=os.environ.get("FI_PROJECT_NAME") or "prismml-bonsai",
+    project_type=ProjectType.OBSERVE,
+    set_global_tracer_provider=False,
+    verbose=False,
 )
 OpenAIInstrumentor().instrument(tracer_provider=provider)
-with OpenAI(base_url="http://localhost:8080/v1", api_key="not-needed") as client:
-    response = client.chat.completions.create(
-        model="bonsai", messages=[{"role": "user", "content": "Say hello."}], stream=False,
-    )
-    print(response.choices[0].message.content or "")
-provider.force_flush()
+try:
+    with OpenAI(
+        base_url=os.environ.get("PRISMML_BASE_URL") or "http://localhost:8080/v1",
+        api_key=os.environ.get("PRISMML_API_KEY") or "not-needed",
+    ) as client:
+        response = client.chat.completions.create(
+            model=os.environ.get("PRISMML_MODEL") or "bonsai",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+        print(response.choices[0].message.content or "")
+finally:
+    provider.force_flush()
 ```
 
-## What you see in Future AGI
+## View traces
 
-The fixtures produce one `ChatCompletion` span per call with `gen_ai.span.kind=LLM`. The provider field says `openai`: `gen_ai.provider.name` is the shared instrumentor's label.
+Open **Observe** in Future AGI and select the project named by `FI_PROJECT_NAME`. Each completion produces one `ChatCompletion` LLM span with the prompt, answer, latency and any token usage supplied by the server. The provider field says `openai` because this local endpoint uses the shared OpenAI instrumentor.
 
-Current `traceai-openai` behavior:
+- Non-streamed calls record the server's returned model in `gen_ai.request.model`. Streamed and failed calls record the requested model. The original requested name also appears in `gen_ai.request.parameters` unless invocation parameters are hidden.
+- Streamed answer text is accumulated in `output.value`. To request streaming token counts, pass `stream_options={"include_usage": True}`; counts appear only if the server returns a final usage chunk. Missing usage is omitted, not replaced with zero.
+- SDK errors mark the span as ERROR. Returned `tool_calls` are recorded, but the instrumentor does not execute tools.
+- Local models may have no matching price entry, so cost can be unavailable even when token counts are present.
 
-- For a successful non-streamed call, `gen_ai.request.model` is the model name the server returns. The fixture requests `bonsai` and returns the synthetic loaded-model name `Ternary-Bonsai-2-27B-Q4_K_M.gguf`; the latter is recorded. The requested `bonsai` remains in the `gen_ai.request.parameters` JSON. A real `llama-server` started by the demo scripts returns the loaded file's absolute path, such as `/Users/you/Bonsai-demo/models/gguf/1.7B/Bonsai-1.7B-Q1_0.gguf`, and that path is what gets recorded. Start the server with `./scripts/start_llama_server.sh --alias bonsai` to record `bonsai` instead; the script passes extra arguments to `llama-server`.
-- Up to `traceai-openai` 0.1.10, streamed and failed calls omit `gen_ai.request.model`; later versions (future-agi/traceAI#249) record the requested model there. The requested model remains in `gen_ai.request.parameters`, unless invocation parameters are hidden.
-- Non-streamed token usage is recorded as `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens` when the response supplies it. Missing usage is omitted, never replaced with zero.
-- A stream accumulates answer text in `output.value`. Default fixture streams omit usage. With `stream_options={"include_usage": True}` and a final usage chunk, the same three token attributes are recorded. This verifies the instrumentor, not the real server's streaming usage support.
-- Non-streamed `output.value` contains assistant content. Tool-call responses contain a readable function call instead. A stream with no text records `output.value=''`; Chat Completions have no raw-response fallback here.
-- SDK errors set span status to ERROR and record an exception event. The 401 fixture is synthetic; it does not imply that this unauthenticated server checks a key.
-
-A cost lookup keyed on the requested name may miss the server's returned name. Cost may be unknown when usage or a matching price entry is unavailable. This recipe adds no model pricing.
-
-## Provider specifics
-
-According to the [PrismML server docs](https://docs.prismml.com/run/server):
-
-| Server | API base URL |
-|---|---|
-| llama.cpp | `http://localhost:8080/v1` |
-| MLX on Apple Silicon | `http://localhost:8081/v1` |
-
-The SDK appends a trailing slash to its stored base URL and calls `/v1/chat/completions`. The validator returns allowed URLs unchanged. It permits exactly `/v1` or `/v1/` on any host and refuses the root web chat, a full `/v1/chat/completions` URL, other paths, credentials, query or fragment delimiters, whitespace, control characters, non-ASCII hosts and malformed IDNA. Host names may use letters, digits, hyphens and underscores inside a label, so container or Compose service names such as `bonsai_server` work.
-
-Loopback HTTP is allowed without a warning for `localhost` and loopback IP addresses (`127.0.0.0/8`, `::1`). HTTP outside loopback is allowed with one stderr warning about the unauthenticated server. Use it only on a trusted LAN. HTTPS URLs still need the same API path.
-
-The [server docs](https://docs.prismml.com/run/server) warn:
-
-> The scripts bind to `127.0.0.1`, so the server is reachable only from the same machine and there is no authentication. Setting `BONSAI_HOST` to any non-loopback address (for example `0.0.0.0`) exposes an unauthenticated server to your network.
-
-For llama-server, any model string works because it serves the loaded model; `GET /v1/models` returns the real name: the loaded file's absolute path by default, or the name set with `--alias`. The documented Python example requests `bonsai` with streaming ([server docs](https://docs.prismml.com/run/server)). `traceai-openai` records the `model` field of the server's non-streamed response, pinned by the tests; the loaded-model name used in tests is synthetic, not a promised filename.
-
-Thinking is controlled per request with `thinking_budget_tokens`; zero disables it ([server docs](https://docs.prismml.com/run/server)). Send it through the SDK's `extra_body`:
-
-```python
-response = client.chat.completions.create(
-    model="bonsai", messages=[{"role": "user", "content": "Say hello."}],
-    extra_body={"thinking_budget_tokens": 0},
-)
-```
-
-The tests pin that this value reaches the HTTP request but is absent from `gen_ai.request.parameters`. The SDK merges `extra_body` after the instrumentor reads the request parameters.
-
-The 27B model supports native OpenAI-style `tool_calls` ([server docs](https://docs.prismml.com/run/server)). The fixture uses a standard `tools` array. It records definitions in `gen_ai.tool.definitions` and `gen_ai.tool.definitions.0.tool.json_schema`, and records the returned tool ID, function name and arguments under `gen_ai.output.messages.0.message.tool_calls.0.tool_call.*`. It does not execute a tool.
+For llama.cpp thinking control, pass `extra_body={"thinking_budget_tokens": 0}` to `client.chat.completions.create()` to disable thinking for that request. This server-specific option reaches the model server but is not included in the pinned instrumentor's invocation parameters. See the [PrismML server reference](https://docs.prismml.com/run/server) for model-specific settings.
 
 ## Privacy
 
-Prompt and answer text normally leave the machine in the Future AGI trace export. Set `FI_HIDE_INPUTS=true` to mask input attributes and `FI_HIDE_OUTPUTS=true` to mask output attributes. The tests verify each flag against visible controls for both chat and streaming.
-
-The server's returned model name is exported too, and these flags do not mask it. Without `--alias`, `llama-server` returns the model file's absolute path, which can include your user name or directory layout. Start the server with `--alias bonsai` to keep local paths out of the export.
-
-`FI_HIDE_INPUTS` masks only inputs. If the server echoes the prompt in its answer, that text remains in output attributes unless outputs are also hidden. Non-streamed output is assistant content, and streamed output is accumulated text, including an empty string when no text arrives. This recipe does not export a raw Chat Completions response in `output.value`.
-
-The local server still receives the prompt. Future AGI masking does not change the server's memory or its own logging. Key separation tests verify that `not-needed` and the custom local placeholder never reach the Future AGI export, while Future AGI keys never reach the local request.
-
-## Limits / not covered
-
-- The built-in web chat, Open WebUI, MCP, Responses API, embeddings and other API surfaces.
-- Starting or stopping the server, distributing weights, live GPU jobs, MLX server differences, benchmarks or model quality.
-- Tool execution and streaming tool calls.
-- Other products called Prism: the [ssimplifi Prism proxy guide](https://ssimplifi.com/guides/openai-compatible-api), [prism-proxy](https://git.sovereign-society.org/prism/prism-proxy), and [Prism PHP](https://mintlify.wiki/prism-php/prism/providers/overview).
-- The automated contract suite uses a local fake of the OpenAI API and does not download weights. The real-server check below is separate.
-
-## Real-server check
-
-On 2026-10-28 this recipe ran against the official PrismML `llama-server`
-release `prism-b10826-c9c34bc`, with the official
-`Ternary-Bonsai-2-2B-PQ2_0.gguf` weights (verified against the published SHA256SUMS).
-The Linux CPU server used `BONSAI_MODEL=2B`, `BONSAI_NGL=0`, `BONSAI_CTX=4096`,
-`BONSAI_THINKING=0`, and `--alias bonsai`. The model and binary came from the
-[official demo](https://github.com/PrismML-Eng/Bonsai-demo) and its linked releases.
-
-With the pinned `openai==3.24.0`, `traceAI-openai==0.1.10`, and
-`fi-instrumentation-otel==1.1.0`, both the normal and `--stream` recipe commands
-returned answers. Their exported spans were read back in Future AGI Cloud:
-non-streamed calls had model `bonsai` and token usage; the default stream had
-answer text but no model or usage attributes, matching the published-version
-behavior described above. A separate call with input/output/invocation-parameter
-hiding enabled exported no prompt or answer text. This check covers the 2B text
-model on the llama.cpp server, not 27B tool calling, vision, or MLX.
-
-## Tests
-
-Run these commands from the repository root. All provider responses are synthetic: in-process MockTransport at both documented URLs, plus a server and OTLP receiver bound to `127.0.0.1`. A subprocess socket guard refuses non-loopback connections before DNS and has a loopback positive control.
-
-Repository source:
+Model execution is local, but prompt and answer content are exported to Future AGI by default. To hide content and invocation parameters, set these variables before running the application:
 
 ```bash
-env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
-  PYTHONPATH="python/examples/prismml/src:python:python/frameworks/openai:python/tests" \
-  uv run --no-project --python 3.11 \
-  --with 'openai==3.24.0' --with httpx --with 'wrapt<2' \
-  --with opentelemetry-api --with opentelemetry-sdk --with opentelemetry-instrumentation \
-  --with opentelemetry-exporter-otlp-proto-http --with requests --with protobuf \
-  --with opentelemetry-proto --with pydantic --with jsonschema --with pytest \
-  pytest python/examples/prismml/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
+export FI_HIDE_INPUTS=true
+export FI_HIDE_OUTPUTS=true
+export FI_HIDE_LLM_INVOCATION_PARAMETERS=true
 ```
 
-Published packages:
+Hide both input and output if an answer might echo a sensitive prompt. These settings do not change what the local server receives or logs.
 
-```bash
-env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
-  PYTHONPATH="python/examples/prismml/src:python/tests" \
-  uv run --no-project --python 3.11 \
-  --with 'openai==3.24.0' --with httpx --with 'wrapt<2' \
-  --with 'traceAI-openai==0.1.10' --with 'fi-instrumentation-otel==1.1.0' \
-  --with opentelemetry-api --with opentelemetry-sdk --with opentelemetry-instrumentation \
-  --with opentelemetry-exporter-otlp-proto-http --with requests --with protobuf \
-  --with opentelemetry-proto --with pydantic --with jsonschema --with pytest \
-  pytest python/examples/prismml/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
-```
+The returned model name is metadata and is not masked by these flags. Without an alias, llama-server can return the loaded model file's **absolute path**, including your user name or directory layout. Start it with `--alias bonsai` to keep local paths out of traces.
 
-To check the `traceai-openai` SDK floor, change the source command's OpenAI pin to `openai==1.69.0`.
+## Troubleshooting
 
-| Python | `openai` | traceAI packages | Result |
-|---|---|---|---|
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
-| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
-| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
+- **Connection refused:** start the local server first and check the port. Use port 8080 for llama.cpp or 8081 for MLX.
+- **URL validation error:** the recipe requires a base URL ending in `/v1` or `/v1/`, not the web chat root or `/v1/chat/completions`. Remove credentials, query strings and fragments. Compose host names such as `bonsai_server` are accepted; non-loopback HTTP prints a security warning.
+- **No traces:** check `FI_API_KEY`, `FI_SECRET_KEY` and the project name. `FI_BASE_URL` is the trace export origin, not the model server URL.
+- **Unexpected model path or missing cost:** use `--alias bonsai`; pricing still requires a matching model price entry.
+
+This route traces calls made by your Python client. It does not automatically trace the server's built-in web chat or other applications connected to it.
